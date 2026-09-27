@@ -45,14 +45,18 @@ def ready(node_url: str, key: str, timeout: float = 180) -> None:
     """Bare node: /readyz 200. MCP-only LB route: an authenticated initialize answers 200."""
     if E.node_admin(node_url):
         return wait(f"{node_url}/readyz", timeout)
-    deadline, last = time.monotonic() + timeout, None
+    deadline, last, streak = time.monotonic() + timeout, None, 0
     while time.monotonic() < deadline:
         try:
             r = httpx.post(E.mcp_url(node_url), json=INIT_BODY, verify=E.tls_verify(), timeout=15,
                            headers={**MCP_HEADERS, "Authorization": f"Bearer {key}"})
             if r.status_code == 200:
-                return
-            last = r.status_code
+                streak += 1  # the LB may still route some requests to a draining pod with the old key set
+                if streak >= 3:
+                    return
+                time.sleep(1)
+                continue
+            streak, last = 0, r.status_code
         except httpx.HTTPError as e:
             last = e
         time.sleep(3)

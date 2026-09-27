@@ -43,7 +43,9 @@ if [ $ADMIN = 1 ]; then
 else
   STEP="mcp route ready"; ok=0; for _ in $(seq 1 60); do c=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "${H[@]}" -X POST "$MCP" -d '{"jsonrpc":"2.0","id":0,"method":"ping"}'); [ "$c" = 200 ] && { ok=1; break; }; sleep 3; done; [ $ok = 1 ] || fail "$MCP ping → $c"
 fi
-STEP="mcp initialize"; R=$(curl -sk --max-time 30 "${H[@]}" -X POST "$MCP" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.2.0"}}}')
+STEP="mcp initialize"; for _ in $(seq 1 20); do  # a draining old pod may still answer 401 for a few seconds after deploy
+  R=$(curl -sk --max-time 30 "${H[@]}" -X POST "$MCP" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.2.0"}}}')
+  [ "$(echo "$R" | jget '["result"]["protocolVersion"]')" = "2025-06-18" ] && break; sleep 3; done
 [ "$(echo "$R" | jget '["result"]["protocolVersion"]')" = "2025-06-18" ] || fail "$R"
 STEP="tools/call";  R=$(curl -sk --max-time 60 "${H[@]}" -X POST "$MCP" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}')
 OUT=$(echo "$R" | jget '["result"]["content"][0]["text"]'); [ "${OUT%.0}" = 5 ] || fail "$R"

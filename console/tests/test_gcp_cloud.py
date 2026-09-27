@@ -440,3 +440,20 @@ async def test_refresh_lists_groups(cloud, fk):
     await cloud.attach_zone("other", "b", SPEC)
     r = await cloud.refresh()
     assert r["groups"] == ["demo", "other"]
+
+
+async def test_deploy_waits_for_old_pods_to_drain(cloud, fk, http_state):
+    await cloud.attach_zone("demo", "a", SPEC)
+    calls = {"n": 0}
+    real = fk.k8s.core.list_namespaced_pod
+
+    def listing(ns, label_selector=""):
+        out = real(ns, label_selector)
+        calls["n"] += 1
+        if calls["n"] <= 2:  # first two polls: an old pod is still terminating
+            out["items"].append({"metadata": {"name": "worker-old", "labels": {"app": "worker", "ramen.io/track": "stable"},
+                                              "namespace": ns, "deletionTimestamp": "2026-09-28T00:00:00Z"}, "status": {"phase": "Running"}})
+        return out
+    fk.k8s.core.list_namespaced_pod = listing
+    r = await cloud.deploy("demo", "dev", "a", canary=True, config={"RAMEN_MCP_KEYS": "rmk_1"})
+    assert r["ok"] and any("old pods drained" in l for l in r["log"])

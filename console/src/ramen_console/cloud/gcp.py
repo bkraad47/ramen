@@ -144,6 +144,9 @@ class GcpCloud(Cloud):
                 await asyncio.to_thread(self.kube.restart, ns, "worker")
                 note("main: restarted worker, waiting for ready")
                 d = await asyncio.to_thread(self.kube.wait_ready, ns, "worker")
+                # old pods keep serving (with the old key set) until drained; the job is only "ok" once they are gone
+                drained = await asyncio.to_thread(self.kube.wait_terminated, ns, "app=worker", 180)
+                note("main: old pods drained" if drained else "main: old pods still terminating after 180s")
                 for p in await asyncio.to_thread(self.kube.pods, ns, "app=worker,ramen.io/track=stable"):
                     workers.append({"id": p["metadata"]["name"], "ok": True, "track": "stable", "status": 200})
                 note(f"main: {d.get('status', {}).get('readyReplicas', 0)} ready")

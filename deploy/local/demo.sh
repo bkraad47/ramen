@@ -14,7 +14,7 @@ api() { $C -H 'Content-Type: application/json' -X "$1" "$CONSOLE/api/v1$2" ${3:+
 api POST /zones '{"name":"local","provider":"local","region":"local"}'
 api POST /groups "{\"name\":\"demo\",\"repo_url\":\"$REPO\",\"ref\":\"main\"}"
 api POST /groups/demo/environments '{"name":"dev","ref":"main","zones":["local"]}'
-KEY=$(api POST /groups/demo/mcp-keys '{"name":"demo"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
+KEY=$(api POST /groups/demo/mcp-keys "{\"name\":\"demo-$(date +%s)\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
 JOB=$(api POST /groups/demo/environments/dev/deploy '{"canary":true}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 for _ in $(seq 1 60); do S=$(api GET "/jobs/$JOB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))'); [ "$S" = ok ] && break; [ "$S" = error ] && { echo "deploy failed"; exit 1; }; sleep 2; done
 "$HERE/../../scripts/wait_ready.sh" "$NODE/readyz" 120 2>/dev/null || for _ in $(seq 1 60); do curl -sf "$NODE/readyz" >/dev/null && break; sleep 2; done

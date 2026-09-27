@@ -114,7 +114,7 @@ class GcpCloud(Cloud):
             if log:
                 log(lines[-1])
         ns, config = ns_name(group, zone), dict(config or {})
-        workers, canary_up = [], False
+        workers, canary_up = [], False  # noqa: F841 - kept for log clarity
         try:
             note(f"{ns}: applying zone manifests")
             await asyncio.to_thread(self._attach, group, zone, spec or {})
@@ -151,7 +151,7 @@ class GcpCloud(Cloud):
         except Exception as e:  # noqa: BLE001 - reported in the job, canary torn down
             err = f"{type(e).__name__}: {e}"
             note(f"deploy failed: {err}")
-            if canary_up:
+            if canary:  # also tears down a canary left from an earlier deploy (canary_up tracks this attempt only)
                 try:
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
                     note("scaled canary to 0; main deployment untouched")
@@ -194,9 +194,14 @@ class GcpCloud(Cloud):
         loads = [w["load"] for w in ws]
         load = "high" if "high" in loads else ("low" if loads and all(l in ("low", "down") for l in loads) else "even")
         scaler = 0.5 if load == "high" else 1.0
-        bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
-        await asyncio.to_thread(comp.set_capacity, bs, ns, scaler)
-        out = {"ok": True, "load": load, "capacity_scaler": scaler, "backend_service": bs["name"]}
+        out = {"ok": True, "load": load, "capacity_scaler": scaler, "backend_service": None, "applied": False}
+        try:
+            bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
+        except ApiError as e:
+            out["note"] = f"capacity not applied: {e.detail}"
+        else:
+            await asyncio.to_thread(comp.set_capacity, bs, ns, scaler)
+            out.update(backend_service=bs["name"], applied=True)
         hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
         dep = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker")
         if hpa and dep and dep["spec"].get("replicas") != hpa["spec"].get("minReplicas"):
@@ -209,12 +214,28 @@ class GcpCloud(Cloud):
         ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
         ref = await asyncio.to_thread(comp.set_armor, f"ramen-{group}", list(cidrs))
         await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"})
+        out = {"ok": True, "policy": f"ramen-{group}", "cidrs": list(cidrs), "backend_service": None, "attached": False}
         try:
             bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
         except ApiError as e:
-            raise ApiError(404, f"{e.detail}; Cloud Armor policy ramen-{group} updated and RAMEN_ALLOWED_CIDRS written, not attached")
+            out["note"] = f"policy written to Secret and Cloud Armor but not attached: {e.detail}"
+            return out
         await asyncio.to_thread(comp.attach_armor, bs["name"], ref)
-        return {"ok": True, "policy": f"ramen-{group}", "cidrs": list(cidrs), "backend_service": bs["name"], "attached": True}
+        return {**out, "backend_service": bs["name"], "attached": True}
+
+    @_guard
+    async def detach_group(self, group):
+        """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA (F4.1)."""
+        prefix = f"ramen-{group}-"
+        removed = {"namespaces": [], "service_accounts": []}
+        for ns in await asyncio.to_thread(self.kube.list_namespaces, group):
+            await asyncio.to_thread(self.kube.delete_namespace, ns)
+            removed["namespaces"].append(ns)
+        iam = gcp_api.Iam(self.c.iam, self.c.crm, self.project)
+        for email in await asyncio.to_thread(iam.list_service_accounts, prefix):
+            await asyncio.to_thread(iam.delete_service_account, email)
+            removed["service_accounts"].append(email)
+        return removed
 
     # identity -----------------------------------------------------------
     @_guard

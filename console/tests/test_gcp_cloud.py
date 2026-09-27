@@ -203,9 +203,8 @@ async def test_logs(fk, cloud):
 
 async def test_rebalance(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
-    with pytest.raises(ApiError) as e:
-        await cloud.rebalance("demo", "a")
-    assert e.value.status_code == 404 and "ramen-demo-a" in e.value.detail and "ramen-demo" in e.value.detail
+    r = await cloud.rebalance("demo", "a")  # backend not programmed yet: 200, nothing applied, reason given
+    assert r["ok"] and not r["applied"] and r["backend_service"] is None and "ramen-demo-a" in r["note"] and "ramen-demo" in r["note"]
     # GKE Gateway auto-named backend service found through its NEG backend (second page)
     fk.compute_state["paged"] = True
     fk.compute_state["backend"] = {"name": "gkegw1-abcd-ramen-demo-a-worker-8080-xyz", "fingerprint": "f1", "backends": [
@@ -229,9 +228,8 @@ async def test_rebalance_fallback_name(cloud, fk):
 
 async def test_set_ip_rules(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
-    with pytest.raises(ApiError) as e:
-        await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
-    assert e.value.status_code == 404 and "not attached" in e.value.detail
+    r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
+    assert r["ok"] and not r["attached"] and "not attached" in r["note"]
     pol = fk.compute_state["policies"]["ramen-demo"]
     assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8,192.168.0.0/16"
     fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a"}]}
@@ -402,3 +400,26 @@ def test_real_clients_lazy(monkeypatch):
                                                                           load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
                                                                           ConfigException=RuntimeError), fake_client))
     assert g2.core == "core" and loaded["mode"] == "kubeconfig"
+
+
+async def test_failed_deploy_tears_down_leftover_canary(cloud, fk, http_state):
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.k8s.objs[("Deployment", "ramen-demo-a", "worker-canary")]["spec"]["replicas"] = 1  # left from an earlier deploy
+    cloud._attach = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git ref not found"))
+    r = await cloud.deploy("demo", "dev", "a", canary=True, config={"RAMEN_MCP_KEYS": "rmk_1"})
+    assert not r["ok"] and "git ref not found" in r["error"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+
+
+async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    await cloud.attach_zone("demo", "b", SPEC)
+    await cloud.attach_zone("other", "a", SPEC)
+    await cloud.create_service_account("demo", "a")
+    await cloud.create_service_account("other", "a")
+    r = await cloud.detach_group("demo")
+    assert r["namespaces"] == ["ramen-demo-a", "ramen-demo-b"]
+    assert r["service_accounts"] == ["ramen-demo-a@p1.iam.gserviceaccount.com"]
+    assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and ("Namespace", None, "ramen-demo-a") not in fk.k8s.objs
+    assert list(fk.iam_state["accounts"]) == ["ramen-other-a@p1.iam.gserviceaccount.com"]
+    assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}

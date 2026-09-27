@@ -1,0 +1,58 @@
+# Manual cloud run: e2e + conformance + cloud suites and the smoke script against a deployed console/worker.
+# Never part of the push pipeline. Repo secrets: RAMEN_ADMIN_EMAIL, RAMEN_ADMIN_PASSWORD, RAMEN_ADMIN_KEY,
+# optional GCP_SA_KEY (JSON key with viewer roles; enables the RAMEN_GCP_PROJECT assertions via gcloud).
+name: cloud-e2e
+on:
+  workflow_dispatch:
+    inputs:
+      console_url: { description: "Console base URL (https://<ip-or-host>)", required: true, type: string }
+      node_url: { description: "Worker/LB base URL for /mcp", required: true, type: string }
+      gcp_project: { description: "GCP project for gcloud assertions (empty = skip)", required: false, type: string, default: "" }
+      zone: { description: "Zone name to deploy into", required: false, type: string, default: "a" }
+      zone_region: { description: "Cloud zone for the zone record", required: false, type: string, default: "us-central1-a" }
+      tls_insecure: { description: "Accept self-signed certs", required: false, type: boolean, default: true }
+      trusted_cidrs: { description: "CIDRs that must stay allowed during the IP-rules lock test (console → worker path)", required: false, type: string, default: "" }
+env:
+  UV_PYTHON: "3.14"
+jobs:
+  cloud-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RAMEN_CONSOLE_URL: ${{ inputs.console_url }}
+      RAMEN_NODE_URL: ${{ inputs.node_url }}
+      RAMEN_GCP_PROJECT: ${{ inputs.gcp_project }}
+      RAMEN_E2E_ZONE: ${{ inputs.zone }}
+      RAMEN_ZONE_PROVIDER: gcp
+      RAMEN_ZONE_REGION: ${{ inputs.zone_region }}
+      RAMEN_TLS_INSECURE: ${{ inputs.tls_insecure && '1' || '0' }}
+      RAMEN_TRUSTED_CIDRS: ${{ inputs.trusted_cidrs }}
+      RAMEN_ADMIN_EMAIL: ${{ secrets.RAMEN_ADMIN_EMAIL }}
+      RAMEN_ADMIN_PASSWORD: ${{ secrets.RAMEN_ADMIN_PASSWORD }}
+      RAMEN_ADMIN_KEY: ${{ secrets.RAMEN_ADMIN_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - name: gcloud auth (optional)
+        if: inputs.gcp_project != ''
+        uses: google-github-actions/auth@v2
+        with: { credentials_json: "${{ secrets.GCP_SA_KEY }}" }
+      - name: gcloud sdk (optional)
+        if: inputs.gcp_project != ''
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Wait ready
+        run: |
+          scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/healthz" 300 || scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/login" 300
+      - name: Smoke (console → deploy → MCP through the LB)
+        run: |
+          RAMEN_SMOKE_ZONE="$RAMEN_E2E_ZONE" scripts/cloud_smoke.sh "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_EMAIL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_ADMIN_KEY" "$RAMEN_NODE_URL"
+      - name: e2e + conformance + cloud
+        working-directory: tests
+        run: uv sync && uv run pytest -q -rs e2e conformance cloud --junitxml=cloud-junit.xml
+      - name: Cost check
+        if: always() && inputs.gcp_project != ''
+        run: scripts/gcp_cost_check.sh "$RAMEN_GCP_PROJECT"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: cloud-junit, path: tests/cloud-junit.xml, if-no-files-found: ignore }

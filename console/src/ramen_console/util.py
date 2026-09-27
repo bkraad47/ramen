@@ -5,7 +5,15 @@ from datetime import datetime, timezone
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 SECRET_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 KEYNAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-CIDR_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$")
+def is_cidr(value: str) -> bool:
+    """IPv4 or IPv6 network in CIDR form (host bits allowed)."""
+    import ipaddress
+
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return False
+    return "/" in value
 
 
 def now() -> str:

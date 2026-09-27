@@ -45,4 +45,15 @@ spec:
       type: HTTP
       httpHealthCheck: { requestPath: /healthz, port: {{ .Values.console.port }} }
   targetRef: { group: "", kind: Service, name: console }
+---
+# Console API calls that drive GCP operations (rebalance, ip-rules, service accounts) can exceed the LB's 30s default.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  default:
+    timeoutSec: {{ .Values.console.backendTimeoutSec | default 300 }}
+  targetRef: { group: "", kind: Service, name: console }
 {{- end }}

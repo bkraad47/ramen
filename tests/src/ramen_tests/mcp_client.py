@@ -5,12 +5,11 @@ import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from .env import strip, tls_verify
+from .env import mcp_url, tls_verify
 
 
 def endpoint(base: str) -> str:
-    base = strip(base)
-    return base if base.endswith("/mcp") else base + "/mcp"
+    return mcp_url(base)
 
 
 def http_client(key: str | None, timeout: float = 30) -> httpx2.AsyncClient:

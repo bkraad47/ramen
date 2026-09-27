@@ -297,7 +297,7 @@ class _Coll:
 
         def call(**kw):
             self.d.calls.append((self.name, method, kw))
-            return NS(execute=lambda: self.d.handler(self.name, method, kw))
+            return NS(execute=lambda **_: self.d.handler(self.name, method, kw))
         return call
 
 

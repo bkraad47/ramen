@@ -112,10 +112,15 @@ class Console:
 
     def wait_job(self, job_id: str, timeout: float = 300) -> dict:
         deadline = time.monotonic() + timeout
-        job = {}
+        job, bad = {}, 0
         while time.monotonic() < deadline:
             r = self.get("job", id=job_id)
+            if r.status_code >= 500 and bad < 5:  # transient LB/console reset: retry a few times
+                bad += 1
+                time.sleep(3)
+                continue
             assert r.status_code == 200, f"job {job_id}: {r.status_code} {r.text[:300]}"
+            bad = 0
             job = r.json()
             if job.get("status") != "running":
                 return job

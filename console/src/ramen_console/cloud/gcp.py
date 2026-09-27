@@ -218,14 +218,31 @@ class GcpCloud(Cloud):
         ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
         ref = await asyncio.to_thread(comp.set_armor, f"ramen-{group}", list(cidrs))
         await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"})
+        # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
+        for dep in ("worker", "worker-canary"):
+            d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
+            if d and d.get("spec", {}).get("replicas", 0) > 0:
+                await asyncio.to_thread(self.kube.restart, ns, dep)
+                await asyncio.to_thread(self.kube.wait_ready, ns, dep)
         out = {"ok": True, "policy": f"ramen-{group}", "cidrs": list(cidrs), "backend_service": None, "attached": False}
         try:
             bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
         except ApiError as e:
             out["note"] = f"policy written to Secret and Cloud Armor but not attached: {e.detail}"
             return out
-        await asyncio.to_thread(comp.attach_armor, bs["name"], ref)
+        try:
+            await asyncio.to_thread(comp.attach_armor, bs["name"], ref, 6)  # ~30s; the LB reconciles after the restart
+        except Exception as e:  # noqa: BLE001 - keep attaching in the background, the Secret already protects the node
+            if "not ready" not in str(e):
+                raise
+            self._background(comp.attach_armor, bs["name"], ref, 120)
+            return {**out, "backend_service": bs["name"], "note": "Cloud Armor attach pending: backend service busy, retrying in background"}
         return {**out, "backend_service": bs["name"], "attached": True}
+
+    def _background(self, fn, *args):
+        task = asyncio.get_running_loop().run_in_executor(None, fn, *args)
+        self._bg = getattr(self, "_bg", set()) | {task}
+        task.add_done_callback(lambda t: self._bg.discard(t))
 
     @_guard
     async def abort_deploy(self, group, zone):

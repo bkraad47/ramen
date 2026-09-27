@@ -95,6 +95,17 @@ class GcpClients:
             return build(name, version, cache_discovery=False, credentials=_creds())
         return self._cached(name, make)
 
+
+def fresh_http():
+    """A per-call authorized httplib2 transport. googleapiclient's shared Http is not thread-safe; using one
+    connection from two threads (e.g. a background Cloud Armor attach and a rebalance) segfaults in OpenSSL."""
+    try:
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
+        return AuthorizedHttp(_creds(), http=httplib2.Http(timeout=120))
+    except Exception:  # noqa: BLE001 - tests/fakes or no credentials: let the client use its default transport
+        return None
+
     @property
     def compute(self):
         return self._discovery("compute", "v1")

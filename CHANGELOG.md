@@ -2,6 +2,8 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.2.0] — GCP
+- (in progress) GCP cloud adapter, Secret Manager secrets, GCS bucket sync, canary deploys, rebalance, Cloud Logging, Terraform apply + Helm on GKE Autopilot.
 ## [0.1.0] — local core
 - Python runtime sidecar (`ramen_runtime`): loads group repos, validates protos, executes tools/resources/prompts, resolves `{{$group.VAR}}` secrets.
 - Rust MCP node (`ramen-node`): JSON-RPC 2.0 over MCP Streamable HTTP, bearer auth, CIDR allowlist, metrics, admin reload, sidecar supervisor.

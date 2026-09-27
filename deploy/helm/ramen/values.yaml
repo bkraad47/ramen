@@ -4,7 +4,7 @@ environment: default
 image:
   worker: ramen-worker
   console: ramen-console
-  tag: 0.1.0
+  tag: 0.2.0
   pullPolicy: IfNotPresent
 
 zones:                # one worker Deployment per entry, pinned to topology.kubernetes.io/zone

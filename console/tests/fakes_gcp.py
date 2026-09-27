@@ -336,7 +336,12 @@ def compute_handler(state):
                 return {"status": "DONE"}
             p = pols[kw["securityPolicy"]]
             if method == "addRule":
+                if any(r["priority"] == kw["body"]["priority"] for r in p["rules"]):
+                    raise FakeApiError(400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities.")
                 p["rules"].append(kw["body"])
+                if state.get("dup_once"):
+                    state["dup_once"] = False
+                    raise FakeApiError(400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities.")
             if method == "removeRule":
                 p["rules"] = [r for r in p["rules"] if r["priority"] != kw["priority"]]
             if method == "patchRule":

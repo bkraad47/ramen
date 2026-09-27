@@ -94,7 +94,7 @@ class Compute:
             raise ApiError(404, f"no backend service found for NEG {neg_name} (Gateway route not programmed yet?) nor {fallback}")
         return bs
 
-    def set_capacity(self, bs: dict, neg_name, scaler) -> None:
+    def set_capacity(self, bs: dict, neg_name, scaler, attempts=24) -> None:
         backends = bs.get("backends", [])
         for b in backends:
             if b.get("group", "").endswith(f"/networkEndpointGroups/{neg_name}"):
@@ -103,7 +103,7 @@ class Compute:
         if bs.get("fingerprint"):
             body["fingerprint"] = bs["fingerprint"]
         # Gateway-managed backend services report "not ready" while the controller reconciles them (e.g. after a rollout)
-        self._ready(lambda: self.api.backendServices().patch(project=self.project, backendService=bs["name"], body=body))
+        self._ready(lambda: self.api.backendServices().patch(project=self.project, backendService=bs["name"], body=body), attempts=attempts)
 
     def set_armor(self, name, cidrs: list[str]) -> str:
         pols = self.api.securityPolicies()
@@ -120,9 +120,14 @@ class Compute:
             if rule["priority"] != DEFAULT_PRIORITY:
                 self._ready(lambda r=rule: pols.removeRule(project=self.project, securityPolicy=name, priority=r["priority"]))
         for i in range(0, len(cidrs), 10):
-            self._ready(lambda i=i: pols.addRule(project=self.project, securityPolicy=name, body={
-                "priority": 1000 + i // 10, "action": "allow", "description": "ramen ip-rules",
-                "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": cidrs[i:i + 10]}}}))
+            rule = {"priority": 1000 + i // 10, "action": "allow", "description": "ramen ip-rules",
+                    "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": cidrs[i:i + 10]}}}
+            try:
+                self._ready(lambda: pols.addRule(project=self.project, securityPolicy=name, body=rule))
+            except Exception as e:  # noqa: BLE001 - a retried add may already have landed: converge with a patch
+                if http_status(e) != 400 or "same priorities" not in str(e):
+                    raise
+                self._ready(lambda: pols.patchRule(project=self.project, securityPolicy=name, priority=rule["priority"], body=rule))
         self._ready(lambda: pols.patchRule(project=self.project, securityPolicy=name, priority=DEFAULT_PRIORITY,
                                            body={"action": "deny(403)" if cidrs else "allow"}))
         return f"projects/{self.project}/global/securityPolicies/{name}"

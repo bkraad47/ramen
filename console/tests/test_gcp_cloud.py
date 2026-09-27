@@ -479,3 +479,29 @@ async def test_abort_deploy_scales_canary_to_zero(cloud, fk):
     await cloud.abort_deploy("demo", "a")
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
     await cloud.abort_deploy("demo", "nozone")  # no namespace: no-op
+
+
+async def test_armor_add_rule_converges_when_retry_already_landed(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["dup_once"] = True
+    r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    assert r["ok"]
+    rules = [x for x in fk.compute_state["policies"]["ramen-demo"]["rules"] if x["priority"] == 1000]
+    assert len(rules) == 1 and rules[0]["match"]["config"]["srcIpRanges"] == ["10.0.0.0/8"]
+
+
+async def test_rebalance_hands_off_to_background_when_backend_stays_busy(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "fingerprint": "f1", "backends": [
+        {"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}]}
+    fk.compute_state["bs_not_ready"] = 10  # more than the 6 synchronous attempts
+    r = await cloud.rebalance("demo", "a")
+    assert r["ok"] and not r["applied"] and "pending" in r["note"] and r["backend_service"] == "gkegw1-ramen-demo-a"
+    import asyncio
+    for t in list(getattr(cloud, "_bg", ())):
+        await asyncio.wrap_future(t) if hasattr(t, "result") and not isinstance(t, asyncio.Future) else t
+    assert fk.compute_state["bs_not_ready"] == 0

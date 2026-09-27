@@ -137,6 +137,17 @@ class Kube:
             raise ApiError(502, f"unsupported manifest kind {kind}")
         return table[kind]
 
+    def wait_terminated(self, ns: str, selector: str, timeout: float | None = None) -> bool:
+        """True once no pod matching `selector` is still terminating (old ReplicaSet drained), False on timeout."""
+        deadline = time.monotonic() + (timeout or self.wait_secs)
+        while True:
+            items = self.c.to_dict(self.c.core.list_namespaced_pod(ns, label_selector=selector)).get("items", [])
+            if not any(p["metadata"].get("deletionTimestamp") for p in items):
+                return True
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(self.poll)
+
     def wait_gone(self, ns: str, selector: str, timeout: float | None = None) -> bool:
         """True once no pod matches `selector` (terminating pods included), False on timeout."""
         deadline = time.monotonic() + (timeout or self.wait_secs)

@@ -7,7 +7,7 @@ class AwsCloud(Cloud):
     async def sync_repo(self, group, repo_url, ref, token):
         raise NotImplementedError(MSG)
 
-    async def deploy(self, group, env, zone, canary=True, config=None):
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None):
         raise NotImplementedError(MSG)
 
     async def rebalance(self, group, zone):

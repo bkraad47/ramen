@@ -8,6 +8,7 @@ dependencies = ["jsonschema>=4.23"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5"]
+gcp = ["google-cloud-storage>=2.18"]
 
 [build-system]
 requires = ["hatchling"]

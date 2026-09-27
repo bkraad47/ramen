@@ -475,3 +475,44 @@ async fn py_call_timeout_kills_sidecar() {
     assert!(!a.sidecar.alive().await);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A fake `ramen_runtime` that echoes `RAMEN_BUCKET_URI` in a `sync` summary: proves the node passes
+/// the URI to the sidecar env and that `/admin/reload` returns whatever the runtime reports.
+#[tokio::test]
+async fn admin_reload_returns_runtime_sync_summary() {
+    let dir = std::env::temp_dir().join(format!("ramen-fake-rt-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("ramen_runtime")).unwrap();
+    std::fs::write(
+        dir.join("ramen_runtime/__main__.py"),
+        r#"import json, os, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    r = {"tools": [], "resources": [], "prompts": [], "errors": [], "sync": {"uri": os.environ.get("RAMEN_BUCKET_URI"), "downloaded": 2}} if m["method"] == "runtime.load" else {"ok": True}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#,
+    )
+    .unwrap();
+    let pp = dir.display().to_string();
+    let a = app(cfg(&[
+        ("RAMEN_PYTHON", "python3"),
+        ("RAMEN_PYTHONPATH", &pp),
+        ("RAMEN_BUCKET_URI", "gs://groups/demo"),
+    ]));
+    let (st, v) = send(
+        &a,
+        "POST",
+        "/admin/reload",
+        &[("x-ramen-admin-key", "adm")],
+        None,
+        "127.0.0.1:1",
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["sync"],
+        json!({"uri": "gs://groups/demo", "downloaded": 2})
+    );
+    let (st, _) = send(&a, "GET", "/readyz", &[], None, "127.0.0.1:1").await;
+    assert_eq!(st, StatusCode::OK);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

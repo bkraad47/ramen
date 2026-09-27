@@ -14,7 +14,7 @@ class Jobs:
 
     def create(self, kind, target) -> dict:
         job = {"id": uid(), "kind": kind, "target": target, "status": "running", "started": now(),
-               "finished": None, "result": None, "error": None}
+               "finished": None, "result": None, "error": None, "log": []}
         self._jobs[job["id"]] = job
         return job
 
@@ -33,16 +33,23 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         zones = [zone] if zone else env.get("zones", [])
         results = {}
         _, token, _ = await svc.secrets_for(group, env_name, None)
-        await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token or g.get("github_token"))
+        token = await svc.secrets_backend.resolve(token or g.get("github_token"))
+        job["log"].append(f"{now()} syncing repo {g['repo_url']}")
+        await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
         for z in zones:
             vars_, _, mcp = await svc.secrets_for(group, env_name, z)
             cfg = {"RAMEN_VERBOSE": "1" if env.get("verbose") else "0", **vars_}
             if mcp:
                 cfg["RAMEN_MCP_KEYS"] = ",".join(mcp)
-            results[z] = await svc.cloud.deploy(group, env_name, z, canary=canary, config=cfg)
+            cfg = await svc.secrets_backend.resolve_config(cfg)
+            job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
+            results[z] = await svc.cloud.deploy(group, env_name, z, canary=canary, config=cfg,
+                                                spec=await svc.zone_spec(group, z), log=job["log"].append)
         ok = all(r.get("ok") for r in results.values()) if results else False
         failed = [f"{z} {w['id']}: {w.get('error') or w.get('status')}" for z, r in results.items()
                   for w in r.get("workers", []) if not w.get("ok")]
+        for z, r in results.items():
+            r.pop("log", None)
         job.update(status="ok" if ok else "error", result=results, finished=now(),
                    error=None if ok else ("no zones configured" if not results else "workers failed to reload: " + "; ".join(failed)))
     except Exception as e:  # noqa: BLE001 - surfaced to the UI

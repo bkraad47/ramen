@@ -3,4 +3,6 @@
 <span class="badge {{ job.status }}">{{ job.kind }} {{ job.target }} — {{ 'refreshing…' if job.status == 'running' else job.status }}</span>
 <span class="muted"> job {{ job.id[:8] }} started {{ job.started }}{% if job.finished %}, finished {{ job.finished }}{% endif %}</span>
 {% if job.error %}<div class="err">{{ job.error }}</div>{% endif %}
+{% if job.log %}<details {{ 'open' if job.status != 'ok' }}><summary>log ({{ job.log|length }} lines)</summary><pre class="log">{% for l in job.log %}{{ l }}
+{% endfor %}</pre></details>{% endif %}
 {% if job.result %}<details><summary>result</summary><pre>{{ tojson(job.result, indent=1) }}</pre></details>{% endif %}</div>{% endif %}

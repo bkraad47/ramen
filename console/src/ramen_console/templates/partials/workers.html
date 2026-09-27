@@ -1,0 +1,3 @@
+{% set live = w.live or [] %}<div class="workers"><span class="badge">{{ w.count }} × {{ w.size }}</span>{% if w.namespace %} <code>{{ w.namespace }}</code>{% endif %}
+{% if w.canary is not none %} · canary: <span class="badge {{ 'ok' if w.canary.ready else '' }}">{{ w.canary.ready }}/{{ w.canary.replicas }} ready</span>{% endif %}
+{% for x in live %}<br><span class="dot {{ x.load }}"></span>{{ x.id }}{% if x.track %} <small class="muted">[{{ x.track }}]</small>{% endif %}: {{ x.load }}{% if x.metrics.inflight is defined %} ({{ x.metrics.inflight }}/{{ x.metrics.total }}){% endif %}{% if x.error %} <span class="err">{{ x.error }}</span>{% endif %}{% else %}<br><span class="muted">no live workers</span>{% endfor %}</div>

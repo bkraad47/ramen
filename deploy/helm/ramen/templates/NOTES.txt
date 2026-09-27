@@ -1,4 +1,6 @@
-Ramen {{ .Chart.AppVersion }} — group {{ .Values.group }}/{{ .Values.environment }}
-Workers: {{ range .Values.zones }}{{ .name }} ({{ .replicas }}x {{ .size }}) {{ end }}
-Console: kubectl port-forward svc/{{ include "ramen.fullname" . }}-console {{ .Values.console.port }}
-Worker NEGs are named after each worker Service; wire them into the LB backend (deploy/terraform/gcp).
+Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} (project {{ .Values.project }}, {{ .Values.region }}).
+Prereqs: TLS Secret {{ .Values.gateway.tlsSecret }} (deploy/scripts/selfsigned.sh <console_ip> {{ .Release.Namespace }} {{ .Values.gateway.tlsSecret }})
+         kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (lets the console HTTPRoute attach)
+LB: kubectl -n {{ .Release.Namespace }} get gateway {{ .Values.gateway.name }} (programmed in ~5 min) ; curl -k https://<console_ip>/readyz
+Workers: helm template ramen-worker deploy/helm/ramen-worker --set project={{ .Values.project }},group=<g>,zone=<z>,gcpZone=<region-zone> | kubectl apply -f -
+         → https://<console_ip>/mcp/<g>/<z>

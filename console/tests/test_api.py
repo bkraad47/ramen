@@ -430,10 +430,10 @@ def test_config_and_refresh(demo, tmp_path, monkeypatch):
 
 
 def test_cloud_not_implemented_surfaces(demo, monkeypatch):
-    from ramen_console.cloud.gcp import GcpCloud
-    demo.app.state.services.cloud = GcpCloud()
+    from ramen_console.cloud.aws import AwsCloud
+    demo.app.state.services.cloud = AwsCloud()
     r = demo.post("/api/v1/groups/demo/zones/zone-a/rebalance")
-    assert r.status_code == 501 and "gcp" in r.text
+    assert r.status_code == 501 and "aws" in r.text
 
 
 def test_htmx_mutation_headers(demo):
@@ -496,7 +496,7 @@ def test_deploy_worker_failure_and_no_zones(demo, tmp_path, monkeypatch):
     async def fake_sync(group, repo_url, ref, token):
         return str(tmp_path / "buckets" / group)
 
-    async def bad_deploy(group, env, zone, canary=True, config=None):
+    async def bad_deploy(group, env, zone, canary=True, config=None, **kw):
         return {"ok": False, "workers": [{"id": "http://w1:8080", "ok": False, "error": "ConnectError: boom"}]}
     monkeypatch.setattr(demo.app.state.cloud, "sync_repo", fake_sync)
     monkeypatch.setattr(demo.app.state.cloud, "deploy", bad_deploy)

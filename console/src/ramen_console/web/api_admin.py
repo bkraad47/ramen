@@ -13,6 +13,7 @@ from .helpers import accounts, backups, respond, svc, tabular
 r = APIRouter(prefix="/api/v1")
 viewer, admin, super_ = require("viewer"), require("group_admin"), require("super_admin")
 MASK = ("SECRET", "PASSWORD", "KEY", "TOKEN")
+UNMASKED = {"RAMEN_SECRETS_BACKEND"}
 
 
 @r.get("/users")
@@ -120,13 +121,16 @@ async def restore_backup(request: Request, bid: str, p: Principal = Depends(supe
 
 
 def masked_env() -> dict[str, str]:
-    return {k: ("***" if any(w in k for w in MASK) else v) for k, v in sorted(os.environ.items()) if k.startswith("RAMEN_")}
+    return {k: ("***" if any(w in k for w in MASK) and k not in UNMASKED else v)
+            for k, v in sorted(os.environ.items()) if k.startswith("RAMEN_")}
 
 
 @r.get("/config")
 async def config(request: Request, p: Principal = Depends(super_)):
     return {"env": masked_env(), "config_file": os.environ.get("RAMEN_CONFIG"),
-            "store": os.environ.get("RAMEN_STORE", "memory"), "cloud": os.environ.get("RAMEN_CLOUD", "local")}
+            "store": os.environ.get("RAMEN_STORE", "memory"), "cloud": os.environ.get("RAMEN_CLOUD", "local"),
+            "secrets_backend": request.app.state.secrets.kind,
+            "gcp": {k: os.environ.get(k) for k in ("RAMEN_GCP_PROJECT", "RAMEN_GCP_REGION", "RAMEN_GROUPS_BUCKET", "RAMEN_IMAGE_WORKER")}}
 
 
 @r.post("/config/reload")
@@ -152,4 +156,4 @@ async def set_sa_rules(request: Request, body: m.Rules, p: Principal = Depends(s
 @r.post("/refresh")
 async def refresh(request: Request, p: Principal = Depends(super_)):
     note(request, "refresh", "cloud")
-    return respond(request, await svc(request).cloud.refresh())
+    return respond(request, await svc(request).refresh())

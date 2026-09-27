@@ -1,4 +1,4 @@
-//! Startup: initial `runtime.load`, serve until `shutdown` resolves, then stop the sidecar.
+//! Startup: initial `runtime.load` (when mcp/ exists or `RAMEN_BUCKET_URI` is set), serve until `shutdown` resolves, then stop the sidecar.
 use crate::config::Config;
 use crate::http::{self, Shared};
 use crate::log::emit;
@@ -19,7 +19,8 @@ pub async fn run(
     crate::log::set_file(cfg.log_file.clone());
     let app = http::app(cfg.clone());
     app.sidecar.start_reaper();
-    if cfg.bucket.join("mcp").is_dir() {
+    // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.
+    if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
         if let Err(e) = app.sidecar.load().await {
             emit("warn", "initial load failed", json!({"error": e.message}));
         }
@@ -73,5 +74,27 @@ mod tests {
         tx.send(()).unwrap();
         let app = server.await.unwrap();
         assert!(!app.sidecar.alive().await && app.sidecar.loaded().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn bucket_uri_triggers_initial_load_attempt() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let m: HashMap<_, _> = [
+            (
+                "RAMEN_BUCKET".to_string(),
+                std::env::temp_dir()
+                    .join("ramen-nope")
+                    .display()
+                    .to_string(),
+            ),
+            ("RAMEN_BUCKET_URI".to_string(), "gs://b/g".to_string()),
+            (
+                "RAMEN_PYTHON".to_string(),
+                "/nonexistent/python".to_string(),
+            ),
+        ]
+        .into();
+        let app = run(Config::from_map(&m).unwrap(), listener, async {}).await;
+        assert!(app.sidecar.loaded().await.is_none()); // spawn failed → warned, still serving
     }
 }

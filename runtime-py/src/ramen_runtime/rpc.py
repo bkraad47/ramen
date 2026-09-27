@@ -1,7 +1,9 @@
 """Newline-delimited JSON-RPC 2.0 server over stdin/stdout (CONTRACTS §2)."""
 import json
+import os
 from pathlib import Path
 
+from . import bucket as gcs
 from . import deps
 from .executor import Executor
 from .loader import load
@@ -68,9 +70,10 @@ class Server:
 
     def load(self, params: dict) -> dict:
         bucket = Path(params.get("bucket") or self.bucket)
+        summary = gcs.sync(uri, bucket) if (uri := os.environ.get("RAMEN_BUCKET_URI")) else None
         deps.install(bucket)
         self.exe = Executor(load(bucket))
-        return self.exe.reg.describe()
+        return self.exe.reg.describe() | ({"sync": summary} if summary else {})
 
     def _exe(self) -> Executor:
         if self.exe is None:

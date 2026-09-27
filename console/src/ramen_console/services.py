@@ -1,15 +1,18 @@
 import secrets as pysecrets
 
 from .cloud.base import Cloud
+from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
 from .rbac import Principal, RuleClash, check_clash
+from .secrets.base import SecretsBackend, StoreBackend
 from .storage.base import Store
 from .util import CIDR_RE, KEYNAME_RE, NAME_RE, SECRET_RE, now, public, uid
 
 
 class Services:
-    def __init__(self, store: Store, cloud: Cloud):
+    def __init__(self, store: Store, cloud: Cloud, secrets: SecretsBackend | None = None):
         self.store, self.cloud = store, cloud
+        self.secrets_backend = secrets or StoreBackend()
 
     async def visible_groups(self, p: Principal) -> list[dict]:
         groups = await self.store.list("groups")
@@ -103,12 +106,25 @@ class Services:
         await self._check_zones(zones)
         doc = {"group": group, "name": name, "ref": ref or g.get("ref", "main"), "zones": list(zones),
                "verbose": False, "created": now(), "last_deploy": None}
+        await self._attach_zones(group, zones)
         return await self.store.put("environments", f"{group}:{name}", doc)
+
+    async def _attach_zones(self, group, zones, already=()):
+        for z in zones:
+            if z not in already:
+                await self.cloud.attach_zone(group, z, await self.zone_spec(group, z))
+
+    async def zone_spec(self, group, zone) -> dict:
+        z = await self.store.get("zones", zone) or {}
+        w = await self.worker_config(group, zone)
+        return {"region": z.get("region", ""), "size": normalize_size(w.get("size")) or "s", "count": w.get("count", 1),
+                "allowed_sizes": w.get("allowed_sizes", []), "service_account": w.get("service_account")}
 
     async def update_env(self, group, name, **fields) -> dict:
         e = await self.get_env(group, name)
         if fields.get("zones") is not None:
             await self._check_zones(fields["zones"])
+            await self._attach_zones(group, fields["zones"], already=e.get("zones", []))
         e.update({k: v for k, v in fields.items() if v is not None})
         return await self.store.put("environments", e["id"], e)
 
@@ -120,19 +136,43 @@ class Services:
         if not await self.store.get("zones", zone):
             raise not_found("zone")
         return await self.store.get("workers", f"{group}:{zone}") or {
-            "id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "size": "small"}
+            "id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "size": "s", "allowed_sizes": []}
 
-    async def set_workers(self, group, zone, p: Principal, count=None, size=None) -> dict:
+    async def set_workers(self, group, zone, p: Principal, count=None, size=None, allowed_sizes=None) -> dict:
         w = await self.worker_config(group, zone)
-        if size is not None:
+        if allowed_sizes is not None:
             if p.role != "super_admin":
-                raise forbidden("only super admins change worker sizes")
+                raise forbidden("only super admins set allowed sizes")
+            bad = [s for s in allowed_sizes if not normalize_size(s)]
+            if bad:
+                raise invalid(f"unknown sizes: {', '.join(bad)} (use s|m|l)")
+            w["allowed_sizes"] = [normalize_size(s) for s in allowed_sizes]
+        if size is not None:
+            if p.role != "super_admin" and normalize_size(size) not in w.get("allowed_sizes", []):
+                raise forbidden("only super admins change worker sizes (or sizes outside the allowed list)")
+            if not normalize_size(size):
+                raise invalid("size must be one of s|m|l")
             w["size"] = size
         if count is not None:
             if count < 1:
                 raise invalid("count must be >= 1")
             w["count"] = count
-        return await self.store.put("workers", w["id"], w)
+        doc = await self.store.put("workers", w["id"], w)
+        doc["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
+        return doc
+
+    async def refresh(self) -> dict:
+        r = await self.cloud.refresh()
+        for z in r.get("zones", []):
+            if not (z.get("group") and z.get("zone")):
+                continue
+            w = await self.store.get("workers", f"{z['group']}:{z['zone']}") or {
+                "id": f"{z['group']}:{z['zone']}", "group": z["group"], "zone": z["zone"], "count": 1, "size": "s", "allowed_sizes": []}
+            w["live_state"] = {k: z.get(k) for k in ("namespace", "replicas", "ready", "canary_replicas", "canary_ready")}
+            if z.get("service_account"):
+                w["service_account"] = z["service_account"]
+            await self.store.put("workers", w["id"], w)
+        return r
 
     async def set_ip_rules(self, group, zone, cidrs: list[str]) -> dict:
         bad = [c for c in cidrs if not CIDR_RE.match(c)]
@@ -161,14 +201,16 @@ class Services:
         for s in await self.store.list("secrets", {"group": group, "name": name, "kind": kind}):
             if s.get("env") == env and s.get("zone") == zone:
                 raise conflict(f"secret {name} exists for that scope")
-        doc = {"group": group, "name": name, "value": value, "env": env, "zone": zone, "kind": kind,
-               "created": now(), "created_by": by}
+        stored = await self.secrets_backend.put(group, env, zone, name, value, kind)
+        doc = {"group": group, "name": name, "env": env, "zone": zone, "kind": kind, "created": now(), "created_by": by,
+               "backend": self.secrets_backend.kind, **stored}
         return public(await self.store.put("secrets", uid(), doc))
 
     async def delete_secret(self, group, sid, kind="secret") -> None:
         s = await self.store.get("secrets", sid)
         if not s or s["group"] != group or s.get("kind") != kind:
             raise not_found("secret")
+        await self.secrets_backend.delete(s)
         await self.store.delete("secrets", sid)
 
     async def mint_mcp_key(self, group, name, by="") -> dict:
@@ -181,10 +223,11 @@ class Services:
         for s in await self.store.list("secrets", {"group": group}):
             if s.get("env") not in (None, env) or s.get("zone") not in (None, zone):
                 continue
+            val = s.get("ref") or s.get("value")
             if s.get("kind") == "mcp_key":
-                mcp.append(s["value"])
+                mcp.append(val)
             else:
-                vars_[f"RAMEN_SECRET_{group.upper().replace('-', '_')}__{s['name']}"] = s["value"]
+                vars_[f"RAMEN_SECRET_{group.upper().replace('-', '_')}__{s['name']}"] = val
                 if s["name"] == "GITHUB_TOKEN":
-                    token = s["value"]
+                    token = val
         return vars_, token, mcp

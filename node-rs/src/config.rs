@@ -21,6 +21,8 @@ const DEPLOY_KEYS: &[&str] = &[
 pub struct Config {
     pub port: u16,
     pub bucket: PathBuf,
+    /// `gs://bucket/prefix` synced into `bucket` by the runtime on every load (CONTRACTS §7).
+    pub bucket_uri: Option<String>,
     pub python: String,
     pub pythonpath: Option<String>,
     pub mcp_keys: Vec<String>,
@@ -114,6 +116,7 @@ impl Config {
         Ok(Config {
             port: num("RAMEN_NODE_PORT", 8080)? as u16,
             bucket: PathBuf::from(get("RAMEN_BUCKET").unwrap_or_else(|| "/buckets/default".into())),
+            bucket_uri: get("RAMEN_BUCKET_URI"),
             python: get("RAMEN_PYTHON").unwrap_or_else(|| "python3".into()),
             pythonpath: get("RAMEN_PYTHONPATH"),
             mcp_keys: list("RAMEN_MCP_KEYS"),
@@ -189,6 +192,12 @@ mod tests {
         );
         assert!(
             c.mcp_keys.is_empty() && c.admin_key.is_none() && !c.verbose && c.log_file.is_none()
+        );
+        assert!(c.bucket_uri.is_none());
+        let m: HashMap<_, _> = [("RAMEN_BUCKET_URI".to_string(), " gs://b/g ".to_string())].into();
+        assert_eq!(
+            Config::from_map(&m).unwrap().bucket_uri.as_deref(),
+            Some("gs://b/g")
         );
     }
 

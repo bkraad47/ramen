@@ -1,0 +1,37 @@
+{{- $env := merge (dict) .Values.console.env (dict
+  "RAMEN_GCP_PROJECT" .Values.project
+  "RAMEN_GCP_REGION" .Values.region
+  "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" .Values.project)
+  "RAMEN_IMAGE_WORKER" (printf "%s-docker.pkg.dev/%s/ramen/worker:%s" .Values.region .Values.project (.Values.image.tag | toString))
+  "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.console.replicas }}
+  selector:
+    matchLabels: {{- include "ramen.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "ramen.labels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ .Values.console.secrets | toJson | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: console
+          image: {{ include "ramen.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: http, containerPort: {{ .Values.console.port }} }]
+          env:
+            {{- range $k, $v := $env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          envFrom:
+            - secretRef: { name: {{ include "ramen.secretName" . }} }
+          resources: {{- toYaml .Values.console.resources | nindent 12 }}
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, failureThreshold: 12 }

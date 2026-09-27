@@ -1,51 +1,36 @@
-# One release = one group + environment. Workers are deployed once per zone in `zones`.
-group: demo
-environment: default
+# helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace -f my-values.yaml
+project: ""                  # GCP project id (required)
+region: us-central1
 image:
-  worker: ramen-worker
-  console: ramen-console
+  repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
   tag: 0.2.0
-  pullPolicy: IfNotPresent
+  pullPolicy: Always          # version tags are re-pushed during development
 
-zones:                # one worker Deployment per entry, pinned to topology.kubernetes.io/zone
-  - name: australia-southeast1-a
-    replicas: 1
-    minReplicas: 1
-    maxReplicas: 4
-    size: small       # key into worker.sizes
-
-worker:
-  port: 8080
-  bucketPath: /buckets
-  bucketVolume: { emptyDir: {} }   # GKE: replace with a GCS FUSE CSI volume for the group bucket
-  hpaCpuPercent: 70
-  sizes:
-    small:  { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "1",  memory: 512Mi } }
-    medium: { requests: { cpu: 500m, memory: 512Mi }, limits: { cpu: "2",  memory: 1Gi } }
-    large:  { requests: { cpu: "1",  memory: 1Gi },   limits: { cpu: "4",  memory: 2Gi } }
-  env:                # non-secret RAMEN_* vars → ConfigMap
-    RAMEN_SIDECAR_IDLE_SECS: "300"
-    RAMEN_MAX_INFLIGHT: "32"
-    RAMEN_ALLOWED_CIDRS: "0.0.0.0/0,::/0"
-    RAMEN_TRUST_PROXY: "1"
-    RAMEN_VERBOSE: "0"
-  secrets:            # secret RAMEN_* vars → Secret (set via --set or an external secret operator)
-    RAMEN_MCP_KEYS: ""
-    RAMEN_ADMIN_KEY: ""
-  pdb: { minAvailable: 1 }
+serviceAccount:
+  name: console
+  gsa: ""                    # default: ramen-console@<project>.iam.gserviceaccount.com (terraform output console_gsa)
 
 console:
-  enabled: true
   replicas: 1
   port: 8000
-  resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "1", memory: 512Mi } }
-  env:
+  resources: { requests: { cpu: 250m, memory: 512Mi } }   # Autopilot sets limits = requests
+  env:                       # CONTRACTS §7 console runtime env; RAMEN_GCP_PROJECT/REGION/GROUPS_BUCKET/IMAGE_WORKER default from project/region
     RAMEN_STORE: firestore
     RAMEN_CLOUD: gcp
-  secrets:
-    RAMEN_FERNET_KEY: ""
-    RAMEN_ADMIN_EMAIL: ""
+    RAMEN_SECRETS_BACKEND: gcp
+    RAMEN_ADMIN_EMAIL: admin@ramen.local
+  secrets:                   # rendered into Secret ramen-console; set via --set or a values file kept out of git
     RAMEN_ADMIN_PASSWORD: ""
-  service: { type: ClusterIP, annotations: {} }
+    RAMEN_FERNET_KEY: ""
+    RAMEN_ADMIN_KEY: ""
+  existingSecret: ""         # use this Secret instead of rendering console.secrets
 
-serviceAccount: { create: true, annotations: {} }   # annotate with iam.gke.io/gcp-service-account for Workload Identity
+gateway:                     # GKE Gateway API: one global external HTTPS LB for console ("/") and workers ("/mcp/<group>/<zone>")
+  enabled: true
+  name: ramen
+  className: gke-l7-global-external-managed
+  staticIpName: ramen-console          # terraform google_compute_global_address.console
+  tlsSecret: ramen-console-tls         # created by deploy/scripts/selfsigned.sh <console_ip>
+  routesLabel: ramen.io/routes         # namespaces labelled <routesLabel>=true may attach HTTPRoutes (worker namespaces; label ramen-system too)
+rbac:
+  create: true                         # ClusterRole for the console KSA (manages worker namespaces, HTTPRoutes)

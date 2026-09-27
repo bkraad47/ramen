@@ -305,6 +305,9 @@ def compute_handler(state):
     """state: {'backend': {...} | None, 'policies': {name: policy}}"""
     def h(coll, method, kw):
         if coll == "backendServices":
+            if method in ("patch", "setSecurityPolicy") and state.get("bs_not_ready", 0) > 0:
+                state["bs_not_ready"] -= 1
+                raise FakeApiError(400, f"The resource 'projects/p1/global/backendServices/{kw['backendService']}' is not ready")
             if method == "list":
                 if kw.get("pageToken") is None and state.get("paged"):
                     return {"items": [{"name": "other", "backends": []}], "nextPageToken": "p2"}

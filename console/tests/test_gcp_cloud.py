@@ -457,3 +457,25 @@ async def test_deploy_waits_for_old_pods_to_drain(cloud, fk, http_state):
     fk.k8s.core.list_namespaced_pod = listing
     r = await cloud.deploy("demo", "dev", "a", canary=True, config={"RAMEN_MCP_KEYS": "rmk_1"})
     assert r["ok"] and any("old pods drained" in l for l in r["log"])
+
+
+async def test_rebalance_and_armor_retry_while_backend_not_ready(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "fingerprint": "f1", "backends": [
+        {"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}]}
+    fk.compute_state["bs_not_ready"] = 2
+    r = await cloud.rebalance("demo", "a")
+    assert r["applied"] and fk.compute_state["bs_not_ready"] == 0
+    fk.compute_state["bs_not_ready"] = 2
+    r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    assert r["attached"] and fk.compute_state["bs_not_ready"] == 0
+
+
+async def test_abort_deploy_scales_canary_to_zero(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.k8s.objs[("Deployment", "ramen-demo-a", "worker-canary")]["spec"]["replicas"] = 1
+    await cloud.abort_deploy("demo", "a")
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+    await cloud.abort_deploy("demo", "nozone")  # no namespace: no-op

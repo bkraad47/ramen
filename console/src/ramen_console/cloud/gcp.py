@@ -228,6 +228,13 @@ class GcpCloud(Cloud):
         return {**out, "backend_service": bs["name"], "attached": True}
 
     @_guard
+    async def abort_deploy(self, group, zone):
+        ns = ns_name(group, zone)
+        if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary"):
+            await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
+            await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
+
+    @_guard
     async def detach_group(self, group):
         """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA (F4.1)."""
         prefix = f"ramen-{group}-"

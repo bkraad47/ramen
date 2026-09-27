@@ -47,7 +47,7 @@ API_KEY_HEADER = "X-Ramen-Api-Key"
 
 
 class Console:
-    def __init__(self, base: str, api_key: str | None = None, timeout: float = 60):
+    def __init__(self, base: str, api_key: str | None = None, timeout: float = 180):  # cloud ops (Armor/backends) retry for minutes
         headers = {API_KEY_HEADER: api_key} if api_key else {}
         self.http = httpx.Client(base_url=strip(base), verify=tls_verify(), timeout=timeout, headers=headers)
         self.email: str | None = None

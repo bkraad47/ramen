@@ -1,0 +1,24 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy: { matrix: { dir: [console, runtime-py] } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - working-directory: ${{ matrix.dir }}
+        run: |
+          if [ -f pyproject.toml ]; then uv sync --all-extras && uv run pytest --cov --cov-fail-under=90; else echo "no project yet"; fi
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "1.98.1", components: "clippy,rustfmt" }
+      - working-directory: node-rs
+        run: |
+          if [ -f Cargo.toml ]; then cargo fmt --check && cargo clippy -- -D warnings && cargo test; else echo "no crate yet"; fi

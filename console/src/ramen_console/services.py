@@ -43,6 +43,8 @@ class Services:
     async def delete_group(self, name) -> None:
         await self.get_group(name)
         await self.cloud.detach_group(name)  # destroys the group's infra first (F4.1); errors abort the delete
+        for d in await self.store.list("secrets", {"group": name}):
+            await self.secrets_backend.delete(d)  # removes Secret Manager secrets too, never just the store doc
         for col in ("environments", "secrets", "workers"):
             for d in await self.store.list(col, {"group": name}):
                 await self.store.delete(col, d["id"])

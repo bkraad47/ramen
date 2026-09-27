@@ -1,0 +1,2 @@
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Audit{% endblock %}
+{% block body %}{{ table(rows, ['ts', 'user', 'ip', 'action', 'target', 'ok', 'tags'], '/api/v1/audit', 'Audit log (latest 200)') }}{% endblock %}

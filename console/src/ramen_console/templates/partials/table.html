@@ -1,0 +1,8 @@
+{% macro table(rows, cols, api, name, actions=None) %}
+<div class="card"><div class="dl">download: <a href="{{ api }}{{ '&' if '?' in api else '?' }}format=csv">CSV</a><a href="{{ api }}{{ '&' if '?' in api else '?' }}format=json">JSON</a></div>
+<h2 style="margin-top:0">{{ name }}</h2>
+<table><thead><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}{% if actions %}<th></th>{% endif %}</tr></thead><tbody>
+{% for r in rows %}<tr>{% for c in cols %}<td>{% set v = r.get(c) %}{% if v is mapping or v is sequence and v is not string %}<code>{{ tojson(v) }}</code>{% else %}{{ v if v is not none else '' }}{% endif %}</td>{% endfor %}
+{% if actions %}<td>{{ actions(r) }}</td>{% endif %}</tr>{% else %}<tr><td colspan="{{ cols|length + 1 }}" class="muted">nothing yet</td></tr>{% endfor %}
+</tbody></table></div>
+{% endmacro %}

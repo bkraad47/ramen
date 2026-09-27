@@ -1,0 +1,9 @@
+{
+  "type": "widget",
+  "name": "bad_type_tool",
+  "description": "BROKEN: type widget is not in {tool, resource, prompt}.",
+  "callable": "run",
+  "input": {},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

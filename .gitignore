@@ -12,3 +12,5 @@ dist/
 .terraform/
 *.tfstate*
 .DS_Store
+deploy/local/.cookies
+coverage.xml

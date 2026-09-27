@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}API Keys{% endblock %}
+{% block body %}
+<div class="card"><form class="inline" hx-post="/api/v1/api-keys" hx-ext="json" hx-target="#once" hx-swap="innerHTML">
+<label>Name<input name="name" required></label><label>Role (≤ yours)<select name="role"><option value="">same as me</option><option>viewer</option><option>group_admin</option>{% if p.role == 'super_admin' %}<option>super_admin</option>{% endif %}</select></label>
+<label>Groups (comma, blank = mine)<input name="groups"></label><button>Mint key</button></form><div id="once"></div>
+<p class="muted">Send as header <code>X-Ramen-Api-Key: rmn_…</code> to <code>/api/v1/*</code>. See <a href="/api/docs">API docs</a>.</p></div>
+{% macro act(r) %}<button class="sm danger" hx-delete="/api/v1/api-keys/{{ r.id }}" hx-confirm="Revoke key {{ r.name }}?" hx-swap="none">revoke</button>{% endmacro %}
+{{ table(keys, ['id', 'name', 'role', 'groups', 'created'], '/api/v1/api-keys', 'API keys', act) }}
+{% endblock %}

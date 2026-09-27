@@ -1,0 +1,51 @@
+# One release = one group + environment. Workers are deployed once per zone in `zones`.
+group: demo
+environment: default
+image:
+  worker: ramen-worker
+  console: ramen-console
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+zones:                # one worker Deployment per entry, pinned to topology.kubernetes.io/zone
+  - name: australia-southeast1-a
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 4
+    size: small       # key into worker.sizes
+
+worker:
+  port: 8080
+  bucketPath: /buckets
+  bucketVolume: { emptyDir: {} }   # GKE: replace with a GCS FUSE CSI volume for the group bucket
+  hpaCpuPercent: 70
+  sizes:
+    small:  { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "1",  memory: 512Mi } }
+    medium: { requests: { cpu: 500m, memory: 512Mi }, limits: { cpu: "2",  memory: 1Gi } }
+    large:  { requests: { cpu: "1",  memory: 1Gi },   limits: { cpu: "4",  memory: 2Gi } }
+  env:                # non-secret RAMEN_* vars → ConfigMap
+    RAMEN_SIDECAR_IDLE_SECS: "300"
+    RAMEN_MAX_INFLIGHT: "32"
+    RAMEN_ALLOWED_CIDRS: "0.0.0.0/0,::/0"
+    RAMEN_TRUST_PROXY: "1"
+    RAMEN_VERBOSE: "0"
+  secrets:            # secret RAMEN_* vars → Secret (set via --set or an external secret operator)
+    RAMEN_MCP_KEYS: ""
+    RAMEN_ADMIN_KEY: ""
+  pdb: { minAvailable: 1 }
+
+console:
+  enabled: true
+  replicas: 1
+  port: 8000
+  resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "1", memory: 512Mi } }
+  env:
+    RAMEN_STORE: firestore
+    RAMEN_CLOUD: gcp
+  secrets:
+    RAMEN_FERNET_KEY: ""
+    RAMEN_ADMIN_EMAIL: ""
+    RAMEN_ADMIN_PASSWORD: ""
+  service: { type: ClusterIP, annotations: {} }
+
+serviceAccount: { create: true, annotations: {} }   # annotate with iam.gke.io/gcp-service-account for Workload Identity

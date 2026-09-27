@@ -1,0 +1,17 @@
+{{- $root := . }}
+{{- range .Values.zones }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ramen.workerName" (dict "root" $root "zone" .) }}
+  labels: {{- include "ramen.labels" $root | nindent 4 }}
+    ramen.io/role: worker
+    ramen.io/zone: {{ .name }}
+  annotations:
+    cloud.google.com/neg: '{"exposed_ports": {"{{ $root.Values.worker.port }}": {"name": "{{ include "ramen.workerName" (dict "root" $root "zone" .) }}"}}}'
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/instance: {{ $root.Release.Name }}, ramen.io/role: worker, ramen.io/zone: {{ .name }} }
+  ports: [{ name: http, port: {{ $root.Values.worker.port }}, targetPort: http }]
+{{- end }}

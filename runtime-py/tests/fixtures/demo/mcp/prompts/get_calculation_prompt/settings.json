@@ -1,0 +1,5 @@
+{
+  "allowed_tools": ["demo_calculator_tool"],
+  "max_tool_calls": 10,
+  "boundaries": ["arithmetic only", "never guess a result without calling the tool"]
+}

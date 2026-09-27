@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}Dashboard{% endblock %}
+{% block body %}
+<div class="card"><div class="legend">Load per zone × group: <span style="background:var(--blue)"></span>low <span style="background:var(--green)"></span>even <span style="background:var(--red)"></span>high <span style="background:var(--grey)"></span>down/none
+{% if p.role == 'super_admin' %}<button class="sm ghost" style="float:right" hx-post="/api/v1/refresh" hx-swap="none">Refresh discovery</button>{% endif %}</div></div>
+<div id="grid" hx-get="/ui/dashboard" hx-trigger="load, every 10s" hx-swap="innerHTML"><p class="muted">loading…</p></div>
+{% endblock %}

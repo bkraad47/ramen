@@ -1,0 +1,65 @@
+# Local Ramen stack (CONTRACTS §5): Firestore emulator + console + one worker (group `demo`).
+# Shell env > .env > defaults below (CI exports RAMEN_ADMIN_EMAIL/PASSWORD, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY).
+# Deploy from the console writes /buckets/demo/.ramen/env-local (minted rmk_ keys) and POSTs worker /admin/reload. Worker build context is the ramen repo root
+# because the image needs both node-rs/ and runtime-py/ (see node-rs/Dockerfile).
+name: ramen
+services:
+  firestore:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators firestore start --host-port=0.0.0.0:8081 --project=${GCP_PROJECT:-ramen-local}
+    ports: ["8081:8081"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8081/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  console:
+    build:
+      context: ../../console
+    image: ramen-console:${VERSION:-0.1.0}
+    depends_on:
+      firestore: { condition: service_healthy }
+    environment:
+      RAMEN_STORE: firestore
+      FIRESTORE_EMULATOR_HOST: firestore:8081
+      GOOGLE_CLOUD_PROJECT: ${GCP_PROJECT:-ramen-local}
+      RAMEN_CLOUD: local
+      RAMEN_TLS: self
+      RAMEN_CONSOLE_PORT: "8443"
+      RAMEN_ADMIN_EMAIL: ${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
+      RAMEN_ADMIN_PASSWORD: ${RAMEN_ADMIN_PASSWORD:-changeme-ramen}
+      RAMEN_FERNET_KEY: ${RAMEN_FERNET_KEY:-0VnINh_5EgyBnkUEf44BuR7CTKLrb97GSTjdjTbbkhY=}
+      RAMEN_BUCKET_ROOT: /buckets
+      RAMEN_LOG_ROOT: /buckets/_logs
+      RAMEN_WORKER_URL: http://worker:8080        # zone `local` → this worker
+      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}   # sent as X-Ramen-Admin-Key on deploy
+    ports: ["8443:8443"]
+    volumes:
+      - buckets:/buckets
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: node-rs/Dockerfile
+      args: { VERSION: "${VERSION:-0.1.0}" }
+    image: ramen-worker:${VERSION:-0.1.0}
+    environment:
+      RAMEN_NODE_PORT: "8080"
+      RAMEN_BUCKET: /buckets/demo
+      RAMEN_GROUP: demo
+      RAMEN_ENV: default
+      RAMEN_ZONE: local
+      RAMEN_MCP_KEYS: ${RAMEN_MCP_KEYS:-local-mcp-key}
+      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}
+      RAMEN_ALLOWED_CIDRS: ${RAMEN_ALLOWED_CIDRS:-0.0.0.0/0,::/0}
+      RAMEN_SIDECAR_IDLE_SECS: "300"
+      RAMEN_MAX_INFLIGHT: "32"
+      RAMEN_VERBOSE: ${RAMEN_VERBOSE:-0}
+      RAMEN_LOG_FILE: /buckets/_logs/demo/local/worker.log   # read back by the console Logs page
+    ports: ["8080:8080"]
+    volumes:
+      - buckets:/buckets
+
+volumes:
+  buckets: {}

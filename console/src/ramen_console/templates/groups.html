@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Groups{% endblock %}
+{% block body %}
+{% if p.role == 'super_admin' %}<div class="card"><form class="inline" hx-post="/api/v1/groups" hx-ext="json" hx-swap="none">
+<label>Name<input name="name" pattern="[a-z][a-z0-9-]*" required></label><label>Git repo URL<input name="repo_url" placeholder="https://github.com/org/repo.git"></label><label>Ref<input name="ref" value="main"></label><button>Create group</button></form></div>{% endif %}
+{% macro act(r) %}<a class="btn ghost sm" href="/groups/{{ r.id }}">open</a>{% if p.role == 'super_admin' %} <button class="sm danger" hx-delete="/api/v1/groups/{{ r.id }}" hx-confirm="Delete group {{ r.id }} and destroy its infrastructure?" hx-swap="none">delete</button>{% endif %}{% endmacro %}
+{{ table(groups, ['name', 'repo_url', 'ref', 'created', 'created_by'], '/api/v1/groups', 'Groups', act) }}
+{% endblock %}

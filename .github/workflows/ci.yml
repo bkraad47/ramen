@@ -2,7 +2,15 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+env:
+  UV_PYTHON: "3.14"
 jobs:
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_versions.py
+
   python:
     runs-on: ubuntu-latest
     strategy: { matrix: { dir: [console, runtime-py] } }
@@ -12,13 +20,97 @@ jobs:
       - run: uv python install 3.14
       - working-directory: ${{ matrix.dir }}
         run: |
-          if [ -f pyproject.toml ]; then uv sync --all-extras && uv run pytest --cov --cov-fail-under=90; else echo "no project yet"; fi
+          if [ -f pyproject.toml ]; then uv sync --all-extras && uv run pytest --cov --cov-report=xml --cov-fail-under=90; else echo "no project yet"; fi
+      - uses: actions/upload-artifact@v4
+        if: hashFiles(format('{0}/coverage.xml', matrix.dir)) != ''
+        with: { name: "coverage-${{ matrix.dir }}", path: "${{ matrix.dir }}/coverage.xml" }
+
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: "1.98.1", components: "clippy,rustfmt" }
+        with: { toolchain: "1.98.1", components: "clippy,rustfmt,llvm-tools-preview" }
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - working-directory: node-rs
         run: |
-          if [ -f Cargo.toml ]; then cargo fmt --check && cargo clippy -- -D warnings && cargo test; else echo "no crate yet"; fi
+          if [ -f Cargo.toml ]; then
+            cargo fmt --check && cargo clippy -- -D warnings && cargo test
+            cargo llvm-cov --cobertura --output-path coverage.xml
+          else echo "no crate yet"; fi
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('node-rs/coverage.xml') != ''
+        with: { name: coverage-node-rs, path: node-rs/coverage.xml }
+
+  tests:
+    # conformance suites in "skip without env" mode: everything collects, fixture/schema tests run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - working-directory: tests
+        run: uv sync && uv run pytest -q -rs
+
+  compose-check:
+    # hashFiles() is empty at job level (no checkout yet), so the e2e guard is computed here.
+    runs-on: ubuntu-latest
+    outputs: { present: "${{ steps.c.outputs.present }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        run: |
+          if [ "${{ hashFiles('deploy/local/docker-compose.yml') }}" != "" ]; then echo present=true >> "$GITHUB_OUTPUT"; else echo present=false >> "$GITHUB_OUTPUT"; fi
+
+  e2e:
+    needs: [versions, python, rust, tests, compose-check]
+    if: needs.compose-check.outputs.present == 'true'
+    continue-on-error: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RAMEN_CONSOLE_URL: https://localhost:8443
+      RAMEN_NODE_URL: http://localhost:8080
+      RAMEN_MCP_KEY: ci-mcp-key
+      RAMEN_MCP_KEYS: ci-mcp-key
+      RAMEN_ADMIN_KEY: ci-admin-key
+      RAMEN_ADMIN_EMAIL: admin@ramen.local
+      RAMEN_ADMIN_PASSWORD: ramen-admin
+      RAMEN_TLS_INSECURE: "1"
+      RAMEN_DEMO_REPO: https://github.com/bkraad47/ramen-demo-mcp-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, pattern: "coverage-*" }
+      - name: Runtime venv for sidecar conformance
+        run: |
+          if [ -f runtime-py/pyproject.toml ]; then
+            (cd runtime-py && uv sync --all-extras)
+            echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
+          fi
+      - name: Compose up
+        run: docker compose -f deploy/local/docker-compose.yml up -d --build
+      - name: Wait ready
+        run: |
+          scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/login" 180
+          scripts/wait_ready.sh "$RAMEN_NODE_URL/healthz" 180
+      - name: e2e (deploys demo, mints MCP key) then conformance
+        working-directory: tests
+        run: uv sync && uv run pytest -q -rs e2e conformance --cov --cov-report=xml --cov-report=term
+      - name: Compose logs
+        if: failure()
+        run: docker compose -f deploy/local/docker-compose.yml logs --no-color --tail=300
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage-tests, path: tests/coverage.xml, if-no-files-found: ignore }
+      - name: Coverage report
+        if: always()
+        run: python3 scripts/coverage_report.py --artifacts artifacts --out coverage-report.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage-report, path: coverage-report.md, if-no-files-found: ignore }
+      - name: Compose down
+        if: always()
+        run: docker compose -f deploy/local/docker-compose.yml down -v

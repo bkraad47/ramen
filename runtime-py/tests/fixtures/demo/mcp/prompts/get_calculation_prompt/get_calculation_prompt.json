@@ -1,0 +1,10 @@
+{
+  "type": "prompt",
+  "name": "get_calculation_prompt",
+  "description": "Guide an agent to solve an arithmetic request with demo_calculator_tool.",
+  "input": {
+    "request": {"type": "string", "description": "the user's arithmetic question"}
+  },
+  "skill": "SKILL.md",
+  "settings": "settings.json"
+}

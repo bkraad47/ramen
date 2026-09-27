@@ -1,0 +1,11 @@
+{
+  "type": "resource",
+  "name": "demo_readme",
+  "uri": "ramen://demo/readme",
+  "description": "README of the demo group repo.",
+  "mime_type": "text/markdown",
+  "callable": "read_readme",
+  "input": {},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

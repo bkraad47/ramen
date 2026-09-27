@@ -1,0 +1,51 @@
+# Ramen v0.1.0 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose.
+export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
+VERSION := $(shell cat VERSION)
+COMPOSE := docker compose -f deploy/local/docker-compose.yml
+.PHONY: test test-runtime test-node test-console test-harness lint build build-worker build-console env up down logs demo demo-worker clean
+
+test: test-runtime test-node test-console
+
+test-runtime:
+	cd runtime-py && uv sync -q --all-extras && uv run pytest -q --cov --cov-fail-under=90
+
+test-node:
+	cd node-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+
+test-console:
+	@if [ -f console/pyproject.toml ] && ls console/tests/*.py >/dev/null 2>&1; then cd console && uv sync -q --all-extras && uv run pytest -q --cov --cov-fail-under=90; else echo "console: no tests yet"; fi
+
+test-harness:
+	cd tests && uv sync -q && uv run pytest -q
+
+build: build-worker build-console
+
+build-worker:
+	docker build -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t ramen-worker:$(VERSION) .
+
+build-console:
+	@if [ -f console/Dockerfile ]; then docker build -t ramen-console:$(VERSION) console; else echo "console/Dockerfile missing"; fi
+
+env:
+	@[ -f deploy/local/.env ] || cp deploy/local/.env.example deploy/local/.env
+
+up: env
+	$(COMPOSE) up -d --build
+
+down:
+	$(COMPOSE) down -v
+
+logs:
+	$(COMPOSE) logs -f --tail=100
+
+# Full path: stack up → console API creates group demo → deploy → MCP call (needs the console).
+demo: up
+	@for i in $$(seq 1 90); do curl -sk -o /dev/null https://localhost:8443/login && curl -sf -o /dev/null http://localhost:8080/healthz && break; sleep 2; done
+	deploy/local/demo.sh
+
+# Worker-only path: local ramen-node + runtime-py against a clone of the demo repo, no console/docker.
+demo-worker:
+	deploy/local/demo-worker.sh
+
+clean:
+	rm -rf node-rs/target runtime-py/.venv console/.venv tests/.venv deploy/local/.cookies

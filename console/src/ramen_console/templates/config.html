@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block title %}Config{% endblock %}
+{% block body %}
+<div class="card"><b>Config file:</b> <code>{{ config_file or 'none (RAMEN_CONFIG unset)' }}</code> <button class="sm" hx-post="/api/v1/config/reload" hx-swap="none">Hot reload</button>
+<p class="muted">Top-level yaml keys map to <code>RAMEN_*</code> env vars (nested keys join with <code>_</code>); real env vars win. OAuth providers: {{ providers|join(', ') or 'none configured' }}.</p></div>
+<div class="card"><h2 style="margin-top:0">Effective RAMEN_* environment</h2><table>{% for k, v in env.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h2 style="margin-top:0">Super-admin service-account rules</h2><p class="muted">Group admins cannot add restrictions that clash with these.</p>
+<form hx-put="/api/v1/config/sa-rules" hx-ext="json" hx-swap="none" hx-vals='js:{rules: JSON.parse(document.getElementById("rules").value || "[]")}'><textarea id="rules" rows="5" style="width:100%">{{ tojson(rules, indent=1) }}</textarea><br><button>Save rules</button></form></div>
+{% endblock %}

@@ -24,7 +24,8 @@ Errors: 401 `-32001` unauthorized, 403 `-32000` ip not allowed, 400 `-32700`/`-3
 | `RAMEN_BUCKET` | `/buckets/default` | group repo root containing `mcp/` |
 | `RAMEN_PYTHON` / `RAMEN_PYTHONPATH` | `python3` / unset | interpreter with `ramen_runtime` installed (image: `/opt/venv/bin/python`) |
 | `RAMEN_MCP_KEYS` | empty = deny all | comma list; union of env, `RAMEN_CONFIG` and the deploy file |
-| `RAMEN_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` | |
+| `RAMEN_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` | `/mcp` allowlist |
+| `RAMEN_ADMIN_CIDRS` | `0.0.0.0/0,::/0` | `/admin/*` allowlist, independent of the MCP lock |
 | `RAMEN_TRUST_PROXY` | `0` | `1` → first `X-Forwarded-For` hop is the client IP |
 | `RAMEN_ADMIN_KEY` | unset = admin disabled | |
 | `RAMEN_GROUP` / `RAMEN_ZONE` / `RAMEN_ENV` | `default` / `local` / `default` | log fields |

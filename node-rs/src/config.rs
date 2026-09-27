@@ -27,6 +27,8 @@ pub struct Config {
     pub pythonpath: Option<String>,
     pub mcp_keys: Vec<String>,
     pub allowed_cidrs: Vec<IpNet>,
+    /// CIDRs allowed to call `/admin/*` (key-protected). Default: any, so IP locks on `/mcp` never lock the console out.
+    pub admin_cidrs: Vec<IpNet>,
     pub admin_key: Option<String>,
     pub verbose: bool,
     pub trust_proxy: bool,
@@ -113,6 +115,17 @@ impl Config {
                 .map_err(|e| format!("RAMEN_ALLOWED_CIDRS {c}: {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+        let admin_cidrs = if get("RAMEN_ADMIN_CIDRS").is_some() {
+            list("RAMEN_ADMIN_CIDRS")
+        } else {
+            vec!["0.0.0.0/0".into(), "::/0".into()]
+        }
+        .iter()
+        .map(|c| {
+            c.parse::<IpNet>()
+                .map_err(|e| format!("RAMEN_ADMIN_CIDRS {c}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
         Ok(Config {
             port: num("RAMEN_NODE_PORT", 8080)? as u16,
             bucket: PathBuf::from(get("RAMEN_BUCKET").unwrap_or_else(|| "/buckets/default".into())),
@@ -121,6 +134,7 @@ impl Config {
             pythonpath: get("RAMEN_PYTHONPATH"),
             mcp_keys: list("RAMEN_MCP_KEYS"),
             allowed_cidrs,
+            admin_cidrs,
             admin_key: get("RAMEN_ADMIN_KEY"),
             verbose: matches!(get("RAMEN_VERBOSE").as_deref(), Some("1" | "true")),
             trust_proxy: matches!(get("RAMEN_TRUST_PROXY").as_deref(), Some("1" | "true")),

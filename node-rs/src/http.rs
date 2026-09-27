@@ -168,7 +168,7 @@ async fn admin_reload(
     headers: HeaderMap,
 ) -> Response {
     let cfg = app.cfg.read().await.clone();
-    if !auth::ip_allowed(&cfg, auth::client_ip(&cfg, peer, &headers))
+    if !auth::admin_ip_allowed(&cfg, auth::client_ip(&cfg, peer, &headers))
         || !auth::check_admin(&cfg, &headers)
     {
         return (

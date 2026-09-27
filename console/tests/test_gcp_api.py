@@ -180,7 +180,7 @@ def test_refresh_reconciles_store_and_dashboard(demo, fk):
 
 def test_rebalance_ip_rules_config(demo, fk):
     r = demo.post("/api/v1/groups/demo/zones/a/rebalance")
-    assert r.status_code == 404 and "ramen-demo-a" in r.text
+    assert r.status_code == 200 and r.json()["applied"] is False and "ramen-demo-a" in r.json()["note"]
     fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}]}
     r = demo.post("/api/v1/groups/demo/zones/a/rebalance").json()
     assert r["ok"] and r["backend_service"] == "gkegw1-ramen-demo-a" and r["capacity_scaler"] == 1.0

@@ -51,15 +51,26 @@ pub fn client_ip(cfg: &Config, peer: SocketAddr, headers: &HeaderMap) -> IpAddr 
     peer.ip()
 }
 
-pub fn ip_allowed(cfg: &Config, ip: IpAddr) -> bool {
-    let ip = match ip {
+fn normalize(ip: IpAddr) -> IpAddr {
+    match ip {
         IpAddr::V6(v6) => v6
             .to_ipv4_mapped()
             .map(IpAddr::V4)
             .unwrap_or(IpAddr::V6(v6)),
         v4 => v4,
-    };
+    }
+}
+
+/// `/mcp` allowlist (`RAMEN_ALLOWED_CIDRS`).
+pub fn ip_allowed(cfg: &Config, ip: IpAddr) -> bool {
+    let ip = normalize(ip);
     cfg.allowed_cidrs.iter().any(|n| n.contains(&ip))
+}
+
+/// `/admin/*` allowlist (`RAMEN_ADMIN_CIDRS`, default any) so MCP IP locks cannot break deploys.
+pub fn admin_ip_allowed(cfg: &Config, ip: IpAddr) -> bool {
+    let ip = normalize(ip);
+    cfg.admin_cidrs.iter().any(|n| n.contains(&ip))
 }
 
 #[cfg(test)]
@@ -109,6 +120,17 @@ mod tests {
             &h(&[("x-ramen-admin-key", "x")])
         ));
         assert!(!check_admin(&cfg(&[]), &h(&[("x-ramen-admin-key", "adm")])));
+    }
+
+    #[test]
+    fn admin_cidrs_independent_of_mcp_lock() {
+        let c = cfg(&[("RAMEN_ALLOWED_CIDRS", "203.0.113.0/24")]);
+        let console: IpAddr = "10.4.0.7".parse().unwrap();
+        assert!(!ip_allowed(&c, console));
+        assert!(admin_ip_allowed(&c, console));
+        let c = cfg(&[("RAMEN_ADMIN_CIDRS", "10.0.0.0/8")]);
+        assert!(admin_ip_allowed(&c, console));
+        assert!(!admin_ip_allowed(&c, "203.0.113.9".parse().unwrap()));
     }
 
     #[test]

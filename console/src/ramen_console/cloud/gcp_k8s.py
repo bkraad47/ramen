@@ -137,6 +137,17 @@ class Kube:
             raise ApiError(502, f"unsupported manifest kind {kind}")
         return table[kind]
 
+    def list_namespaces(self, group: str) -> list[str]:
+        items = self.c.to_dict(self.c.core.list_namespace(label_selector=f"ramen.io/group={group}")).get("items", [])
+        return sorted(n["metadata"]["name"] for n in items if n["metadata"].get("labels", {}).get("ramen.io/group") == group)
+
+    def delete_namespace(self, name: str) -> None:
+        try:
+            self.c.core.delete_namespace(name)
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 404:
+                raise
+
     def apply(self, doc: dict, keep: tuple[str, ...] = ()) -> None:
         create, patch, _, namespaced = self._fns(doc["kind"])
         m = doc["metadata"]

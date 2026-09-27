@@ -24,7 +24,8 @@ locals {
     "roles/storage.admin", "roles/secretmanager.admin", "roles/container.developer",
     "roles/logging.viewer", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountUser",
     "roles/compute.securityAdmin", "roles/compute.loadBalancerAdmin",
-    "roles/datastore.user", # Firestore state DB (needed beyond the §7 list; the console cannot start without it)
+    "roles/datastore.user",              # Firestore state DB
+    "roles/resourcemanager.projectIamAdmin", # bind conditioned roles to per-group GSAs (create_service_account)
   ]
 }
 

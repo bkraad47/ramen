@@ -150,6 +150,16 @@ class Iam:
         r = self.iam.projects().serviceAccounts().list(name=f"projects/{self.project}").execute()
         return sorted(a["email"] for a in r.get("accounts", []) if a["email"].startswith("ramen-"))
 
+    def list_service_accounts(self, prefix: str) -> list[str]:
+        return [e for e in self.list_accounts() if e.startswith(prefix)]
+
+    def delete_service_account(self, email: str) -> None:
+        try:
+            self.iam.projects().serviceAccounts().delete(name=f"projects/{self.project}/serviceAccounts/{email}").execute()
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 404:
+                raise
+
     @staticmethod
     def _add(policy, role, member, condition=None) -> bool:
         for b in policy.setdefault("bindings", []):

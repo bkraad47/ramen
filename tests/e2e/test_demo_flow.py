@@ -10,7 +10,7 @@ import pytest
 from ramen_tests import env as E
 from ramen_tests import state
 from ramen_tests.console import items
-from ramen_tests.mcp_client import session, text_of
+from ramen_tests.mcp_client import INIT_BODY, MCP_HEADERS, session, text_of
 
 pytestmark = pytest.mark.e2e
 GROUP = E.env("RAMEN_E2E_GROUP", "demo")
@@ -41,6 +41,24 @@ def metrics(node_url) -> dict:
     return httpx.get(f"{node_url}/metrics", verify=E.tls_verify(), timeout=10).json()
 
 
+def ready(node_url: str, key: str, timeout: float = 180) -> None:
+    """Bare node: /readyz 200. MCP-only LB route: an authenticated initialize answers 200."""
+    if E.node_admin(node_url):
+        return wait(f"{node_url}/readyz", timeout)
+    deadline, last = time.monotonic() + timeout, None
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.post(E.mcp_url(node_url), json=INIT_BODY, verify=E.tls_verify(), timeout=15,
+                           headers={**MCP_HEADERS, "Authorization": f"Bearer {key}"})
+            if r.status_code == 200:
+                return
+            last = r.status_code
+        except httpx.HTTPError as e:
+            last = e
+        time.sleep(3)
+    raise AssertionError(f"{E.mcp_url(node_url)} not ready after {timeout}s: {last}")
+
+
 @pytest.fixture(scope="module")
 def deployed(admin, node_url, demo_repo):
     ok(admin.create_zone(ZONE), 201, 409)
@@ -53,7 +71,7 @@ def deployed(admin, node_url, demo_repo):
     job = admin.wait_job(job["id"])
     assert job["status"] == "ok", job
     assert key not in str(job)
-    wait(f"{node_url}/readyz")
+    ready(node_url, key)
     return {"key": key, "job": job}
 
 
@@ -82,8 +100,8 @@ async def test_mcp_call_through_deployed_worker(deployed, node_url):
         assert "2+3" in p.messages[0].content.text
 
 
-def test_worker_metrics_reflect_load(deployed, node_url):
-    m = metrics(node_url)
+def test_worker_metrics_reflect_load(deployed, node_admin_url):
+    m = metrics(node_admin_url)
     assert m["total"] >= 1 and m["sidecar_alive"] is True
     assert m["packages"]["tools"] >= 1 and m["packages"]["errors"] == 0
 
@@ -102,8 +120,9 @@ def test_dashboard_shows_group_in_zone(admin, deployed):
 def test_redeploy_is_idempotent(admin, deployed, node_url):
     job = admin.wait_job(ok(admin.deploy(GROUP, ENV), 202).json()["id"])
     assert job["status"] == "ok", job
-    wait(f"{node_url}/readyz")
-    assert metrics(node_url)["packages"]["tools"] >= 1
+    ready(node_url, deployed["key"])
+    if E.node_admin(node_url):
+        assert metrics(node_url)["packages"]["tools"] >= 1
 
 
 def test_console_logs_reach_worker_output(admin, deployed):

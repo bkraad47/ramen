@@ -122,9 +122,17 @@ class _Core:
         return self.s._read("Namespace", None, name)
 
     def list_namespace(self, label_selector=""):
-        key = label_selector.split("=")[0]
+        key, _, want = label_selector.partition("=")
         return {"items": [copy.deepcopy(v) for (k, _, _), v in self.s.objs.items()
-                          if k == "Namespace" and key in v["metadata"].get("labels", {})]}
+                          if k == "Namespace" and key in v["metadata"].get("labels", {})
+                          and (not want or v["metadata"]["labels"][key] == want)]}
+
+    def delete_namespace(self, name):
+        if ("Namespace", None, name) not in self.s.objs:
+            raise FakeApiError(404, "no ns")
+        for k in [k for k in self.s.objs if k[1] == name or k == ("Namespace", None, name)]:
+            del self.s.objs[k]
+        return {}
 
     def create_namespaced_service_account(self, ns, body):
         return self.s._create("ServiceAccount", ns, body)
@@ -353,6 +361,12 @@ def iam_handler(state):
                 return accts[email]
             if method == "list":
                 return {"accounts": list(accts.values())}
+            if method == "delete":
+                email = kw["name"].rsplit("/", 1)[1]
+                if email not in accts:
+                    raise FakeApiError(404, "no sa")
+                del accts[email]
+                return {}
             email = kw["resource"].rsplit("/", 1)[1]
             if method == "getIamPolicy":
                 return copy.deepcopy(state.setdefault("sa_policy", {}).get(email, {"bindings": []}))

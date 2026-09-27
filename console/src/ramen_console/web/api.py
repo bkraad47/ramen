@@ -166,7 +166,7 @@ async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn
 @r.post("/groups/{group}/zones/{zone}/rebalance")
 async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(admin_g)):
     note(request, "rebalance", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).cloud.rebalance(group, zone))
+    return respond(request, await svc(request).rebalance(group, zone))
 
 
 @r.put("/groups/{group}/zones/{zone}/ip-rules")

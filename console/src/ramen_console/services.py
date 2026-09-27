@@ -6,7 +6,7 @@ from .errors import conflict, forbidden, invalid, not_found
 from .rbac import Principal, RuleClash, check_clash
 from .secrets.base import SecretsBackend, StoreBackend
 from .storage.base import Store
-from .util import CIDR_RE, KEYNAME_RE, NAME_RE, SECRET_RE, now, public, uid
+from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, public, uid
 
 
 class Services:
@@ -42,6 +42,7 @@ class Services:
 
     async def delete_group(self, name) -> None:
         await self.get_group(name)
+        await self.cloud.detach_group(name)  # destroys the group's infra first (F4.1); errors abort the delete
         for col in ("environments", "secrets", "workers"):
             for d in await self.store.list(col, {"group": name}):
                 await self.store.delete(col, d["id"])
@@ -132,6 +133,13 @@ class Services:
         e = await self.get_env(group, name)
         await self.store.delete("environments", e["id"])
 
+    async def rebalance(self, group, zone):
+        if not await self.store.get("groups", group):
+            raise not_found("group")
+        if not await self.store.get("zones", zone):
+            raise not_found("zone")
+        return await self.cloud.rebalance(group, zone)
+
     async def worker_config(self, group, zone) -> dict:
         if not await self.store.get("zones", zone):
             raise not_found("zone")
@@ -175,7 +183,7 @@ class Services:
         return r
 
     async def set_ip_rules(self, group, zone, cidrs: list[str]) -> dict:
-        bad = [c for c in cidrs if not CIDR_RE.match(c)]
+        bad = [c for c in cidrs if not is_cidr(c)]
         if bad:
             raise invalid(f"invalid CIDRs: {', '.join(bad)}")
         w = await self.worker_config(group, zone)

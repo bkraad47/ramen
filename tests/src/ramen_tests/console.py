@@ -3,7 +3,7 @@ import time
 
 import httpx
 
-from .env import strip, tls_verify
+from .env import env, strip, tls_verify
 
 ROUTES = {
     "login": "/login",                      # form POST {email,password} → 303 (401 on bad password)
@@ -22,7 +22,10 @@ ROUTES = {
     "job": "/api/v1/jobs/{id}",
     "workers": "/api/v1/groups/{group}/zones/{zone}/workers",       # GET {live:[{load}],count,size}
     "rebalance": "/api/v1/groups/{group}/zones/{zone}/rebalance",
-    "ip_rules": "/api/v1/groups/{group}/zones/{zone}/ip-rules",
+    "ip_rules": "/api/v1/groups/{group}/zones/{zone}/ip-rules",             # PUT {cidrs:[...]}
+    "service_account": "/api/v1/groups/{group}/zones/{zone}/service-account",  # POST → {name,...} (super admin)
+    "sa_restrictions": "/api/v1/groups/{group}/sa-restrictions",           # PUT {rules:[...]}
+    "env_verbose": "/api/v1/groups/{group}/environments/{env}/verbose",    # POST {verbose}
     "secrets": "/api/v1/groups/{group}/secrets",             # POST {name,value,env?,zone?} → 201 {id,name}
     "secret": "/api/v1/groups/{group}/secrets/{id}",
     "mcp_keys": "/api/v1/groups/{group}/mcp-keys",           # POST {name} → 201 {id,key:"rmk_..."}
@@ -33,9 +36,11 @@ ROUTES = {
     "backups": "/api/v1/backups",                            # POST {target:"local"} → 201 {id,release_version}
     "backup_download": "/api/v1/backups/{id}/download",
     "config": "/api/v1/config",
+    "config_reload": "/api/v1/config/reload",
+    "sa_rules": "/api/v1/config/sa-rules",
     "refresh": "/api/v1/refresh",
     "dashboard": "/api/v1/dashboard",
-    "logs": "/api/v1/logs",
+    "logs": "/api/v1/logs",                                  # ?group&zone&worker?&tail&download=1 → text/plain
     "healthz": "/healthz",
 }
 API_KEY_HEADER = "X-Ramen-Api-Key"
@@ -91,7 +96,9 @@ class Console:
     def create_group(self, name, repo_url, ref="main"):
         return self.post("groups", {"name": name, "repo_url": repo_url, "ref": ref})
 
-    def create_zone(self, name, provider="local", region="local"):
+    def create_zone(self, name, provider=None, region=None):
+        provider = provider or env("RAMEN_ZONE_PROVIDER", "local")
+        region = region or env("RAMEN_ZONE_REGION", "local")
         return self.post("zones", {"name": name, "provider": provider, "region": region})
 
     def create_environment(self, group, name, zones, ref="main"):

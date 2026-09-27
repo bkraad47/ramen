@@ -14,6 +14,14 @@ def node_url() -> str:
 
 
 @pytest.fixture(scope="session")
+def node_admin_url(node_url) -> str:
+    """Bare node URL with /healthz, /readyz, /metrics, /admin. Skips when RAMEN_NODE_URL is an MCP-only LB route."""
+    if not E.node_admin(node_url):
+        pytest.skip(f"{node_url} is an MCP-only route (LB); health/metrics/admin are not exposed there")
+    return node_url
+
+
+@pytest.fixture(scope="session")
 def mcp_key() -> str:
     """Key minted by the e2e deploy in this process wins; else RAMEN_MCP_KEY; else skip."""
     k = state.MCP_KEY or E.env("RAMEN_MCP_KEY")

@@ -94,7 +94,7 @@ def test_wrong_key_is_401(http, node_url):
     assert r.status_code == 401
 
 
-def test_health_ready_metrics(http):
+def test_health_ready_metrics(http, node_admin_url):
     assert http.get("/healthz").status_code == 200
     assert http.get("/readyz").status_code == 200
     m = http.get("/metrics").json()
@@ -104,7 +104,7 @@ def test_health_ready_metrics(http):
     assert set(m["packages"]) >= {"tools", "resources", "prompts", "errors"}
 
 
-def test_metrics_counts_calls(http, node_url, mcp_key):
+def test_metrics_counts_calls(http, node_url, mcp_key, node_admin_url):
     before = http.get("/metrics").json()["total"]
     r = http.post(endpoint(node_url), json={"jsonrpc": "2.0", "id": 9, "method": "ping"},
                   headers={**MCP_HEADERS, "Authorization": f"Bearer {mcp_key}"})
@@ -122,7 +122,7 @@ def test_cidr_lock(http, node_url, mcp_key):
     assert "error" in r.json()
 
 
-def test_admin_reload_requires_admin_key(http):
+def test_admin_reload_requires_admin_key(http, node_admin_url):
     r = http.post("/admin/reload")
     assert r.status_code in (401, 403)
     key = E.env("RAMEN_ADMIN_KEY")

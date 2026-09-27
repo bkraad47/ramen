@@ -1,6 +1,7 @@
 """Environment lookup. Missing env → pytest.skip, never a failure."""
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -28,3 +29,15 @@ def tls_verify() -> bool:
 
 def strip(url: str) -> str:
     return url.rstrip("/")
+
+
+def mcp_url(base: str) -> str:
+    """Full MCP endpoint. A node URL whose path already contains /mcp (e.g. an LB route
+    https://<ip>/mcp/<group>/<zone>) is the endpoint itself; a bare node URL gets /mcp appended."""
+    base = strip(base)
+    return base if "/mcp" in urlsplit(base).path else base + "/mcp"
+
+
+def node_admin(base: str) -> bool:
+    """True when RAMEN_NODE_URL is a bare node (health/metrics/admin reachable); False for an MCP-only LB route."""
+    return urlsplit(strip(base)).path in ("", "/")

@@ -1,0 +1,8 @@
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+    {{ .Values.route.label }}: "true"
+{{- end }}

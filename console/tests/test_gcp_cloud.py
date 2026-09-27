@@ -1,0 +1,404 @@
+import json
+import subprocess
+
+import httpx
+import pytest
+from types import SimpleNamespace as NS
+
+from ramen_console.cloud import make_cloud
+from ramen_console.cloud.gcp import GcpCloud
+from ramen_console.cloud.gcp_k8s import SIZES, manifests, normalize_size
+from ramen_console.errors import ApiError
+from tests.fakes_gcp import FakeApiError, FakeClients, FakeLogging
+
+SPEC = {"region": "us-central1-a", "size": "s", "count": 2}
+ADMIN = "adm-key"
+
+
+@pytest.fixture
+def http_state():
+    return {"smoke_ok": True, "reload_status": 200, "calls": []}
+
+
+@pytest.fixture
+def fk():
+    return FakeClients()
+
+
+@pytest.fixture
+def cloud(fk, http_state):
+    def handler(req: httpx.Request):
+        http_state["calls"].append((req.url.host, req.url.path, req.method))
+        if req.url.path == "/metrics":
+            load = "high" if req.url.host.endswith(".2") else "even"
+            return httpx.Response(200, json={"inflight": 2, "total": 9, "errors": 0, "load": load})
+        if req.url.path == "/admin/reload":
+            if req.headers.get("X-Ramen-Admin-Key") != ADMIN:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            return httpx.Response(http_state["reload_status"], json={"tools": [{"name": "calc"}], "errors": []})
+        if req.url.path == "/mcp":
+            body = json.loads(req.content)
+            assert body["method"] == "tools/list" and req.headers["Authorization"] == "Bearer rmk_1"
+            if not http_state["smoke_ok"]:
+                return httpx.Response(500, text="boom")
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
+        if req.url.path == "/readyz":
+            return httpx.Response(200)
+        return httpx.Response(404)
+    return GcpCloud(project="p1", region="us-central1", bucket="p1-groups", image="img/worker:0.2.0", admin_key=ADMIN,
+                    clients=fk, transport=httpx.MockTransport(handler), wait_secs=1, poll=0)
+
+
+def obj(fk, kind, ns, name):
+    return fk.k8s.objs[(kind, ns, name)]
+
+
+def test_sizes():
+    assert normalize_size("small") == "s" and normalize_size("l") == "l" and normalize_size("big") is None
+    assert SIZES["m"] == {"cpu": "500m", "memory": "1Gi"}
+
+
+def test_manifests_shape():
+    docs = manifests("demo", "a", SPEC, "img", "gs://b/demo", gsa="ramen-demo-a@p1.iam.gserviceaccount.com")
+    kinds = [d["kind"] for d in docs]
+    assert kinds == ["Namespace", "ServiceAccount", "Service", "Deployment", "Deployment", "HorizontalPodAutoscaler", "HTTPRoute"]
+    assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
+    route = docs[6]
+    assert route["apiVersion"] == "gateway.networking.k8s.io/v1" and route["metadata"] == {"name": "worker", "namespace": "ramen-demo-a", "labels": {"ramen.io/group": "demo", "ramen.io/zone": "a"}}
+    assert route["spec"]["parentRefs"] == [{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}]
+    rule = route["spec"]["rules"][0]
+    assert rule["matches"] == [{"path": {"type": "PathPrefix", "value": "/mcp/demo/a"}}]
+    assert rule["filters"] == [{"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}}}]
+    assert rule["backendRefs"] == [{"name": "worker", "port": 8080}]
+    dep = docs[3]
+    assert dep["metadata"]["name"] == "worker" and dep["spec"]["replicas"] == 2
+    assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-central1-a"}
+    env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["RAMEN_BUCKET_URI"] == "gs://b/demo" and env["RAMEN_BUCKET"] == "/data/bucket"
+    assert docs[4]["metadata"]["name"] == "worker-canary" and docs[4]["spec"]["replicas"] == 0
+    assert docs[1]["metadata"]["annotations"]["iam.gke.io/gcp-service-account"].startswith("ramen-demo-a@")
+    assert "ramen-demo-a" in docs[2]["metadata"]["annotations"]["cloud.google.com/neg"]
+    assert docs[5]["spec"]["minReplicas"] == 2 and docs[5]["spec"]["maxReplicas"] == 4
+    no_zone = manifests("demo", "a", {"region": "", "size": "xl", "count": 1}, "img", "gs://b/demo")
+    assert "nodeSelector" not in no_zone[3]["spec"]["template"]["spec"]
+    assert no_zone[3]["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["s"]
+
+
+async def test_attach_zone_idempotent(cloud, fk):
+    r = await cloud.attach_zone("demo", "a", SPEC)
+    assert r["namespace"] == "ramen-demo-a" and r["ok"]
+    obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] = 1
+    r2 = await cloud.attach_zone("demo", "a", {**SPEC, "count": 3})
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 1  # canary replicas preserved
+    assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"] == {"ramen.io/group": "demo", "ramen.io/zone": "a", "ramen.io/routes": "true"}
+    assert obj(fk, "HTTPRoute", "ramen-demo-a", "worker")["spec"]["rules"][0]["matches"][0]["path"]["value"] == "/mcp/demo/a"
+    assert ("create", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls and ("patch", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls
+    assert r2["ok"]
+
+
+async def test_deploy_canary_success(cloud, fk, http_state):
+    lines = []
+    cfg = {"RAMEN_VERBOSE": "0", "RAMEN_SECRET_DEMO__TOKEN": "s3cret", "RAMEN_MCP_KEYS": "rmk_1"}
+    res = await cloud.deploy("demo", "prod", "a", canary=True, config=cfg, spec=SPEC, log=lines.append)
+    assert res["ok"] is True, res
+    sec = obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]
+    assert sec["RAMEN_SECRET_DEMO__TOKEN"] == "s3cret" and sec["RAMEN_ENV"] == "prod" and sec["RAMEN_ADMIN_KEY"] == ADMIN
+    canary = obj(fk, "Deployment", "ramen-demo-a", "worker-canary")
+    assert canary["spec"]["replicas"] == 1
+    assert canary["spec"]["template"]["metadata"]["annotations"]["ramen.io/restartedAt"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["template"]["metadata"]["annotations"]["ramen.io/restartedAt"]
+    paths = [c[1] for c in http_state["calls"]]
+    assert paths.index("/admin/reload") < paths.index("/mcp")
+    assert any("canary" in l for l in lines) and any("smoke" in l for l in lines)
+    assert res["workers"][0]["result"]["tools"] == [{"name": "calc"}]
+    assert "s3cret" not in json.dumps(res) and "s3cret" not in "\n".join(lines)
+
+
+async def test_deploy_canary_bad_smoke_scales_canary_to_zero(cloud, fk, http_state):
+    await cloud.attach_zone("demo", "a", SPEC)
+    main_before = json.dumps(obj(fk, "Deployment", "ramen-demo-a", "worker"), sort_keys=True)
+    http_state["smoke_ok"] = False
+    lines = []
+    res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC, log=lines.append)
+    assert res["ok"] is False and "smoke" in res["error"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+    assert json.dumps(obj(fk, "Deployment", "ramen-demo-a", "worker"), sort_keys=True) == main_before
+    assert res["workers"] and res["workers"][0]["ok"] is False
+    assert any("scaled canary to 0" in l for l in lines)
+
+
+async def test_deploy_canary_reload_failure(cloud, fk, http_state):
+    http_state["reload_status"] = 500
+    res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC)
+    assert res["ok"] is False and "reload" in res["error"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+
+
+async def test_deploy_canary_not_ready_times_out(cloud, fk):
+    fk.k8s.ready = False
+    res = await cloud.deploy("demo", "prod", "a", config={}, spec=SPEC)
+    assert res["ok"] is False and "not ready" in res["error"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+
+
+async def test_deploy_no_canary_and_readyz_smoke(cloud, fk, http_state):
+    res = await cloud.deploy("demo", "prod", "a", canary=False, config={}, spec=SPEC)
+    assert res["ok"] is True
+    assert ("Deployment", "ramen-demo-a", "worker-canary") in fk.k8s.objs
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
+    assert not any(c[1] == "/mcp" for c in http_state["calls"])
+    # canary with no MCP keys smokes /readyz instead of tools/list
+    res = await cloud.deploy("demo", "prod", "a", canary=True, config={}, spec=SPEC)
+    assert res["ok"] and any(c[1] == "/readyz" for c in http_state["calls"])
+
+
+async def test_deploy_preserves_cidrs(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["backend"] = {"name": "gkegw1-x", "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a"}]}
+    await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    await cloud.deploy("demo", "prod", "a", canary=False, config={}, spec=SPEC)
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"
+
+
+async def test_workers_and_proxy(cloud, fk, monkeypatch):
+    assert await cloud.workers("demo", "a") == []
+    await cloud.attach_zone("demo", "a", SPEC)
+    ws = await cloud.workers("demo", "a")
+    assert [w["id"] for w in ws] == ["worker-0", "worker-1"]
+    assert ws[0]["load"] == "even" and ws[1]["load"] == "high" and ws[0]["track"] == "stable"
+    assert ws[0]["metrics"]["total"] == 9
+    fk.k8s.ready = False
+    assert all(w["load"] == "down" for w in await cloud.workers("demo", "a"))
+    fk.k8s.ready = True
+    cloud.pod_proxy = True
+    ws = await cloud.workers("demo", "a")
+    assert ws[0]["metrics"]["via"] == "proxy"
+
+
+async def test_workers_metrics_error(fk):
+    def handler(req):
+        raise httpx.ConnectError("nope")
+    c = GcpCloud(project="p1", region="r", bucket="b", image="i", clients=fk, transport=httpx.MockTransport(handler), poll=0)
+    await c.attach_zone("demo", "a", SPEC)
+    ws = await c.workers("demo", "a")
+    assert ws[0]["load"] == "down" and "ConnectError" in ws[0]["error"]
+
+
+async def test_logs(fk, cloud):
+    from datetime import datetime, timezone
+    fk.logging.entries = [
+        NS(timestamp=datetime(2026, 9, 27, 1, 0, 1, tzinfo=timezone.utc), severity="INFO", payload={"msg": "b"},
+           resource=NS(labels={"pod_name": "worker-0"})),
+        NS(timestamp=datetime(2026, 9, 27, 1, 0, 0, tzinfo=timezone.utc), severity=None, payload="a",
+           resource=NS(labels={"pod_name": "worker-1"})),
+    ]
+    text = await cloud.logs("demo", "a", tail=5)
+    lines = text.splitlines()
+    assert lines[0].endswith("worker-1 a") and '"msg": "b"' in lines[1]
+    assert 'resource.type="k8s_container"' in fk.logging.filters[0] and 'namespace_name="ramen-demo-a"' in fk.logging.filters[0]
+    await cloud.logs("demo", "a", worker="worker-0", tail=1)
+    assert 'pod_name="worker-0"' in fk.logging.filters[1]
+
+
+async def test_rebalance(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    with pytest.raises(ApiError) as e:
+        await cloud.rebalance("demo", "a")
+    assert e.value.status_code == 404 and "ramen-demo-a" in e.value.detail and "ramen-demo" in e.value.detail
+    # GKE Gateway auto-named backend service found through its NEG backend (second page)
+    fk.compute_state["paged"] = True
+    fk.compute_state["backend"] = {"name": "gkegw1-abcd-ramen-demo-a-worker-8080-xyz", "fingerprint": "f1", "backends": [
+        {"group": "https://www.googleapis.com/compute/v1/projects/p1/zones/us-central1-a/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0},
+        {"group": ".../networkEndpointGroups/ramen-demo-b", "capacityScaler": 1.0}]}
+    r = await cloud.rebalance("demo", "a")
+    assert r["ok"] and r["load"] == "high" and r["capacity_scaler"] == 0.5 and r["backend_service"].startswith("gkegw1-")
+    b = fk.compute_state["backend"]["backends"]
+    assert b[0]["capacityScaler"] == 0.5 and b[1]["capacityScaler"] == 1.0
+    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
+    r = await cloud.rebalance("demo", "a")
+    assert r["scaled_to"] == 3 and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+
+
+async def test_rebalance_fallback_name(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["backend"] = {"name": "ramen-demo", "backends": [{"group": "x/networkEndpointGroups/unrelated", "capacityScaler": 1.0}]}
+    r = await cloud.rebalance("demo", "a")
+    assert r["ok"] and r["backend_service"] == "ramen-demo" and fk.compute_state["backend"]["backends"][0]["capacityScaler"] == 1.0
+
+
+async def test_set_ip_rules(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    with pytest.raises(ApiError) as e:
+        await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
+    assert e.value.status_code == 404 and "not attached" in e.value.detail
+    pol = fk.compute_state["policies"]["ramen-demo"]
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8,192.168.0.0/16"
+    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a"}]}
+    r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
+    assert r["ok"] and r["policy"] == "ramen-demo" and r["cidrs"] == ["10.0.0.0/8", "192.168.0.0/16"] and r["backend_service"] == "gkegw1-ramen-demo-a"
+    pol = fk.compute_state["policies"]["ramen-demo"]
+    allow = [x for x in pol["rules"] if x["action"] == "allow"]
+    assert allow[0]["match"]["config"]["srcIpRanges"] == ["10.0.0.0/8", "192.168.0.0/16"]
+    assert [x for x in pol["rules"] if x["priority"] == 2147483647][0]["action"] == "deny(403)"
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8,192.168.0.0/16"
+    r = await cloud.set_ip_rules("demo", "a", [f"10.{i}.0.0/16" for i in range(12)])
+    pol = fk.compute_state["policies"]["ramen-demo"]
+    assert len([x for x in pol["rules"] if x["action"] == "allow"]) == 2 and r["attached"] is True
+    assert fk.compute_state["backend"]["securityPolicy"].endswith("securityPolicies/ramen-demo")
+    r = await cloud.set_ip_rules("demo", "a", [])
+    pol = fk.compute_state["policies"]["ramen-demo"]
+    assert [x for x in pol["rules"] if x["priority"] == 2147483647][0]["action"] == "allow"
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "0.0.0.0/0"
+
+
+async def test_create_service_account_idempotent(cloud, fk):
+    r = await cloud.create_service_account("demo", "a")
+    assert r["name"] == "ramen-demo-a@p1.iam.gserviceaccount.com" and r["created"] is True
+    assert r["ksa"] == "ramen-demo-a/worker"
+    r2 = await cloud.create_service_account("demo", "a")
+    assert r2["created"] is False and r2["name"] == r["name"]
+    pol = fk.iam_state["project_policy"]["bindings"]
+    roles = sorted(b["role"] for b in pol)
+    assert roles == ["roles/secretmanager.secretAccessor", "roles/storage.objectViewer"]
+    assert "p1-groups/objects/demo/" in pol[0]["condition"]["expression"] or "p1-groups/objects/demo/" in pol[1]["condition"]["expression"]
+    wi = fk.iam_state["sa_policy"][r["name"]]["bindings"]
+    assert wi == [{"role": "roles/iam.workloadIdentityUser", "members": ["serviceAccount:p1.svc.id.goog[ramen-demo-a/worker]"]}]
+    ksa = obj(fk, "ServiceAccount", "ramen-demo-a", "worker")
+    assert ksa["metadata"]["annotations"]["iam.gke.io/gcp-service-account"] == r["name"]
+    long = await cloud.create_service_account("a-very-long-group-name-here", "zone-name-x")
+    acct = long["name"].split("@")[0]
+    assert len(acct) <= 30 and acct.startswith("ramen-")
+
+
+async def test_refresh_and_scale(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    await cloud.create_service_account("demo", "a")
+    r = await cloud.refresh()
+    z = r["zones"][0]
+    assert z["group"] == "demo" and z["zone"] == "a" and z["namespace"] == "ramen-demo-a"
+    assert z["ready"] == 2 and z["canary_ready"] == 0 and z["service_account"].startswith("ramen-demo-a@")
+    assert r["service_accounts"] == ["ramen-demo-a@p1.iam.gserviceaccount.com"]
+    s = await cloud.scale("demo", "a", {**SPEC, "count": 4, "size": "l"})
+    assert s["ok"]
+    dep = obj(fk, "Deployment", "ramen-demo-a", "worker")
+    assert dep["spec"]["replicas"] == 4
+    assert dep["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["l"]
+    assert obj(fk, "HorizontalPodAutoscaler", "ramen-demo-a", "worker")["spec"]["minReplicas"] == 4
+
+
+@pytest.fixture
+def repo(tmp_path):
+    src = tmp_path / "src"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "requirements.txt").write_text("x")
+    (src / "old.txt").write_text("old")
+    for cmd in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "init"]):
+        subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", *cmd] if cmd[0] != "init"
+                       else ["git", "init", "-q", "-b", "main", str(src)], check=True)
+    return src
+
+
+async def test_sync_repo(cloud, fk, repo):
+    bucket = fk.storage.bucket("p1-groups")
+    bucket.data["demo/stale.txt"] = b"stale"
+    bucket.data["other/keep.txt"] = b"keep"
+    uri = await cloud.sync_repo("demo", str(repo), "main", None)
+    assert uri == "gs://p1-groups/demo"
+    assert set(bucket.data) == {"demo/mcp/requirements.txt", "demo/old.txt", "other/keep.txt"}
+    (repo / "old.txt").unlink()
+    (repo / "new.txt").write_text("new")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "2"], check=True)
+    r = await cloud.sync_repo("demo", str(repo), "main", "tok")
+    assert set(bucket.data) == {"demo/mcp/requirements.txt", "demo/new.txt", "other/keep.txt"}
+    with pytest.raises(ApiError) as e:
+        await cloud.sync_repo("demo", str(repo / "nope"), "main", "tok")
+    assert e.value.status_code == 502 and "tok" not in str(e.value.detail)
+
+
+async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
+    chart = tmp_path / "chart"
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("name: ramen-worker\n")
+    seen = {}
+
+    def fake_run(cmd, capture_output, text):
+        seen["cmd"] = cmd
+        return NS(returncode=0, stdout="apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ramen-demo-a\n---\n"
+                  "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: worker\n  namespace: ramen-demo-a\n"
+                  "spec:\n  replicas: 2\n  template:\n    metadata:\n      labels: {app: worker, ramen.io/track: stable}\n", stderr="")
+    monkeypatch.setattr("ramen_console.cloud.gcp_k8s.subprocess.run", fake_run)
+    monkeypatch.setattr("ramen_console.cloud.gcp_k8s.shutil.which", lambda _: "/usr/bin/helm")
+    cloud.chart = str(chart)
+    r = await cloud.attach_zone("demo", "a", SPEC)
+    assert r["renderer"] == "helm" and seen["cmd"][:2] == ["helm", "template"] and "secret.create=false" in seen["cmd"] and "project=p1" in seen["cmd"]
+    assert ("Deployment", "ramen-demo-a", "worker") in fk.k8s.objs
+    assert ("HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.objs  # appended when the chart renders none
+    assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"]["ramen.io/routes"] == "true"
+    monkeypatch.setattr("ramen_console.cloud.gcp_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart"))
+    with pytest.raises(ApiError, match="helm"):
+        await cloud.attach_zone("demo", "a", SPEC)
+
+
+async def test_error_mapping(cloud, fk):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom value=s3cret")
+    fk.k8s.objs.clear()
+    orig = fk.k8s._create
+    fk.k8s._create = boom
+    with pytest.raises(ApiError) as e:
+        await cloud.attach_zone("demo", "a", SPEC)
+    assert e.value.status_code == 502 and "RuntimeError" in e.value.detail
+    fk.k8s._create = orig
+
+    def unknown_kind():
+        from ramen_console.cloud.gcp_k8s import Kube
+        Kube(fk, poll=0).apply({"kind": "Weird", "metadata": {"name": "x"}})
+    with pytest.raises(ApiError, match="Weird"):
+        unknown_kind()
+
+
+def test_factory_and_env(monkeypatch):
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
+    monkeypatch.setenv("RAMEN_GCP_PROJECT", "p1")
+    monkeypatch.setenv("RAMEN_GROUPS_BUCKET", "bkt")
+    monkeypatch.setenv("RAMEN_IMAGE_WORKER", "img:1")
+    monkeypatch.setenv("RAMEN_GCP_POD_PROXY", "1")
+    c = make_cloud()
+    assert isinstance(c, GcpCloud) and c.project == "p1" and c.bucket == "bkt" and c.image == "img:1" and c.pod_proxy
+    monkeypatch.delenv("RAMEN_GCP_PROJECT")
+    with pytest.raises(ValueError, match="RAMEN_GCP_PROJECT"):
+        make_cloud()
+
+
+def test_real_clients_lazy(monkeypatch):
+    from ramen_console.cloud.gcp_clients import GcpClients, _creds, http_status
+    monkeypatch.delenv("GOOGLE_OAUTH_ACCESS_TOKEN", raising=False)
+    assert _creds() is None
+    monkeypatch.setenv("GOOGLE_OAUTH_ACCESS_TOKEN", "tok")
+    assert _creds().token == "tok"
+    assert http_status(FakeApiError(409)) == 409
+    assert http_status(NS(code=404)) == 404
+    assert http_status(NS(resp=NS(status=403))) == 403
+    assert http_status(RuntimeError()) is None
+    g = GcpClients("p1")
+    import types
+    loaded = {}
+    fake_cfg = types.SimpleNamespace(load_incluster_config=lambda: loaded.setdefault("mode", "incluster"),
+                                     load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
+                                     ConfigException=RuntimeError)
+    fake_client = types.SimpleNamespace(CoreV1Api=lambda: "core", AppsV1Api=lambda: "apps", AutoscalingV2Api=lambda: "hpa", CustomObjectsApi=lambda: "custom",
+                                        ApiClient=lambda: NS(sanitize_for_serialization=lambda o: {"x": o}))
+    monkeypatch.setattr(g, "_kube_modules", lambda: (fake_cfg, fake_client))
+    assert g.core == "core" and g.apps == "apps" and g.autoscaling == "hpa" and g.custom == "custom" and loaded["mode"] == "incluster"
+    assert g.to_dict({"a": 1}) == {"a": 1} and g.to_dict("o") == {"x": "o"}
+
+    def fail_incluster():
+        raise RuntimeError("no sa token")
+    loaded.clear()
+    g2 = GcpClients("p1")
+    monkeypatch.setattr(g2, "_kube_modules", lambda: (types.SimpleNamespace(load_incluster_config=fail_incluster,
+                                                                          load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
+                                                                          ConfigException=RuntimeError), fake_client))
+    assert g2.core == "core" and loaded["mode"] == "kubeconfig"

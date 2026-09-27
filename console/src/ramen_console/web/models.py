@@ -59,9 +59,10 @@ class DeployIn(BaseModel):
     canary: bool = True
 
 
-class WorkersIn(BaseModel):
+class WorkersIn(ListFields):
     count: int | None = None
     size: str | None = None
+    allowed_sizes: list[str] | None = None
 
 
 class Cidrs(ListFields):

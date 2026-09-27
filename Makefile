@@ -1,8 +1,12 @@
-# Ramen v0.2.0 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose.
+# Ramen v0.2.0 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
 export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
 VERSION := $(shell cat VERSION)
 COMPOSE := docker compose -f deploy/local/docker-compose.yml
-.PHONY: test test-runtime test-node test-console test-harness lint build build-worker build-console env up down logs demo demo-worker clean
+PROJECT ?=
+REGION ?= us-central1
+PLATFORM ?= linux/amd64
+REGISTRY = $(REGION)-docker.pkg.dev/$(PROJECT)/ramen
+.PHONY: test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean
 
 test: test-runtime test-node test-console
 
@@ -25,6 +29,20 @@ build-worker:
 
 build-console:
 	@if [ -f console/Dockerfile ]; then docker build -t ramen-console:$(VERSION) console; else echo "console/Dockerfile missing"; fi
+
+# GCP (CONTRACTS §7): linux/amd64 images pushed to Artifact Registry as <region>-docker.pkg.dev/<project>/ramen/{worker,console}:<VERSION>.
+#   make push PROJECT=<id> REGION=us-central1      (repo `ramen` is created by deploy/terraform/gcp)
+push: auth-docker push-worker push-console
+
+auth-docker:
+	@test -n "$(PROJECT)" || { echo "PROJECT=<gcp project> required"; exit 2; }
+	gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet
+
+push-worker:
+	docker buildx build --platform $(PLATFORM) -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t $(REGISTRY)/worker:$(VERSION) --push .
+
+push-console:
+	docker buildx build --platform $(PLATFORM) --build-arg RAMEN_VERSION=$(VERSION) -t $(REGISTRY)/console:$(VERSION) --push console
 
 env:
 	@[ -f deploy/local/.env ] || cp deploy/local/.env.example deploy/local/.env

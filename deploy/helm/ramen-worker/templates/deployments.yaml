@@ -1,0 +1,49 @@
+{{- $root := . }}
+{{- $size := index .Values.sizes .Values.size }}
+{{- range $t := list (dict "name" "worker" "track" "stable" "replicas" .Values.replicas) (dict "name" "worker-canary" "track" "canary" "replicas" .Values.canaryReplicas) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $t.name }}
+  namespace: {{ include "rw.ns" $root }}
+  labels: {{- include "rw.labels" $root | nindent 4 }}
+    ramen.io/track: {{ $t.track }}
+spec:
+  replicas: {{ $t.replicas }}
+  selector:
+    matchLabels: { app: worker, ramen.io/track: {{ $t.track }} }
+  template:
+    metadata:
+      labels: {{- include "rw.labels" $root | nindent 8 }}
+        app: worker
+        ramen.io/track: {{ $t.track }}
+    spec:
+      serviceAccountName: {{ $root.Values.serviceAccount.name }}
+      nodeSelector: { topology.kubernetes.io/zone: {{ $root.Values.gcpZone | quote }} }
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
+      containers:
+        - name: worker
+          image: {{ include "rw.image" $root | quote }}
+          imagePullPolicy: {{ $root.Values.pullPolicy }}
+          ports: [{ name: http, containerPort: {{ $root.Values.port }} }]
+          env:
+            - { name: RAMEN_GROUP, value: {{ $root.Values.group | quote }} }
+            - { name: RAMEN_ZONE, value: {{ $root.Values.zone | quote }} }
+            - { name: RAMEN_NODE_PORT, value: {{ $root.Values.port | quote }} }
+            - { name: RAMEN_BUCKET, value: {{ $root.Values.bucketPath | quote }} }
+            - { name: RAMEN_BUCKET_URI, value: {{ include "rw.bucketUri" $root | quote }} }
+            - { name: RAMEN_TRACK, value: {{ $t.track | quote }} }
+            {{- range $k, $v := $root.Values.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          envFrom:
+            - secretRef: { name: ramen-deploy, optional: true }
+          resources: { requests: {{ toJson $size }} }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, failureThreshold: 60 }
+          volumeMounts: [{ name: bucket, mountPath: {{ $root.Values.bucketPath }} }]
+      volumes:
+        - name: bucket
+          emptyDir: {}
+{{- end }}

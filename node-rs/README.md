@@ -32,6 +32,7 @@ Errors: 401 `-32001` unauthorized, 403 `-32000` ip not allowed, 400 `-32700`/`-3
 | `RAMEN_SIDECAR_IDLE_SECS` | `300` | kill sidecar after idle; respawn (and re-load) on demand |
 | `RAMEN_MAX_INFLIGHT` | `32` | concurrency bound; `load` = low <30%, high >80% |
 | `RAMEN_CALL_TIMEOUT_SECS` | `120` | per sidecar call; timeout kills the sidecar |
+| `RAMEN_BUCKET_URI` | unset | `gs://bucket/prefix`; passed to the sidecar, which syncs it into `RAMEN_BUCKET` on every load; `/admin/reload` then carries a `sync` summary |
 | `RAMEN_LOG_FILE` | unset | mirror JSON log lines (node + sidecar stderr) to this file |
 | `RAMEN_CONFIG` | unset | flat `key: value` yaml with the same names (env wins) |
 

@@ -28,6 +28,21 @@ async def dashboard_grid(request: Request, p: Principal = Depends(viewer)):
     return render(request, "partials/dashboard.html", data=await dep.dashboard(s, await s.visible_groups(p)))
 
 
+@r.get("/ui/groups/{group}/zones/{zone}/workers")
+async def workers_partial(request: Request, group: str, zone: str, p: Principal = Depends(require("viewer", "group"))):
+    s = svc(request)
+    w = await s.worker_config(group, zone)
+    try:
+        w["live"] = await s.cloud.workers(group, zone)
+    except Exception as e:  # noqa: BLE001 - shown inline
+        w["live"] = [{"id": "?", "load": "down", "metrics": {}, "error": str(e)}]
+    canary = [x for x in w["live"] if x.get("track") == "canary"]
+    live = (w.get("live_state") or {})
+    w["canary"] = {"replicas": live.get("canary_replicas", len(canary)), "ready": len([x for x in canary if x["load"] != "down"])} if canary or live else None
+    w["namespace"] = live.get("namespace")
+    return render(request, "partials/workers.html", w=w)
+
+
 @r.get("/ui/jobs/{jid}")
 async def job_partial(request: Request, jid: str, p: Principal = Depends(viewer)):
     return render(request, "partials/job.html", job=request.app.state.jobs.get(jid))

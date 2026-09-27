@@ -160,7 +160,7 @@ async def workers(request: Request, group: str, zone: str, p: Principal = Depend
 @r.put("/groups/{group}/zones/{zone}/workers")
 async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(admin_g)):
     note(request, "workers.scale", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).set_workers(group, zone, p, body.count, body.size))
+    return respond(request, await svc(request).set_workers(group, zone, p, body.count, body.size, body.allowed_sizes))
 
 
 @r.post("/groups/{group}/zones/{zone}/rebalance")

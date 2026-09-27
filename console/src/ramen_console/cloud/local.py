@@ -66,7 +66,7 @@ class LocalCloud(Cloud):
         p.write_text(json.dumps(cidrs))
         return {"ok": True, "cidrs": cidrs}
 
-    async def deploy(self, group, env, zone, canary=True, config=None):
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None):
         vars_ = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone, "RAMEN_CANARY": "1" if canary else "0",
                  "RAMEN_BUCKET": str(self._bucket(group)), **(config or {})}
         rp = self._rules_path(group, zone)

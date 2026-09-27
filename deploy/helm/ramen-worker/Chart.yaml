@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ramen-worker
+description: One Ramen zone (namespace ramen-<group>-<zone>) - worker + worker-canary Deployments pinned to a GCP zone, NEG Service, HTTPRoute /mcp/<group>/<zone> on the console Gateway, Workload Identity KSA, deploy Secret. Rendered/applied by the console's gcp adapter; also usable by hand.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"

@@ -21,6 +21,7 @@ from .backup import Backups, release_version
 from .cloud import make_cloud
 from .config import apply_config
 from .deploy import Jobs
+from .secrets import make_secrets_backend
 from .services import Services
 from .storage import make_store
 from .web import api, api_admin, auth_routes, pages
@@ -32,7 +33,7 @@ def _wants_html(request: Request) -> bool:
     return not request.url.path.startswith("/api/")
 
 
-def create_app(store=None, cloud=None) -> FastAPI:
+def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     apply_config()
     logging.basicConfig(level=os.environ.get("RAMEN_LOG_LEVEL", "INFO"))
 
@@ -45,7 +46,8 @@ def create_app(store=None, cloud=None) -> FastAPI:
     st = app.state
     st.store = store or make_store()
     st.cloud = cloud or make_cloud()
-    st.services = Services(st.store, st.cloud)
+    st.secrets = secrets or make_secrets_backend(st.cloud)
+    st.services = Services(st.store, st.cloud, st.secrets)
     st.accounts = Accounts(st.store)
     st.backups = Backups(st.services)
     st.jobs = Jobs()

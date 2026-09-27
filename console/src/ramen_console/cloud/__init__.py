@@ -10,7 +10,7 @@ def make_cloud() -> Cloud:
         return LocalCloud.from_env()
     if kind == "gcp":
         from .gcp import GcpCloud
-        return GcpCloud()
+        return GcpCloud.from_env()
     if kind == "aws":
         from .aws import AwsCloud
         return AwsCloud()

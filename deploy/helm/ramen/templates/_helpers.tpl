@@ -1,11 +1,19 @@
-{{- define "ramen.name" -}}{{ .Chart.Name }}{{- end -}}
-{{- define "ramen.fullname" -}}{{ printf "%s-%s" .Release.Name .Values.group | trunc 63 | trimSuffix "-" }}{{- end -}}
 {{- define "ramen.labels" -}}
-app.kubernetes.io/name: {{ include "ramen.name" . }}
+app.kubernetes.io/name: ramen-console
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-ramen.io/group: {{ .Values.group }}
-ramen.io/environment: {{ .Values.environment }}
 {{- end -}}
-{{- define "ramen.workerName" -}}{{ printf "%s-worker-%s" (include "ramen.fullname" .root) .zone.name | trunc 63 | trimSuffix "-" }}{{- end -}}
+{{- define "ramen.selector" -}}
+app.kubernetes.io/name: ramen-console
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+{{- define "ramen.image" -}}
+{{ printf "%s:%s" (default (printf "%s-docker.pkg.dev/%s/ramen/console" .Values.region .Values.project) .Values.image.repository) (.Values.image.tag | toString) }}
+{{- end -}}
+{{- define "ramen.gsa" -}}
+{{ default (printf "ramen-console@%s.iam.gserviceaccount.com" .Values.project) .Values.serviceAccount.gsa }}
+{{- end -}}
+{{- define "ramen.secretName" -}}
+{{ default "ramen-console" .Values.console.existingSecret }}
+{{- end -}}

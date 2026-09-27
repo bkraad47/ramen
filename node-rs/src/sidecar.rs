@@ -163,6 +163,10 @@ impl Sidecar {
         if let Some(pp) = &cfg.pythonpath {
             cmd.env("PYTHONPATH", pp);
         }
+        match &cfg.bucket_uri {
+            Some(uri) => cmd.env("RAMEN_BUCKET_URI", uri),
+            None => cmd.env_remove("RAMEN_BUCKET_URI"),
+        };
         let mut child = cmd
             .spawn()
             .map_err(|e| RpcErr::internal(format!("spawn {}: {e}", cfg.python)))?;

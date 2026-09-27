@@ -1,9 +1,0 @@
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "ramen.fullname" . }}-worker
-  labels: {{- include "ramen.labels" . | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.worker.pdb.minAvailable }}
-  selector:
-    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, ramen.io/role: worker }

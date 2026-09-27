@@ -6,10 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --extra gcp --no-install-project
 COPY src ./src
 COPY entrypoint.sh ./
-RUN uv sync --frozen --no-dev && echo "$RAMEN_VERSION" > /app/VERSION \
+RUN uv sync --frozen --no-dev --extra gcp && echo "$RAMEN_VERSION" > /app/VERSION \
  && mkdir -p /data/buckets /data/backups && chown -R ramen:ramen /app /data
 USER ramen
 ENV RAMEN_BUCKET_ROOT=/data/buckets RAMEN_BACKUP_ROOT=/data/backups RAMEN_CONSOLE_PORT=8000

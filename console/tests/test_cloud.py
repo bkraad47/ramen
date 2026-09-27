@@ -120,7 +120,7 @@ async def test_misc(cloud, tmp_path):
 
 
 def test_stubs():
-    for cls, name in ((GcpCloud, "gcp"), (AwsCloud, "aws")):
+    for cls, name in ((AwsCloud, "aws"),):
         c = cls()
         for m, args in (("sync_repo", ("g", "u", "r", None)), ("deploy", ("g", "e", "z")), ("rebalance", ("g", "z")),
                         ("workers", ("g", "z")), ("logs", ("g", "z")), ("set_ip_rules", ("g", "z", [])),
@@ -137,6 +137,7 @@ def test_factory(monkeypatch, tmp_path):
     c = make_cloud()
     assert isinstance(c, LocalCloud) and c.workers_map["demo/z"] == ["http://a:1", "http://b:2"]
     monkeypatch.setenv("RAMEN_CLOUD", "gcp")
+    monkeypatch.setenv("RAMEN_GCP_PROJECT", "p1")
     assert isinstance(make_cloud(), GcpCloud)
     monkeypatch.setenv("RAMEN_CLOUD", "aws")
     assert isinstance(make_cloud(), AwsCloud)

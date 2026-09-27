@@ -7,8 +7,8 @@ class Cloud(ABC):
     async def sync_repo(self, group: str, repo_url: str, ref: str, token: str | None) -> str: ...
 
     @abstractmethod
-    async def deploy(self, group: str, env: str, zone: str, canary: bool = True,
-                     config: dict[str, str] | None = None) -> dict[str, Any]: ...
+    async def deploy(self, group: str, env: str, zone: str, canary: bool = True, config: dict[str, str] | None = None,
+                     spec: dict[str, Any] | None = None, log=None) -> dict[str, Any]: ...
 
     @abstractmethod
     async def rebalance(self, group: str, zone: str) -> dict[str, Any]: ...
@@ -27,3 +27,10 @@ class Cloud(ABC):
 
     @abstractmethod
     async def refresh(self) -> dict[str, Any]: ...
+
+    # optional (v0.2.0, additive): zone = namespace lifecycle and worker scaling; no-ops for adapters without them
+    async def attach_zone(self, group: str, zone: str, spec: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"ok": True, "note": "no zone provisioning for this adapter"}
+
+    async def scale(self, group: str, zone: str, spec: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "note": "no scaling for this adapter"}

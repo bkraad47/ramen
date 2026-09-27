@@ -54,7 +54,14 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | api-keys | `/api/v1/api-keys[/{id}]` | POST {name,role?,groups?} → 201 {id,key:"rmn_..."} |
 | audit / logs / dashboard | `GET /api/v1/audit`, `/api/v1/logs`, `/api/v1/dashboard` | |
 | backups | `POST /api/v1/backups` {target} → 201 {id,release_version}; `GET /api/v1/backups/{id}/download` | |
-| config / refresh | `/api/v1/config` (GET, POST reload), `POST /api/v1/refresh` | super admin |
+| config / refresh | `/api/v1/config` (GET), `POST /api/v1/config/reload`, `GET|PUT /api/v1/config/sa-rules`, `POST /api/v1/refresh` | super admin |
+| service account | `POST /api/v1/groups/{group}/zones/{zone}/service-account` → {name,…} | super admin |
+| sa-restrictions | `PUT /api/v1/groups/{group}/sa-restrictions` {rules} | 409 on clash with super-admin rules |
+| verbose | `POST /api/v1/groups/{group}/environments/{env}/verbose` {verbose} | |
+| requests | `POST|GET /api/v1/requests`, `POST /api/v1/requests/{id}/approve` | permission requests (F4.2) |
+| restore / password | `POST /api/v1/backups/{id}/restore`, `POST /api/v1/users/{id}/password` | |
+| logs | `GET /api/v1/logs?group&zone&worker?&tail&download=1` → text/plain (+Content-Disposition attachment) | |
+Response shapes on gcp: rebalance `{ok, load, capacity_scaler, backend_service|null, applied, note?, scaled_to?}`; ip-rules `{ok, policy, cidrs, backend_service|null, attached, note?}`; workers `live[]` items carry `track` (stable|canary), `ip`, `phase`.
 
 ## 5. Local stack (deploy/local/docker-compose.yml)
 Services: `firestore` (emulator, 8081), `console` (8443), `worker` (node-rs + runtime-py in one image, 8080), shared volume `buckets`. `make demo` = up, wait ready, create group `demo` pointing at the demo repo, deploy, call `demo_calculator_tool` via an MCP client, print result.

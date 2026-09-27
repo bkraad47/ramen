@@ -29,6 +29,10 @@ class Cloud(ABC):
     async def refresh(self) -> dict[str, Any]: ...
 
     # optional (v0.2.0, additive): zone = namespace lifecycle and worker scaling; no-ops for adapters without them
+    async def abort_deploy(self, group: str, zone: str) -> None:
+        """Tear down any canary after a deploy that failed before/outside `deploy()`. Default: nothing to do."""
+        return None
+
     async def detach_group(self, group: str) -> dict[str, Any]:
         """Destroy everything the cloud holds for a group. Default: nothing to do."""
         return {"namespaces": [], "service_accounts": []}

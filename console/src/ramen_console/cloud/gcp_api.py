@@ -60,7 +60,7 @@ class Compute:
             self.api.globalOperations().wait(project=self.project, operation=op["name"]).execute()
         return op
 
-    def _ready(self, make_request, attempts=12, delay=5.0):
+    def _ready(self, make_request, attempts=24, delay=5.0):
         """Cloud Armor rejects rule edits with 400 'is not ready' for a while after the previous edit: retry, then wait."""
         for i in range(attempts):
             try:
@@ -102,7 +102,8 @@ class Compute:
         body = {"backends": backends}
         if bs.get("fingerprint"):
             body["fingerprint"] = bs["fingerprint"]
-        self._wait(self.api.backendServices().patch(project=self.project, backendService=bs["name"], body=body).execute())
+        # Gateway-managed backend services report "not ready" while the controller reconciles them (e.g. after a rollout)
+        self._ready(lambda: self.api.backendServices().patch(project=self.project, backendService=bs["name"], body=body))
 
     def set_armor(self, name, cidrs: list[str]) -> str:
         pols = self.api.securityPolicies()
@@ -127,8 +128,8 @@ class Compute:
         return f"projects/{self.project}/global/securityPolicies/{name}"
 
     def attach_armor(self, backend_service, policy_ref) -> None:
-        self._wait(self.api.backendServices().setSecurityPolicy(project=self.project, backendService=backend_service,
-                                                                body={"securityPolicy": policy_ref}).execute())
+        self._ready(lambda: self.api.backendServices().setSecurityPolicy(project=self.project, backendService=backend_service,
+                                                                        body={"securityPolicy": policy_ref}))
 
 
 class Iam:

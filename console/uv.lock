@@ -1568,6 +1568,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aws = [
+    { name = "kubernetes" },
+]
 dev = [
     { name = "moto", extra = ["dynamodb"] },
     { name = "pytest" },
@@ -1599,6 +1602,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "itsdangerous", specifier = ">=2.2" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "kubernetes", marker = "extra == 'aws'", specifier = ">=30" },
     { name = "kubernetes", marker = "extra == 'gcp'", specifier = ">=30" },
     { name = "moto", extras = ["dynamodb"], marker = "extra == 'dev'", specifier = ">=5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -1608,7 +1612,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
-provides-extras = ["dev", "gcp"]
+provides-extras = ["dev", "gcp", "aws"]
 
 [[package]]
 name = "requests"

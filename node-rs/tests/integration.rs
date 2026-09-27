@@ -246,6 +246,52 @@ async fn health_auth_and_protocol_without_sidecar() {
 }
 
 #[tokio::test]
+async fn mcp_path_prefix_serves_the_alias_like_mcp() {
+    let a = app(cfg(&[("RAMEN_MCP_PATH_PREFIX", "/mcp/demo/a")]));
+    for path in ["/mcp", "/mcp/demo/a"] {
+        let (s, v) = send(&a, "POST", path, &[], Some(json!({})), "127.0.0.1:1").await;
+        assert_eq!(
+            (path, s, v["error"]["code"].as_i64()),
+            (path, StatusCode::UNAUTHORIZED, Some(-32001))
+        );
+        let (s, v) = send(
+            &a,
+            "POST",
+            path,
+            &[("authorization", "Bearer k1")],
+            Some(json!({"jsonrpc": "2.0", "id": 1})),
+            "127.0.0.1:1",
+        )
+        .await;
+        assert_eq!(
+            (path, s, v["error"]["code"].as_i64()),
+            (path, StatusCode::BAD_REQUEST, Some(-32600))
+        );
+    }
+    let (s, _) = send(
+        &a,
+        "POST",
+        "/mcp/demo/b",
+        &[],
+        Some(json!({})),
+        "127.0.0.1:1",
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let plain = app(cfg(&[]));
+    let (s, _) = send(
+        &plain,
+        "POST",
+        "/mcp/demo/a",
+        &[],
+        Some(json!({})),
+        "127.0.0.1:1",
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn trust_proxy_uses_forwarded_ip() {
     let strict = app(cfg(&[("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8")]));
     let xff = [
@@ -514,5 +560,132 @@ for line in sys.stdin:
     );
     let (st, _) = send(&a, "GET", "/readyz", &[], None, "127.0.0.1:1").await;
     assert_eq!(st, StatusCode::OK);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// CONTRACTS §9: `RAMEN_BLOCKED` (deploy-scoped) hides names from the list calls and answers -32601 on calls;
+/// a resource blocked by name is also unreadable by URI. Fake runtime, no demo repo needed.
+#[tokio::test]
+async fn blocked_names_are_hidden_and_unreachable() {
+    let dir = std::env::temp_dir().join(format!("ramen-blocked-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("ramen_runtime")).unwrap();
+    std::fs::create_dir_all(dir.join("bucket/.ramen")).unwrap();
+    std::fs::write(
+        dir.join("ramen_runtime/__main__.py"),
+        r#"import json, sys
+LOAD = {"tools": [{"name": "calc"}, {"name": "secret_tool"}], "prompts": [{"name": "p1"}, {"name": "p2"}],
+        "resources": [{"name": "readme", "uri": "ramen://demo/readme"}, {"name": "other", "uri": "ramen://demo/other"}], "errors": []}
+for line in sys.stdin:
+    m = json.loads(line)
+    r = LOAD if m["method"] == "runtime.load" else {"called": m["method"], "params": m["params"]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("bucket/.ramen/env"),
+        "RAMEN_BLOCKED=secret_tool,p2,readme\n",
+    )
+    .unwrap();
+    let pp = dir.display().to_string();
+    let bucket = dir.join("bucket").display().to_string();
+    let a = app(cfg(&[
+        ("RAMEN_PYTHON", "python3"),
+        ("RAMEN_PYTHONPATH", &pp),
+        ("RAMEN_BUCKET", &bucket),
+    ]));
+    // before reload: env process config has no blocked list; the deploy file is applied on /admin/reload
+    let (st, _) = send(
+        &a,
+        "POST",
+        "/admin/reload",
+        &[("x-ramen-admin-key", "adm")],
+        None,
+        "127.0.0.1:1",
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = rpc(&a, "k1", "tools/list", json!({})).await;
+    assert_eq!(
+        v["result"]["tools"],
+        json!([{"name": "calc"}, {"name": "secret_tool"}])
+    );
+    // simulate the console deploy: fresh config source reads the deploy file
+    let vars: Vec<(String, String)> = [
+        ("RAMEN_MCP_KEYS", "k1"),
+        ("RAMEN_ADMIN_KEY", "adm"),
+        ("RAMEN_PYTHON", "python3"),
+        ("RAMEN_PYTHONPATH", pp.as_str()),
+        ("RAMEN_BUCKET", bucket.as_str()),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let a = app_with(
+        Config::from_vars(vars.clone().into_iter()).unwrap(),
+        Box::new(move || Config::from_vars(vars.clone().into_iter())),
+    );
+    let (st, _) = send(
+        &a,
+        "POST",
+        "/admin/reload",
+        &[("x-ramen-admin-key", "adm")],
+        None,
+        "127.0.0.1:1",
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = rpc(&a, "k1", "tools/list", json!({})).await;
+    assert_eq!(v["result"]["tools"], json!([{"name": "calc"}]));
+    let (_, v) = rpc(&a, "k1", "prompts/list", json!({})).await;
+    assert_eq!(v["result"]["prompts"], json!([{"name": "p1"}]));
+    let (_, v) = rpc(&a, "k1", "resources/list", json!({})).await;
+    assert_eq!(
+        v["result"]["resources"],
+        json!([{"name": "other", "uri": "ramen://demo/other"}])
+    );
+    let (st, v) = rpc(
+        &a,
+        "k1",
+        "tools/call",
+        json!({"name": "secret_tool", "arguments": {}}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["error"]["code"], -32601, "{v}");
+    let (_, v) = rpc(
+        &a,
+        "k1",
+        "tools/call",
+        json!({"name": "calc", "arguments": {"a": 1}}),
+    )
+    .await;
+    assert_eq!(v["result"]["called"], "runtime.call_tool");
+    let (_, v) = rpc(&a, "k1", "prompts/get", json!({"name": "p2"})).await;
+    assert_eq!(v["error"]["code"], -32601);
+    let (_, v) = rpc(
+        &a,
+        "k1",
+        "resources/read",
+        json!({"uri": "ramen://demo/readme"}),
+    )
+    .await;
+    assert_eq!(
+        v["error"]["code"], -32601,
+        "blocked by name, read by uri: {v}"
+    );
+    let (_, v) = rpc(
+        &a,
+        "k1",
+        "resources/read",
+        json!({"uri": "ramen://demo/other"}),
+    )
+    .await;
+    assert_eq!(v["result"]["called"], "runtime.read_resource");
+    let (_, m) = send(&a, "GET", "/metrics", &[], None, "127.0.0.1:1").await;
+    assert_eq!(
+        m["packages"]["tools"], 2,
+        "metrics count what the runtime loaded, not what is exposed"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, Request
 
 from .. import deploy as dep
 from ..rbac import Principal, can, require
+from ..policy import permissions as perm
 from .api_admin import masked_env
+from .auth_routes import auth_settings
 from .helpers import accounts, backups, svc
 
 r = APIRouter()
@@ -61,7 +63,8 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
     workers = {z["id"]: await s.worker_config(group, z["id"]) for z in zones}
     return render(request, "group.html", group=g, envs=await s.environments(group), zones=zones, workers=workers,
                   mcp_keys=await s.secrets(group, kind="mcp_key"), jobs=request.app.state.jobs.recent(f"{group}/"),
-                  can_admin=can(p, "group_admin", group))
+                  can_admin=can(p, "group_admin", group), permissions=perm.table(),
+                  requests=[q for q in await request.app.state.accounts.list_requests() if q.get("group") == group and q.get("type") == "permission"])
 
 
 @r.get("/environments")
@@ -127,4 +130,5 @@ async def backups_page(request: Request, p: Principal = Depends(super_)):
 async def config(request: Request, p: Principal = Depends(super_)):
     rules = (await svc(request).store.get("config", "sa_rules") or {}).get("rules", [])
     return render(request, "config.html", env=masked_env(), config_file=os.environ.get("RAMEN_CONFIG"), rules=rules,
-                  providers=request.app.state.oauth.providers())
+                  providers=request.app.state.oauth.providers(), auth=await auth_settings(request),
+                  mail=request.app.state.mailer.backend, permissions=perm.table())

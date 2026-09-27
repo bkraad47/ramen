@@ -1,0 +1,576 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Ramen on AWS (CONTRACTS section 8, v0.3.0) - UNTESTED: authored without an AWS account, checked with cfn-lint only.
+  Base resources for teams that cannot run Terraform: VPC with two public subnets, EKS cluster + managed node group,
+  OIDC provider (IRSA), DynamoDB state table, S3 groups bucket, ECR repos, console / ALB controller / Fluent Bit IAM roles.
+  Helm steps (Load Balancer Controller, Fluent Bit, ramen charts) and the ACM certificate import are documented in
+  deploy/README.md, not templated.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: ramen
+    Description: EKS cluster name (also node group name and Container Insights log group).
+  KubernetesVersion:
+    Type: String
+    Default: "1.31"
+  NodeInstanceType:
+    Type: String
+    Default: t3.small
+  NodeCount:
+    Type: Number
+    Default: 2
+  NodeMax:
+    Type: Number
+    Default: 3
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+  TableName:
+    Type: String
+    Default: ramen
+    Description: DynamoDB state table (RAMEN_DDB_TABLE).
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  # --- network: two public subnets, no NAT ---
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Ref ClusterName }, { Key: app, Value: ramen }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: app, Value: ramen }]
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 2, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: !Sub "${ClusterName}-public-0" }
+        - { Key: kubernetes.io/role/elb, Value: "1" }
+        - { Key: !Sub "kubernetes.io/cluster/${ClusterName}", Value: shared }
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 2, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: !Sub "${ClusterName}-public-1" }
+        - { Key: kubernetes.io/role/elb, Value: "1" }
+        - { Key: !Sub "kubernetes.io/cluster/${ClusterName}", Value: shared }
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: app, Value: ramen }]
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubnetA, RouteTableId: !Ref RouteTable }
+  SubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubnetB, RouteTableId: !Ref RouteTable }
+
+  # --- EKS ---
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ClusterName}-eks-cluster"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: eks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonEKSClusterPolicy]
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      AccessConfig:
+        AuthenticationMode: API_AND_CONFIG_MAP
+        BootstrapClusterCreatorAdminPermissions: true
+      ResourcesVpcConfig:
+        SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Tags: [{ Key: app, Value: ramen }]
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ClusterName}-eks-node"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref Cluster
+      NodegroupName: !Ref ClusterName
+      NodeRole: !GetAtt NodeRole.Arn
+      Subnets: [!Ref SubnetA, !Ref SubnetB]
+      InstanceTypes: [!Ref NodeInstanceType]
+      CapacityType: ON_DEMAND
+      ScalingConfig: { DesiredSize: !Ref NodeCount, MinSize: 1, MaxSize: !Ref NodeMax }
+      UpdateConfig: { MaxUnavailable: 1 }
+      Tags: { app: ramen }
+
+  # --- IRSA ---
+  OidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !GetAtt Cluster.OpenIdConnectIssuerUrl
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [9e99a48a9960b14926bb7f3b02e22da2b0ab7280]  # root CA thumbprint used by EKS OIDC endpoints
+      Tags: [{ Key: app, Value: ramen }]
+
+  # --- state, bucket, registries, logs ---
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags: [{ Key: app, Value: ramen }]
+  GroupsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "ramen-${AWS::AccountId}-groups"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags: [{ Key: app, Value: ramen }]
+  EcrConsole:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ramen/console
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
+  EcrWorker:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ramen/worker
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/containerinsights/${ClusterName}/application"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # --- console role (KSA ramen-system/console), scoped like the Terraform variant ---
+  ConsoleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-console
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:ramen-system:console", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      Policies:
+        - PolicyName: ramen-console
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt GroupsBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${GroupsBucket.Arn}/*"
+              - Effect: Allow
+                Action: [secretsmanager:CreateSecret, secretsmanager:PutSecretValue, secretsmanager:GetSecretValue, secretsmanager:DescribeSecret,
+                         secretsmanager:DeleteSecret, secretsmanager:RestoreSecret, secretsmanager:TagResource, secretsmanager:UpdateSecret]
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+              - Effect: Allow
+                Action: secretsmanager:ListSecrets
+                Resource: "*"
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan,
+                         dynamodb:BatchGetItem, dynamodb:BatchWriteItem, dynamodb:DescribeTable, dynamodb:CreateTable]
+                Resource: [!GetAtt StateTable.Arn, !Sub "${StateTable.Arn}/index/*"]
+              - Effect: Allow
+                Action: dynamodb:ListTables
+                Resource: "*"
+              - Effect: Allow
+                Action: eks:DescribeCluster
+                Resource: !GetAtt Cluster.Arn
+              - Effect: Allow
+                Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:UpdateAssumeRolePolicy, iam:TagRole, iam:PutRolePolicy,
+                         iam:DeleteRolePolicy, iam:GetRolePolicy, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:DetachRolePolicy]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ramen/*"
+              - Effect: Allow
+                Action: iam:ListRoles
+                Resource: "*"
+              - Effect: Allow
+                Action: wafv2:*
+                Resource: !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/*"
+              - Effect: Allow
+                Action: [wafv2:ListWebACLs, wafv2:ListIPSets, wafv2:GetWebACLForResource, wafv2:AssociateWebACL, wafv2:DisassociateWebACL]
+                Resource: "*"
+              - Effect: Allow
+                Action: [elasticloadbalancing:DescribeLoadBalancers, elasticloadbalancing:DescribeTags, elasticloadbalancing:SetWebAcl]
+                Resource: "*"
+              - Effect: Allow
+                Action: [logs:StartQuery, logs:GetQueryResults, logs:StopQuery, logs:DescribeLogGroups]
+                Resource: "*"
+      Tags: [{ Key: app, Value: ramen }]
+
+  # --- AWS Load Balancer Controller (KSA kube-system/aws-load-balancer-controller); policy vendored from v2.13.0 ---
+  AlbControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-alb-controller
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      Policies:
+        - PolicyName: AWSLoadBalancerControllerIAMPolicy
+          PolicyDocument:
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:CreateServiceLinkedRole"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeAccountAttributes",
+                    "ec2:DescribeAddresses",
+                    "ec2:DescribeAvailabilityZones",
+                    "ec2:DescribeInternetGateways",
+                    "ec2:DescribeVpcs",
+                    "ec2:DescribeVpcPeeringConnections",
+                    "ec2:DescribeSubnets",
+                    "ec2:DescribeSecurityGroups",
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeNetworkInterfaces",
+                    "ec2:DescribeTags",
+                    "ec2:GetCoipPoolUsage",
+                    "ec2:DescribeCoipPools",
+                    "ec2:GetSecurityGroupsForVpc",
+                    "ec2:DescribeIpamPools",
+                    "ec2:DescribeRouteTables",
+                    "elasticloadbalancing:DescribeLoadBalancers",
+                    "elasticloadbalancing:DescribeLoadBalancerAttributes",
+                    "elasticloadbalancing:DescribeListeners",
+                    "elasticloadbalancing:DescribeListenerCertificates",
+                    "elasticloadbalancing:DescribeSSLPolicies",
+                    "elasticloadbalancing:DescribeRules",
+                    "elasticloadbalancing:DescribeTargetGroups",
+                    "elasticloadbalancing:DescribeTargetGroupAttributes",
+                    "elasticloadbalancing:DescribeTargetHealth",
+                    "elasticloadbalancing:DescribeTags",
+                    "elasticloadbalancing:DescribeTrustStores",
+                    "elasticloadbalancing:DescribeListenerAttributes",
+                    "elasticloadbalancing:DescribeCapacityReservation"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cognito-idp:DescribeUserPoolClient",
+                    "acm:ListCertificates",
+                    "acm:DescribeCertificate",
+                    "iam:ListServerCertificates",
+                    "iam:GetServerCertificate",
+                    "waf-regional:GetWebACL",
+                    "waf-regional:GetWebACLForResource",
+                    "waf-regional:AssociateWebACL",
+                    "waf-regional:DisassociateWebACL",
+                    "wafv2:GetWebACL",
+                    "wafv2:GetWebACLForResource",
+                    "wafv2:AssociateWebACL",
+                    "wafv2:DisassociateWebACL",
+                    "shield:GetSubscriptionState",
+                    "shield:DescribeProtection",
+                    "shield:CreateProtection",
+                    "shield:DeleteProtection"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:AuthorizeSecurityGroupIngress",
+                    "ec2:RevokeSecurityGroupIngress"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateSecurityGroup"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateTags"
+                  ],
+                  "Resource": "arn:aws:ec2:*:*:security-group/*",
+                  "Condition": {
+                    "StringEquals": {
+                      "ec2:CreateAction": "CreateSecurityGroup"
+                    },
+                    "Null": {
+                      "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateTags",
+                    "ec2:DeleteTags"
+                  ],
+                  "Resource": "arn:aws:ec2:*:*:security-group/*",
+                  "Condition": {
+                    "Null": {
+                      "aws:RequestTag/elbv2.k8s.aws/cluster": "true",
+                      "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:AuthorizeSecurityGroupIngress",
+                    "ec2:RevokeSecurityGroupIngress",
+                    "ec2:DeleteSecurityGroup"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "Null": {
+                      "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:CreateLoadBalancer",
+                    "elasticloadbalancing:CreateTargetGroup"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "Null": {
+                      "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:CreateListener",
+                    "elasticloadbalancing:DeleteListener",
+                    "elasticloadbalancing:CreateRule",
+                    "elasticloadbalancing:DeleteRule"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:AddTags",
+                    "elasticloadbalancing:RemoveTags"
+                  ],
+                  "Resource": [
+                    "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
+                  ],
+                  "Condition": {
+                    "Null": {
+                      "aws:RequestTag/elbv2.k8s.aws/cluster": "true",
+                      "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:AddTags",
+                    "elasticloadbalancing:RemoveTags"
+                  ],
+                  "Resource": [
+                    "arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:ModifyLoadBalancerAttributes",
+                    "elasticloadbalancing:SetIpAddressType",
+                    "elasticloadbalancing:SetSecurityGroups",
+                    "elasticloadbalancing:SetSubnets",
+                    "elasticloadbalancing:DeleteLoadBalancer",
+                    "elasticloadbalancing:ModifyTargetGroup",
+                    "elasticloadbalancing:ModifyTargetGroupAttributes",
+                    "elasticloadbalancing:DeleteTargetGroup",
+                    "elasticloadbalancing:ModifyListenerAttributes",
+                    "elasticloadbalancing:ModifyCapacityReservation",
+                    "elasticloadbalancing:ModifyIpPools"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "Null": {
+                      "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:AddTags"
+                  ],
+                  "Resource": [
+                    "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*",
+                    "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "elasticloadbalancing:CreateAction": [
+                        "CreateTargetGroup",
+                        "CreateLoadBalancer"
+                      ]
+                    },
+                    "Null": {
+                      "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:RegisterTargets",
+                    "elasticloadbalancing:DeregisterTargets"
+                  ],
+                  "Resource": "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "elasticloadbalancing:SetWebAcl",
+                    "elasticloadbalancing:ModifyListener",
+                    "elasticloadbalancing:AddListenerCertificates",
+                    "elasticloadbalancing:RemoveListenerCertificates",
+                    "elasticloadbalancing:ModifyRule",
+                    "elasticloadbalancing:SetRulePriorities"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+      Tags: [{ Key: app, Value: ramen }]
+
+  # --- Fluent Bit → CloudWatch Logs (KSA kube-system/aws-for-fluent-bit) ---
+  FluentBitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-fluent-bit
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:kube-system:aws-for-fluent-bit", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy]
+      Tags: [{ Key: app, Value: ramen }]
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  Region:
+    Value: !Ref AWS::Region
+  Account:
+    Value: !Ref AWS::AccountId
+  EcrConsole:
+    Value: !GetAtt EcrConsole.RepositoryUri
+  EcrWorker:
+    Value: !GetAtt EcrWorker.RepositoryUri
+  ConsoleRoleArn:
+    Value: !GetAtt ConsoleRole.Arn
+  AlbControllerRoleArn:
+    Value: !GetAtt AlbControllerRole.Arn
+  FluentBitRoleArn:
+    Value: !GetAtt FluentBitRole.Arn
+  GroupsBucket:
+    Value: !Ref GroupsBucket
+  DynamoDbTable:
+    Value: !Ref StateTable
+  OidcProviderArn:
+    Value: !Ref OidcProvider
+  LogGroup:
+    Value: !Ref ApplicationLogGroup
+  KubeconfigCommand:
+    Value: !Sub "aws eks update-kubeconfig --name ${Cluster} --region ${AWS::Region}"
+  ConsoleUrl:
+    Description: Known only after `helm install ramen` creates the console Ingress (the Load Balancer Controller provisions the ALB).
+    Value: "https://$(kubectl -n ramen-system get ingress console -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"

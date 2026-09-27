@@ -15,14 +15,17 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_MAX_INFLIGHT",
     "RAMEN_CALL_TIMEOUT_SECS",
     "RAMEN_LOG_FILE",
+    "RAMEN_BLOCKED",
 ];
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub port: u16,
     pub bucket: PathBuf,
-    /// `gs://bucket/prefix` synced into `bucket` by the runtime on every load (CONTRACTS §7).
+    /// `gs://bucket/prefix` or `s3://bucket/prefix` synced into `bucket` by the runtime on every load (CONTRACTS §7/§8).
     pub bucket_uri: Option<String>,
+    /// Extra path served exactly like `/mcp` (e.g. `/mcp/<group>/<zone>` behind an ALB, which cannot rewrite paths; §8).
+    pub mcp_path_prefix: Option<String>,
     pub python: String,
     pub pythonpath: Option<String>,
     pub mcp_keys: Vec<String>,
@@ -39,6 +42,8 @@ pub struct Config {
     pub max_inflight: usize,
     pub call_timeout_secs: u64,
     pub log_file: Option<PathBuf>,
+    /// Tool/resource/prompt names (or resource URIs) hidden from `*/list` and answered with `-32601` (CONTRACTS §9).
+    pub blocked: Vec<String>,
 }
 
 impl Config {
@@ -130,6 +135,10 @@ impl Config {
             port: num("RAMEN_NODE_PORT", 8080)? as u16,
             bucket: PathBuf::from(get("RAMEN_BUCKET").unwrap_or_else(|| "/buckets/default".into())),
             bucket_uri: get("RAMEN_BUCKET_URI"),
+            mcp_path_prefix: get("RAMEN_MCP_PATH_PREFIX").and_then(|p| {
+                let p = format!("/{}", p.trim_matches('/'));
+                (p != "/" && p != "/mcp").then_some(p)
+            }),
             python: get("RAMEN_PYTHON").unwrap_or_else(|| "python3".into()),
             pythonpath: get("RAMEN_PYTHONPATH"),
             mcp_keys: list("RAMEN_MCP_KEYS"),
@@ -145,6 +154,7 @@ impl Config {
             max_inflight: num("RAMEN_MAX_INFLIGHT", 32)?.max(1) as usize,
             call_timeout_secs: num("RAMEN_CALL_TIMEOUT_SECS", 120)?,
             log_file: get("RAMEN_LOG_FILE").map(PathBuf::from),
+            blocked: list("RAMEN_BLOCKED"),
         })
     }
 }
@@ -207,12 +217,26 @@ mod tests {
         assert!(
             c.mcp_keys.is_empty() && c.admin_key.is_none() && !c.verbose && c.log_file.is_none()
         );
-        assert!(c.bucket_uri.is_none());
+        assert!(c.blocked.is_empty());
+        let m: HashMap<_, _> = [("RAMEN_BLOCKED".to_string(), " a, b ,a,".to_string())].into();
+        assert_eq!(Config::from_map(&m).unwrap().blocked, vec!["a", "b"]);
+        assert!(c.bucket_uri.is_none() && c.mcp_path_prefix.is_none());
         let m: HashMap<_, _> = [("RAMEN_BUCKET_URI".to_string(), " gs://b/g ".to_string())].into();
         assert_eq!(
             Config::from_map(&m).unwrap().bucket_uri.as_deref(),
             Some("gs://b/g")
         );
+    }
+
+    #[test]
+    fn mcp_path_prefix_is_normalized_and_never_plain_mcp() {
+        let prefix = |v: &str| {
+            let m: HashMap<_, _> = [("RAMEN_MCP_PATH_PREFIX".to_string(), v.to_string())].into();
+            Config::from_map(&m).unwrap().mcp_path_prefix
+        };
+        assert_eq!(prefix("/mcp/demo/a").as_deref(), Some("/mcp/demo/a"));
+        assert_eq!(prefix("mcp/demo/a/").as_deref(), Some("/mcp/demo/a"));
+        assert!(prefix("/mcp").is_none() && prefix("/").is_none() && prefix("").is_none());
     }
 
     #[test]
@@ -249,7 +273,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("bucket/.ramen/env-z1"),
-            "RAMEN_MCP_KEYS=rmk_1,e1\nRAMEN_ALLOWED_CIDRS=10.0.0.0/8\nRAMEN_ADMIN_KEY=nope\n",
+            "RAMEN_MCP_KEYS=rmk_1,e1\nRAMEN_ALLOWED_CIDRS=10.0.0.0/8\nRAMEN_ADMIN_KEY=nope\nRAMEN_BLOCKED=secret_tool\n",
         )
         .unwrap();
         let bucket = dir.join("bucket").display().to_string();
@@ -265,6 +289,7 @@ mod tests {
         assert_eq!(c.mcp_keys, vec!["e1", "rmk_1"]);
         assert_eq!(c.allowed_cidrs.len(), 1);
         assert!(c.admin_key.is_none() && c.bucket.ends_with("bucket") && !c.verbose);
+        assert_eq!(c.blocked, vec!["secret_tool"]);
         let c =
             Config::from_vars(vars(&[("RAMEN_BUCKET", &bucket), ("RAMEN_ZONE", "other")])).unwrap();
         assert_eq!(

@@ -14,3 +14,7 @@ dist/
 .DS_Store
 deploy/local/.cookies
 coverage.xml
+site/
+
+# dev mail backend output (deploy/local compose)
+deploy/local/.mail/

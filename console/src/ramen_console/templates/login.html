@@ -1,8 +1,11 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in · Ramen console</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/logo.png"></head>
 <body><div class="login card"><img src="/static/logo.png" alt="Ramen"><h1 style="text-align:center">Ramen <span>console</span></h1>
-{% if error %}<div class="err">{{ error }}</div>{% endif %}
-<form method="post" action="/login"><input type="hidden" name="next" value="{{ next }}">
+{% if error %}<div class="err">{{ error }}</div>{% endif %}{% if msg %}<div class="ok">{{ msg }}</div>{% endif %}
+{% if auth.password_login or auth.force_password %}<form method="post" action="/login"><input type="hidden" name="next" value="{{ next }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+{% if not auth.password_login %}<p class="muted">Password login is disabled; break-glass for the bootstrap super admin only.</p>{% endif %}
 <label>Email<input name="email" type="email" required autofocus></label><br>
-<label>Password<input name="password" type="password" required></label><br><br><button type="submit">Sign in</button></form>
-{% for prov in providers %}<p><a class="btn ghost" href="/auth/oauth/{{ prov }}/login">Sign in with {{ prov }}</a></p>{% endfor %}
+<label>Password<input name="password" type="password" required></label><br><br><button type="submit">Sign in</button>
+{% if mail %} <a class="btn ghost sm" href="/auth/reset">forgot password?</a>{% endif %}</form>{% endif %}
+{% for prov in providers %}<p><a class="btn ghost" href="/auth/{{ prov }}/login">Sign in with {{ prov }}</a></p>{% endfor %}
+{% if auth.magic_link and mail %}<form method="post" action="/auth/magic"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>Email me a sign-in link<input name="email" type="email" required></label> <button class="ghost" type="submit">Send link</button></form>{% endif %}
 </div></body></html>

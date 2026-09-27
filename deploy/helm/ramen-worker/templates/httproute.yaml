@@ -1,4 +1,4 @@
-{{- if .Values.route.enabled }}
+{{- if and .Values.route.enabled (ne .Values.provider "aws") }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

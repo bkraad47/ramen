@@ -512,3 +512,17 @@ def test_real_client_class_exposes_every_lazy_client():
     for name in ("core", "apps", "autoscaling", "custom", "storage", "secretmanager", "logging", "compute", "iam", "crm"):
         assert isinstance(getattr(GcpClients, name), property), name
     assert callable(fresh_http)  # not invoked: without ADC it would probe the GCE metadata server (slow timeouts)
+
+
+async def test_apply_sa_permissions_binds_mapped_roles(cloud, fk):
+    r = await cloud.apply_sa_permissions("demo", "a", ["bucket.read", "logs.write", "secrets.read", "unknown.perm"])
+    assert r["ok"] and r["service_account"] == "ramen-demo-a@p1.iam.gserviceaccount.com" and r["ksa"] == "ramen-demo-a/worker"
+    assert r["applied"] == ["roles/storage.objectViewer", "roles/logging.logWriter", "roles/secretmanager.secretAccessor"]
+    pol = {b["role"]: b for b in fk.iam_state["project_policy"]["bindings"]}
+    assert "p1-groups/objects/demo/" in pol["roles/storage.objectViewer"]["condition"]["expression"]
+    assert "secrets/ramen-demo-" in pol["roles/secretmanager.secretAccessor"]["condition"]["expression"]
+    assert "condition" not in pol["roles/logging.logWriter"]
+    assert pol["roles/logging.logWriter"]["members"] == ["serviceAccount:ramen-demo-a@p1.iam.gserviceaccount.com"]
+    again = await cloud.apply_sa_permissions("demo", "a", ["bucket.read"])
+    assert again["applied"] == ["roles/storage.objectViewer"] and len(fk.iam_state["project_policy"]["bindings"]) == 3
+    assert (await cloud.apply_sa_permissions("demo", "a", []))["applied"] == []

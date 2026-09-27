@@ -1,0 +1,35 @@
+# Ramen
+
+> Multizone, highly available, enterprise-grade MCP (Model Context Protocol) server for GCP and AWS Kubernetes. A Rust MCP node and a Python 3.14 runtime run tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit. BSD-3-Clause. Version 0.3.0.
+
+Ramen exposes MCP Streamable HTTP (JSON-RPC 2.0, protocol 2025-06-18, JSON responses) at `POST /mcp` (or `https://<lb>/mcp/<group>/<zone>` behind the cloud load balancer) with `Authorization: Bearer rmk_<key>`. Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json` (proto: type, name, description, callable, input, output, error). Deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll the stable track.
+
+## Docs
+
+- [Landing page](https://bkraad47.github.io/ramen/): value proposition, 5-command local quickstart, badges
+- [How it works and why](https://bkraad47.github.io/ramen/how-it-works/): design rationale (Rust node + Python runtime, git→bucket→worker, canary, keys, secrets)
+- [Architecture (current)](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions D1–D18
+- [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/): binding contracts for the group repo, sidecar protocol, node HTTP surface, console API, GCP/AWS deployment, auth/policy, docs
+- [Local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/): docker compose stack, console URL and login, minting rmk_ MCP keys vs rmn_ API keys, curl example
+- [GCP how-to](https://bkraad47.github.io/ramen/how-tos/gcp/): Terraform + Helm bring-up on GKE Autopilot, verified
+- [AWS how-to](https://bkraad47.github.io/ramen/how-tos/aws/): Terraform/CloudFormation + Helm on EKS, untested
+- [Security](https://bkraad47.github.io/ramen/how-tos/security/): roles, keys, IP rules, CSRF, OAuth, audit
+- [Secrets](https://bkraad47.github.io/ramen/how-tos/secrets/): `{{$group.NAME}}` references, backends, scoping
+- [DevOps with the API](https://bkraad47.github.io/ramen/how-tos/devops-api/): every console route with curl, API keys, backups, rotation
+- [Concepts](https://bkraad47.github.io/ramen/wiki/concepts/): group, environment, zone, worker, roles
+- [Protos](https://bkraad47.github.io/ramen/wiki/protos/): group repo contract with examples
+- [Canary deploys](https://bkraad47.github.io/ramen/wiki/canary/)
+- [Rebalance and load](https://bkraad47.github.io/ramen/wiki/rebalance/)
+- [Cloud-ops agent skills](https://bkraad47.github.io/ramen/wiki/skills/): deploy-gcp, deploy-aws, rotate-keys, backup-restore, scale-zone
+- [Versions](https://bkraad47.github.io/ramen/versions/): version tracker generated from the changelog
+
+## Code
+
+- [Repository](https://github.com/bkraad47/ramen): console/ (FastAPI), node-rs/ (Rust), runtime-py/ (Python), deploy/ (compose, Helm, Terraform, CloudFormation), skills/, tests/
+- [Releases](https://github.com/bkraad47/ramen/releases): tagged v<semver>, zips attached by GitHub Actions
+- [Demo group repo](https://github.com/bkraad47/ramen-demo-mcp-group): one tool, one resource, one prompt to connect right away
+
+## Optional
+
+- [Changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md)
+- [Architecture v0.1.0](https://bkraad47.github.io/ramen/architecture/v0.1.0/), [v0.2.0](https://bkraad47.github.io/ramen/architecture/v0.2.0/), [v0.3.0](https://bkraad47.github.io/ramen/architecture/v0.3.0/)

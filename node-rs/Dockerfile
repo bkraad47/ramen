@@ -1,4 +1,4 @@
-# Worker image: ramen-node (Rust) + ramen_runtime (Python 3.14, gcp extra) in one container.
+# Worker image: ramen-node (Rust) + ramen_runtime (Python 3.14, gcp+aws extras) in one container.
 # Build context = ramen repo root (needs node-rs/ and runtime-py/):
 #   docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .                       # native
 #   docker buildx build --platform linux/amd64 -f node-rs/Dockerfile -t <ar>/worker:<v> --push . # GKE
@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.ver
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp]'
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws]'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080

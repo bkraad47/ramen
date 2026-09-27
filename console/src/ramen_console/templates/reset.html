@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Password reset · Ramen console</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/logo.png"></head>
+<body><div class="login card"><img src="/static/logo.png" alt="Ramen"><h1 style="text-align:center">Ramen <span>console</span></h1>
+{% if stage == 'request' %}{% if not mail %}<div class="err">Email is not configured (RAMEN_SMTP_HOST); ask a super admin to reset your password.</div>{% endif %}
+<form method="post" action="/auth/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>Email<input name="email" type="email" required autofocus></label><br><br><button type="submit">Send reset link</button></form>
+{% elif stage == 'sent' %}<div class="ok">If that account exists, a reset link has been emailed.</div>
+{% elif stage == 'set' %}<form method="post" action="/auth/reset/{{ token }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>New password<input name="password" type="password" required minlength="8" autofocus></label><br><br><button type="submit">Set password</button></form>
+{% else %}<div class="err">This reset link is invalid, expired or already used.</div>{% endif %}
+<p><a href="/login">back to sign in</a></p></div></body></html>

@@ -52,12 +52,31 @@ class Accounts:
                "password_hash": hash_password(password) if password else ""}
         return public(await self.store.put("users", uid(), doc))
 
-    async def upsert_sso_user(self, email) -> dict:
+    async def upsert_sso_user(self, email, role="viewer", groups=(), provider="oauth") -> dict:
+        """Link by verified email (existing role kept) or create with the mapped role/groups."""
         found = await self.store.list("users", {"email": email})
         if found:
             return found[0]
-        doc = {"email": email, "role": "viewer", "groups": [], "created": now(), "provider": "oauth", "password_hash": ""}
+        doc = {"email": email, "role": role, "groups": list(groups), "created": now(), "provider": provider, "password_hash": ""}
         return await self.store.put("users", uid(), doc)
+
+    async def start_token(self, email, kind) -> tuple[dict, str] | None:
+        """Issue a single-use nonce for a reset/magic token; None when the email is unknown (never revealed)."""
+        found = await self.store.list("users", {"email": email})
+        if not found:
+            return None
+        u, nonce = found[0], uid()
+        u[f"{kind}_nonce"] = nonce
+        return await self.store.put("users", u["id"], u), nonce
+
+    async def redeem_token(self, uid_, kind, nonce, password=None) -> dict | None:
+        u = await self.store.get("users", uid_)
+        if not u or not nonce or u.get(f"{kind}_nonce") != nonce:
+            return None
+        u.pop(f"{kind}_nonce", None)
+        if password is not None:
+            u["password_hash"] = hash_password(password)
+        return await self.store.put("users", uid_, u)
 
     async def update_user(self, uid_, role=None, groups=None) -> dict:
         u = await self.store.get("users", uid_)
@@ -112,22 +131,31 @@ class Accounts:
             raise forbidden("not your key")
         await self.store.delete("api_keys", kid)
 
-    async def request_permission(self, p: Principal, role, group) -> dict:
-        if role not in ROLES:
-            raise invalid("bad role")
-        doc = {"kind": "permission_request", "user": p.id, "email": p.name, "role": role, "group": group,
-               "status": "pending", "created": now()}
+    async def request_permission(self, p: Principal, role=None, group=None, zone=None, permission=None) -> dict:
+        """Role request (viewer → admin) or SA permission request (group+zone+permission, CONTRACTS §9)."""
+        if permission:
+            doc = {"kind": "permission_request", "type": "permission", "user": p.id, "email": p.name, "group": group,
+                   "zone": zone, "permission": permission, "status": "pending", "created": now()}
+        else:
+            if role not in ROLES:
+                raise invalid("bad role")
+            doc = {"kind": "permission_request", "type": "role", "user": p.id, "email": p.name, "role": role, "group": group,
+                   "status": "pending", "created": now()}
         return await self.store.put("activity", uid(), doc)
 
     async def list_requests(self) -> list[dict]:
         return await self.store.list("activity", {"kind": "permission_request"})
 
-    async def approve_request(self, rid, by) -> dict:
+    async def approve_request(self, rid, by, apply=None) -> dict:
         r = await self.store.get("activity", rid)
         if not r or r.get("kind") != "permission_request":
             raise not_found("request")
         if r["status"] != "pending":
             raise conflict("request already handled")
+        if r.get("type") == "permission":
+            r["applied"] = await apply(r["group"], r["zone"], r["permission"]) if apply else None
+            r.update(status="approved", approved_by=by, approved=now())
+            return await self.store.put("activity", rid, r)
         u = await self.store.get("users", r["user"])
         if u:
             if RANK[r["role"]] > RANK[u["role"]]:

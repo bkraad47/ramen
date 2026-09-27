@@ -1,9 +1,22 @@
-{{- $env := merge (dict) .Values.console.env (dict
+{{- $env := dict }}
+{{- if eq .Values.provider "aws" }}
+{{- /* CONTRACTS §8 console env; provider=aws forces the three backend selectors, the rest defaults from aws.*/ -}}
+{{- $env = merge (dict) (dict "RAMEN_STORE" "dynamodb" "RAMEN_CLOUD" "aws" "RAMEN_SECRETS_BACKEND" "aws") .Values.console.env (dict
+  "RAMEN_AWS_REGION" .Values.region
+  "AWS_REGION" .Values.region
+  "RAMEN_EKS_CLUSTER" .Values.aws.cluster
+  "RAMEN_ALB_GROUP" .Values.aws.albGroup
+  "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" (.Values.aws.account | toString))
+  "RAMEN_IMAGE_WORKER" (printf "%s.dkr.ecr.%s.amazonaws.com/ramen/worker:%s" (.Values.aws.account | toString) .Values.region (.Values.image.tag | toString))
+  "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)) }}
+{{- else }}
+{{- $env = merge (dict) .Values.console.env (dict
   "RAMEN_GCP_PROJECT" .Values.project
   "RAMEN_GCP_REGION" .Values.region
   "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" .Values.project)
   "RAMEN_IMAGE_WORKER" (printf "%s-docker.pkg.dev/%s/ramen/worker:%s" .Values.region .Values.project (.Values.image.tag | toString))
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

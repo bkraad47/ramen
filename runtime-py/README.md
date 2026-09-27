@@ -25,7 +25,7 @@ Errors: `-32002` not loaded, `-32004` unknown package, `-32602` bad params, `-32
 - Tool exceptions → `isError: true` with `ExceptionType: message` only (no traceback). Non-string results are JSON.
 - Prompts: SKILL.md front matter stripped, `{{param}}` substituted, `settings.json` appended as a `## Settings`
   block; `prompts/list` entries carry `_meta.settings`.
-- GCS (§7): when `RAMEN_BUCKET_URI=gs://<bucket>/<prefix>` is set, `runtime.load` first runs
+- Bucket sync (§7 GCS, §8 S3): when `RAMEN_BUCKET_URI=gs://<bucket>/<prefix>` (extra `gcp`) or `s3://<bucket>/<prefix>` (extra `aws`, IRSA) is set, `runtime.load` first runs
   `ramen_runtime.bucket.sync(uri, dest)` (md5-based, deletes stale files, keeps `.ramen*`/`__pycache__`) and adds a
   `sync: {uri,downloaded,unchanged,deleted,total}` summary to the load result. Needs the `gcp` extra
   (`google-cloud-storage`, ADC / Workload Identity).

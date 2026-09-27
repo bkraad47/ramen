@@ -110,6 +110,13 @@ class LocalCloud(Cloud):
     async def rebalance(self, group, zone):
         return {"ok": True, "note": "local adapter: no load balancer to rebalance"}
 
+    async def apply_sa_permissions(self, group, zone, permissions):
+        p = self._bucket(group) / ".ramen" / f"sa_permissions_{zone}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(permissions))
+        return {"ok": True, "applied": [], "permissions": list(permissions), "recorded": str(p),
+                "note": "local adapter: recorded only, no cloud IAM"}
+
     async def create_service_account(self, group, zone):
         return {"name": f"local-sa-{group}-{zone}", "note": "local adapter: no cloud IAM"}
 

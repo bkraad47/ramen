@@ -15,12 +15,16 @@ from . import __version__
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth.bootstrap import ensure_super_admin
+from .auth.csrf import CsrfMiddleware, token as csrf_token
 from .auth.oauth import OAuthRegistry
 from .auth.sessions import SessionSigner
+from .auth.settings import AuthSettings
+from .auth.tokens import Tokens
 from .backup import Backups, release_version
 from .cloud import make_cloud
 from .config import apply_config
 from .deploy import Jobs
+from .mail import Mailer
 from .secrets import make_secrets_backend
 from .services import Services
 from .storage import make_store
@@ -52,11 +56,15 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.backups = Backups(st.services)
     st.jobs = Jobs()
     st.signer = SessionSigner(os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure")
+    st.tokens = Tokens(os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure")
     st.oauth = OAuthRegistry.from_env()
+    st.auth_env = AuthSettings.from_env()
+    st.mailer = Mailer.from_env()
     st.cookie_secure = os.environ.get("RAMEN_COOKIE_SECURE", "0") == "1"
     st.templates = Jinja2Templates(directory=str(HERE / "templates"))
-    st.templates.env.globals.update(version=release_version(), tojson=json.dumps)
+    st.templates.env.globals.update(version=release_version(), tojson=json.dumps, csrf_token=csrf_token)
 
+    app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
     app.add_middleware(AuthAuditMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=os.environ.get("RAMEN_SESSION_SECRET", "dev-insecure"), https_only=st.cookie_secure)
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")

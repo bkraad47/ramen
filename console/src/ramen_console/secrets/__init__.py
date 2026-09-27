@@ -17,4 +17,7 @@ def make_secrets_backend(cloud=None) -> SecretsBackend:
             from ..cloud.gcp_clients import GcpClients
             client = GcpClients(project).secretmanager
         return GcpSecrets(project, client)
-    raise ValueError(f"unknown RAMEN_SECRETS_BACKEND={kind!r}; use store|gcp")
+    if kind == "aws":
+        from .aws import from_env
+        return from_env(cloud)
+    raise ValueError(f"unknown RAMEN_SECRETS_BACKEND={kind!r}; use store|gcp|aws")

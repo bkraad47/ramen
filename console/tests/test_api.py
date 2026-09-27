@@ -430,8 +430,12 @@ def test_config_and_refresh(demo, tmp_path, monkeypatch):
 
 
 def test_cloud_not_implemented_surfaces(demo, monkeypatch):
-    from ramen_console.cloud.aws import AwsCloud
-    demo.app.state.services.cloud = AwsCloud()
+    from ramen_console.cloud.local import LocalCloud
+
+    class Stub(LocalCloud):  # an adapter method that is not implemented surfaces as 501 (the aws stub did this in 0.1.0)
+        async def rebalance(self, group, zone):
+            raise NotImplementedError("aws rebalance is not available")
+    demo.app.state.services.cloud = Stub(bucket_root="/nonexistent")
     r = demo.post("/api/v1/groups/demo/zones/zone-a/rebalance")
     assert r.status_code == 501 and "aws" in r.text
 

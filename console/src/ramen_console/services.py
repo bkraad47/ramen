@@ -3,10 +3,22 @@ import secrets as pysecrets
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
+from .policy import permissions as perm
 from .rbac import Principal, RuleClash, check_clash
 from .secrets.base import SecretsBackend, StoreBackend
 from .storage.base import Store
 from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, public, uid
+
+
+def clean_blocked(names) -> list[str]:
+    out = []
+    for n in names:
+        n = str(n).strip()
+        if "," in n or "\n" in n:
+            raise invalid("blocked names must not contain commas")
+        if n and n not in out:
+            out.append(n)
+    return out
 
 
 class Services:
@@ -65,6 +77,35 @@ class Services:
             raise invalid(str(e))
         return await self.store.put("config", "sa_rules", {"rules": rules})
 
+    async def check_permission_request(self, p: Principal, group, zone, permission) -> None:
+        """422 unknown, 403 not an admin of the group, 409 denied by super-admin or group rules (CONTRACTS §9)."""
+        if not perm.known(permission or ""):
+            raise invalid(f"unknown permission {permission!r}; see /api/v1/policy/permissions")
+        if not group or not zone:
+            raise invalid("permission requests need group and zone")
+        g = await self.get_group(group)
+        if not await self.store.get("zones", zone):
+            raise not_found("zone")
+        if p.role != "super_admin" and (p.role != "group_admin" or group not in p.groups):
+            raise forbidden(f"requires group_admin on group {group}")
+        rules = (await self.store.get("config", "sa_rules") or {}).get("rules", [])
+        why = perm.evaluate(permission, rules, g.get("sa_restrictions", []))
+        if why:
+            raise conflict(f"permission {permission!r} denied: {why}")
+
+    async def apply_sa_permissions(self, group, zone, permission) -> dict:
+        """Approved request → union with what the zone SA already has → Cloud.apply_sa_permissions."""
+        w = await self.worker_config(group, zone)
+        perms = list(w.get("sa_permissions", []))
+        if permission not in perms:
+            perms.append(permission)
+        result = await self.cloud.apply_sa_permissions(group, zone, perms)
+        w["sa_permissions"] = perms
+        if result.get("service_account"):
+            w["service_account"] = result["service_account"]
+        await self.store.put("workers", w["id"], w)
+        return result
+
     async def zones(self) -> list[dict]:
         return sorted(await self.store.list("zones"), key=lambda z: z["name"])
 
@@ -108,7 +149,7 @@ class Services:
             raise conflict(f"environment {name} exists in {group}")
         await self._check_zones(zones)
         doc = {"group": group, "name": name, "ref": ref or g.get("ref", "main"), "zones": list(zones),
-               "verbose": False, "created": now(), "last_deploy": None}
+               "verbose": False, "blocked": [], "created": now(), "last_deploy": None}
         await self._attach_zones(group, zones)
         return await self.store.put("environments", f"{group}:{name}", doc)
 
@@ -125,6 +166,8 @@ class Services:
 
     async def update_env(self, group, name, **fields) -> dict:
         e = await self.get_env(group, name)
+        if fields.get("blocked") is not None:
+            fields["blocked"] = clean_blocked(fields["blocked"])
         if fields.get("zones") is not None:
             await self._check_zones(fields["zones"])
             await self._attach_zones(group, fields["zones"], already=e.get("zones", []))

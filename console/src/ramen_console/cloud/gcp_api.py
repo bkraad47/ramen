@@ -1,6 +1,7 @@
 """GCS repo sync, Cloud Logging, Cloud Armor / backend capacity and IAM helpers (sync functions, run in threads)."""
 import base64
 import hashlib
+import time
 import json
 import subprocess
 import tempfile
@@ -59,6 +60,16 @@ class Compute:
             self.api.globalOperations().wait(project=self.project, operation=op["name"]).execute()
         return op
 
+    def _ready(self, make_request, attempts=12, delay=5.0):
+        """Cloud Armor rejects rule edits with 400 'is not ready' for a while after the previous edit: retry, then wait."""
+        for i in range(attempts):
+            try:
+                return self._wait(make_request().execute())
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 400 or "not ready" not in str(e) or i == attempts - 1:
+                    raise
+                time.sleep(delay)
+
     def backend_service(self, name) -> dict | None:
         try:
             return self.api.backendServices().get(project=self.project, backendService=name).execute()
@@ -100,19 +111,19 @@ class Compute:
         except Exception as e:  # noqa: BLE001
             if http_status(e) != 404:
                 raise
-            self._wait(pols.insert(project=self.project, body={"name": name, "description": "ramen group allow-list", "rules": [
+            self._ready(lambda: pols.insert(project=self.project, body={"name": name, "description": "ramen group allow-list", "rules": [
                 {"priority": DEFAULT_PRIORITY, "action": "allow", "description": "default",
-                 "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": ["*"]}}}]}).execute())
+                 "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": ["*"]}}}]}))
             pol = pols.get(project=self.project, securityPolicy=name).execute()
         for rule in pol.get("rules", []):
             if rule["priority"] != DEFAULT_PRIORITY:
-                self._wait(pols.removeRule(project=self.project, securityPolicy=name, priority=rule["priority"]).execute())
+                self._ready(lambda r=rule: pols.removeRule(project=self.project, securityPolicy=name, priority=r["priority"]))
         for i in range(0, len(cidrs), 10):
-            self._wait(pols.addRule(project=self.project, securityPolicy=name, body={
+            self._ready(lambda i=i: pols.addRule(project=self.project, securityPolicy=name, body={
                 "priority": 1000 + i // 10, "action": "allow", "description": "ramen ip-rules",
-                "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": cidrs[i:i + 10]}}}).execute())
-        self._wait(pols.patchRule(project=self.project, securityPolicy=name, priority=DEFAULT_PRIORITY,
-                                  body={"action": "deny(403)" if cidrs else "allow"}).execute())
+                "match": {"versionedExpr": "SRC_IPS_V1", "config": {"srcIpRanges": cidrs[i:i + 10]}}}))
+        self._ready(lambda: pols.patchRule(project=self.project, securityPolicy=name, priority=DEFAULT_PRIORITY,
+                                           body={"action": "deny(403)" if cidrs else "allow"}))
         return f"projects/{self.project}/global/securityPolicies/{name}"
 
     def attach_armor(self, backend_service, policy_ref) -> None:

@@ -137,6 +137,16 @@ class Kube:
             raise ApiError(502, f"unsupported manifest kind {kind}")
         return table[kind]
 
+    def wait_gone(self, ns: str, selector: str, timeout: float | None = None) -> bool:
+        """True once no pod matches `selector` (terminating pods included), False on timeout."""
+        deadline = time.monotonic() + (timeout or self.wait_secs)
+        while True:
+            if not self.pods(ns, selector):
+                return True
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(self.poll)
+
     def list_namespaces(self, group: str) -> list[str]:
         items = self.c.to_dict(self.c.core.list_namespace(label_selector=f"ramen.io/group={group}")).get("items", [])
         return sorted(n["metadata"]["name"] for n in items if n["metadata"].get("labels", {}).get("ramen.io/group") == group)

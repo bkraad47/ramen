@@ -321,6 +321,9 @@ def compute_handler(state):
                 return {"status": "DONE"}
         if coll == "securityPolicies":
             pols = state.setdefault("policies", {})
+            if method in ("addRule", "removeRule", "patchRule") and state.get("not_ready", 0) > 0:
+                state["not_ready"] -= 1
+                raise FakeApiError(400, f"The resource 'projects/p1/global/securityPolicies/{kw['securityPolicy']}' is not ready")
             if method == "get":
                 if kw["securityPolicy"] not in pols:
                     raise FakeApiError(404, "policy not found")

@@ -1,0 +1,35 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions: { contents: write }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: false }
+      - name: Version
+        run: |
+          TAG=${GITHUB_REF_NAME#v}; FILE=$(cat VERSION)
+          [ "$TAG" = "$FILE" ] || { echo "tag $TAG != VERSION $FILE"; exit 1; }
+          echo "VER=$TAG" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "1.98.1" }
+      - name: Build node
+        working-directory: node-rs
+        run: |
+          if [ -f Cargo.toml ]; then cargo build --release; fi
+      - name: Package
+        run: |
+          mkdir -p dist
+          git archive --format=zip -o dist/ramen-$VER-source.zip HEAD
+          [ -f node-rs/target/release/ramen-node ] && zip -j dist/ramen-$VER-node-linux-amd64.zip node-rs/target/release/ramen-node || true
+          zip -r dist/ramen-$VER-console.zip console runtime-py deploy skills -x '*/.venv/*' '*/__pycache__/*' '*/target/*'
+          ls -la dist
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Ramen v${{ env.VER }}
+          generate_release_notes: true
+          files: dist/*

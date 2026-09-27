@@ -1,0 +1,14 @@
+target/
+**/*.rs.bk
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+.env
+.terraform/
+*.tfstate*
+.DS_Store

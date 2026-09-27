@@ -204,8 +204,15 @@ class GcpCloud(Cloud):
         except ApiError as e:
             out["note"] = f"capacity not applied: {e.detail}"
         else:
-            await asyncio.to_thread(comp.set_capacity, bs, ns, scaler)
-            out.update(backend_service=bs["name"], applied=True)
+            try:
+                await asyncio.to_thread(comp.set_capacity, bs, ns, scaler, 6)  # ~30s; the Gateway may be reconciling
+            except Exception as e:  # noqa: BLE001 - keep applying in the background
+                if "not ready" not in str(e):
+                    raise
+                self._background(comp.set_capacity, bs, ns, scaler, 120)
+                out.update(backend_service=bs["name"], note="capacity change pending: backend service busy, retrying in background")
+            else:
+                out.update(backend_service=bs["name"], applied=True)
         hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
         dep = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker")
         if hpa and dep and dep["spec"].get("replicas") != hpa["spec"].get("minReplicas"):

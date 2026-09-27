@@ -1,0 +1,39 @@
+---
+name: deploy-gcp
+description: Bring Ramen up on a GCP project (GKE Autopilot, Firestore, GCS, Artifact Registry, global HTTPS LB) with Terraform + Helm, then create the first zone, group and deploy through the console API. Use when asked to deploy, install or stand up Ramen on GCP.
+---
+
+# Deploy Ramen on GCP
+
+Verified path (v0.2.0+). Full narrative: `docs/how-tos/gcp.md`; binding contract: `docs/CONTRACTS.md` §7.
+Takes ~25 min wall clock; most of it is GKE and load-balancer provisioning. Never skip waits.
+
+## Inputs
+- `PROJECT` (existing project with billing, or create one with `scripts/gcp_test_project.sh create`), `REGION` (default `us-central1`), first worker zone `GCP_ZONE` (default `us-central1-a`).
+- Group repo URL to deploy (default `https://github.com/bkraad47/ramen-demo-mcp-group`).
+- Tools on PATH: `gcloud` (logged in), `terraform >= 1.6`, `helm 4`, `kubectl`, `docker` + buildx, `gke-gcloud-auth-plugin`, `uv`, `openssl`, `python3`.
+
+## Steps
+1. Auth: `gcloud config set project $PROJECT && gcloud auth application-default login` (or export `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)` for Terraform). Confirm billing is linked: `gcloud billing projects describe $PROJECT`.
+2. Infra: `cd deploy/terraform/gcp && cp -n terraform.tfvars.example terraform.tfvars`, set `project`/`region`, `terraform init && terraform apply -auto-approve`. Record outputs `console_ip`, `groups_bucket`, `artifact_repo`, `console_gsa`.
+3. Images: `make push PROJECT=$PROJECT REGION=$REGION` (linux/amd64 → Artifact Registry `ramen/{console,worker}:<VERSION>`).
+4. Console: `gcloud container clusters get-credentials ramen --region $REGION`; `deploy/scripts/selfsigned.sh <console_ip>`; `kubectl label ns ramen-system ramen.io/routes=true --overwrite`; generate `ADMIN_PW=$(openssl rand -base64 18)`, `FERNET=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')`, `ADMIN_KEY=$(openssl rand -hex 24)`; `helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace --set project=$PROJECT,region=$REGION --set console.secrets.RAMEN_ADMIN_PASSWORD=$ADMIN_PW,console.secrets.RAMEN_FERNET_KEY=$FERNET,console.secrets.RAMEN_ADMIN_KEY=$ADMIN_KEY`. Hand the three values to the human once (they are not recoverable from the cluster without kubectl access) and do not print them again.
+5. Wait: `kubectl -n ramen-system rollout status deploy/console`; poll `kubectl -n ramen-system get gateway ramen` until `PROGRAMMED=True` (up to 10 min); `curl -k https://<console_ip>/readyz` must return `{"ok":true,...}`.
+6. First zone/group/env/key/deploy through the API (cookie login with `admin@ramen.local` / `$ADMIN_PW`): `POST /api/v1/zones {name:"a",provider:"gcp",region:"$GCP_ZONE"}`, `POST /api/v1/groups {name,repo_url,ref:"main"}`, `POST /api/v1/groups/<g>/environments {name:"default",ref:"main",zones:["a"]}`, `POST /api/v1/groups/<g>/mcp-keys {name:"first"}` (store the returned `rmk_` key for the validator), `POST .../environments/default/deploy {canary:true}` and poll `/api/v1/jobs/<id>` until `ok` (first run 1–3 min: bucket sync + pip install). Alternative: `scripts/cloud_smoke.sh https://<console_ip> admin@ramen.local "$ADMIN_PW" "$ADMIN_KEY"`.
+7. Mint an `rmn_` API key for later automation: `POST /api/v1/api-keys {name:"ops",role:"super_admin"}`; give it to the human once.
+8. Write a short runbook line into the ticket/PR: project, region, console IP, zone, group, and the teardown commands below.
+
+## Validate
+(hand this section to a read-only sub-agent with `CONSOLE=https://<console_ip>`, the `rmk_` key and a viewer `rmn_` key)
+- V1 `curl -sk $CONSOLE/readyz` → HTTP 200 and body contains `"ok":true`.
+- V2 `curl -sk -H "X-Ramen-Api-Key: $RMN" $CONSOLE/api/v1/groups/<g>/zones/a/workers` → HTTP 200, `live` has ≥1 item with `track:"stable"` and `load` in {low,even,high}.
+- V3 `curl -sk $CONSOLE/mcp/<g>/a -H "Authorization: Bearer $RMK" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` → HTTP 200 and `result.tools` non-empty.
+- V4 Same call without the `Authorization` header → HTTP 401.
+- V5 `kubectl -n ramen-<g>-a get deploy worker-canary -o jsonpath='{.spec.replicas}'` → `0` or `1` (never more), and `kubectl -n ramen-<g>-a get deploy worker` READY ≥ 1/1.
+- V6 `curl -sk -H "X-Ramen-Api-Key: $RMN" "$CONSOLE/api/v1/audit"` → contains an entry with `action` `deploy` and `ok:true`.
+
+## Boundaries
+- Never `terraform destroy`, delete namespaces, or delete the project unless the request explicitly says teardown; then use `docs/how-tos/gcp.md#teardown` and finish with `scripts/gcp_cost_check.sh $PROJECT --expect-empty`.
+- Never print or store secret values, the Fernet key or keys beyond the one hand-over.
+- Do not loop on `rebalance` / `ip-rules` responses with `applied:false` / `attached:false`; they retry in the background.
+- Stop and ask a human if `terraform apply` fails on IAM/quota, if the Gateway is not programmed after 15 min, or if the deploy job reports pip errors from the group repo (that is the repo owner's problem, not infra).

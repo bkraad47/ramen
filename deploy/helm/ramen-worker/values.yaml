@@ -1,5 +1,13 @@
 # helm template ramen-worker deploy/helm/ramen-worker --set project=<p>,group=demo,zone=a,gcpZone=us-central1-a | kubectl apply -f -
-project: ""                 # GCP project id (required)
+provider: gcp               # gcp | aws (CONTRACTS §7 / §8). provider=aws is UNTESTED on a real account.
+project: ""                 # GCP project id (required on gcp)
+aws:                        # provider=aws only
+  account: ""               # AWS account id: ECR image + groups bucket defaults
+  region: us-east-1
+  zone: us-east-1a          # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
+  roleArn: ""               # IAM role for KSA worker (IRSA); empty = no annotation (console sets it via create_service_account)
+  albGroup: ramen           # ALB IngressGroup shared with the console Ingress
+  canaryWeight: 0           # 0-50, traffic share of worker-canary; the console rewrites it on deploy/rebalance
 region: us-central1
 group: demo
 environment: default        # → RAMEN_ENV in Secret ramen-deploy
@@ -30,7 +38,7 @@ secret:
   data:                     # RAMEN_ENV, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_ALLOWED_CIDRS, RAMEN_SIDECAR_IDLE_SECS, RAMEN_SECRET_<GROUP>__<VAR>...
     RAMEN_MCP_KEYS: ""
     RAMEN_ADMIN_KEY: ""
-route:                      # HTTPRoute on the console Gateway: https://<console_ip>/mcp/<group>/<zone> → worker:8080/mcp
+route:                      # HTTPRoute on the console Gateway (gcp only; aws renders an ALB Ingress instead): https://<console_ip>/mcp/<group>/<zone> → worker:8080/mcp
   enabled: true
   gateway: ramen
   gatewayNamespace: ramen-system

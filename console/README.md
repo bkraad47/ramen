@@ -44,7 +44,7 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_STORE` | `memory` | `memory` / `firestore` / `dynamodb` |
 | `FIRESTORE_EMULATOR_HOST`, `RAMEN_GCP_PROJECT`, `RAMEN_FIRESTORE_PREFIX` | – / – / `ramen_` | Firestore adapter (emulator honored automatically) |
 | `RAMEN_DDB_TABLE`, `RAMEN_DDB_ENDPOINT` + AWS creds | `ramen` / – | DynamoDB adapter (single table, pk=collection, sk=id; created if missing) |
-| `RAMEN_CLOUD` | `local` | `local` / `gcp` / `aws` (aws is a stub until v0.3.0) |
+| `RAMEN_CLOUD` | `local` | `local` / `gcp` / `aws` (`aws` implemented in v0.3.0 but untested on a real account) |
 | `RAMEN_SECRETS_BACKEND` | `store` | `store` keeps secret values Fernet-encrypted in the store; `gcp` writes them to Secret Manager as `ramen-<group>-<env|all>-<zone|all>-<NAME>` (labels group/env/zone) and the store keeps only name + `sm://` ref. Deploy resolves refs into the worker Secret |
 | `RAMEN_GCP_PROJECT` | – | GCP project (Firestore, Secret Manager, Logging, Compute, IAM). Required for `RAMEN_CLOUD=gcp` / `RAMEN_SECRETS_BACKEND=gcp` |
 | `RAMEN_GCP_REGION` | `us-central1` | GKE cluster region |
@@ -53,6 +53,10 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_DEPLOY_TIMEOUT_SECS` | `300` | Max wait for a Deployment rollout during deploy |
 | `RAMEN_GCP_POD_PROXY` | `0` | `1` reads worker `/metrics` through the API-server pod proxy (for running the console outside the cluster) |
 | `RAMEN_WORKER_CHART` | – | Path to `deploy/helm/ramen-worker`; when set and `helm` is on PATH the zone manifests are rendered with `helm template`, otherwise the built-in Python manifest set is used |
+| `RAMEN_AWS_REGION` | `AWS_REGION` or `us-east-1` | AWS region for `RAMEN_CLOUD=aws` / `RAMEN_SECRETS_BACKEND=aws` (untested on a real account, CONTRACTS §8) |
+| `RAMEN_EKS_CLUSTER`, `RAMEN_ALB_GROUP` | `ramen` / `ramen` | EKS cluster name (OIDC issuer for worker IAM roles, Container Insights log group) and the ALB IngressGroup shared by console + workers |
+| `RAMEN_AWS_POD_PROXY` | `0` | `1` reads worker `/metrics` through the API-server pod proxy (console running outside EKS); AWS twin of `RAMEN_GCP_POD_PROXY` |
+| `RAMEN_LOG_GROUP` | `/aws/containerinsights/<cluster>/application` | CloudWatch log group queried by `logs()` (Logs Insights, Fluent Bit) |
 | `KUBECONFIG` | – | Used when in-cluster config is unavailable (console running outside GKE) |
 | `RAMEN_BUCKET_ROOT` | `./buckets` | Local adapter: filesystem "bucket" root, one dir per group (`<root>/<group>`) |
 | `RAMEN_LOG_ROOT` | `<bucket root>/_logs` | Local adapter: worker logs at `<root>/<group>/<zone>/worker.log` |
@@ -61,17 +65,55 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_ADMIN_KEY` | – | Sent as `X-Ramen-Admin-Key` to worker `POST /admin/reload` |
 | `RAMEN_BACKUP_ROOT` | `./backups` | Where `target=local` backups are written (`target=bucket` → `<bucket root>/_backups`) |
 | `RAMEN_CONFIG` | – | YAML file; top-level keys map to `RAMEN_*` (nested keys join with `_`). Env vars win. Hot reload: `POST /api/v1/config/reload` |
-| `RAMEN_OAUTH_<NAME>_CLIENT_ID` / `_CLIENT_SECRET` / `_METADATA_URL` / `_SCOPES` | – | OIDC provider `<name>`; enabled only when id, secret and metadata URL are all set. SSO users are created as viewers with no groups |
+| `RAMEN_OAUTH_<NAME>_ISSUER` (or `_METADATA_URL`) / `_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPES` | – / – / – / `openid email profile` | OIDC provider `<name>` (login button, `/auth/<name>/login` → `/auth/<name>/callback`); enabled when id, secret and issuer/metadata URL are set. Users are linked or created by verified email |
+| `RAMEN_AUTH_OAUTH_<NAME>_ROLE_CLAIM` / `_ROLE_MAP` | – | Role mapping for *new* SSO users: claim name (string or list) and `value=role[:group,group];…` (or `_ROLE_MAP_<VALUE>=role:groups`). Default viewer, no groups |
+| `RAMEN_AUTH_PASSWORD_LOGIN` / `RAMEN_AUTH_MAGIC_LINK` | `1` / `0` | Defaults for the super-admin toggles at `PUT /api/v1/config/auth` (store doc wins) |
+| `RAMEN_ADMIN_FORCE_PASSWORD` | `0` | Break-glass: with password login off, `RAMEN_ADMIN_EMAIL` may still sign in with the password |
+| `RAMEN_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` / `_TLS` | – / `587` / – / – / `ramen@localhost` / `1` | Outbound mail (invite on user create, password reset, magic link). `_TLS`: `1` starttls, `ssl`, `0`. `RAMEN_SMTP_HOST=file:///dir` writes `.eml` files instead (dev/tests). Unset = mail off (reset page says so) |
+| `RAMEN_PUBLIC_URL` | request base URL | Base for links in mails |
 | `RAMEN_CONSOLE_PORT` | `8000` | HTTP port |
 | `RAMEN_TLS` / `RAMEN_TLS_PORT` / `RAMEN_TLS_HOST` | – / `8443` / `localhost` | `RAMEN_TLS=self` serves HTTPS with a generated cert |
 | `RAMEN_LOG_LEVEL` | `INFO` | Console log level |
+
+### Auth config yaml example
+
+```yaml
+# RAMEN_CONFIG=/etc/ramen/console.yaml — keys map to RAMEN_* (nested join with _); env vars win; hot reload POST /api/v1/config/reload
+auth:
+  password_login: true        # RAMEN_AUTH_PASSWORD_LOGIN; toggle at runtime: PUT /api/v1/config/auth {"password_login": false}
+  magic_link: false           # RAMEN_AUTH_MAGIC_LINK (needs smtp)
+  oauth:
+    google:
+      role_claim: hd          # RAMEN_AUTH_OAUTH_GOOGLE_ROLE_CLAIM
+      role_map: "example.com=group_admin:demo"   # RAMEN_AUTH_OAUTH_GOOGLE_ROLE_MAP
+oauth:
+  google:
+    issuer: https://accounts.google.com          # RAMEN_OAUTH_GOOGLE_ISSUER
+    client_id: ...
+    client_secret: ...        # prefer the env var RAMEN_OAUTH_GOOGLE_CLIENT_SECRET
+    scopes: openid email profile
+smtp:
+  host: smtp.example.com      # RAMEN_SMTP_HOST (file:///var/mail/ramen for a dev drop dir)
+  port: 587
+  user: ramen
+  password: ...
+  from: ramen@example.com
+  tls: "1"
+public_url: https://console.example.com
+```
+
+Security notes: cookie sessions must send `X-Ramen-CSRF` (value of the `ramen_csrf` cookie) on `/api/*` mutations
+(HTMX does this from `base.html`); HTML forms carry the hidden `csrf_token`; API-key requests are exempt. Reset and
+magic-link tokens are signed with `RAMEN_SESSION_SECRET`, single use (nonce on the user doc), 24 h / 15 min. Password
+login cannot be disabled while no OAuth provider, magic link or break-glass exists. Mail bodies are never logged.
 
 ## Deploy flow (local adapter)
 
 `POST /api/v1/groups/{g}/environments/{env}/deploy` returns `202 {id}`; poll `/api/v1/jobs/{id}` (the UI polls
 `/ui/jobs/{id}` every 2 s and shows "refreshing…"). The job clones/pulls the group repo into the bucket (token from a
 secret named `GITHUB_TOKEN`, or the group's fallback token), writes `<bucket>/.ramen/env-<zone>` with `RAMEN_*`,
-`RAMEN_MCP_KEYS` (minted MCP keys) and `RAMEN_SECRET_<GROUP>__<NAME>` for secrets scoped to that env/zone, then
+`RAMEN_MCP_KEYS` (minted MCP keys), `RAMEN_BLOCKED` (tools/resources/prompts blocked on the group page, hidden from
+list calls and answered `-32601` by the node) and `RAMEN_SECRET_<GROUP>__<NAME>` for secrets scoped to that env/zone, then
 POSTs `/admin/reload` to every worker of the zone. Errors are surfaced in the job, the group page and the audit log.
 
 ## Deploy flow (gcp adapter, CONTRACTS §7)
@@ -91,6 +133,15 @@ list = allow all) attached to the backend service + `RAMEN_ALLOWED_CIDRS` in the
 GSA with `storage.objectViewer` (bucket prefix condition) + `secretmanager.secretAccessor` (`ramen-<group>-*`
 condition) + Workload Identity binding, idempotent. Sizes `s` 250m/512Mi, `m` 500m/1Gi, `l` 1/2Gi: super admins pick
 the size and the per-zone allowed list; group admins may switch within the allowed list and set the count.
+
+## Service-account permissions (CONTRACTS §9)
+
+Group admins request abstract permissions (`GET /api/v1/policy/permissions`: `bucket.read`, `secrets.read`,
+`logs.write`, …) for a group+zone from the group page; super-admin rules (`/config`) and the group's own restrictions
+gate them (409 + audit when denied). A super admin approves on the Users page →
+`Cloud.apply_sa_permissions(group, zone, permissions)`: gcp binds the mapped `roles/*` to the zone GSA (bucket/secret
+roles keep the group-prefix conditions), local records `<bucket>/.ramen/sa_permissions_<zone>.json`, aws binds the
+mapped actions (see `cloud/aws.py`). Approved permissions show per zone on the group page (`sa_permissions`).
 
 ## Roles
 

@@ -1,0 +1,57 @@
+variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+variable "name" {
+  type        = string
+  default     = "ramen"
+  description = "EKS cluster name (also the node group, VPC Name tag and Container Insights log group)."
+}
+variable "kubernetes_version" {
+  type    = string
+  default = "1.31"
+}
+variable "node_instance_type" {
+  type        = string
+  default     = "t3.small"
+  description = "Cheap first (CLAUDE.md): console + a couple of small workers fit on two t3.small nodes."
+}
+variable "node_count" {
+  type    = number
+  default = 2
+}
+variable "node_max" {
+  type    = number
+  default = 3
+}
+variable "vpc_cidr" {
+  type    = string
+  default = "10.42.0.0/16"
+}
+variable "table" {
+  type        = string
+  default     = "ramen"
+  description = "DynamoDB state table (RAMEN_DDB_TABLE)."
+}
+variable "groups_bucket" {
+  type        = string
+  default     = ""
+  description = "S3 bucket holding every group's synced repo under <bucket>/<group>/. Empty = ramen-<account>-groups."
+}
+variable "log_retention_days" {
+  type    = number
+  default = 14
+}
+variable "install_addons" {
+  type        = bool
+  default     = true
+  description = "Install the AWS Load Balancer Controller and Fluent Bit via Helm from Terraform (needs aws CLI + kubectl auth)."
+}
+variable "alb_controller_chart_version" {
+  type    = string
+  default = "1.13.0"
+}
+variable "fluent_bit_chart_version" {
+  type    = string
+  default = "0.1.35"
+}

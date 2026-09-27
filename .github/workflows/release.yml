@@ -25,9 +25,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          git archive --format=zip -o dist/ramen-$VER-source.zip HEAD
-          [ -f node-rs/target/release/ramen-node ] && zip -j dist/ramen-$VER-node-linux-amd64.zip node-rs/target/release/ramen-node || true
-          zip -r dist/ramen-$VER-console.zip console runtime-py deploy skills -x '*/.venv/*' '*/__pycache__/*' '*/target/*'
+          git archive --format=zip -o "dist/ramen-$VER-source.zip" HEAD
+          [ -f node-rs/target/release/ramen-node ] && zip -j "dist/ramen-$VER-node-linux-amd64.zip" node-rs/target/release/ramen-node || true
+          zip -r "dist/ramen-$VER-console.zip" console runtime-py deploy skills -x '*/.venv/*' '*/__pycache__/*' '*/target/*'
           ls -la dist
       - name: Release
         uses: softprops/action-gh-release@v2

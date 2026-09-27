@@ -4,9 +4,29 @@ metadata:
   name: worker
   namespace: {{ include "rw.ns" . }}
   labels: {{- include "rw.labels" . | nindent 4 }}
+  {{- if ne .Values.provider "aws" }}
   annotations:
     cloud.google.com/neg: '{"exposed_ports": {"{{ .Values.port }}": {"name": "ramen-{{ .Values.group }}-{{ .Values.zone }}"}}}'
+  {{- end }}
 spec:
   type: ClusterIP
+  {{- if eq .Values.provider "aws" }}
+  selector: { app: worker, ramen.io/track: stable }
+  {{- else }}
   selector: { app: worker }
+  {{- end }}
   ports: [{ name: http, port: {{ .Values.port }}, targetPort: http }]
+{{- if eq .Values.provider "aws" }}
+---
+# aws: separate canary Service so the ALB Ingress can weight stable/canary target groups (CONTRACTS §8)
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-canary
+  namespace: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: { app: worker, ramen.io/track: canary }
+  ports: [{ name: http, port: {{ .Values.port }}, targetPort: http }]
+{{- end }}

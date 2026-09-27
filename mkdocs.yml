@@ -1,0 +1,88 @@
+site_name: Ramen
+site_description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. Rust MCP node + Python 3.14 runtime workers, managed from a FastAPI console.
+site_url: https://bkraad47.github.io/ramen/
+repo_url: https://github.com/bkraad47/ramen
+repo_name: bkraad47/ramen
+edit_uri: edit/main/docs/
+copyright: BSD-3-Clause · © 2026 Raad
+docs_dir: docs
+site_dir: site
+strict: true
+exclude_docs: |
+  pyproject.toml
+  uv.lock
+  .venv/
+hooks:
+  - scripts/gen_versions.py
+theme:
+  name: material
+  logo: img/logo.png
+  favicon: img/favicon.png
+  language: en
+  palette:
+    - scheme: ramen
+      primary: custom
+      accent: custom
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+extra_css: [stylesheets/ramen.css]
+extra:
+  version_current: 0.3.0
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bkraad47/ramen
+    - icon: fontawesome/solid/bowl-food
+      link: https://github.com/bkraad47/ramen-demo-mcp-group
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed: { alternate_style: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+plugins:
+  - search
+nav:
+  - Home: index.md
+  - How it works: how-it-works.md
+  - Architecture:
+      - Current (v0.3.0): architecture/index.md
+      - v0.3.0: architecture/v0.3.0.md
+      - v0.2.0: architecture/v0.2.0.md
+      - v0.1.0: architecture/v0.1.0.md
+  - How-tos:
+      - Local quickstart: how-tos/local-quickstart.md
+      - GCP (verbose): how-tos/gcp.md
+      - AWS (verbose, untested): how-tos/aws.md
+      - Security: how-tos/security.md
+      - Secrets: how-tos/secrets.md
+      - DevOps with the API and keys: how-tos/devops-api.md
+  - Wiki:
+      - Concepts: wiki/concepts.md
+      - Protos (group repo contract): wiki/protos.md
+      - Canary deploys: wiki/canary.md
+      - Rebalance and load: wiki/rebalance.md
+      - Cloud-ops skills: wiki/skills.md
+  - Reference:
+      - Interface contracts: CONTRACTS.md
+      - Versions: versions.md
+      - llms.txt: llms.md

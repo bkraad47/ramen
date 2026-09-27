@@ -30,16 +30,18 @@ Errors: 401 `-32001` unauthorized, 403 `-32000` ip not allowed, 400 `-32700`/`-3
 | `RAMEN_ADMIN_KEY` | unset = admin disabled | |
 | `RAMEN_GROUP` / `RAMEN_ZONE` / `RAMEN_ENV` | `default` / `local` / `default` | log fields |
 | `RAMEN_VERBOSE` | `0` | `1` logs full request/response bodies |
+| `RAMEN_BLOCKED` | – | Comma list of tool/prompt names or resource names/URIs hidden from `*/list` and answered `-32601` on call (console block toggle, CONTRACTS §9) |
 | `RAMEN_SIDECAR_IDLE_SECS` | `300` | kill sidecar after idle; respawn (and re-load) on demand |
 | `RAMEN_MAX_INFLIGHT` | `32` | concurrency bound; `load` = low <30%, high >80% |
 | `RAMEN_CALL_TIMEOUT_SECS` | `120` | per sidecar call; timeout kills the sidecar |
-| `RAMEN_BUCKET_URI` | unset | `gs://bucket/prefix`; passed to the sidecar, which syncs it into `RAMEN_BUCKET` on every load; `/admin/reload` then carries a `sync` summary |
+| `RAMEN_MCP_PATH_PREFIX` | unset | extra path served exactly like `/mcp` (e.g. `/mcp/<group>/<zone>` behind an AWS ALB, which cannot rewrite paths) |
+| `RAMEN_BUCKET_URI` | unset | `gs://bucket/prefix` or `s3://bucket/prefix`; passed to the sidecar, which syncs it into `RAMEN_BUCKET` on every load; `/admin/reload` then carries a `sync` summary |
 | `RAMEN_LOG_FILE` | unset | mirror JSON log lines (node + sidecar stderr) to this file |
 | `RAMEN_CONFIG` | unset | flat `key: value` yaml with the same names (env wins) |
 
 Precedence: `RAMEN_CONFIG` < process env < `<bucket>/.ramen/env-<zone>` (or `.ramen/env`), the file the
 console writes on deploy. Only deploy-scoped keys are read from that file (`RAMEN_MCP_KEYS`, `RAMEN_ALLOWED_CIDRS`,
-`RAMEN_ENV`, `RAMEN_VERBOSE`, idle/inflight/timeout, `RAMEN_LOG_FILE`); MCP keys are unioned so console-minted
+`RAMEN_ENV`, `RAMEN_VERBOSE`, `RAMEN_BLOCKED`, idle/inflight/timeout, `RAMEN_LOG_FILE`); MCP keys are unioned so console-minted
 `rmk_` keys work alongside static ones.
 
 Log line per call: `ts, ip, group, zone, env, method, name, status, http, ms, key_id` (`key_id` is a non-secret hash).

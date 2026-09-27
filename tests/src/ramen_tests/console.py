@@ -42,15 +42,34 @@ ROUTES = {
     "dashboard": "/api/v1/dashboard",
     "logs": "/api/v1/logs",                                  # ?group&zone&worker?&tail&download=1 → text/plain
     "healthz": "/healthz",
+    # v0.3.0 (CONTRACTS §9)
+    "requests": "/api/v1/requests",                          # POST {role,group?} | {group,zone,permission} → 201; GET (super admin)
+    "request_approve": "/api/v1/requests/{id}/approve",      # POST → applied SA permissions / role granted
+    "policy_permissions": "/api/v1/policy/permissions",      # GET catalogue [{permission,desc,gcp,aws}]
+    "env_blocked": "/api/v1/groups/{group}/environments/{env}/blocked",  # PUT {blocked:[names]}
+    "config_auth": "/api/v1/config/auth",                    # GET|PUT {password_login?, magic_link?} (super admin)
+    "auth_reset": "/auth/reset",                             # form POST {email} → 200 always
+    "auth_reset_token": "/auth/reset/{token}",               # form POST {password} → 303 /login
+    "auth_magic": "/auth/magic",                             # form POST {email} (auth.magic_link)
+    "auth_magic_token": "/auth/magic/{token}",               # GET → 303 + session
+    "oauth_login": "/auth/{name}/login",
+    "oauth_callback": "/auth/{name}/callback",
 }
 API_KEY_HEADER = "X-Ramen-Api-Key"
+CSRF_COOKIE, CSRF_HEADER = "ramen_csrf", "X-Ramen-CSRF"
 
 
 class Console:
     def __init__(self, base: str, api_key: str | None = None, timeout: float = 180):  # cloud ops (Armor/backends) retry for minutes
         headers = {API_KEY_HEADER: api_key} if api_key else {}
         self.http = httpx.Client(base_url=strip(base), verify=tls_verify(), timeout=timeout, headers=headers)
+        self.http.event_hooks["request"].append(self._csrf)  # cookie sessions must echo the csrf cookie (CONTRACTS §9)
         self.email: str | None = None
+
+    def _csrf(self, request: httpx.Request) -> None:
+        t = self.http.cookies.get(CSRF_COOKIE)
+        if t and CSRF_HEADER not in request.headers:
+            request.headers[CSRF_HEADER] = t
 
     def close(self):
         self.http.close()
@@ -88,6 +107,9 @@ class Console:
 
     def page(self, path: str) -> httpx.Response:
         return self.http.get(path)
+
+    def form(self, key: str, data: dict, **kw) -> httpx.Response:
+        return self.http.post(self.url(key, **kw), data=data, follow_redirects=False)
 
     # convenience
     def create_user(self, email, password, role, groups=None):

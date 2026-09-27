@@ -9,7 +9,9 @@ Contract under test: `docs/CONTRACTS.md`. Every suite skips (never fails) when i
 | `conformance/test_sidecar_protocol.py` | importable `ramen_runtime` (auto-detects `../runtime-py/.venv`, or `RAMEN_RUNTIME_PYTHON`) | §2: every `runtime.*` method, broken packages → `errors`, `RAMEN_SECRET_<GROUP>__<VAR>` substitution |
 | `conformance/test_mcp_node.py` | `RAMEN_NODE_URL` + `RAMEN_MCP_KEY` (or a key minted by e2e earlier in the same run; opt: `RAMEN_ADMIN_KEY`, `RAMEN_EXPECT_CIDR_403=1`) | §3 via the official `mcp` client: initialize, list/call/read/get, 401, health/metrics |
 | `conformance/test_console_api.py` | `RAMEN_CONSOLE_URL` (opt: `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD`, default `admin@ramen.local`/`ramen-admin`) | §4: bootstrap login, RBAC matrix, secret values never in responses, API keys, audit, backup |
+| `conformance/test_console_auth.py` | `RAMEN_CONSOLE_URL` (reset-mail case also needs `RAMEN_MAIL_DIR` = host path of the console's `RAMEN_SMTP_HOST=file://` dir, compose: `deploy/local/.mail`) | §9: CSRF (cookie sessions 403 without `X-Ramen-CSRF`, API keys exempt), `GET|PUT /api/v1/config/auth` super admin + audited, SA permission request → 409 on denied rule (audited) → approve → `sa_permissions` on the zone, `PUT …/blocked` → env + group page, password reset via emailed link (single use) |
 | `e2e/test_demo_flow.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` | console → zone/group/env → mint `rmk_` key → deploy job → worker ready → MCP calls → metrics/audit/dashboard |
+| `e2e/test_tool_blocking.py` | same (runs after the demo flow) | §9: `PUT …/blocked [demo_calculator_tool]` → deploy → node hides it from `tools/list` and denies the call → unblock → deploy → restored |
 | `cloud/test_canary.py` | `RAMEN_CONSOLE_URL` (+`RAMEN_NODE_URL`; canary-at-0 check needs `RAMEN_GCP_PROJECT`) | §7 deploy: bad ref → job `error` + audited, main worker still serves; good ref → `ok`; `canary:false` |
 | `cloud/test_rebalance.py` | `RAMEN_CONSOLE_URL` (+`RAMEN_GCP_PROJECT`) | POST rebalance → `{ok}` + audit; GCP: NEG backend `capacityScaler` ∈ {0.5, 1.0} |
 | `cloud/test_ip_rules.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` + `RAMEN_TRUSTED_CIDRS` (+`RAMEN_GCP_PROJECT`) | PUT cidrs → deploy → node 403 outside → restore; invalid CIDR 4xx; GCP: Cloud Armor policy `ramen-<group>` |
@@ -68,6 +70,10 @@ group secrets by id, never returning `value`; `POST /api/v1/groups/{g}/mcp-keys`
 `POST .../zones/{zone}/service-account` → `{name}` (super admin), `PUT .../groups/{g}/sa-restrictions {rules}`,
 `POST .../environments/{env}/verbose {verbose}`, `POST /api/v1/config/reload`, `GET|PUT /api/v1/config/sa-rules`,
 `GET /api/v1/logs?group&zone&worker?&tail&download=1` → `text/plain` (+ `Content-Disposition: attachment`)).
+v0.3.0 (§9): `POST /api/v1/requests {group,zone,permission}` + `POST /api/v1/requests/{id}/approve`, `GET /api/v1/policy/permissions`,
+`PUT …/environments/{env}/blocked {blocked}`, `GET|PUT /api/v1/config/auth`, forms `POST /auth/reset`, `POST /auth/reset/{token}`,
+`POST /auth/magic`, `GET /auth/magic/{token}`, OAuth `GET /auth/{name}/login` → `/auth/{name}/callback`. Cookie sessions must send
+`X-Ramen-CSRF: <ramen_csrf cookie>` on mutations (`Console` does this automatically; API-key clients are exempt).
 Edit `ROUTES` if the console moves them. Console `/healthz` is not in the contract yet; the harness waits on `/login`.
 
 ## Fixtures

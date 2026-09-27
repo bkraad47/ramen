@@ -17,7 +17,7 @@ button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;paddin
 .once{background:#fff6e5;border:1px solid #f2c48d;padding:10px;border-radius:8px;margin:8px 0;word-break:break-all}
 #toast{position:fixed;right:20px;bottom:20px;background:var(--red);color:#fff;padding:12px 16px;border-radius:10px;display:none;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.2)}
 pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px}
-.login{margin:auto;width:360px}.login img{width:96px;display:block;margin:0 auto 12px}.err{color:var(--red);margin:8px 0}
+.login{margin:auto;width:360px}.login img{width:96px;display:block;margin:0 auto 12px}.err{color:var(--red);margin:8px 0}.ok{color:#1f6b40;margin:8px 0}
 code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--line)}.muted{color:var(--muted);font-size:13px}
 
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:var(--grey)}.dot.low{background:var(--blue)}.dot.even{background:var(--green)}.dot.high{background:var(--red)}pre.log{max-height:280px;overflow:auto;font-size:12px}

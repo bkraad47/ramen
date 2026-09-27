@@ -9,6 +9,7 @@
 <main><h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>{% block body %}{% endblock %}</main>
 <div id="toast"></div>
 <script>
+document.body.addEventListener('htmx:configRequest',e=>{const m=document.cookie.match(/(?:^|; )ramen_csrf=([^;]+)/);if(m)e.detail.headers['X-Ramen-CSRF']=decodeURIComponent(m[1])});
 htmx.defineExtension('json',{onEvent:(n,e)=>{if(n==='htmx:configRequest')e.detail.headers['Content-Type']='application/json'},
  encodeParameters:(xhr,params)=>{xhr.overrideMimeType('text/json');const o={};params.forEach((v,k)=>{if(k in o)o[k]=[].concat(o[k],v);else o[k]=v});return JSON.stringify(o)}});
 document.body.addEventListener('htmx:responseError',e=>{const t=document.getElementById('toast');t.textContent=e.detail.xhr.responseText||('Error '+e.detail.xhr.status);t.style.display='block';setTimeout(()=>t.style.display='none',6000)});

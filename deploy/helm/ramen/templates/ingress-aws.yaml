@@ -1,0 +1,26 @@
+{{- if eq .Values.provider "aws" }}
+# CONTRACTS §8 (UNTESTED on a real account): console Ingress in ALB IngressGroup {{ .Values.aws.albGroup }}; worker
+# namespaces add their own Ingress (/mcp/<group>/<zone>, group.order 10) to the same ALB. Console is the catch-all.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/group.name: {{ .Values.aws.albGroup }}
+    alb.ingress.kubernetes.io/group.order: "100"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.aws.certificateArn | quote }}
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300   # IAM/WAF calls exceed 60s
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: console, port: { number: 80 } } }
+{{- end }}

@@ -6,6 +6,7 @@ import pytest
 
 from ramen_console.cloud import make_cloud
 from ramen_console.cloud.aws import AwsCloud
+from ramen_console.cloud.base import Cloud
 from ramen_console.cloud.gcp import GcpCloud
 from ramen_console.cloud.local import LocalCloud
 
@@ -119,15 +120,9 @@ async def test_misc(cloud, tmp_path):
     assert r["groups"] == ["demo"] and "demo/local-a" in r["workers"]
 
 
-def test_stubs():
-    for cls, name in ((AwsCloud, "aws"),):
-        c = cls()
-        for m, args in (("sync_repo", ("g", "u", "r", None)), ("deploy", ("g", "e", "z")), ("rebalance", ("g", "z")),
-                        ("workers", ("g", "z")), ("logs", ("g", "z")), ("set_ip_rules", ("g", "z", [])),
-                        ("create_service_account", ("g", "z")), ("refresh", ())):
-            with pytest.raises(NotImplementedError, match=name):
-                import asyncio
-                asyncio.run(getattr(c, m)(*args))
+def test_aws_adapter_is_a_full_cloud():  # v0.3.0: the AWS stub is gone (tests/test_aws_*.py cover it)
+    for m in ("sync_repo", "deploy", "rebalance", "workers", "logs", "set_ip_rules", "create_service_account", "refresh", "detach_group"):
+        assert getattr(AwsCloud, m) is not getattr(Cloud, m, None) and getattr(AwsCloud, m) is not None
 
 
 def test_factory(monkeypatch, tmp_path):
@@ -140,6 +135,7 @@ def test_factory(monkeypatch, tmp_path):
     monkeypatch.setenv("RAMEN_GCP_PROJECT", "p1")
     assert isinstance(make_cloud(), GcpCloud)
     monkeypatch.setenv("RAMEN_CLOUD", "aws")
+    monkeypatch.setenv("RAMEN_AWS_REGION", "us-east-1")
     assert isinstance(make_cloud(), AwsCloud)
     monkeypatch.setenv("RAMEN_CLOUD", "x")
     with pytest.raises(ValueError):

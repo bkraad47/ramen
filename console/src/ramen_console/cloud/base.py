@@ -42,3 +42,7 @@ class Cloud(ABC):
 
     async def scale(self, group: str, zone: str, spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "note": "no scaling for this adapter"}
+
+    async def apply_sa_permissions(self, group: str, zone: str, permissions: list[str]) -> dict[str, Any]:
+        """Bind the cloud roles mapped from approved permissions to the zone's SA (CONTRACTS §9). Default: no IAM."""
+        return {"ok": True, "applied": [], "permissions": list(permissions), "note": "no IAM for this adapter"}

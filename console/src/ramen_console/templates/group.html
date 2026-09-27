@@ -29,7 +29,20 @@
 <a class="btn ghost sm" href="/logs?group={{ group.id }}&zone={{ z.id }}">logs</a>{% endif %}</td></tr>{% endfor %}</table></div>
 
 <h2>Loaded packages (tools / resources / prompts)</h2>
-<div class="card">{% for e in envs if e.last_deploy and e.last_deploy.packages %}{% for w, pk in e.last_deploy.packages.items() %}<b>{{ e.name }} · {{ w }}</b><pre>{{ tojson(pk, indent=1) }}</pre>{% endfor %}{% else %}<span class="muted">deploy to see the package list reported by workers</span>{% endfor %}</div>
+{% for e in envs %}<div class="card"><b>{{ e.name }}</b> · blocked: {% for n in e.blocked or [] %}<span class="badge error">{{ n }}</span>{% if can_admin %} <button class="sm ghost" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or [])|reject("equalto", n)|list}) }}' hx-swap="none">unblock</button>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}
+{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-swap="none"><input name="blocked" value="{{ (e.blocked or [])|join(',') }}" placeholder="tool_a,resource_b (comma)"><button class="sm ghost">Set blocked list</button></form>{% endif %}
+<p class="muted">Blocked names disappear from list calls and answer <code>-32601</code>; takes effect on the next deploy.</p>
+{% if e.last_deploy and e.last_deploy.packages %}{% for w, pk in e.last_deploy.packages.items() %}<b>{{ w }}</b><table><tr><th>kind</th><th>name</th><th>call</th><th></th></tr>
+{% for kind in ['tools', 'resources', 'prompts'] %}{% for it in pk.get(kind, []) %}{% set n = it.name or it.uri %}<tr><td>{{ kind }}</td><td><code>{{ n }}</code>{% if it.uri and it.name %} <span class="muted">{{ it.uri }}</span>{% endif %}</td><td><code class="muted">{{ tojson(it.get('inputSchema') or it.get('arguments') or {}) }}</code></td>
+<td>{% if n in (e.blocked or []) %}<span class="badge error">blocked</span>{% elif can_admin %}<button class="sm danger" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or []) + [n]}) }}' hx-swap="none">block</button>{% endif %}</td></tr>{% endfor %}{% endfor %}
+{% if pk.errors %}<tr><td colspan="4"><span class="badge error">errors</span> <code>{{ tojson(pk.errors) }}</code></td></tr>{% endif %}</table>{% endfor %}{% else %}<span class="muted">deploy to see the package list reported by workers</span>{% endif %}</div>{% else %}<p class="muted">no environments</p>{% endfor %}
+
+<h2>Service-account permissions</h2>
+<div class="card"><p class="muted">Approved permissions per zone are bound to the zone's service account (least privilege, F6.5). Requests go to a super admin.</p>
+<table><tr><th>zone</th><th>service account</th><th>approved permissions</th></tr>{% for z in zones %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td><td>{{ (workers[z.id].sa_permissions or [])|join(', ') or '—' }}</td></tr>{% endfor %}</table>
+{% if can_admin %}<form class="inline" hx-post="/api/v1/requests" hx-ext="json" hx-vals='{"group": "{{ group.id }}"}' hx-swap="none"><label>Zone<select name="zone">{% for z in zones %}<option>{{ z.id }}</option>{% endfor %}</select></label>
+<label>Permission<select name="permission">{% for q in permissions %}<option value="{{ q.permission }}">{{ q.permission }} — {{ q.desc }}</option>{% endfor %}</select></label><button>Request permission</button></form>{% endif %}
+{% if requests %}<table><tr><th>requested by</th><th>zone</th><th>permission</th><th>status</th></tr>{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.zone }}</td><td><code>{{ q.permission }}</code></td><td><span class="badge {{ 'ok' if q.status == 'approved' else '' }}">{{ q.status }}</span></td></tr>{% endfor %}</table>{% endif %}</div>
 
 <h2>MCP auth keys</h2>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/mcp-keys" hx-ext="json" hx-target="#mcp-once" hx-swap="innerHTML"><label>Key name<input name="name" required></label><button>Mint MCP key</button></form><div id="mcp-once"></div>{% endif %}

@@ -17,6 +17,7 @@ services:
   console:
     build:
       context: ../../console
+      args: { RAMEN_VERSION: "${VERSION:-0.3.0}" }
     image: ramen-console:${VERSION:-0.3.0}
     depends_on:
       firestore: { condition: service_healthy }
@@ -34,9 +35,15 @@ services:
       RAMEN_LOG_ROOT: /buckets/_logs
       RAMEN_WORKER_URL: http://worker:8080        # zone `local` → this worker
       RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}   # sent as X-Ramen-Admin-Key on deploy
+      RAMEN_PUBLIC_URL: ${RAMEN_PUBLIC_URL:-https://localhost:8443}   # base for links in invite/reset/magic-link mails
+      RAMEN_SMTP_HOST: ${RAMEN_SMTP_HOST:-file:///mail}   # dev mail backend: .eml files in ./.mail (CONTRACTS §9); set a real SMTP host to send
+      RAMEN_SMTP_FROM: ${RAMEN_SMTP_FROM:-ramen@localhost}
+      RAMEN_AUTH_MAGIC_LINK: ${RAMEN_AUTH_MAGIC_LINK:-0}
+      RAMEN_ADMIN_FORCE_PASSWORD: ${RAMEN_ADMIN_FORCE_PASSWORD:-0}
     ports: ["8443:8443"]
     volumes:
       - buckets:/buckets
+      - ./.mail:/mail
 
   worker:
     build:

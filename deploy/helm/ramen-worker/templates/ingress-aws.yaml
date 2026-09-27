@@ -1,0 +1,28 @@
+{{- if eq .Values.provider "aws" }}
+{{- $canary := int .Values.aws.canaryWeight }}
+# CONTRACTS §8 (UNTESTED on a real account): /mcp/<group>/<zone> on the shared ALB. ALB cannot rewrite the path, so the
+# node serves it via RAMEN_MCP_PATH_PREFIX. One weighted forward action → stable/canary target groups.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: worker
+  namespace: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/group.name: {{ .Values.aws.albGroup }}
+    alb.ingress.kubernetes.io/group.order: "10"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/actions.worker: >-
+      {"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"worker","servicePort":"{{ .Values.port }}","weight":{{ sub 100 $canary }}},{"serviceName":"worker-canary","servicePort":"{{ .Values.port }}","weight":{{ $canary }}}]}}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: {{ printf "/mcp/%s/%s" .Values.group .Values.zone | quote }}
+            pathType: Prefix
+            backend: { service: { name: worker, port: { name: use-annotation } } }
+{{- end }}

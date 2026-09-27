@@ -39,7 +39,7 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
         for z in zones:
             vars_, _, mcp = await svc.secrets_for(group, env_name, z)
-            cfg = {"RAMEN_VERBOSE": "1" if env.get("verbose") else "0", **vars_}
+            cfg = {"RAMEN_VERBOSE": "1" if env.get("verbose") else "0", "RAMEN_BLOCKED": ",".join(env.get("blocked") or []), **vars_}
             if mcp:
                 cfg["RAMEN_MCP_KEYS"] = ",".join(mcp)
             cfg = await svc.secrets_backend.resolve_config(cfg)

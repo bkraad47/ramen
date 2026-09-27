@@ -24,5 +24,5 @@ def uid() -> str:
     return uuid.uuid4().hex
 
 
-def public(doc: dict, hidden=("password_hash", "secret_hash", "value", "github_token")) -> dict:
+def public(doc: dict, hidden=("password_hash", "secret_hash", "value", "github_token", "reset_nonce", "magic_nonce")) -> dict:
     return {k: v for k, v in doc.items() if k not in hidden}

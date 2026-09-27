@@ -20,7 +20,7 @@ spec:
         ramen.io/track: {{ $t.track }}
     spec:
       serviceAccountName: {{ $root.Values.serviceAccount.name }}
-      nodeSelector: { topology.kubernetes.io/zone: {{ $root.Values.gcpZone | quote }} }
+      nodeSelector: { topology.kubernetes.io/zone: {{ include "rw.az" $root | quote }} }
       securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
       containers:
         - name: worker
@@ -34,6 +34,9 @@ spec:
             - { name: RAMEN_BUCKET, value: {{ $root.Values.bucketPath | quote }} }
             - { name: RAMEN_BUCKET_URI, value: {{ include "rw.bucketUri" $root | quote }} }
             - { name: RAMEN_TRACK, value: {{ $t.track | quote }} }
+            {{- if eq $root.Values.provider "aws" }}
+            - { name: RAMEN_MCP_PATH_PREFIX, value: {{ printf "/mcp/%s/%s" $root.Values.group $root.Values.zone | quote }} }
+            {{- end }}
             {{- range $k, $v := $root.Values.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}

@@ -29,8 +29,9 @@ def test_parse_uri():
     assert bucket.parse_uri("gs://b/demo") == ("b", "demo")
     assert bucket.parse_uri("gs://b/demo/") == ("b", "demo")
     assert bucket.parse_uri("gs://b") == ("b", "")
+    assert bucket.parse_uri("s3://b/x") == ("b", "x") and bucket.scheme("s3://b/x") == "s3" and bucket.scheme("gs://b") == "gs"
     with pytest.raises(ValueError):
-        bucket.parse_uri("s3://b/x")
+        bucket.parse_uri("http://b/x")
 
 
 def test_sync_downloads_skips_unchanged_and_deletes_stale(tmp_path):
@@ -73,6 +74,59 @@ def test_default_client_needs_google_cloud_storage(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "google.cloud", None)
     with pytest.raises(bucket.SyncError, match="google-cloud-storage"):
         bucket.sync("gs://b/x", tmp_path)
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    with pytest.raises(bucket.SyncError, match="boto3"):
+        bucket.sync("s3://b/x", tmp_path)
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    for k, v in {"AWS_ACCESS_KEY_ID": "t", "AWS_SECRET_ACCESS_KEY": "t", "AWS_DEFAULT_REGION": "us-east-1"}.items():
+        monkeypatch.setenv(k, v)
+    boto3 = pytest.importorskip("boto3")
+    from moto import mock_aws
+
+    with mock_aws():
+        c = boto3.client("s3")
+        c.create_bucket(Bucket="ramen-groups")
+        yield c
+
+
+def test_s3_sync_downloads_skips_unchanged_and_deletes_stale(tmp_path, s3):
+    dest = tmp_path / "bucket"
+    dest.mkdir()
+    (dest / "stale.txt").write_text("old")
+    (dest / "mcp").mkdir()
+    (dest / "mcp" / "same.py").write_text("same")
+    (dest / "mcp" / ".ramen_requirements.sha256").write_text("keep")
+    for key, body in (("demo/mcp/same.py", b"same"), ("demo/mcp/new.json", b"{}"), ("demo/mcp/", b""), ("other/x", b"x")):
+        s3.put_object(Bucket="ramen-groups", Key=key, Body=body)
+    s = bucket.sync("s3://ramen-groups/demo", dest, client=s3)
+    assert s == {"uri": "s3://ramen-groups/demo", "downloaded": 1, "unchanged": 1, "deleted": 1, "total": 2}
+    assert (dest / "mcp" / "new.json").read_text() == "{}" and not (dest / "stale.txt").exists()
+    assert (dest / "mcp" / ".ramen_requirements.sha256").exists()
+    s3.put_object(Bucket="ramen-groups", Key="demo/mcp/same.py", Body=b"changed")
+    s = bucket.sync("s3://ramen-groups/demo", dest, client=s3)
+    assert (s["downloaded"], s["deleted"], s["unchanged"]) == (1, 0, 1) and (dest / "mcp" / "same.py").read_text() == "changed"
+    # default client path: boto3.client("s3") under moto; whole-bucket prefix (no strip)
+    s = bucket.sync("s3://ramen-groups", tmp_path / "all")
+    assert s["total"] == 3 and (tmp_path / "all" / "other" / "x").read_text() == "x"  # the "demo/mcp/" marker is skipped
+
+
+def test_s3_multipart_etag_is_always_redownloaded(tmp_path):
+    class Client:
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return self
+
+        def paginate(self, Bucket, Prefix=None):
+            return [{"Contents": [{"Key": "g/a.txt", "ETag": '"abc-2"'}]}]
+
+        def download_file(self, bucket, key, path):
+            open(path, "wb").write(b"a")
+
+    (tmp_path / "a.txt").write_bytes(b"a")
+    assert bucket.sync("s3://b/g", tmp_path, client=Client())["downloaded"] == 1
 
 
 def test_load_syncs_when_uri_set(demo_bucket, monkeypatch):

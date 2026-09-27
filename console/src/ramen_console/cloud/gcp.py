@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from ..errors import ApiError
+from ..policy import permissions as perm
 from ..util import now
 from . import gcp_api
 from .base import Cloud
@@ -291,6 +292,29 @@ class GcpCloud(Cloud):
             self.kube.apply({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {
                 "name": "worker", "namespace": ns, "annotations": {"iam.gke.io/gcp-service-account": email}}})
             return {"name": email, "created": created, "roles": roles, "ksa": f"{ns}/worker", "workload_identity": member}
+        return await asyncio.to_thread(run)
+
+    @_guard
+    async def apply_sa_permissions(self, group, zone, permissions):
+        """Grant the mapped IAM roles to the zone GSA (created if missing). bucket.* stays scoped to the group prefix."""
+        ns, iam = ns_name(group, zone), gcp_api.Iam(self.c.iam, self.c.crm, self.project)
+        roles = perm.mapped(permissions, "gcp")
+
+        def run():
+            email, _ = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
+            bindings = []
+            for role in roles:
+                cond = None
+                if role.startswith("roles/storage."):
+                    cond = {"title": f"ramen {group} bucket prefix", "expression":
+                            f'resource.name.startsWith("projects/_/buckets/{self.bucket}/objects/{group}/") || '
+                            f'resource.name == "projects/_/buckets/{self.bucket}"'}
+                elif role.startswith("roles/secretmanager."):
+                    cond = {"title": f"ramen {group} secrets", "expression":
+                            f'resource.name.startsWith("projects/{iam.project_number()}/secrets/ramen-{group}-")'}
+                bindings.append((role, cond))
+            applied = iam.grant_project_roles(email, bindings) if bindings else []
+            return {"ok": True, "service_account": email, "applied": applied, "permissions": list(permissions), "ksa": f"{ns}/worker"}
         return await asyncio.to_thread(run)
 
     @_guard

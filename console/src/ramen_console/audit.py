@@ -34,7 +34,7 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
             if sess:
                 request.state.principal = await st.accounts.principal_for_user(sess.get("uid"))
         response = await call_next(request)
-        if request.method in MUTATING and (request.url.path.startswith("/api/") or request.url.path == "/login"):
+        if request.state.audit or (request.method in MUTATING and request.url.path.startswith("/api/")):
             p = request.state.principal
             meta = dict(request.state.audit or {"action": f"{request.method} {request.url.path}", "target": request.url.path, "tags": []})
             user = meta.pop("user", None) or (p.name if p else "-")

@@ -1,4 +1,4 @@
-//! axum routes: `/mcp`, `/healthz`, `/readyz`, `/metrics`, `/admin/reload`.
+//! axum routes: `/mcp` (+ `RAMEN_MCP_PATH_PREFIX` alias), `/healthz`, `/readyz`, `/metrics`, `/admin/reload`.
 use crate::auth;
 use crate::config::Config;
 use crate::log::emit;
@@ -26,6 +26,8 @@ pub struct App {
     pub metrics: Metrics,
     /// Re-read on `/admin/reload` (env + yaml in production; injectable for tests).
     pub config_source: ConfigSource,
+    /// `RAMEN_MCP_PATH_PREFIX`: fixed at startup, an ALB forwards `/mcp/<group>/<zone>` unchanged (§8).
+    pub mcp_alias: Option<String>,
 }
 
 pub type Shared = Arc<App>;
@@ -38,6 +40,7 @@ pub fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
     let sidecar = Sidecar::new(cfg.clone());
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),
+        mcp_alias: cfg.mcp_path_prefix.clone(),
         cfg: RwLock::new(cfg),
         sidecar,
         metrics: Metrics::default(),
@@ -46,9 +49,12 @@ pub fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
 }
 
 pub fn router(state: Shared) -> Router {
-    Router::new()
-        .route("/mcp", post(mcp_post))
-        .route("/healthz", get(|| async { "ok" }))
+    let r = Router::new().route("/mcp", post(mcp_post));
+    let r = match &state.mcp_alias {
+        Some(p) => r.route(p, post(mcp_post)),
+        None => r,
+    };
+    r.route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
         .route("/admin/reload", post(admin_reload))
@@ -108,7 +114,7 @@ async fn mcp_post(
         );
     };
     let t0 = Instant::now();
-    let out = mcp::dispatch(&app.sidecar, &method, &params).await;
+    let out = mcp::dispatch(&app.sidecar, &cfg.blocked, &method, &params).await;
     let (status, ok) = match &out {
         Ok(Some(r)) => (
             200,

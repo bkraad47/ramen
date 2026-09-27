@@ -1,34 +1,58 @@
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
+from starlette.responses import Response
 
 from ..audit import note
+from ..auth import csrf
 from ..auth.sessions import COOKIE
-from ..errors import not_found
+from ..errors import ApiError, not_found
+from ..mail import magic_mail, reset_mail
 
 r = APIRouter()
+ALIASES = ("/auth/{name}/login", "/auth/oauth/{name}/login")
+CALLBACKS = ("/auth/{name}/callback", "/auth/oauth/{name}/callback")
+
+
+async def auth_settings(request: Request):
+    st = request.app.state
+    return st.auth_env.with_doc(await st.store.get("config", "auth"))
+
+
+def base_url(request: Request) -> str:
+    import os
+    return (os.environ.get("RAMEN_PUBLIC_URL") or str(request.base_url)).rstrip("/")
 
 
 def _login_response(request: Request, user: dict, next_: str = "/"):
     resp = RedirectResponse(next_ if next_.startswith("/") else "/", 303)
-    resp.set_cookie(COOKIE, request.app.state.signer.sign({"uid": user["id"]}), httponly=True, samesite="lax",
-                    secure=request.app.state.cookie_secure, max_age=12 * 3600)
+    kw = {"samesite": "lax", "secure": request.app.state.cookie_secure, "max_age": 12 * 3600}
+    resp.set_cookie(COOKIE, request.app.state.signer.sign({"uid": user["id"]}), httponly=True, **kw)
+    resp.set_cookie(csrf.COOKIE, csrf.token(request), httponly=False, **kw)
     return resp
 
 
+async def _login_page(request: Request, status=200, **ctx) -> Response:
+    st, auth = request.app.state, await auth_settings(request)
+    ctx.setdefault("next", "/")
+    return st.templates.TemplateResponse(request, "login.html", {**ctx, "providers": st.oauth.providers(), "auth": auth,
+                                                                  "mail": st.mailer.enabled}, status_code=status)
+
+
 @r.get("/login")
-async def login_page(request: Request, next: str = "/"):
-    t = request.app.state.templates
-    return t.TemplateResponse(request, "login.html", {"next": next, "providers": request.app.state.oauth.providers()})
+async def login_page(request: Request, next: str = "/", msg: str | None = None):
+    return await _login_page(request, next=next, msg=msg)
 
 
 @r.post("/login")
-async def login(request: Request, email: str = Form(), password: str = Form(), next: str = Form("/")):
+async def login(request: Request, email: str = Form(), password: str = Form(), next: str = Form("/"), _=Depends(csrf.csrf_form)):
     note(request, "login", email, user=email)
+    auth = await auth_settings(request)
+    if not auth.can_password(email):
+        note(request, "login", email, ["password_login:disabled"], user=email)
+        return await _login_page(request, 403, error="Password login is disabled; use a configured provider or a sign-in link", next=next)
     user = await request.app.state.accounts.authenticate(email, password)
     if not user:
-        t = request.app.state.templates
-        return t.TemplateResponse(request, "login.html", {"error": "Invalid email or password", "next": next,
-                                                          "providers": request.app.state.oauth.providers()}, status_code=401)
+        return await _login_page(request, 401, error="Invalid email or password", next=next)
     return _login_response(request, user, next)
 
 
@@ -36,25 +60,108 @@ async def login(request: Request, email: str = Form(), password: str = Form(), n
 async def logout():
     resp = RedirectResponse("/login", 303)
     resp.delete_cookie(COOKIE)
+    resp.delete_cookie(csrf.COOKIE)
     return resp
 
 
-@r.get("/auth/oauth/{name}/login")
-async def oauth_login(request: Request, name: str):
+# password reset / invite ------------------------------------------------
+@r.get("/auth/reset")
+async def reset_page(request: Request):
+    return request.app.state.templates.TemplateResponse(request, "reset.html", {"stage": "request", "mail": request.app.state.mailer.enabled})
+
+
+@r.post("/auth/reset")
+async def reset_request(request: Request, email: str = Form(), _=Depends(csrf.csrf_form)):
+    """Always 200: never reveals whether the account exists."""
+    st = request.app.state
+    note(request, "password.reset.request", email, user=email)
+    started = await st.accounts.start_token(email, "reset")
+    if started and st.mailer.enabled:
+        user, nonce = started
+        link = f"{base_url(request)}/auth/reset/{st.tokens.issue('reset', user['id'], nonce)}"
+        await st.mailer.send(email, *reset_mail(base_url(request), link))
+    return st.templates.TemplateResponse(request, "reset.html", {"stage": "sent", "mail": st.mailer.enabled})
+
+
+@r.get("/auth/reset/{token}")
+async def reset_form(request: Request, token: str):
+    st = request.app.state
+    if not st.tokens.load("reset", token):
+        return st.templates.TemplateResponse(request, "reset.html", {"stage": "invalid"}, status_code=400)
+    return st.templates.TemplateResponse(request, "reset.html", {"stage": "set", "token": token})
+
+
+@r.post("/auth/reset/{token}")
+async def reset_finish(request: Request, token: str, password: str = Form(), _=Depends(csrf.csrf_form)):
+    st = request.app.state
+    parsed = st.tokens.load("reset", token)
+    user = parsed and await st.accounts.redeem_token(parsed[0], "reset", parsed[1], password=password)
+    note(request, "password.reset", user["email"] if user else "-", user=user["email"] if user else None)
+    if not user:
+        raise ApiError(400, "reset link is invalid, expired or already used")
+    return RedirectResponse("/login?msg=Password+updated%2C+sign+in", 303)
+
+
+# magic link ----------------------------------------------------------------
+@r.post("/auth/magic")
+async def magic_request(request: Request, email: str = Form(), _=Depends(csrf.csrf_form)):
+    st = request.app.state
+    note(request, "login.magic.request", email, user=email)
+    if not (await auth_settings(request)).magic_link:
+        raise ApiError(403, "magic-link login is disabled (auth.magic_link)")
+    started = await st.accounts.start_token(email, "magic")
+    if started and st.mailer.enabled:
+        user, nonce = started
+        link = f"{base_url(request)}/auth/magic/{st.tokens.issue('magic', user['id'], nonce)}"
+        await st.mailer.send(email, *magic_mail(base_url(request), link))
+    return await _login_page(request, msg="If that account exists, a sign-in link has been emailed")
+
+
+@r.get("/auth/magic/{token}")
+async def magic_login(request: Request, token: str):
+    st = request.app.state
+    parsed = st.tokens.load("magic", token)
+    user = parsed and (await auth_settings(request)).magic_link and await st.accounts.redeem_token(parsed[0], "magic", parsed[1])
+    note(request, "login.magic", user["email"] if user else "-", user=user["email"] if user else None)
+    if not user:
+        raise ApiError(400, "sign-in link is invalid, expired or already used")
+    return _login_response(request, user)
+
+
+# OAuth / OIDC ---------------------------------------------------------------
+def _client(request: Request, name: str):
     client = request.app.state.oauth.client(name)
     if not client:
         raise not_found("oauth provider")
+    return client
+
+
+async def oauth_login(request: Request, name: str):
+    client = _client(request, name)
     return await client.authorize_redirect(request, str(request.url_for("oauth_callback", name=name)))
 
 
-@r.get("/auth/oauth/{name}/callback", name="oauth_callback")
 async def oauth_callback(request: Request, name: str):
-    client = request.app.state.oauth.client(name)
-    if not client:
-        raise not_found("oauth provider")
-    token = await client.authorize_access_token(request)
-    info = token.get("userinfo") or {}
+    client = _client(request, name)
+    from authlib.integrations.base_client.errors import OAuthError
+    try:
+        token = await client.authorize_access_token(request)
+    except OAuthError as e:
+        note(request, "login.oauth", name, [f"provider:{name}"], user="-")
+        raise ApiError(401, f"oauth error: {e.error}")
+    info = dict(token.get("userinfo") or {})
     if not info.get("email"):
-        info = await client.userinfo(token=token)
-    user = await request.app.state.accounts.upsert_sso_user(info["email"])
+        info = dict(await client.userinfo(token=token))
+    email = (info.get("email") or "").strip().lower()
+    note(request, "login.oauth", email or "-", [f"provider:{name}"], user=email or "-")
+    if not email or info.get("email_verified") is False:
+        raise ApiError(403, "provider did not return a verified email")
+    role, groups = (await auth_settings(request)).map_role(name, info)
+    user = await request.app.state.accounts.upsert_sso_user(email, role, groups, provider=name)
     return _login_response(request, user)
+
+
+for path in ALIASES:
+    r.get(path)(oauth_login)
+for path in CALLBACKS:
+    r.get(path, name="oauth_callback")(oauth_callback)

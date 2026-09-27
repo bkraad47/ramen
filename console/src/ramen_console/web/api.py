@@ -116,6 +116,13 @@ async def set_verbose(request: Request, group: str, env: str, body: m.Verbose, p
     return respond(request, await svc(request).update_env(group, env, verbose=body.verbose))
 
 
+@r.put("/groups/{group}/environments/{env}/blocked")
+async def set_blocked(request: Request, group: str, env: str, body: m.Blocked, p: Principal = Depends(admin_g)):
+    """Blocked tools/resources/prompts (F5.6); applied to workers by the next deploy as RAMEN_BLOCKED."""
+    note(request, "environment.blocked", f"{group}/{env}", [f"group:{group}"] + [f"blocked:{n}" for n in body.blocked])
+    return respond(request, await svc(request).update_env(group, env, blocked=body.blocked))
+
+
 @r.delete("/groups/{group}/environments/{env}")
 async def delete_env(request: Request, group: str, env: str, p: Principal = Depends(admin_g)):
     note(request, "environment.delete", f"{group}/{env}", [f"group:{group}"])

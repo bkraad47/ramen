@@ -48,6 +48,11 @@ class EnvUpdate(ListFields):
     ref: str | None = None
     zones: list[str] | None = None
     verbose: bool | None = None
+    blocked: list[str] | None = None
+
+
+class Blocked(ListFields):
+    blocked: list[str]
 
 
 class Verbose(BaseModel):
@@ -103,8 +108,15 @@ class KeyIn(ListFields):
 
 
 class RequestIn(BaseModel):
-    role: str
+    role: str | None = None
     group: str | None = None
+    zone: str | None = None
+    permission: str | None = None
+
+
+class AuthConfig(BaseModel):
+    password_login: bool | None = None
+    magic_link: bool | None = None
 
 
 class BackupIn(BaseModel):

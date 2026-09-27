@@ -1,0 +1,41 @@
+/* Ramen theme: coral #F26B3A strokes on off-white #F4F1EC (facts F1.2). */
+:root {
+  --md-primary-fg-color: #F26B3A;
+  --md-primary-fg-color--light: #F58B62;
+  --md-primary-fg-color--dark: #C9511F;
+  --md-accent-fg-color: #C9511F;
+  --md-accent-fg-color--transparent: rgba(242, 107, 58, .1);
+}
+[data-md-color-scheme="ramen"] {
+  --md-default-bg-color: #F4F1EC;
+  --md-default-fg-color: #2B2622;
+  --md-default-fg-color--light: #5A5049;
+  --md-default-fg-color--lighter: #8A7F76;
+  --md-default-fg-color--lightest: #E6E0D8;
+  --md-code-bg-color: #EDE8E0;
+  --md-code-fg-color: #2B2622;
+  --md-typeset-a-color: #C9511F;
+  --md-footer-bg-color: #2B2622;
+  --md-footer-bg-color--dark: #1F1B18;
+  --md-admonition-bg-color: #FBF9F6;
+  --md-typeset-table-color: rgba(43, 38, 34, .12);
+}
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #1F1B18;
+  --md-code-bg-color: #2B2622;
+  --md-typeset-a-color: #F58B62;
+  --md-hue: 25;
+}
+.md-header, .md-tabs { background-color: #F26B3A; color: #fff; }
+.md-header__button.md-logo img { height: 2rem; width: 2rem; border-radius: 6px; background: #F4F1EC; }
+.ramen-hero { text-align: center; padding: 1.5rem 0 .5rem; }
+.ramen-hero img { width: 180px; max-width: 60%; border-radius: 18px; }
+.ramen-hero h1 { margin: .6rem 0 .2rem; font-weight: 700; }
+.ramen-hero p.tag { color: var(--md-default-fg-color--light); font-size: 1.05rem; margin: 0 0 .8rem; }
+.ramen-badges img { margin: 0 .15rem; }
+.ramen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .8rem; margin: 1rem 0; }
+.ramen-grid > div { border: 1px solid var(--md-default-fg-color--lightest); border-radius: 10px; padding: .8rem 1rem; background: rgba(255,255,255,.35); }
+[data-md-color-scheme="slate"] .ramen-grid > div { background: rgba(255,255,255,.04); }
+.ramen-grid h3 { margin: 0 0 .3rem; font-size: 1rem; }
+.ramen-shot { border: 1px solid var(--md-default-fg-color--lightest); border-radius: 10px; box-shadow: 0 6px 24px rgba(43,38,34,.10); }
+.md-typeset .ramen-untested { border-left: .2rem solid #C9511F; }

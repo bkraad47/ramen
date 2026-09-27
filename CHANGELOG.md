@@ -2,6 +2,8 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.3.0] — AWS, auth & policy, docs
+- (in progress) AWS Terraform + CloudFormation and console AWS adapter (untested, no AWS account); OAuth/OIDC login flow, email auth, SA policy engine, tool blocking, CSRF; docs site, wiki, README screenshots, launch material.
 ## [0.2.0] — GCP
 - Console GCP adapter: zone = namespace, canary deploy flow, workers/metrics, Cloud Logging, rebalance via backend capacity, Cloud Armor IP rules, per-group+zone service accounts with Workload Identity, refresh, group destruction.
 - Secrets backend `store|gcp` (Secret Manager). Runtime syncs the group bucket from GCS on load.

@@ -395,10 +395,10 @@ def test_audit(demo):
 
 def test_backups(demo, tmp_path):
     r = demo.post("/api/v1/backups", json={"target": "local"})
-    assert r.status_code == 201 and r.json()["release_version"] == "0.2.0"
+    assert r.status_code == 201 and r.json()["release_version"] == "0.3.0"
     bid = r.json()["id"]
     data = demo.get(f"/api/v1/backups/{bid}/download").json()
-    assert data["release_version"] == "0.2.0" and data["groups"][0]["name"] == "demo" and "secrets" not in data
+    assert data["release_version"] == "0.3.0" and data["groups"][0]["name"] == "demo" and "secrets" not in data
     assert all("password_hash" not in u for u in data["users"])
     r2 = demo.post("/api/v1/backups", json={"target": "bucket"})
     assert r2.status_code == 201 and "_backups" in r2.json()["path"]

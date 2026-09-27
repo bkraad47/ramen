@@ -112,9 +112,30 @@ class GcpClients:
 def fresh_http():
     """A per-call authorized httplib2 transport. googleapiclient's shared Http is not thread-safe; using one
     connection from two threads (e.g. a background Cloud Armor attach and a rebalance) segfaults in OpenSSL."""
+    import os
+    if os.environ.get("RAMEN_GCP_FRESH_HTTP", "1") == "0":
+        return None
     try:
         import httplib2
         from google_auth_httplib2 import AuthorizedHttp
-        return AuthorizedHttp(_creds(), http=httplib2.Http(timeout=120))
-    except Exception:  # noqa: BLE001 - tests/fakes or no credentials: let the client use its default transport
+        creds = _adc()
+        return AuthorizedHttp(creds, http=httplib2.Http(timeout=120)) if creds is not None else None
+    except Exception:  # noqa: BLE001 - no credentials: let the client use its default transport
         return None
+
+
+_ADC: list = []
+
+
+def _adc():
+    """Explicit token if given, else Application Default Credentials (Workload Identity in-cluster), cached."""
+    creds = _creds()
+    if creds is not None:
+        return creds
+    if not _ADC:  # probe once; a failure is cached too so fakes/tests never pay for metadata-server timeouts twice
+        try:
+            import google.auth
+            _ADC.append(google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])[0])
+        except Exception:  # noqa: BLE001
+            _ADC.append(None)
+    return _ADC[0]

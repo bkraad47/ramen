@@ -505,3 +505,10 @@ async def test_rebalance_hands_off_to_background_when_backend_stays_busy(cloud, 
     for t in list(getattr(cloud, "_bg", ())):
         await asyncio.wrap_future(t) if hasattr(t, "result") and not isinstance(t, asyncio.Future) else t
     assert fk.compute_state["bs_not_ready"] == 0
+
+
+def test_real_client_class_exposes_every_lazy_client():
+    from ramen_console.cloud.gcp_clients import GcpClients, fresh_http
+    for name in ("core", "apps", "autoscaling", "custom", "storage", "secretmanager", "logging", "compute", "iam", "crm"):
+        assert isinstance(getattr(GcpClients, name), property), name
+    assert fresh_http() is None or hasattr(fresh_http(), "request")

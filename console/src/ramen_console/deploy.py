@@ -55,13 +55,13 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
                    error=None if ok else ("no zones configured" if not results else "workers failed to reload: " + "; ".join(failed)))
     except Exception as e:  # noqa: BLE001 - surfaced to the UI
         log.exception("deploy failed")
-        job.update(status="error", error=f"{type(e).__name__}: {e}", finished=now())
         for z in zones:  # a failure before the adapter ran (e.g. bad git ref) must still tear down any canary (§7)
             try:
                 job["log"].append(f"{now()} zone {z}: aborting, canary scaled to 0")
                 await svc.cloud.abort_deploy(group, z)
             except Exception as e2:  # noqa: BLE001
                 job["log"].append(f"{now()} zone {z}: could not abort: {type(e2).__name__}: {e2}")
+        job.update(status="error", error=f"{type(e).__name__}: {e}", finished=now())
     try:
         env = await svc.get_env(group, env_name)
         env["last_deploy"] = {"job": job["id"], "status": job["status"], "at": job["finished"], "error": job["error"],

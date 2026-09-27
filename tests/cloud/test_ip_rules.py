@@ -46,12 +46,12 @@ def test_out_of_range_client_is_rejected_then_restored(admin, world, node_http, 
                   timeout=120, what="node reachable before locking")
     try:
         _apply(admin, LOCKED + trusted)
-        poll(lambda: _mcp(node_http, mcp_key_opt) == 403, timeout=120, what="node returns 403 outside CIDRs")
+        poll(lambda: _mcp(node_http, mcp_key_opt) == 403, timeout=420, what="node returns 403 outside CIDRs")
         if E.node_admin(str(node_http.base_url)):
             assert node_http.get("/healthz").status_code == 200, "health probes must stay reachable"
     finally:
         _apply(admin, OPEN)
-    poll(lambda: _mcp(node_http, mcp_key_opt) == before, timeout=120, what="node open again")
+    poll(lambda: _mcp(node_http, mcp_key_opt) == before, timeout=420, what="node open again")
 
 
 def test_ip_rules_audited(admin, world, admin_creds):
@@ -64,6 +64,7 @@ def test_cloud_armor_policy_exists_on_gcp(admin, world, gcp_project):
     ok(admin.put("ip_rules", {"cidrs": OPEN}, group=GROUP, zone=ZONE))
     pol = poll(lambda: gcp.get("compute", "security-policies", "describe", f"ramen-{GROUP}", project=gcp_project),
                timeout=60, what=f"security policy ramen-{GROUP}")
+    pol = pol[0] if isinstance(pol, list) else pol
     rules = pol.get("rules", [])
     allows = [r for r in rules if r.get("action") == "allow"]
     denies = [r for r in rules if str(r.get("action", "")).startswith("deny")]

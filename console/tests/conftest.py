@@ -1,5 +1,9 @@
 import os
 
+os.environ.setdefault("RAMEN_GCP_FRESH_HTTP", "0")  # fakes never need a real transport; avoids ADC probing
+
+import os
+
 import pytest
 from cryptography.fernet import Fernet
 

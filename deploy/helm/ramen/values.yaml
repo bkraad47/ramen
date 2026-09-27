@@ -3,7 +3,7 @@ project: ""                  # GCP project id (required)
 region: us-central1
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.2.0
+  tag: 0.3.0
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:

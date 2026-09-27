@@ -40,7 +40,7 @@ INIT_BODY = {
     "params": {
         "protocolVersion": "2025-06-18",
         "capabilities": {},
-        "clientInfo": {"name": "ramen-tests", "version": "0.2.0"},
+        "clientInfo": {"name": "ramen-tests", "version": "0.3.0"},
     },
 }
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}

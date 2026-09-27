@@ -154,7 +154,8 @@ class GcpCloud(Cloud):
             if canary:  # also tears down a canary left from an earlier deploy (canary_up tracks this attempt only)
                 try:
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
-                    note("scaled canary to 0; main deployment untouched")
+                    gone = await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
+                    note("scaled canary to 0; main deployment untouched" + ("" if gone else " (canary pod still terminating)"))
                 except Exception as e2:  # noqa: BLE001
                     note(f"could not scale canary down: {type(e2).__name__}: {e2}")
             workers.append({"id": "worker-canary" if canary else "worker", "ok": False, "error": err})
@@ -271,5 +272,6 @@ class GcpCloud(Cloud):
                               "replicas": main.get("spec", {}).get("replicas", 0), "ready": (main.get("status") or {}).get("readyReplicas", 0),
                               "canary_replicas": can.get("spec", {}).get("replicas", 0), "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
                               "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account")})
-            return {"zones": zones, "service_accounts": gcp_api.Iam(self.c.iam, self.c.crm, self.project).list_accounts(), "at": now()}
+            return {"groups": sorted({z["group"] for z in zones if z.get("group")}), "zones": zones,
+                    "service_accounts": gcp_api.Iam(self.c.iam, self.c.crm, self.project).list_accounts(), "at": now()}
         return await asyncio.to_thread(run)

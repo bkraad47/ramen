@@ -423,3 +423,20 @@ async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
     assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and ("Namespace", None, "ramen-demo-a") not in fk.k8s.objs
     assert list(fk.iam_state["accounts"]) == ["ramen-other-a@p1.iam.gserviceaccount.com"]
     assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}
+
+
+async def test_set_ip_rules_retries_while_policy_not_ready(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.compute_state["not_ready"] = 3
+    r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    assert r["ok"] and fk.compute_state["not_ready"] == 0
+    assert any(r["action"] == "deny(403)" for r in fk.compute_state["policies"]["ramen-demo"]["rules"])
+
+
+async def test_refresh_lists_groups(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    await cloud.attach_zone("other", "b", SPEC)
+    r = await cloud.refresh()
+    assert r["groups"] == ["demo", "other"]

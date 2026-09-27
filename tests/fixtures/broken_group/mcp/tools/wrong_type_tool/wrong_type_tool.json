@@ -1,0 +1,11 @@
+{
+  "type": "resource",
+  "name": "wrong_type_tool",
+  "uri": "ramen://broken/wrong-type",
+  "mime_type": "text/plain",
+  "description": "BROKEN: a valid resource proto that lives under tools/ (folder type != json type).",
+  "callable": "run",
+  "input": {},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

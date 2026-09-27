@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Users{% endblock %}
+{% block body %}
+<div class="card"><form class="inline" hx-post="/api/v1/users" hx-ext="json" hx-swap="none">
+<label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>
+<label>Role<select name="role"><option>viewer</option>{% if p.role == 'super_admin' %}<option>group_admin</option><option>super_admin</option>{% endif %}</select></label>
+<label>Groups (comma)<input name="groups" placeholder="{{ groups|map(attribute='id')|join(',') }}"></label><button>Create user</button></form></div>
+{% macro act(r) %}{% if p.role == 'super_admin' %}<form class="inline" hx-put="/api/v1/users/{{ r.id }}" hx-ext="json" hx-swap="none"><select name="role">{% for role in ['viewer', 'group_admin', 'super_admin'] %}<option {{ 'selected' if role == r.role }}>{{ role }}</option>{% endfor %}</select><input name="groups" value="{{ r.groups|join(',') }}"><button class="sm">save</button></form>{% endif %}
+<button class="sm danger" hx-delete="/api/v1/users/{{ r.id }}" hx-confirm="Delete {{ r.email }}?" hx-swap="none">delete</button>{% endmacro %}
+{{ table(users, ['email', 'role', 'groups', 'provider', 'created'], '/api/v1/users', 'Users', act) }}
+{% if p.role == 'super_admin' %}<h2>Permission requests</h2><div class="card"><table><tr><th>user</th><th>role</th><th>group</th><th>status</th><th></th></tr>
+{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.role }}</td><td>{{ q.group }}</td><td>{{ q.status }}</td><td>{% if q.status == 'pending' %}<button class="sm" hx-post="/api/v1/requests/{{ q.id }}/approve" hx-swap="none">approve</button>{% endif %}</td></tr>{% else %}<tr><td colspan="5" class="muted">none</td></tr>{% endfor %}</table></div>{% endif %}
+<div class="card"><form class="inline" hx-post="/api/v1/users/me/password" hx-ext="json" hx-swap="none"><label>Change my password<input name="password" type="password" required></label><button class="ghost">Update</button></form></div>
+{% endblock %}

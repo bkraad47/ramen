@@ -1,0 +1,6 @@
+{% if not job %}<span class="badge error">job not found</span>{% else %}
+<div class="card" id="job-{{ job.id }}" {% if job.status == 'running' %}hx-get="/ui/jobs/{{ job.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<span class="badge {{ job.status }}">{{ job.kind }} {{ job.target }} — {{ 'refreshing…' if job.status == 'running' else job.status }}</span>
+<span class="muted"> job {{ job.id[:8] }} started {{ job.started }}{% if job.finished %}, finished {{ job.finished }}{% endif %}</span>
+{% if job.error %}<div class="err">{{ job.error }}</div>{% endif %}
+{% if job.result %}<details><summary>result</summary><pre>{{ tojson(job.result, indent=1) }}</pre></details>{% endif %}</div>{% endif %}

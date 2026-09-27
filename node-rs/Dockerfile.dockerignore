@@ -1,0 +1,11 @@
+**/target
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.coverage
+console
+docs
+deploy
+skills
+tests
+.git

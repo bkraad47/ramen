@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{% block title %}Ramen{% endblock %} · Ramen console</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#F26B3A">
+<link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/ramen.css"><script src="/static/htmx.min.js"></script></head>
+<body>
+<nav class="side"><img src="/static/logo.png" alt="Ramen logo"><div class="brand">RAMEN</div>
+{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones / Workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API Keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
+{% if p.role != 'viewer' or key not in ['users', 'api_keys', 'backups', 'config'] %}{% if p.role == 'super_admin' or key not in ['backups', 'config'] %}<a href="{{ href }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endif %}{% endfor %}
+<div class="who">{{ p.name }}<br><span class="badge">{{ p.role }}</span><br><a href="/logout">log out</a><br>v{{ version }}</div></nav>
+<main><h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>{% block body %}{% endblock %}</main>
+<div id="toast"></div>
+<script>
+htmx.defineExtension('json',{onEvent:(n,e)=>{if(n==='htmx:configRequest')e.detail.headers['Content-Type']='application/json'},
+ encodeParameters:(xhr,params)=>{xhr.overrideMimeType('text/json');const o={};params.forEach((v,k)=>{if(k in o)o[k]=[].concat(o[k],v);else o[k]=v});return JSON.stringify(o)}});
+document.body.addEventListener('htmx:responseError',e=>{const t=document.getElementById('toast');t.textContent=e.detail.xhr.responseText||('Error '+e.detail.xhr.status);t.style.display='block';setTimeout(()=>t.style.display='none',6000)});
+document.body.addEventListener('htmx:sendError',()=>{const t=document.getElementById('toast');t.textContent='Network error';t.style.display='block'});
+</script></body></html>

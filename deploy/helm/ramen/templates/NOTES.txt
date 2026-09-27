@@ -1,0 +1,4 @@
+Ramen {{ .Chart.AppVersion }} — group {{ .Values.group }}/{{ .Values.environment }}
+Workers: {{ range .Values.zones }}{{ .name }} ({{ .replicas }}x {{ .size }}) {{ end }}
+Console: kubectl port-forward svc/{{ include "ramen.fullname" . }}-console {{ .Values.console.port }}
+Worker NEGs are named after each worker Service; wire them into the LB backend (deploy/terraform/gcp).

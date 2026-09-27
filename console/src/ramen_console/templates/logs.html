@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Logs{% endblock %}
+{% block body %}
+<div class="card"><form class="inline" method="get">
+<label>Group<select name="group">{% for g in groups %}<option {{ 'selected' if g.id == group }}>{{ g.id }}</option>{% endfor %}</select></label>
+<label>Zone<select name="zone">{% for z in zones %}<option {{ 'selected' if z.id == zone }}>{{ z.id }}</option>{% endfor %}</select></label>
+<label>Worker (optional)<input name="worker" value="{{ worker or '' }}"></label><label>Tail<input name="tail" type="number" value="{{ tail }}" style="min-width:80px"></label><button>Show</button>
+{% if group and zone %}<a class="btn ghost" href="/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
+<pre>{{ text or '(no log lines)' }}</pre>
+{% endblock %}

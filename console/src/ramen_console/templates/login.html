@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in · Ramen console</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/logo.png"></head>
+<body><div class="login card"><img src="/static/logo.png" alt="Ramen"><h1 style="text-align:center">Ramen <span>console</span></h1>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<form method="post" action="/login"><input type="hidden" name="next" value="{{ next }}">
+<label>Email<input name="email" type="email" required autofocus></label><br>
+<label>Password<input name="password" type="password" required></label><br><br><button type="submit">Sign in</button></form>
+{% for prov in providers %}<p><a class="btn ghost" href="/auth/oauth/{{ prov }}/login">Sign in with {{ prov }}</a></p>{% endfor %}
+</div></body></html>

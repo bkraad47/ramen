@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bkraad47/ramen/blob/main/tests/fixtures/proto.schema.json",
+  "title": "Ramen package proto (CONTRACTS.md section 1)",
+  "description": "Shape of mcp/{tools,resources,prompts}/<name>/<name>.json. Folder name == name == file stem and folder type == type are checked by the loader, not by this schema.",
+  "type": "object",
+  "required": ["type", "name", "description", "input"],
+  "properties": {
+    "type": {"enum": ["tool", "resource", "prompt"]},
+    "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
+    "description": {"type": "string"},
+    "callable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "input": {"type": "object", "additionalProperties": {"$ref": "#/$defs/param"}},
+    "output": {"$ref": "#/$defs/typed"},
+    "error": {"$ref": "#/$defs/typed"},
+    "uri": {"type": "string", "minLength": 1},
+    "mime_type": {"type": "string", "pattern": "^[-\\w.+]+/[-\\w.+]+$"},
+    "skill": {"type": "string", "minLength": 1},
+    "settings": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"type": {"const": "tool"}}},
+      "then": {"required": ["callable", "output", "error"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "resource"}}},
+      "then": {"required": ["callable", "uri", "mime_type", "output", "error"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "prompt"}}},
+      "then": {"required": ["skill", "settings"], "not": {"required": ["callable"]}}
+    }
+  ],
+  "$defs": {
+    "param": {
+      "type": "object",
+      "oneOf": [{"required": ["type"]}, {"required": ["enum"]}],
+      "properties": {
+        "type": {"enum": ["string", "number", "integer", "boolean"]},
+        "enum": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "description": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "typed": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"enum": ["string", "number", "integer", "boolean", "object", "array"]}}
+    }
+  }
+}

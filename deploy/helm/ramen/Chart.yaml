@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ramen
+description: Ramen multizone HA MCP server - console + per-zone worker pods (Rust node + Python runtime)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

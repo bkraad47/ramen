@@ -1,0 +1,9 @@
+{
+  "type": "tool",
+  "name": "no_callable_tool",
+  "description": "BROKEN: callable does_not_exist is not defined in no_callable_tool.py.",
+  "callable": "does_not_exist",
+  "input": {"x": {"type": "string", "description": "anything"}},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

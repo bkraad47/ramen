@@ -1,0 +1,9 @@
+{
+  "type": "tool",
+  "name": "other_name",
+  "description": "BROKEN: folder is misnamed_tool but json name/file stem is other_name.",
+  "callable": "run",
+  "input": {},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

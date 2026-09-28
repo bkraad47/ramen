@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.3.2` **(current)** | — | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
+| `0.3.2` **(current)** | 2026-09-28 | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
 | `0.3.1` | 2026-09-28 | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |

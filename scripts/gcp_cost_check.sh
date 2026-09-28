@@ -7,12 +7,15 @@ set -uo pipefail
 PROJECT=${RAMEN_GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}; EXPECT_EMPTY=0
 for a in "$@"; do case "$a" in --expect-empty) EXPECT_EMPTY=1 ;; *) PROJECT=$a ;; esac; done
 [ -n "$PROJECT" ] || { echo "usage: gcp_cost_check.sh <project> [--expect-empty]" >&2; exit 2; }
-if ! gcloud projects describe "$PROJECT" >/dev/null 2>&1; then echo "project $PROJECT: not found or already deleted (nothing billable)"; exit 0; fi
+state=$(gcloud projects describe "$PROJECT" --format="value(lifecycleState)" 2>/dev/null) || state=""
+if [ -z "$state" ]; then echo "project $PROJECT: not found or already deleted (nothing billable)"; exit 0; fi
+if [ "$state" != ACTIVE ]; then echo "project $PROJECT: $state, billing unlinked — nothing billable (purged by GCP within 30 days)"; exit 0; fi
 total=0
 section() { # <label> <billable 0|1> <gcloud args...>
   local label=$1 billable=$2; shift 2
-  local out; out=$(gcloud "$@" --project="$PROJECT" --format="value(name)" 2>/dev/null) || out="(error listing)"
+  local out; out=$(gcloud "$@" --project="$PROJECT" --format="value(name)" 2>/dev/null) || out="(error listing: API disabled or no access)"
   local n; n=$(printf '%s' "$out" | grep -c . || true)
+  case "$out" in "(error listing"*) n=0 ;; esac   # a disabled API means the resource type cannot exist any more
   printf '%-22s %3s  %s\n' "$label" "$n" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)"
   [ "$billable" = 1 ] && total=$((total + n)) || true
 }

@@ -1,4 +1,5 @@
 """`{{$group.VAR}}` → env `RAMEN_SECRET_<GROUP>__<VAR>` (CONTRACTS §1). Values are never logged."""
+
 import os
 import re
 

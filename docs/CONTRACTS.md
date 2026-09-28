@@ -1,4 +1,4 @@
-# Ramen interface contracts (v0.1.0)
+# Ramen interface contracts (v0.3.0)
 Binding for all components. Change only via a PR that updates this file and every implementer.
 
 ## 1. Group repo contract (what users write)
@@ -30,7 +30,7 @@ Config precedence: `RAMEN_CONFIG` file (flat `KEY=value` / `key: value`) < env <
 ## 4. Console (console/)
 Port `RAMEN_CONSOLE_PORT` (default 8000; TLS terminated by ingress/LB; local compose serves https on 8443 with a self-signed cert).
 Storage interface `ramen_console.storage.base.Store` (async): `get/put/delete/list(collection, filters)` + `transaction`. Collections: `users, groups, environments, zones, workers, secrets, api_keys, audit, activity, config, backups`. Adapters: `memory` (tests), `firestore` (honors `FIRESTORE_EMULATOR_HOST`), `dynamodb` (tests use moto). Selected by `RAMEN_STORE=memory|firestore|dynamodb`. Fields marked sensitive (password hashes, secret values, API key hashes, github tokens) are Fernet-encrypted with `RAMEN_FERNET_KEY` before write.
-Cloud interface `ramen_console.cloud.base.Cloud`: `sync_repo(group, repo_url, ref, token) -> bucket_uri`, `deploy(group, env, zone, canary=True)`, `rebalance(group, zone)`, `workers(group, zone) -> [{id, load, metrics}]`, `logs(group, zone, worker=None, tail=500)`, `set_ip_rules(group, zone, cidrs)`, `create_service_account(group, zone)`, `refresh()`. Adapters: `local` (filesystem bucket at `RAMEN_BUCKET_ROOT/<group>`, deploy = write env file + POST worker `/admin/reload`, logs = worker container stdout file), `gcp`, `aws` (Phase 2/3 stubs raising NotImplemented with a clear message). Selected by `RAMEN_CLOUD=local|gcp|aws`.
+Cloud interface `ramen_console.cloud.base.Cloud`: `sync_repo(group, repo_url, ref, token) -> bucket_uri`, `deploy(group, env, zone, canary=True)`, `rebalance(group, zone)`, `workers(group, zone) -> [{id, load, metrics}]`, `logs(group, zone, worker=None, tail=500)`, `set_ip_rules(group, zone, cidrs)`, `create_service_account(group, zone)`, `refresh()`. Adapters: `local` (filesystem bucket at `RAMEN_BUCKET_ROOT/<group>`, deploy = write env file + POST worker `/admin/reload`, logs = worker container stdout file), `gcp` (§7), `aws` (§8, untested on a real account). Selected by `RAMEN_CLOUD=local|gcp|aws`.
 Roles: `super_admin`, `group_admin` (per group), `viewer` (per group). Bootstrap super admin from `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD` on first start. Sessions: signed cookie. Passwords: argon2. API keys: `rmn_<id>_<secret>`, stored hashed, scoped to role+groups, header `X-Ramen-Api-Key` on `/api/v1/*`.
 Pages (left sidebar): Dashboard (zone→group load map, blue/green/red), Groups, Environments, Zones/Workers, Secrets, Users, API Keys, Logs, Audit, Backups, Config. Theme: coral `#F26B3A` on `#F4F1EC`, logo at `/static/logo.png`. HTMX for partial refresh; no JS build step.
 Every mutating request writes `audit` `{ts, user, ip, action, target, ok, tags}`.
@@ -53,7 +53,7 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | mcp-keys | `/api/v1/groups/{group}/mcp-keys[/{id}]` | POST {name} → 201 {id,key:"rmk_..."}; written to workers on deploy |
 | api-keys | `/api/v1/api-keys[/{id}]` | POST {name,role?,groups?} → 201 {id,key:"rmn_..."} |
 | audit / logs / dashboard | `GET /api/v1/audit`, `/api/v1/logs`, `/api/v1/dashboard` | |
-| backups | `POST /api/v1/backups` {target} → 201 {id,release_version}; `GET /api/v1/backups/{id}/download` | |
+| backups | `GET /api/v1/backups`; `POST /api/v1/backups` {target} → 201 {id,release_version}; `GET /api/v1/backups/{id}/download` | super admin |
 | config / refresh | `/api/v1/config` (GET), `POST /api/v1/config/reload`, `GET|PUT /api/v1/config/sa-rules`, `POST /api/v1/refresh` | super admin |
 | service account | `POST /api/v1/groups/{group}/zones/{zone}/service-account` → {name,…} | super admin |
 | sa-restrictions | `PUT /api/v1/groups/{group}/sa-restrictions` {rules} | 409 on clash with super-admin rules |

@@ -29,7 +29,11 @@ def test_parse_uri():
     assert bucket.parse_uri("gs://b/demo") == ("b", "demo")
     assert bucket.parse_uri("gs://b/demo/") == ("b", "demo")
     assert bucket.parse_uri("gs://b") == ("b", "")
-    assert bucket.parse_uri("s3://b/x") == ("b", "x") and bucket.scheme("s3://b/x") == "s3" and bucket.scheme("gs://b") == "gs"
+    assert (
+        bucket.parse_uri("s3://b/x") == ("b", "x")
+        and bucket.scheme("s3://b/x") == "s3"
+        and bucket.scheme("gs://b") == "gs"
+    )
     with pytest.raises(ValueError):
         bucket.parse_uri("http://b/x")
 
@@ -43,7 +47,14 @@ def test_sync_downloads_skips_unchanged_and_deletes_stale(tmp_path):
     (dest / "mcp" / ".ramen_requirements.sha256").write_text("keep")
     (dest / "mcp" / "__pycache__").mkdir()
     (dest / "mcp" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
-    client = FakeClient([FakeBlob("demo/mcp/same.py", b"same"), FakeBlob("demo/mcp/new.json", b"{}"), FakeBlob("demo/mcp/", b""), FakeBlob("other/x", b"x")])
+    client = FakeClient(
+        [
+            FakeBlob("demo/mcp/same.py", b"same"),
+            FakeBlob("demo/mcp/new.json", b"{}"),
+            FakeBlob("demo/mcp/", b""),
+            FakeBlob("other/x", b"x"),
+        ]
+    )
     s = bucket.sync("gs://b/demo", dest, client=client)
     assert client.calls == [("b", "demo/")]
     assert s == {"uri": "gs://b/demo", "downloaded": 1, "unchanged": 1, "deleted": 1, "total": 2}
@@ -99,7 +110,12 @@ def test_s3_sync_downloads_skips_unchanged_and_deletes_stale(tmp_path, s3):
     (dest / "mcp").mkdir()
     (dest / "mcp" / "same.py").write_text("same")
     (dest / "mcp" / ".ramen_requirements.sha256").write_text("keep")
-    for key, body in (("demo/mcp/same.py", b"same"), ("demo/mcp/new.json", b"{}"), ("demo/mcp/", b""), ("other/x", b"x")):
+    for key, body in (
+        ("demo/mcp/same.py", b"same"),
+        ("demo/mcp/new.json", b"{}"),
+        ("demo/mcp/", b""),
+        ("other/x", b"x"),
+    ):
         s3.put_object(Bucket="ramen-groups", Key=key, Body=body)
     s = bucket.sync("s3://ramen-groups/demo", dest, client=s3)
     assert s == {"uri": "s3://ramen-groups/demo", "downloaded": 1, "unchanged": 1, "deleted": 1, "total": 2}
@@ -107,10 +123,14 @@ def test_s3_sync_downloads_skips_unchanged_and_deletes_stale(tmp_path, s3):
     assert (dest / "mcp" / ".ramen_requirements.sha256").exists()
     s3.put_object(Bucket="ramen-groups", Key="demo/mcp/same.py", Body=b"changed")
     s = bucket.sync("s3://ramen-groups/demo", dest, client=s3)
-    assert (s["downloaded"], s["deleted"], s["unchanged"]) == (1, 0, 1) and (dest / "mcp" / "same.py").read_text() == "changed"
+    assert (s["downloaded"], s["deleted"], s["unchanged"]) == (1, 0, 1) and (
+        dest / "mcp" / "same.py"
+    ).read_text() == "changed"
     # default client path: boto3.client("s3") under moto; whole-bucket prefix (no strip)
     s = bucket.sync("s3://ramen-groups", tmp_path / "all")
-    assert s["total"] == 3 and (tmp_path / "all" / "other" / "x").read_text() == "x"  # the "demo/mcp/" marker is skipped
+    assert (
+        s["total"] == 3 and (tmp_path / "all" / "other" / "x").read_text() == "x"
+    )  # the "demo/mcp/" marker is skipped
 
 
 def test_s3_multipart_etag_is_always_redownloaded(tmp_path):

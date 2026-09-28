@@ -1,6 +1,7 @@
 """Bucket prefix → local dir sync (CONTRACTS §7 gs://, §8 s3://). md5-based: downloads changed/new objects,
 deletes stale files. Local state (`.ramen*`, `__pycache__`) is left alone. Auth is ADC / Workload Identity on
 GCP and the default boto3 chain (IRSA in EKS) on AWS."""
+
 import base64
 import hashlib
 from pathlib import Path

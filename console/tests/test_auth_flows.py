@@ -1,4 +1,5 @@
 """CONTRACTS §9: password-login toggle + break-glass, invite / reset / magic-link email via the file:// backend."""
+
 import email as emaillib
 import re
 from pathlib import Path
@@ -7,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console.mail import Mailer
-from tests.test_api import app, client, cloud, demo, root, login, make_user  # noqa: F401 - pytest fixtures
+from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 
 
 @pytest.fixture
@@ -20,13 +21,17 @@ def maildir(tmp_path, monkeypatch):
 
 
 def mails(d: Path) -> list[emaillib.message.EmailMessage]:
-    return [emaillib.message_from_bytes(p.read_bytes(), policy=emaillib.policy.default) for p in sorted(d.glob("*.eml"))] if d.exists() else []
+    return (
+        [emaillib.message_from_bytes(p.read_bytes(), policy=emaillib.policy.default) for p in sorted(d.glob("*.eml"))]
+        if d.exists()
+        else []
+    )
 
 
 def link(msg, kind) -> str:
     m = re.search(rf"https://console\.test/auth/{kind}/(\S+)", msg.get_content())
     assert m, msg.get_content()
-    return "/auth/%s/%s" % (kind, m.group(1))
+    return f"/auth/{kind}/{m.group(1)}"
 
 
 def test_password_login_toggle_and_break_glass(demo, monkeypatch):
@@ -47,13 +52,21 @@ def test_password_login_toggle_and_break_glass(demo, monkeypatch):
         assert "break-glass" in page and 'name="password"' in page
         login(v, "root@ramen.local", "rootpw")  # bootstrap admin still gets in
     audit = demo.get("/api/v1/audit").json()
-    assert any(a["action"] == "login" and a["user"] == "v@x" and not a["ok"] and "password_login:disabled" in a["tags"] for a in audit)
+    assert any(
+        a["action"] == "login" and a["user"] == "v@x" and not a["ok"] and "password_login:disabled" in a["tags"]
+        for a in audit
+    )
     assert any(a["action"] == "config.auth" and "password_login:False" in a["tags"] for a in audit)
     monkeypatch.setenv("RAMEN_ADMIN_FORCE_PASSWORD", "0")
     demo.app.state.auth_env = demo.app.state.auth_env.from_env()
     with TestClient(demo.app) as anon:
         assert 'name="password"' not in anon.get("/login").text
-        assert anon.post("/login", data={"email": "root@ramen.local", "password": "rootpw"}, follow_redirects=False).status_code == 403
+        assert (
+            anon.post(
+                "/login", data={"email": "root@ramen.local", "password": "rootpw"}, follow_redirects=False
+            ).status_code
+            == 403
+        )
     assert demo.put("/api/v1/config/auth", json={"password_login": True}).json()["password_login"] is True
     with TestClient(demo.app) as v:
         login(v, "v@x", "pw")
@@ -63,10 +76,17 @@ def test_password_login_toggle_and_break_glass(demo, monkeypatch):
 
 def test_invite_and_reset_flow(demo, maildir):
     demo.app.state.mailer = Mailer.from_env()
-    u = demo.post("/api/v1/users", json={"email": "new@x", "password": "first-pw", "role": "viewer", "groups": ["demo"]})
+    u = demo.post(
+        "/api/v1/users", json={"email": "new@x", "password": "first-pw", "role": "viewer", "groups": ["demo"]}
+    )
     assert u.status_code == 201 and u.json()["invite"] == {"ok": True, "backend": "file"}
     inv = mails(maildir)
-    assert len(inv) == 1 and inv[0]["To"] == "new@x" and inv[0]["From"] == "console@ramen.test" and "invited" in inv[0]["Subject"]
+    assert (
+        len(inv) == 1
+        and inv[0]["To"] == "new@x"
+        and inv[0]["From"] == "console@ramen.test"
+        and "invited" in inv[0]["Subject"]
+    )
     assert "first-pw" not in inv[0].get_content()
     set_path = link(inv[0], "reset")
     with TestClient(demo.app) as anon:
@@ -85,7 +105,10 @@ def test_invite_and_reset_flow(demo, maildir):
         r = anon.post(reset_path, data={"password": "second-pw"}, follow_redirects=False)
         assert r.status_code == 303 and "/login" in r.headers["location"]
         assert anon.post(reset_path, data={"password": "third-pw"}).status_code == 400  # single use
-        assert anon.post("/login", data={"email": "new@x", "password": "first-pw"}, follow_redirects=False).status_code == 401
+        assert (
+            anon.post("/login", data={"email": "new@x", "password": "first-pw"}, follow_redirects=False).status_code
+            == 401
+        )
         login(anon, "new@x", "second-pw")
     audit = demo.get("/api/v1/audit").json()
     assert any(a["action"] == "password.reset" and a["user"] == "new@x" and a["ok"] for a in audit)
@@ -161,10 +184,19 @@ async def test_mailer_backends(monkeypatch, tmp_path):
             sent.append(("send", msg["To"]))
 
     import smtplib
+
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP)
-    m = Mailer.from_env({"RAMEN_SMTP_HOST": "smtp.test", "RAMEN_SMTP_PORT": "2525", "RAMEN_SMTP_USER": "u",
-                         "RAMEN_SMTP_PASSWORD": "p", "RAMEN_SMTP_FROM": "f@t", "RAMEN_SMTP_TLS": "1"})
+    m = Mailer.from_env(
+        {
+            "RAMEN_SMTP_HOST": "smtp.test",
+            "RAMEN_SMTP_PORT": "2525",
+            "RAMEN_SMTP_USER": "u",
+            "RAMEN_SMTP_PASSWORD": "p",
+            "RAMEN_SMTP_FROM": "f@t",
+            "RAMEN_SMTP_TLS": "1",
+        }
+    )
     assert m.backend == "smtp" and (await m.send("a@b", "s", "b")) == {"ok": True, "backend": "smtp"}
     assert sent == [("connect", "smtp.test", 2525), ("starttls",), ("login", "u"), ("send", "a@b")]
     sent.clear()
@@ -173,6 +205,7 @@ async def test_mailer_backends(monkeypatch, tmp_path):
 
     def boom(*a, **k):
         raise OSError("refused")
+
     monkeypatch.setattr(smtplib, "SMTP", boom)
     r = await Mailer("smtp.test", 25, tls="0").send("a@b", "s", "b")
     assert r["ok"] is False and "OSError" in r["error"]

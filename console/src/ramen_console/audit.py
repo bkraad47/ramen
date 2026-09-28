@@ -1,8 +1,8 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from .auth.sessions import COOKIE
 from .auth.apikeys import HEADER
+from .auth.sessions import COOKIE
 from .util import now, uid
 
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -36,7 +36,10 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         if request.state.audit or (request.method in MUTATING and request.url.path.startswith("/api/")):
             p = request.state.principal
-            meta = dict(request.state.audit or {"action": f"{request.method} {request.url.path}", "target": request.url.path, "tags": []})
+            meta = dict(
+                request.state.audit
+                or {"action": f"{request.method} {request.url.path}", "target": request.url.path, "tags": []}
+            )
             user = meta.pop("user", None) or (p.name if p else "-")
             await write_audit(st.store, user=user, ip=client_ip(request), ok=response.status_code < 400, **meta)
         return response

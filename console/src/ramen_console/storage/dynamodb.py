@@ -15,6 +15,7 @@ class DynamoStore(Store):
     @classmethod
     def from_env(cls):
         import boto3
+
         kw = {}
         if os.environ.get("RAMEN_DDB_ENDPOINT"):
             kw["endpoint_url"] = os.environ["RAMEN_DDB_ENDPOINT"]
@@ -29,7 +30,10 @@ class DynamoStore(Store):
         t = self._res.create_table(
             TableName=self._name,
             KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}],
-            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}, {"AttributeName": "sk", "AttributeType": "S"}],
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
             BillingMode="PAY_PER_REQUEST",
         )
         t.wait_until_exists()

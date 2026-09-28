@@ -1,15 +1,16 @@
 import json
 import subprocess
+from datetime import UTC
+from types import SimpleNamespace as NS
 
 import httpx
 import pytest
-from types import SimpleNamespace as NS
 
 from ramen_console.cloud import make_cloud
 from ramen_console.cloud.gcp import GcpCloud
 from ramen_console.cloud.gcp_k8s import SIZES, manifests, normalize_size
 from ramen_console.errors import ApiError
-from tests.fakes_gcp import FakeApiError, FakeClients, FakeLogging
+from tests.fakes_gcp import FakeApiError, FakeClients
 
 SPEC = {"region": "us-central1-a", "size": "s", "count": 2}
 ADMIN = "adm-key"
@@ -45,8 +46,18 @@ def cloud(fk, http_state):
         if req.url.path == "/readyz":
             return httpx.Response(200)
         return httpx.Response(404)
-    return GcpCloud(project="p1", region="us-central1", bucket="p1-groups", image="img/worker:0.2.0", admin_key=ADMIN,
-                    clients=fk, transport=httpx.MockTransport(handler), wait_secs=1, poll=0)
+
+    return GcpCloud(
+        project="p1",
+        region="us-central1",
+        bucket="p1-groups",
+        image="img/worker:0.2.0",
+        admin_key=ADMIN,
+        clients=fk,
+        transport=httpx.MockTransport(handler),
+        wait_secs=1,
+        poll=0,
+    )
 
 
 def obj(fk, kind, ns, name):
@@ -61,14 +72,30 @@ def test_sizes():
 def test_manifests_shape():
     docs = manifests("demo", "a", SPEC, "img", "gs://b/demo", gsa="ramen-demo-a@p1.iam.gserviceaccount.com")
     kinds = [d["kind"] for d in docs]
-    assert kinds == ["Namespace", "ServiceAccount", "Service", "Deployment", "Deployment", "HorizontalPodAutoscaler", "HTTPRoute"]
+    assert kinds == [
+        "Namespace",
+        "ServiceAccount",
+        "Service",
+        "Deployment",
+        "Deployment",
+        "HorizontalPodAutoscaler",
+        "HTTPRoute",
+    ]
     assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
     route = docs[6]
-    assert route["apiVersion"] == "gateway.networking.k8s.io/v1" and route["metadata"] == {"name": "worker", "namespace": "ramen-demo-a", "labels": {"ramen.io/group": "demo", "ramen.io/zone": "a"}}
-    assert route["spec"]["parentRefs"] == [{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}]
+    assert route["apiVersion"] == "gateway.networking.k8s.io/v1" and route["metadata"] == {
+        "name": "worker",
+        "namespace": "ramen-demo-a",
+        "labels": {"ramen.io/group": "demo", "ramen.io/zone": "a"},
+    }
+    assert route["spec"]["parentRefs"] == [
+        {"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}
+    ]
     rule = route["spec"]["rules"][0]
     assert rule["matches"] == [{"path": {"type": "PathPrefix", "value": "/mcp/demo/a"}}]
-    assert rule["filters"] == [{"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}}}]
+    assert rule["filters"] == [
+        {"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}}}
+    ]
     assert rule["backendRefs"] == [{"name": "worker", "port": 8080}]
     dep = docs[3]
     assert dep["metadata"]["name"] == "worker" and dep["spec"]["replicas"] == 2
@@ -91,9 +118,21 @@ async def test_attach_zone_idempotent(cloud, fk):
     r2 = await cloud.attach_zone("demo", "a", {**SPEC, "count": 3})
     assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 1  # canary replicas preserved
-    assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"] == {"ramen.io/group": "demo", "ramen.io/zone": "a", "ramen.io/routes": "true"}
-    assert obj(fk, "HTTPRoute", "ramen-demo-a", "worker")["spec"]["rules"][0]["matches"][0]["path"]["value"] == "/mcp/demo/a"
-    assert ("create", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls and ("patch", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls
+    assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"] == {
+        "ramen.io/group": "demo",
+        "ramen.io/zone": "a",
+        "ramen.io/routes": "true",
+    }
+    assert (
+        obj(fk, "HTTPRoute", "ramen-demo-a", "worker")["spec"]["rules"][0]["matches"][0]["path"]["value"]
+        == "/mcp/demo/a"
+    )
+    assert ("create", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls and (
+        "patch",
+        "HTTPRoute",
+        "ramen-demo-a",
+        "worker",
+    ) in fk.k8s.calls
     assert r2["ok"]
 
 
@@ -103,14 +142,18 @@ async def test_deploy_canary_success(cloud, fk, http_state):
     res = await cloud.deploy("demo", "prod", "a", canary=True, config=cfg, spec=SPEC, log=lines.append)
     assert res["ok"] is True, res
     sec = obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]
-    assert sec["RAMEN_SECRET_DEMO__TOKEN"] == "s3cret" and sec["RAMEN_ENV"] == "prod" and sec["RAMEN_ADMIN_KEY"] == ADMIN
+    assert (
+        sec["RAMEN_SECRET_DEMO__TOKEN"] == "s3cret" and sec["RAMEN_ENV"] == "prod" and sec["RAMEN_ADMIN_KEY"] == ADMIN
+    )
     canary = obj(fk, "Deployment", "ramen-demo-a", "worker-canary")
     assert canary["spec"]["replicas"] == 1
     assert canary["spec"]["template"]["metadata"]["annotations"]["ramen.io/restartedAt"]
-    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["template"]["metadata"]["annotations"]["ramen.io/restartedAt"]
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["template"]["metadata"]["annotations"][
+        "ramen.io/restartedAt"
+    ]
     paths = [c[1] for c in http_state["calls"]]
     assert paths.index("/admin/reload") < paths.index("/mcp")
-    assert any("canary" in l for l in lines) and any("smoke" in l for l in lines)
+    assert any("canary" in x for x in lines) and any("smoke" in x for x in lines)
     assert res["workers"][0]["result"]["tools"] == [{"name": "calc"}]
     assert "s3cret" not in json.dumps(res) and "s3cret" not in "\n".join(lines)
 
@@ -125,7 +168,7 @@ async def test_deploy_canary_bad_smoke_scales_canary_to_zero(cloud, fk, http_sta
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
     assert json.dumps(obj(fk, "Deployment", "ramen-demo-a", "worker"), sort_keys=True) == main_before
     assert res["workers"] and res["workers"][0]["ok"] is False
-    assert any("scaled canary to 0" in l for l in lines)
+    assert any("scaled canary to 0" in x for x in lines)
 
 
 async def test_deploy_canary_reload_failure(cloud, fk, http_state):
@@ -179,24 +222,39 @@ async def test_workers_and_proxy(cloud, fk, monkeypatch):
 async def test_workers_metrics_error(fk):
     def handler(req):
         raise httpx.ConnectError("nope")
-    c = GcpCloud(project="p1", region="r", bucket="b", image="i", clients=fk, transport=httpx.MockTransport(handler), poll=0)
+
+    c = GcpCloud(
+        project="p1", region="r", bucket="b", image="i", clients=fk, transport=httpx.MockTransport(handler), poll=0
+    )
     await c.attach_zone("demo", "a", SPEC)
     ws = await c.workers("demo", "a")
     assert ws[0]["load"] == "down" and "ConnectError" in ws[0]["error"]
 
 
 async def test_logs(fk, cloud):
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     fk.logging.entries = [
-        NS(timestamp=datetime(2026, 9, 27, 1, 0, 1, tzinfo=timezone.utc), severity="INFO", payload={"msg": "b"},
-           resource=NS(labels={"pod_name": "worker-0"})),
-        NS(timestamp=datetime(2026, 9, 27, 1, 0, 0, tzinfo=timezone.utc), severity=None, payload="a",
-           resource=NS(labels={"pod_name": "worker-1"})),
+        NS(
+            timestamp=datetime(2026, 9, 27, 1, 0, 1, tzinfo=UTC),
+            severity="INFO",
+            payload={"msg": "b"},
+            resource=NS(labels={"pod_name": "worker-0"}),
+        ),
+        NS(
+            timestamp=datetime(2026, 9, 27, 1, 0, 0, tzinfo=UTC),
+            severity=None,
+            payload="a",
+            resource=NS(labels={"pod_name": "worker-1"}),
+        ),
     ]
     text = await cloud.logs("demo", "a", tail=5)
     lines = text.splitlines()
     assert lines[0].endswith("worker-1 a") and '"msg": "b"' in lines[1]
-    assert 'resource.type="k8s_container"' in fk.logging.filters[0] and 'namespace_name="ramen-demo-a"' in fk.logging.filters[0]
+    assert (
+        'resource.type="k8s_container"' in fk.logging.filters[0]
+        and 'namespace_name="ramen-demo-a"' in fk.logging.filters[0]
+    )
     await cloud.logs("demo", "a", worker="worker-0", tail=1)
     assert 'pod_name="worker-0"' in fk.logging.filters[1]
 
@@ -204,14 +262,30 @@ async def test_logs(fk, cloud):
 async def test_rebalance(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
     r = await cloud.rebalance("demo", "a")  # backend not programmed yet: 200, nothing applied, reason given
-    assert r["ok"] and not r["applied"] and r["backend_service"] is None and "ramen-demo-a" in r["note"] and "ramen-demo" in r["note"]
+    assert (
+        r["ok"]
+        and not r["applied"]
+        and r["backend_service"] is None
+        and "ramen-demo-a" in r["note"]
+        and "ramen-demo" in r["note"]
+    )
     # GKE Gateway auto-named backend service found through its NEG backend (second page)
     fk.compute_state["paged"] = True
-    fk.compute_state["backend"] = {"name": "gkegw1-abcd-ramen-demo-a-worker-8080-xyz", "fingerprint": "f1", "backends": [
-        {"group": "https://www.googleapis.com/compute/v1/projects/p1/zones/us-central1-a/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0},
-        {"group": ".../networkEndpointGroups/ramen-demo-b", "capacityScaler": 1.0}]}
+    fk.compute_state["backend"] = {
+        "name": "gkegw1-abcd-ramen-demo-a-worker-8080-xyz",
+        "fingerprint": "f1",
+        "backends": [
+            {
+                "group": "https://www.googleapis.com/compute/v1/projects/p1/zones/us-central1-a/networkEndpointGroups/ramen-demo-a",
+                "capacityScaler": 1.0,
+            },
+            {"group": ".../networkEndpointGroups/ramen-demo-b", "capacityScaler": 1.0},
+        ],
+    }
     r = await cloud.rebalance("demo", "a")
-    assert r["ok"] and r["load"] == "high" and r["capacity_scaler"] == 0.5 and r["backend_service"].startswith("gkegw1-")
+    assert (
+        r["ok"] and r["load"] == "high" and r["capacity_scaler"] == 0.5 and r["backend_service"].startswith("gkegw1-")
+    )
     b = fk.compute_state["backend"]["backends"]
     assert b[0]["capacityScaler"] == 0.5 and b[1]["capacityScaler"] == 1.0
     fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
@@ -221,9 +295,16 @@ async def test_rebalance(cloud, fk):
 
 async def test_rebalance_fallback_name(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
-    fk.compute_state["backend"] = {"name": "ramen-demo", "backends": [{"group": "x/networkEndpointGroups/unrelated", "capacityScaler": 1.0}]}
+    fk.compute_state["backend"] = {
+        "name": "ramen-demo",
+        "backends": [{"group": "x/networkEndpointGroups/unrelated", "capacityScaler": 1.0}],
+    }
     r = await cloud.rebalance("demo", "a")
-    assert r["ok"] and r["backend_service"] == "ramen-demo" and fk.compute_state["backend"]["backends"][0]["capacityScaler"] == 1.0
+    assert (
+        r["ok"]
+        and r["backend_service"] == "ramen-demo"
+        and fk.compute_state["backend"]["backends"][0]["capacityScaler"] == 1.0
+    )
 
 
 async def test_set_ip_rules(cloud, fk):
@@ -231,15 +312,29 @@ async def test_set_ip_rules(cloud, fk):
     r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
     assert r["ok"] and not r["attached"] and "not attached" in r["note"]
     pol = fk.compute_state["policies"]["ramen-demo"]
-    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8,192.168.0.0/16"
-    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a"}]}
+    assert (
+        obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"]
+        == "10.0.0.0/8,192.168.0.0/16"
+    )
+    fk.compute_state["backend"] = {
+        "name": "gkegw1-ramen-demo-a",
+        "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a"}],
+    }
     r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
-    assert r["ok"] and r["policy"] == "ramen-demo" and r["cidrs"] == ["10.0.0.0/8", "192.168.0.0/16"] and r["backend_service"] == "gkegw1-ramen-demo-a"
+    assert (
+        r["ok"]
+        and r["policy"] == "ramen-demo"
+        and r["cidrs"] == ["10.0.0.0/8", "192.168.0.0/16"]
+        and r["backend_service"] == "gkegw1-ramen-demo-a"
+    )
     pol = fk.compute_state["policies"]["ramen-demo"]
     allow = [x for x in pol["rules"] if x["action"] == "allow"]
     assert allow[0]["match"]["config"]["srcIpRanges"] == ["10.0.0.0/8", "192.168.0.0/16"]
     assert [x for x in pol["rules"] if x["priority"] == 2147483647][0]["action"] == "deny(403)"
-    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8,192.168.0.0/16"
+    assert (
+        obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"]
+        == "10.0.0.0/8,192.168.0.0/16"
+    )
     r = await cloud.set_ip_rules("demo", "a", [f"10.{i}.0.0/16" for i in range(12)])
     pol = fk.compute_state["policies"]["ramen-demo"]
     assert len([x for x in pol["rules"] if x["action"] == "allow"]) == 2 and r["attached"] is True
@@ -259,9 +354,14 @@ async def test_create_service_account_idempotent(cloud, fk):
     pol = fk.iam_state["project_policy"]["bindings"]
     roles = sorted(b["role"] for b in pol)
     assert roles == ["roles/secretmanager.secretAccessor", "roles/storage.objectViewer"]
-    assert "p1-groups/objects/demo/" in pol[0]["condition"]["expression"] or "p1-groups/objects/demo/" in pol[1]["condition"]["expression"]
+    assert (
+        "p1-groups/objects/demo/" in pol[0]["condition"]["expression"]
+        or "p1-groups/objects/demo/" in pol[1]["condition"]["expression"]
+    )
     wi = fk.iam_state["sa_policy"][r["name"]]["bindings"]
-    assert wi == [{"role": "roles/iam.workloadIdentityUser", "members": ["serviceAccount:p1.svc.id.goog[ramen-demo-a/worker]"]}]
+    assert wi == [
+        {"role": "roles/iam.workloadIdentityUser", "members": ["serviceAccount:p1.svc.id.goog[ramen-demo-a/worker]"]}
+    ]
     ksa = obj(fk, "ServiceAccount", "ramen-demo-a", "worker")
     assert ksa["metadata"]["annotations"]["iam.gke.io/gcp-service-account"] == r["name"]
     long = await cloud.create_service_account("a-very-long-group-name-here", "zone-name-x")
@@ -292,8 +392,12 @@ def repo(tmp_path):
     (src / "mcp" / "requirements.txt").write_text("x")
     (src / "old.txt").write_text("old")
     for cmd in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "init"]):
-        subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", *cmd] if cmd[0] != "init"
-                       else ["git", "init", "-q", "-b", "main", str(src)], check=True)
+        subprocess.run(
+            ["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", *cmd]
+            if cmd[0] != "init"
+            else ["git", "init", "-q", "-b", "main", str(src)],
+            check=True,
+        )
     return src
 
 
@@ -307,8 +411,10 @@ async def test_sync_repo(cloud, fk, repo):
     (repo / "old.txt").unlink()
     (repo / "new.txt").write_text("new")
     subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "2"], check=True)
-    r = await cloud.sync_repo("demo", str(repo), "main", "tok")
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "2"], check=True
+    )
+    await cloud.sync_repo("demo", str(repo), "main", "tok")
     assert set(bucket.data) == {"demo/mcp/requirements.txt", "demo/new.txt", "other/keep.txt"}
     with pytest.raises(ApiError) as e:
         await cloud.sync_repo("demo", str(repo / "nope"), "main", "tok")
@@ -323,18 +429,30 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
 
     def fake_run(cmd, capture_output, text):
         seen["cmd"] = cmd
-        return NS(returncode=0, stdout="apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ramen-demo-a\n---\n"
-                  "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: worker\n  namespace: ramen-demo-a\n"
-                  "spec:\n  replicas: 2\n  template:\n    metadata:\n      labels: {app: worker, ramen.io/track: stable}\n", stderr="")
+        return NS(
+            returncode=0,
+            stdout="apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ramen-demo-a\n---\n"
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: worker\n  namespace: ramen-demo-a\n"
+            "spec:\n  replicas: 2\n  template:\n    metadata:\n      labels: {app: worker, ramen.io/track: stable}\n",
+            stderr="",
+        )
+
     monkeypatch.setattr("ramen_console.cloud.gcp_k8s.subprocess.run", fake_run)
     monkeypatch.setattr("ramen_console.cloud.gcp_k8s.shutil.which", lambda _: "/usr/bin/helm")
     cloud.chart = str(chart)
     r = await cloud.attach_zone("demo", "a", SPEC)
-    assert r["renderer"] == "helm" and seen["cmd"][:2] == ["helm", "template"] and "secret.create=false" in seen["cmd"] and "project=p1" in seen["cmd"]
+    assert (
+        r["renderer"] == "helm"
+        and seen["cmd"][:2] == ["helm", "template"]
+        and "secret.create=false" in seen["cmd"]
+        and "project=p1" in seen["cmd"]
+    )
     assert ("Deployment", "ramen-demo-a", "worker") in fk.k8s.objs
     assert ("HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.objs  # appended when the chart renders none
     assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"]["ramen.io/routes"] == "true"
-    monkeypatch.setattr("ramen_console.cloud.gcp_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart"))
+    monkeypatch.setattr(
+        "ramen_console.cloud.gcp_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart")
+    )
     with pytest.raises(ApiError, match="helm"):
         await cloud.attach_zone("demo", "a", SPEC)
 
@@ -342,6 +460,7 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
 async def test_error_mapping(cloud, fk):
     def boom(*a, **k):
         raise RuntimeError("kaboom value=s3cret")
+
     fk.k8s.objs.clear()
     orig = fk.k8s._create
     fk.k8s._create = boom
@@ -352,7 +471,9 @@ async def test_error_mapping(cloud, fk):
 
     def unknown_kind():
         from ramen_console.cloud.gcp_k8s import Kube
+
         Kube(fk, poll=0).apply({"kind": "Weird", "metadata": {"name": "x"}})
+
     with pytest.raises(ApiError, match="Weird"):
         unknown_kind()
 
@@ -372,6 +493,7 @@ def test_factory_and_env(monkeypatch):
 
 def test_real_clients_lazy(monkeypatch):
     from ramen_console.cloud.gcp_clients import GcpClients, _creds, http_status
+
     monkeypatch.delenv("GOOGLE_OAUTH_ACCESS_TOKEN", raising=False)
     assert _creds() is None
     monkeypatch.setenv("GOOGLE_OAUTH_ACCESS_TOKEN", "tok")
@@ -382,23 +504,47 @@ def test_real_clients_lazy(monkeypatch):
     assert http_status(RuntimeError()) is None
     g = GcpClients("p1")
     import types
+
     loaded = {}
-    fake_cfg = types.SimpleNamespace(load_incluster_config=lambda: loaded.setdefault("mode", "incluster"),
-                                     load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
-                                     ConfigException=RuntimeError)
-    fake_client = types.SimpleNamespace(CoreV1Api=lambda: "core", AppsV1Api=lambda: "apps", AutoscalingV2Api=lambda: "hpa", CustomObjectsApi=lambda: "custom",
-                                        ApiClient=lambda: NS(sanitize_for_serialization=lambda o: {"x": o}))
+    fake_cfg = types.SimpleNamespace(
+        load_incluster_config=lambda: loaded.setdefault("mode", "incluster"),
+        load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
+        ConfigException=RuntimeError,
+    )
+    fake_client = types.SimpleNamespace(
+        CoreV1Api=lambda: "core",
+        AppsV1Api=lambda: "apps",
+        AutoscalingV2Api=lambda: "hpa",
+        CustomObjectsApi=lambda: "custom",
+        ApiClient=lambda: NS(sanitize_for_serialization=lambda o: {"x": o}),
+    )
     monkeypatch.setattr(g, "_kube_modules", lambda: (fake_cfg, fake_client))
-    assert g.core == "core" and g.apps == "apps" and g.autoscaling == "hpa" and g.custom == "custom" and loaded["mode"] == "incluster"
+    assert (
+        g.core == "core"
+        and g.apps == "apps"
+        and g.autoscaling == "hpa"
+        and g.custom == "custom"
+        and loaded["mode"] == "incluster"
+    )
     assert g.to_dict({"a": 1}) == {"a": 1} and g.to_dict("o") == {"x": "o"}
 
     def fail_incluster():
         raise RuntimeError("no sa token")
+
     loaded.clear()
     g2 = GcpClients("p1")
-    monkeypatch.setattr(g2, "_kube_modules", lambda: (types.SimpleNamespace(load_incluster_config=fail_incluster,
-                                                                          load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
-                                                                          ConfigException=RuntimeError), fake_client))
+    monkeypatch.setattr(
+        g2,
+        "_kube_modules",
+        lambda: (
+            types.SimpleNamespace(
+                load_incluster_config=fail_incluster,
+                load_kube_config=lambda: loaded.setdefault("mode", "kubeconfig"),
+                ConfigException=RuntimeError,
+            ),
+            fake_client,
+        ),
+    )
     assert g2.core == "core" and loaded["mode"] == "kubeconfig"
 
 
@@ -420,13 +566,18 @@ async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
     r = await cloud.detach_group("demo")
     assert r["namespaces"] == ["ramen-demo-a", "ramen-demo-b"]
     assert r["service_accounts"] == ["ramen-demo-a@p1.iam.gserviceaccount.com"]
-    assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and ("Namespace", None, "ramen-demo-a") not in fk.k8s.objs
+    assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and (
+        "Namespace",
+        None,
+        "ramen-demo-a",
+    ) not in fk.k8s.objs
     assert list(fk.iam_state["accounts"]) == ["ramen-other-a@p1.iam.gserviceaccount.com"]
     assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}
 
 
 async def test_set_ip_rules_retries_while_policy_not_ready(cloud, fk, monkeypatch):
     import ramen_console.cloud.gcp_api as api
+
     monkeypatch.setattr(api.time, "sleep", lambda s: None)
     await cloud.attach_zone("demo", "a", SPEC)
     fk.compute_state["not_ready"] = 3
@@ -451,20 +602,34 @@ async def test_deploy_waits_for_old_pods_to_drain(cloud, fk, http_state):
         out = real(ns, label_selector)
         calls["n"] += 1
         if calls["n"] <= 2:  # first two polls: an old pod is still terminating
-            out["items"].append({"metadata": {"name": "worker-old", "labels": {"app": "worker", "ramen.io/track": "stable"},
-                                              "namespace": ns, "deletionTimestamp": "2026-09-28T00:00:00Z"}, "status": {"phase": "Running"}})
+            out["items"].append(
+                {
+                    "metadata": {
+                        "name": "worker-old",
+                        "labels": {"app": "worker", "ramen.io/track": "stable"},
+                        "namespace": ns,
+                        "deletionTimestamp": "2026-09-28T00:00:00Z",
+                    },
+                    "status": {"phase": "Running"},
+                }
+            )
         return out
+
     fk.k8s.core.list_namespaced_pod = listing
     r = await cloud.deploy("demo", "dev", "a", canary=True, config={"RAMEN_MCP_KEYS": "rmk_1"})
-    assert r["ok"] and any("old pods drained" in l for l in r["log"])
+    assert r["ok"] and any("old pods drained" in x for x in r["log"])
 
 
 async def test_rebalance_and_armor_retry_while_backend_not_ready(cloud, fk, monkeypatch):
     import ramen_console.cloud.gcp_api as api
+
     monkeypatch.setattr(api.time, "sleep", lambda s: None)
     await cloud.attach_zone("demo", "a", SPEC)
-    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "fingerprint": "f1", "backends": [
-        {"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}]}
+    fk.compute_state["backend"] = {
+        "name": "gkegw1-ramen-demo-a",
+        "fingerprint": "f1",
+        "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}],
+    }
     fk.compute_state["bs_not_ready"] = 2
     r = await cloud.rebalance("demo", "a")
     assert r["applied"] and fk.compute_state["bs_not_ready"] == 0
@@ -483,6 +648,7 @@ async def test_abort_deploy_scales_canary_to_zero(cloud, fk):
 
 async def test_armor_add_rule_converges_when_retry_already_landed(cloud, fk, monkeypatch):
     import ramen_console.cloud.gcp_api as api
+
     monkeypatch.setattr(api.time, "sleep", lambda s: None)
     await cloud.attach_zone("demo", "a", SPEC)
     fk.compute_state["dup_once"] = True
@@ -494,14 +660,19 @@ async def test_armor_add_rule_converges_when_retry_already_landed(cloud, fk, mon
 
 async def test_rebalance_hands_off_to_background_when_backend_stays_busy(cloud, fk, monkeypatch):
     import ramen_console.cloud.gcp_api as api
+
     monkeypatch.setattr(api.time, "sleep", lambda s: None)
     await cloud.attach_zone("demo", "a", SPEC)
-    fk.compute_state["backend"] = {"name": "gkegw1-ramen-demo-a", "fingerprint": "f1", "backends": [
-        {"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}]}
+    fk.compute_state["backend"] = {
+        "name": "gkegw1-ramen-demo-a",
+        "fingerprint": "f1",
+        "backends": [{"group": "x/networkEndpointGroups/ramen-demo-a", "capacityScaler": 1.0}],
+    }
     fk.compute_state["bs_not_ready"] = 10  # more than the 6 synchronous attempts
     r = await cloud.rebalance("demo", "a")
     assert r["ok"] and not r["applied"] and "pending" in r["note"] and r["backend_service"] == "gkegw1-ramen-demo-a"
     import asyncio
+
     for t in list(getattr(cloud, "_bg", ())):
         await asyncio.wrap_future(t) if hasattr(t, "result") and not isinstance(t, asyncio.Future) else t
     assert fk.compute_state["bs_not_ready"] == 0
@@ -509,15 +680,35 @@ async def test_rebalance_hands_off_to_background_when_backend_stays_busy(cloud, 
 
 def test_real_client_class_exposes_every_lazy_client():
     from ramen_console.cloud.gcp_clients import GcpClients, fresh_http
-    for name in ("core", "apps", "autoscaling", "custom", "storage", "secretmanager", "logging", "compute", "iam", "crm"):
+
+    for name in (
+        "core",
+        "apps",
+        "autoscaling",
+        "custom",
+        "storage",
+        "secretmanager",
+        "logging",
+        "compute",
+        "iam",
+        "crm",
+    ):
         assert isinstance(getattr(GcpClients, name), property), name
     assert callable(fresh_http)  # not invoked: without ADC it would probe the GCE metadata server (slow timeouts)
 
 
 async def test_apply_sa_permissions_binds_mapped_roles(cloud, fk):
     r = await cloud.apply_sa_permissions("demo", "a", ["bucket.read", "logs.write", "secrets.read", "unknown.perm"])
-    assert r["ok"] and r["service_account"] == "ramen-demo-a@p1.iam.gserviceaccount.com" and r["ksa"] == "ramen-demo-a/worker"
-    assert r["applied"] == ["roles/storage.objectViewer", "roles/logging.logWriter", "roles/secretmanager.secretAccessor"]
+    assert (
+        r["ok"]
+        and r["service_account"] == "ramen-demo-a@p1.iam.gserviceaccount.com"
+        and r["ksa"] == "ramen-demo-a/worker"
+    )
+    assert r["applied"] == [
+        "roles/storage.objectViewer",
+        "roles/logging.logWriter",
+        "roles/secretmanager.secretAccessor",
+    ]
     pol = {b["role"]: b for b in fk.iam_state["project_policy"]["bindings"]}
     assert "p1-groups/objects/demo/" in pol["roles/storage.objectViewer"]["condition"]["expression"]
     assert "secrets/ramen-demo-" in pol["roles/secretmanager.secretAccessor"]["condition"]["expression"]

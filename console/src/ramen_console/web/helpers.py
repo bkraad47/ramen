@@ -42,8 +42,9 @@ def tabular(rows: list[dict], fmt: str | None, name: str) -> Response:
         w.writeheader()
         for r in rows:
             w.writerow({k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in r.items()})
-        return PlainTextResponse(buf.getvalue(), media_type="text/csv",
-                                 headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
+        return PlainTextResponse(
+            buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}.csv"'}
+        )
     if fmt == "json":
         return JSONResponse(rows, headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
     return JSONResponse(rows)

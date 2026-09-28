@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full demo against the compose stack: create group `demo` → deploy → call demo_calculator_tool over MCP.
-# Console API paths follow tests/src/ramen_tests/console.py ROUTES (CONTRACTS §4 has no route list yet).
+# Console API paths follow CONTRACTS §4a (mirrored by tests/src/ramen_tests/console.py ROUTES).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CONSOLE=${RAMEN_CONSOLE_URL:-https://localhost:8443}

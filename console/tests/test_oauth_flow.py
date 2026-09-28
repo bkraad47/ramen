@@ -1,17 +1,16 @@
 """CONTRACTS §9 OAuth/OIDC: full code flow against a fake OIDC provider (discovery, token with RS256 id_token,
 userinfo), user link/create by verified email, role_claim/role_map."""
-import json
+
 import time
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 from joserfc import jwt
 from joserfc.jwk import RSAKey
 
 from ramen_console.auth.oauth import OAuthRegistry
-from tests.test_api import app, client, cloud, demo, root, make_user  # noqa: F401 - pytest fixtures
+from tests.test_api import app, client, cloud, demo, make_user, root  # noqa: F401 - pytest fixtures
 
 ISSUER = "https://idp.test"
 KEY = RSAKey.generate_key(2048, parameters={"kid": "k1"})
@@ -26,9 +25,17 @@ class FakeIdp:
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/.well-known/openid-configuration":
-            return httpx.Response(200, json={"issuer": ISSUER, "authorization_endpoint": f"{ISSUER}/authorize",
-                                             "token_endpoint": f"{ISSUER}/token", "userinfo_endpoint": f"{ISSUER}/userinfo",
-                                             "jwks_uri": f"{ISSUER}/jwks", "id_token_signing_alg_values_supported": ["RS256"]})
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": ISSUER,
+                    "authorization_endpoint": f"{ISSUER}/authorize",
+                    "token_endpoint": f"{ISSUER}/token",
+                    "userinfo_endpoint": f"{ISSUER}/userinfo",
+                    "jwks_uri": f"{ISSUER}/jwks",
+                    "id_token_signing_alg_values_supported": ["RS256"],
+                },
+            )
         if path == "/jwks":
             return httpx.Response(200, json={"keys": [KEY.as_dict(private=False)]})
         if path == "/token":
@@ -39,7 +46,15 @@ class FakeIdp:
             body = {"access_token": "at-1", "token_type": "Bearer", "expires_in": 3600}
             if self.id_token:
                 now = int(time.time())
-                claims = {"iss": ISSUER, "sub": "sub-1", "aud": "cid", "iat": now, "exp": now + 300, "nonce": self.nonce, **self.claims}
+                claims = {
+                    "iss": ISSUER,
+                    "sub": "sub-1",
+                    "aud": "cid",
+                    "iat": now,
+                    "exp": now + 300,
+                    "nonce": self.nonce,
+                    **self.claims,
+                }
                 body["id_token"] = jwt.encode({"alg": "RS256", "kid": "k1"}, claims, KEY)
             return httpx.Response(200, json=body)
         if path == "/userinfo":
@@ -49,7 +64,12 @@ class FakeIdp:
 
 
 def registry(idp: FakeIdp, **extra):
-    env = {"RAMEN_OAUTH_IDP_ISSUER": ISSUER, "RAMEN_OAUTH_IDP_CLIENT_ID": "cid", "RAMEN_OAUTH_IDP_CLIENT_SECRET": "sec", **extra}
+    env = {
+        "RAMEN_OAUTH_IDP_ISSUER": ISSUER,
+        "RAMEN_OAUTH_IDP_CLIENT_ID": "cid",
+        "RAMEN_OAUTH_IDP_CLIENT_SECRET": "sec",
+        **extra,
+    }
     return OAuthRegistry.from_env(env, transport=httpx.MockTransport(idp.handler))
 
 
@@ -70,7 +90,7 @@ def test_oidc_creates_user_with_mapped_role(demo, monkeypatch):
     monkeypatch.setenv("RAMEN_AUTH_OAUTH_IDP_ROLE_MAP", "devs=group_admin:demo;ops=viewer:other")
     demo.app.state.auth_env = demo.app.state.auth_env.from_env()
     with TestClient(demo.app) as anon:
-        assert "Sign in with idp" in anon.get("/login").text and '/auth/idp/login' in anon.get("/login").text
+        assert "Sign in with idp" in anon.get("/login").text and "/auth/idp/login" in anon.get("/login").text
         state = start(anon, idp)
         assert anon.get("/auth/idp/callback?code=good-code&state=wrong", follow_redirects=False).status_code == 401
         state = start(anon, idp)
@@ -82,7 +102,10 @@ def test_oidc_creates_user_with_mapped_role(demo, monkeypatch):
     users = {u["email"]: u for u in demo.get("/api/v1/users").json()}
     assert users["dev@corp.test"]["provider"] == "idp"
     audit = demo.get("/api/v1/audit").json()
-    assert any(a["action"] == "login.oauth" and a["user"] == "dev@corp.test" and a["ok"] and "provider:idp" in a["tags"] for a in audit)
+    assert any(
+        a["action"] == "login.oauth" and a["user"] == "dev@corp.test" and a["ok"] and "provider:idp" in a["tags"]
+        for a in audit
+    )
     assert any(a["action"] == "login.oauth" and not a["ok"] for a in audit)  # the bad-state attempt
 
 

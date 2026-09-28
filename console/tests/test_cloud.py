@@ -1,4 +1,3 @@
-import json
 import subprocess
 
 import httpx
@@ -19,7 +18,9 @@ def repo(tmp_path):
     (src / "mcp" / "requirements.txt").write_text("")
     subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
     subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", "add", "."], check=True)
-    subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], check=True)
+    subprocess.run(
+        ["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], check=True
+    )
     return src
 
 
@@ -58,7 +59,9 @@ async def test_sync_repo_clone_then_pull(cloud, repo, tmp_path):
     assert (tmp_path / "buckets" / "demo" / "mcp" / "requirements.txt").exists()
     (repo / "mcp" / "new.txt").write_text("x")
     subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "add", "."], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "2"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "2"], check=True
+    )
     await cloud.sync_repo("demo", str(repo), "main", None)
     assert (tmp_path / "buckets" / "demo" / "mcp" / "new.txt").exists()
 
@@ -76,8 +79,9 @@ def test_auth_url():
 
 async def test_deploy_writes_env_and_reloads(cloud, tmp_path, calls):
     await cloud.set_ip_rules("demo", "local-a", ["10.0.0.0/8"])
-    res = await cloud.deploy("demo", "prod", "local-a", canary=True,
-                             config={"RAMEN_VERBOSE": "1", "RAMEN_SECRET_DEMO__TOKEN": "s3cret"})
+    res = await cloud.deploy(
+        "demo", "prod", "local-a", canary=True, config={"RAMEN_VERBOSE": "1", "RAMEN_SECRET_DEMO__TOKEN": "s3cret"}
+    )
     env = (tmp_path / "buckets" / "demo" / ".ramen" / "env").read_text()
     assert env == (tmp_path / "buckets" / "demo" / ".ramen" / "env-local-a").read_text()
     assert "RAMEN_SECRET_DEMO__TOKEN=s3cret" in env
@@ -121,7 +125,17 @@ async def test_misc(cloud, tmp_path):
 
 
 def test_aws_adapter_is_a_full_cloud():  # v0.3.0: the AWS stub is gone (tests/test_aws_*.py cover it)
-    for m in ("sync_repo", "deploy", "rebalance", "workers", "logs", "set_ip_rules", "create_service_account", "refresh", "detach_group"):
+    for m in (
+        "sync_repo",
+        "deploy",
+        "rebalance",
+        "workers",
+        "logs",
+        "set_ip_rules",
+        "create_service_account",
+        "refresh",
+        "detach_group",
+    ):
         assert getattr(AwsCloud, m) is not getattr(Cloud, m, None) and getattr(AwsCloud, m) is not None
 
 

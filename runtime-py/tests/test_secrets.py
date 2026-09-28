@@ -24,5 +24,7 @@ def test_plain_text_untouched():
 
 
 def test_substitute_args_only_strings():
-    out = secrets.substitute_args({"a": "{{$demo.api_key}}", "b": 3, "c": ["{{$demo.api_key}}"], "d": {"x": "{{$demo.api_key}}"}})
+    out = secrets.substitute_args(
+        {"a": "{{$demo.api_key}}", "b": 3, "c": ["{{$demo.api_key}}"], "d": {"x": "{{$demo.api_key}}"}}
+    )
     assert out == {"a": "s3cr3t", "b": 3, "c": ["s3cr3t"], "d": {"x": "s3cr3t"}}

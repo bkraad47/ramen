@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Aggregate per-component coverage into one markdown table with a >=90% verdict (CLAUDE.md gate).
 Reads Cobertura XML (pytest-cov, cargo llvm-cov --cobertura, tarpaulin) or lcov .info (cargo llvm-cov --lcov).
-Usage: coverage_report.py [--root <ramen>] [--artifacts <dir>] [--min 90] [--out report.md] [--allow-missing] [--no-fail]
+Usage: coverage_report.py [--root <ramen>] [--artifacts <dir>] [--min 90] [--out report.md]
+       [--allow-missing] [--no-fail]
 Extra files: --file name=path. Also appends to $GITHUB_STEP_SUMMARY when set."""
+
 import argparse
 import os
 import sys
@@ -12,7 +14,12 @@ from pathlib import Path
 CANDIDATES = {
     "console": ["console/coverage.xml"],
     "runtime-py": ["runtime-py/coverage.xml"],
-    "node-rs": ["node-rs/coverage.xml", "node-rs/cobertura.xml", "node-rs/lcov.info", "node-rs/target/llvm-cov/lcov.info"],
+    "node-rs": [
+        "node-rs/coverage.xml",
+        "node-rs/cobertura.xml",
+        "node-rs/lcov.info",
+        "node-rs/target/llvm-cov/lcov.info",
+    ],
     "tests": ["tests/coverage.xml"],
 }
 
@@ -61,7 +68,9 @@ def main() -> int:
     ap.add_argument("--file", action="append", default=[], help="name=path")
     ap.add_argument("--allow-missing", action="store_true", help="missing report → skip instead of fail")
     ap.add_argument("--no-fail", action="store_true", help="always exit 0")
-    ap.add_argument("--info", action="append", default=["tests"], help="component reported but not gated (harness helper code)")
+    ap.add_argument(
+        "--info", action="append", default=["tests"], help="component reported but not gated (harness helper code)"
+    )
     a = ap.parse_args()
 
     sources = {k: find(k, v, a.root, a.artifacts) for k, v in CANDIDATES.items()}
@@ -81,11 +90,24 @@ def main() -> int:
         verdict = "INFO" if name in a.info else ("PASS" if pct >= a.min else "FAIL")
         if verdict == "FAIL":
             failed.append(name)
-        rows.append((name, str(cov), str(valid), f"{pct:.1f}%", verdict, str(path.relative_to(a.root) if path.is_relative_to(a.root) else path)))
+        rows.append(
+            (
+                name,
+                str(cov),
+                str(valid),
+                f"{pct:.1f}%",
+                verdict,
+                str(path.relative_to(a.root) if path.is_relative_to(a.root) else path),
+            )
+        )
 
     overall = "PASS" if not failed else "FAIL"
-    md = [f"## Coverage report (gate >= {a.min:g}%) — **{overall}**", "",
-          "| Component | Covered | Lines | % | Verdict | Source |", "|---|---:|---:|---:|---|---|"]
+    md = [
+        f"## Coverage report (gate >= {a.min:g}%) — **{overall}**",
+        "",
+        "| Component | Covered | Lines | % | Verdict | Source |",
+        "|---|---:|---:|---:|---|---|",
+    ]
     md += [f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} | `{r[5]}` |" for r in rows]
     if failed:
         md += ["", f"Below gate or missing: {', '.join(failed)}"]

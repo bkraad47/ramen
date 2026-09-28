@@ -30,9 +30,13 @@ async def create_user(request: Request, body: m.UserIn, p: Principal = Depends(a
     doc = await st.accounts.create_user(p, body.email, body.password, body.role, body.groups)
     if st.mailer.enabled:
         from .auth_routes import base_url
+
         _, nonce = await st.accounts.start_token(body.email, "reset")
         base = base_url(request)
-        mail = await st.mailer.send(body.email, *invite_mail(base, body.email, f"{base}/auth/reset/{st.tokens.issue('reset', doc['id'], nonce)}", p.name))
+        mail = await st.mailer.send(
+            body.email,
+            *invite_mail(base, body.email, f"{base}/auth/reset/{st.tokens.issue('reset', doc['id'], nonce)}", p.name),
+        )
         doc["invite"] = {k: v for k, v in mail.items() if k != "path"}
     return respond(request, doc, 201)
 
@@ -85,13 +89,20 @@ async def request_permission(request: Request, body: m.RequestIn, p: Principal =
     """Role request {role, group?} or SA permission request {group, zone, permission} (CONTRACTS §9)."""
     tags = [f"group:{body.group}"] if body.group else []
     if body.permission:
-        note(request, "permission.request", f"{body.group}/{body.zone}:{body.permission}", tags + [f"permission:{body.permission}"])
+        note(
+            request,
+            "permission.request",
+            f"{body.group}/{body.zone}:{body.permission}",
+            tags + [f"permission:{body.permission}"],
+        )
         await svc(request).check_permission_request(p, body.group, body.zone, body.permission)
     elif body.role:
         note(request, "permission.request", f"{body.role}:{body.group}", tags)
     else:
         raise invalid("request needs role or permission")
-    return respond(request, await accounts(request).request_permission(p, body.role, body.group, body.zone, body.permission), 201)
+    return respond(
+        request, await accounts(request).request_permission(p, body.role, body.group, body.zone, body.permission), 201
+    )
 
 
 @r.get("/policy/permissions")
@@ -107,7 +118,9 @@ async def list_requests(request: Request, p: Principal = Depends(super_)):
 @r.post("/requests/{rid}/approve")
 async def approve(request: Request, rid: str, p: Principal = Depends(super_)):
     note(request, "permission.approve", rid)
-    return respond(request, await accounts(request).approve_request(rid, p.name, apply=svc(request).apply_sa_permissions))
+    return respond(
+        request, await accounts(request).approve_request(rid, p.name, apply=svc(request).apply_sa_permissions)
+    )
 
 
 @r.get("/audit")
@@ -143,17 +156,28 @@ async def restore_backup(request: Request, bid: str, p: Principal = Depends(supe
 
 
 def masked_env() -> dict[str, str]:
-    return {k: ("***" if any(w in k for w in MASK) and k not in UNMASKED else v)
-            for k, v in sorted(os.environ.items()) if k.startswith("RAMEN_")}
+    return {
+        k: ("***" if any(w in k for w in MASK) and k not in UNMASKED else v)
+        for k, v in sorted(os.environ.items())
+        if k.startswith("RAMEN_")
+    }
 
 
 @r.get("/config")
 async def config(request: Request, p: Principal = Depends(super_)):
-    return {"env": masked_env(), "config_file": os.environ.get("RAMEN_CONFIG"),
-            "store": os.environ.get("RAMEN_STORE", "memory"), "cloud": os.environ.get("RAMEN_CLOUD", "local"),
-            "secrets_backend": request.app.state.secrets.kind, "mail": request.app.state.mailer.backend,
-            "oauth_providers": request.app.state.oauth.providers(),
-            "gcp": {k: os.environ.get(k) for k in ("RAMEN_GCP_PROJECT", "RAMEN_GCP_REGION", "RAMEN_GROUPS_BUCKET", "RAMEN_IMAGE_WORKER")}}
+    return {
+        "env": masked_env(),
+        "config_file": os.environ.get("RAMEN_CONFIG"),
+        "store": os.environ.get("RAMEN_STORE", "memory"),
+        "cloud": os.environ.get("RAMEN_CLOUD", "local"),
+        "secrets_backend": request.app.state.secrets.kind,
+        "mail": request.app.state.mailer.backend,
+        "oauth_providers": request.app.state.oauth.providers(),
+        "gcp": {
+            k: os.environ.get(k)
+            for k in ("RAMEN_GCP_PROJECT", "RAMEN_GCP_REGION", "RAMEN_GROUPS_BUCKET", "RAMEN_IMAGE_WORKER")
+        },
+    }
 
 
 @r.post("/config/reload")
@@ -168,6 +192,7 @@ async def reload_config(request: Request, p: Principal = Depends(super_)):
 @r.get("/config/auth")
 async def get_auth_config(request: Request, p: Principal = Depends(super_)):
     from .auth_routes import auth_settings
+
     st = request.app.state
     return {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend}
 
@@ -176,14 +201,26 @@ async def get_auth_config(request: Request, p: Principal = Depends(super_)):
 async def set_auth_config(request: Request, body: m.AuthConfig, p: Principal = Depends(super_)):
     """Super-admin toggles (CONTRACTS §9): password_login (break-glass via RAMEN_ADMIN_FORCE_PASSWORD=1), magic_link."""
     from .auth_routes import auth_settings
+
     st = request.app.state
     doc = await st.store.get("config", "auth") or {}
     doc.update({k: v for k, v in body.model_dump().items() if v is not None})
     note(request, "config.auth", "auth", [f"{k}:{v}" for k, v in doc.items()])
-    if doc.get("password_login") is False and not st.oauth.enabled and not (await auth_settings(request)).with_doc(doc).magic_link and not st.auth_env.force_password:
-        raise invalid("refusing to disable password login: no OAuth provider, no magic link and no RAMEN_ADMIN_FORCE_PASSWORD break-glass")
+    if (
+        doc.get("password_login") is False
+        and not st.oauth.enabled
+        and not (await auth_settings(request)).with_doc(doc).magic_link
+        and not st.auth_env.force_password
+    ):
+        raise invalid(
+            "refusing to disable password login: no OAuth provider, no magic link "
+            "and no RAMEN_ADMIN_FORCE_PASSWORD break-glass"
+        )
     await st.store.put("config", "auth", doc)
-    return respond(request, {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend})
+    return respond(
+        request,
+        {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
+    )
 
 
 @r.get("/config/sa-rules")

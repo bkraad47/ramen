@@ -1,4 +1,5 @@
 """Demo resource: returns this group's README as text."""
+
 from pathlib import Path
 
 

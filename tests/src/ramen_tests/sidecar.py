@@ -1,4 +1,5 @@
 """Spawn `python -m ramen_runtime --bucket <dir>` and speak CONTRACTS §2 over stdin/stdout."""
+
 import json
 import os
 import queue
@@ -28,7 +29,7 @@ def runtime_python() -> str:
 def runtime_importable() -> bool:
     try:
         r = subprocess.run([runtime_python(), "-c", "import ramen_runtime"], capture_output=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return False
     return r.returncode == 0
 
@@ -45,8 +46,12 @@ class Sidecar:
     def __enter__(self):
         self.proc = subprocess.Popen(
             [runtime_python(), "-m", "ramen_runtime", "--bucket", self.bucket],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=self.env, bufsize=1,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self.env,
+            bufsize=1,
         )
         threading.Thread(target=self._pump, args=(self.proc.stdout, self._out.put), daemon=True).start()
         threading.Thread(target=self._pump, args=(self.proc.stderr, self._err.append), daemon=True).start()
@@ -75,7 +80,9 @@ class Sidecar:
                 line = self._out.get(timeout=min(left, 1))
             except queue.Empty:
                 if self.proc.poll() is not None:
-                    raise RuntimeError(f"sidecar exited {self.proc.returncode}; stderr: {self.stderr[-2000:]}")
+                    raise RuntimeError(
+                        f"sidecar exited {self.proc.returncode}; stderr: {self.stderr[-2000:]}"
+                    ) from None
                 continue
             if not line.strip():
                 continue

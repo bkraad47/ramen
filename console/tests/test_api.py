@@ -20,9 +20,15 @@ def cloud(tmp_path):
         if req.url.path == "/admin/reload":
             return httpx.Response(200, json={"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []})
         return httpx.Response(404)
-    return LocalCloud(tmp_path / "buckets", tmp_path / "logs",
-                      {"demo/zone-a": ["http://w1:8080"], "demo/zone-b": ["http://hot:8080"]},
-                      "http://default:8080", "adm", httpx.MockTransport(handler))
+
+    return LocalCloud(
+        tmp_path / "buckets",
+        tmp_path / "logs",
+        {"demo/zone-a": ["http://w1:8080"], "demo/zone-b": ["http://hot:8080"]},
+        "http://default:8080",
+        "adm",
+        httpx.MockTransport(handler),
+    )
 
 
 @pytest.fixture
@@ -60,7 +66,9 @@ def demo(root):
     assert root.post("/api/v1/groups", json={"name": "other"}).status_code == 201
     for z in ("zone-a", "zone-b"):
         assert root.post("/api/v1/zones", json={"name": z, "provider": "local", "region": "local"}).status_code == 201
-    r = root.post("/api/v1/groups/demo/environments", json={"name": "prod", "ref": "main", "zones": ["zone-a", "zone-b"]})
+    r = root.post(
+        "/api/v1/groups/demo/environments", json={"name": "prod", "ref": "main", "zones": ["zone-a", "zone-b"]}
+    )
     assert r.status_code == 201, r.text
     return root
 
@@ -87,8 +95,21 @@ def test_login_flow(client):
 
 
 def test_pages_render(demo):
-    for path in ("/", "/groups", "/groups/demo", "/environments", "/zones", "/secrets", "/users", "/api-keys",
-                 "/logs", "/audit", "/backups", "/config", "/login"):
+    for path in (
+        "/",
+        "/groups",
+        "/groups/demo",
+        "/environments",
+        "/zones",
+        "/secrets",
+        "/users",
+        "/api-keys",
+        "/logs",
+        "/audit",
+        "/backups",
+        "/config",
+        "/login",
+    ):
         r = demo.get(path)
         assert r.status_code == 200, path
         assert "F26B3A" in r.text or path == "/login" or "logo.png" in r.text
@@ -101,7 +122,10 @@ def test_pages_render(demo):
 def test_groups_crud_and_rbac(demo):
     assert demo.post("/api/v1/groups", json={"name": "demo"}).status_code == 409
     assert demo.post("/api/v1/groups", json={"name": "bad name!"}).status_code == 422
-    r = demo.put("/api/v1/groups/demo", json={"repo_url": "https://example.com/x.git", "ref": "dev", "mcp_auth": {"mode": "bearer"}})
+    r = demo.put(
+        "/api/v1/groups/demo",
+        json={"repo_url": "https://example.com/x.git", "ref": "dev", "mcp_auth": {"mode": "bearer"}},
+    )
     assert r.status_code == 200 and r.json()["ref"] == "dev"
     assert demo.get("/api/v1/groups/nope").status_code == 404
     groups = demo.get("/api/v1/groups").json()
@@ -138,7 +162,9 @@ def test_environments(demo):
     assert demo.post("/api/v1/groups/demo/environments", json={"name": "x", "zones": ["nozone"]}).status_code == 422
     r = demo.put("/api/v1/groups/demo/environments/prod", json={"verbose": True, "zones": ["zone-a"]})
     assert r.status_code == 200 and r.json()["verbose"] is True and r.json()["zones"] == ["zone-a"]
-    assert demo.post("/api/v1/groups/demo/environments/prod/verbose", json={"verbose": False}).json()["verbose"] is False
+    assert (
+        demo.post("/api/v1/groups/demo/environments/prod/verbose", json={"verbose": False}).json()["verbose"] is False
+    )
     assert demo.put("/api/v1/groups/demo/environments/nope", json={}).status_code == 404
     assert demo.get("/api/v1/environments?format=json").status_code == 200
     assert demo.delete("/api/v1/groups/demo/environments/prod").status_code == 200
@@ -154,7 +180,9 @@ def test_zones_workers(demo):
     assert r.status_code == 200 and r.json()["count"] == 3 and r.json()["size"] == "small"
     assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 0}).status_code == 422
     assert demo.post("/api/v1/groups/demo/zones/zone-a/rebalance").json()["ok"] is True
-    assert demo.put("/api/v1/groups/demo/zones/zone-a/ip-rules", json={"cidrs": ["10.0.0.0/8"]}).json()["cidrs"] == ["10.0.0.0/8"]
+    assert demo.put("/api/v1/groups/demo/zones/zone-a/ip-rules", json={"cidrs": ["10.0.0.0/8"]}).json()["cidrs"] == [
+        "10.0.0.0/8"
+    ]
     assert demo.put("/api/v1/groups/demo/zones/zone-a/ip-rules", json={"cidrs": ["nope"]}).status_code == 422
     assert demo.post("/api/v1/groups/demo/zones/zone-a/service-account").json()["name"].startswith("local-sa")
     assert demo.get("/api/v1/groups/demo/zones/nozone/workers").status_code == 404
@@ -178,16 +206,33 @@ def test_dashboard(demo):
 
 
 def test_secrets_never_leak(demo):
-    r = demo.post("/api/v1/groups/demo/secrets", json={"name": "GITHUB_TOKEN", "value": SECRET_VALUE, "env": "prod", "zone": "zone-a"})
+    r = demo.post(
+        "/api/v1/groups/demo/secrets",
+        json={"name": "GITHUB_TOKEN", "value": SECRET_VALUE, "env": "prod", "zone": "zone-a"},
+    )
     assert r.status_code == 201 and SECRET_VALUE not in r.text and r.json()["name"] == "GITHUB_TOKEN"
     sid = r.json()["id"]
     assert demo.post("/api/v1/groups/demo/secrets", json={"name": "bad-name", "value": "x"}).status_code == 422
-    assert demo.post("/api/v1/groups/demo/secrets", json={"name": "GITHUB_TOKEN", "value": "x", "env": "prod", "zone": "zone-a"}).status_code == 409
+    assert (
+        demo.post(
+            "/api/v1/groups/demo/secrets", json={"name": "GITHUB_TOKEN", "value": "x", "env": "prod", "zone": "zone-a"}
+        ).status_code
+        == 409
+    )
     listing = demo.get("/api/v1/groups/demo/secrets")
     assert listing.status_code == 200 and SECRET_VALUE not in listing.text and "value" not in listing.json()[0]
     assert SECRET_VALUE not in demo.get("/api/v1/groups/demo/secrets?format=csv").text
-    for path in ("/secrets", "/secrets?group=demo", "/groups/demo", "/audit", "/api/v1/audit", "/api/v1/groups/demo",
-                 "/api/v1/backups", "/config", "/api/v1/config"):
+    for path in (
+        "/secrets",
+        "/secrets?group=demo",
+        "/groups/demo",
+        "/audit",
+        "/api/v1/audit",
+        "/api/v1/groups/demo",
+        "/api/v1/backups",
+        "/config",
+        "/api/v1/config",
+    ):
         assert SECRET_VALUE not in demo.get(path).text, path
     assert demo.post("/api/v1/backups", json={"target": "local"}).status_code == 201
     bid = demo.get("/api/v1/backups").json()[0]["id"]
@@ -209,10 +254,13 @@ def test_deploy_job(demo, tmp_path, monkeypatch):
         (tmp_path / "buckets" / group).mkdir(parents=True, exist_ok=True)
         fake_sync.calls.append((repo_url, ref, token))
         return str(tmp_path / "buckets" / group)
+
     fake_sync.calls = []
     monkeypatch.setattr(demo.app.state.cloud, "sync_repo", fake_sync)
     demo.post("/api/v1/groups/demo/secrets", json={"name": "GITHUB_TOKEN", "value": "ghp_tok"})
-    demo.post("/api/v1/groups/demo/secrets", json={"name": "API", "value": SECRET_VALUE, "env": "prod", "zone": "zone-a"})
+    demo.post(
+        "/api/v1/groups/demo/secrets", json={"name": "API", "value": SECRET_VALUE, "env": "prod", "zone": "zone-a"}
+    )
     demo.post("/api/v1/groups/demo/secrets", json={"name": "OTHER", "value": "no", "env": "staging"})
     demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "k1"})
     r = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": True})
@@ -226,14 +274,20 @@ def test_deploy_job(demo, tmp_path, monkeypatch):
     assert fake_sync.calls == [("https://example.com/demo.git", "main", "ghp_tok")]
     env = (tmp_path / "buckets" / "demo" / ".ramen" / "env-zone-a").read_text()
     assert f"RAMEN_SECRET_DEMO__API={SECRET_VALUE}" in env
-    assert SECRET_VALUE not in (tmp_path / "buckets" / "demo" / ".ramen" / "env-zone-b").read_text() and "OTHER" not in env and "RAMEN_MCP_KEYS=rmk_" in env
+    assert (
+        SECRET_VALUE not in (tmp_path / "buckets" / "demo" / ".ramen" / "env-zone-b").read_text()
+        and "OTHER" not in env
+        and "RAMEN_MCP_KEYS=rmk_" in env
+    )
     assert "RAMEN_VERBOSE=0" in env
     assert SECRET_VALUE not in json.dumps(job)
     assert demo.get("/api/v1/environments?group=demo").json()[0]["last_deploy"]["status"] == "ok"
     html = demo.get(f"/ui/jobs/{job['id']}")
     assert html.status_code == 200 and "ok" in html.text
     assert demo.get("/api/v1/jobs/nope").status_code == 404
-    r = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"zone": "zone-a"}, headers={"HX-Request": "true"})
+    r = demo.post(
+        "/api/v1/groups/demo/environments/prod/deploy", json={"zone": "zone-a"}, headers={"HX-Request": "true"}
+    )
     assert r.status_code == 202 and "hx-get" in r.text
     r = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"zone": "nozone"})
     assert r.status_code == 422
@@ -244,6 +298,7 @@ def test_deploy_job(demo, tmp_path, monkeypatch):
 def test_deploy_error_surfaces(demo, monkeypatch):
     async def boom(*a, **k):
         raise RuntimeError("git failed: nope")
+
     monkeypatch.setattr(demo.app.state.cloud, "sync_repo", boom)
     job = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={}).json()
     for _ in range(50):
@@ -275,9 +330,14 @@ def test_sa_rules(demo):
     with TestClient(demo.app) as ga:
         login(ga, "ga@x", "pw")
         assert ga.put("/api/v1/config/sa-rules", json={"rules": []}).status_code == 403
-        ok = ga.put("/api/v1/groups/demo/sa-restrictions", json={"rules": [{"effect": "allow", "permission": "storage.get"}]})
+        ok = ga.put(
+            "/api/v1/groups/demo/sa-restrictions", json={"rules": [{"effect": "allow", "permission": "storage.get"}]}
+        )
         assert ok.status_code == 200
-        clash = ga.put("/api/v1/groups/demo/sa-restrictions", json={"rules": [{"effect": "allow", "permission": "iam.roles.create"}]})
+        clash = ga.put(
+            "/api/v1/groups/demo/sa-restrictions",
+            json={"rules": [{"effect": "allow", "permission": "iam.roles.create"}]},
+        )
         assert clash.status_code == 409 and "denies" in clash.text
     assert demo.get("/api/v1/groups/demo").json()["sa_restrictions"][0]["permission"] == "storage.get"
 
@@ -287,7 +347,12 @@ def test_users(demo):
     assert "password_hash" not in u
     assert demo.post("/api/v1/users", json={"email": "ga@x", "password": "x"}).status_code == 409
     assert demo.post("/api/v1/users", json={"email": "z@x", "password": "x", "role": "king"}).status_code == 422
-    assert demo.post("/api/v1/users", json={"email": "z@x", "password": "x", "role": "viewer", "groups": ["nogroup"]}).status_code == 422
+    assert (
+        demo.post(
+            "/api/v1/users", json={"email": "z@x", "password": "x", "role": "viewer", "groups": ["nogroup"]}
+        ).status_code
+        == 422
+    )
     users = demo.get("/api/v1/users").json()
     assert len(users) == 2 and all("password_hash" not in x for x in users)
     r = demo.put(f"/api/v1/users/{u['id']}", json={"role": "super_admin"})
@@ -299,8 +364,18 @@ def test_users(demo):
         r = ga.post("/api/v1/users", json={"email": "v@x", "password": "pw", "role": "viewer", "groups": ["demo"]})
         assert r.status_code == 201
         vid = r.json()["id"]
-        assert ga.post("/api/v1/users", json={"email": "v2@x", "password": "pw", "role": "group_admin", "groups": ["demo"]}).status_code == 403
-        assert ga.post("/api/v1/users", json={"email": "v3@x", "password": "pw", "role": "viewer", "groups": ["other"]}).status_code == 403
+        assert (
+            ga.post(
+                "/api/v1/users", json={"email": "v2@x", "password": "pw", "role": "group_admin", "groups": ["demo"]}
+            ).status_code
+            == 403
+        )
+        assert (
+            ga.post(
+                "/api/v1/users", json={"email": "v3@x", "password": "pw", "role": "viewer", "groups": ["other"]}
+            ).status_code
+            == 403
+        )
         assert [x["email"] for x in ga.get("/api/v1/users").json()] == ["ga@x", "v@x"]
         assert ga.put(f"/api/v1/users/{vid}", json={"role": "viewer"}).status_code == 403
         assert ga.delete(f"/api/v1/users/{u['id']}").status_code == 403
@@ -368,7 +443,11 @@ def test_logs(demo, tmp_path):
     p.write_text("a\nb\nc\n")
     r = demo.get("/api/v1/logs?group=demo&zone=zone-a&tail=2")
     assert r.status_code == 200 and r.text == "b\nc\n"
-    assert demo.get("/api/v1/logs?group=demo&zone=zone-a&download=1").headers["content-disposition"].startswith("attachment")
+    assert (
+        demo.get("/api/v1/logs?group=demo&zone=zone-a&download=1")
+        .headers["content-disposition"]
+        .startswith("attachment")
+    )
     assert "b" in demo.get("/logs?group=demo&zone=zone-a").text
     assert demo.get("/api/v1/logs?group=nope&zone=zone-a").status_code == 404
 
@@ -378,7 +457,13 @@ def test_audit(demo):
     actions = {a["action"] for a in audit}
     assert {"login", "group.create", "zone.create", "environment.create"} <= actions
     a = next(x for x in audit if x["action"] == "group.create")
-    assert a["ok"] is True and a["target"] == "demo" and a["ip"] and a["user"] == "root@ramen.local" and "group:demo" in a["tags"]
+    assert (
+        a["ok"] is True
+        and a["target"] == "demo"
+        and a["ip"]
+        and a["user"] == "root@ramen.local"
+        and "group:demo" in a["tags"]
+    )
     assert demo.get("/api/v1/audit?format=csv").headers["content-type"].startswith("text/csv")
     make_user(demo, "ga@x", "group_admin", ["demo"])
     make_user(demo, "o@x", "group_admin", ["other"])
@@ -432,9 +517,12 @@ def test_config_and_refresh(demo, tmp_path, monkeypatch):
 def test_cloud_not_implemented_surfaces(demo, monkeypatch):
     from ramen_console.cloud.local import LocalCloud
 
-    class Stub(LocalCloud):  # an adapter method that is not implemented surfaces as 501 (the aws stub did this in 0.1.0)
+    class Stub(
+        LocalCloud
+    ):  # an adapter method that is not implemented surfaces as 501 (the aws stub did this in 0.1.0)
         async def rebalance(self, group, zone):
             raise NotImplementedError("aws rebalance is not available")
+
     demo.app.state.services.cloud = Stub(bucket_root="/nonexistent")
     r = demo.post("/api/v1/groups/demo/zones/zone-a/rebalance")
     assert r.status_code == 501 and "aws" in r.text
@@ -453,11 +541,13 @@ def test_oauth_routes(demo, monkeypatch):
     monkeypatch.setenv("RAMEN_OAUTH_OIDC_CLIENT_SECRET", "sec")
     monkeypatch.setenv("RAMEN_OAUTH_OIDC_METADATA_URL", "https://issuer/.well-known/openid-configuration")
     from ramen_console.auth.oauth import OAuthRegistry
+
     demo.app.state.oauth = OAuthRegistry.from_env()
 
     class FakeClient:
         async def authorize_redirect(self, request, redirect_uri):
             from starlette.responses import RedirectResponse
+
             return RedirectResponse("https://issuer/authorize?redirect_uri=" + redirect_uri)
 
         async def authorize_access_token(self, request):
@@ -484,6 +574,7 @@ def test_probes(client, monkeypatch):
 
     async def broken(*a, **k):
         raise ConnectionError("store down")
+
     monkeypatch.setattr(client.app.state.store, "list", broken)
     assert client.get("/readyz").status_code == 503
 
@@ -502,6 +593,7 @@ def test_deploy_worker_failure_and_no_zones(demo, tmp_path, monkeypatch):
 
     async def bad_deploy(group, env, zone, canary=True, config=None, **kw):
         return {"ok": False, "workers": [{"id": "http://w1:8080", "ok": False, "error": "ConnectError: boom"}]}
+
     monkeypatch.setattr(demo.app.state.cloud, "sync_repo", fake_sync)
     monkeypatch.setattr(demo.app.state.cloud, "deploy", bad_deploy)
     job = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={}).json()

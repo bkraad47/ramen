@@ -15,6 +15,7 @@ def release_version() -> str:
         if p.exists():
             return p.read_text().strip()
     from . import __version__
+
     return __version__
 
 
@@ -43,8 +44,14 @@ class Backups:
         root.mkdir(parents=True, exist_ok=True)
         file = root / f"ramen-backup-{bid}.json"
         file.write_text(json.dumps(data, indent=1))
-        doc = {"created": data["created"], "release_version": data["release_version"], "target": target,
-               "path": str(file), "by": by, "counts": {c: len(data[c]) for c in COLLECTIONS}}
+        doc = {
+            "created": data["created"],
+            "release_version": data["release_version"],
+            "target": target,
+            "path": str(file),
+            "by": by,
+            "counts": {c: len(data[c]) for c in COLLECTIONS},
+        }
         return await self.store.put("backups", bid, doc)
 
     async def list(self) -> list[dict]:

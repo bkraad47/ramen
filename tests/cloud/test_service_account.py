@@ -1,5 +1,6 @@
 """Per group+zone service account (CONTRACTS §7): POST → {name}; on GCP the GSA exists with objectViewer +
 secretAccessor and the Workload Identity binding to KSA ramen-<group>-<zone>/worker. Needs RAMEN_CONSOLE_URL."""
+
 import pytest
 
 from ramen_tests import gcp
@@ -29,14 +30,18 @@ def test_service_account_is_audited(admin, sa):
 
 def test_gsa_exists_with_expected_roles(sa, gcp_project):
     email = sa["name"] if "@" in str(sa.get("name")) else sa.get("email") or gcp.gsa(gcp_project, GROUP, ZONE)
-    desc = poll(lambda: gcp.get("iam", "service-accounts", "describe", email, project=gcp_project),
-                timeout=60, what=f"GSA {email}")
+    desc = poll(
+        lambda: gcp.get("iam", "service-accounts", "describe", email, project=gcp_project),
+        timeout=60,
+        what=f"GSA {email}",
+    )
     assert desc["email"] == email
     policy = gcp.get("projects", "get-iam-policy", gcp_project, project=gcp_project)
     roles = gcp.roles_of(policy, f"serviceAccount:{email}")
     assert EXPECTED_ROLES <= roles, roles
-    assert not roles - EXPECTED_ROLES - {"roles/logging.logWriter", "roles/monitoring.metricWriter"}, \
+    assert not roles - EXPECTED_ROLES - {"roles/logging.logWriter", "roles/monitoring.metricWriter"}, (
         f"unexpected extra roles on worker GSA: {roles}"
+    )
 
 
 def test_workload_identity_binding(gcp_project, sa):

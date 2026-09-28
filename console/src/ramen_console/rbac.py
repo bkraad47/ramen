@@ -43,6 +43,7 @@ def require(role: str, group_param: str | None = None):
         if not can(p, role, group):
             raise HTTPException(403, f"requires {role}" + (f" on group {group}" if group else ""))
         return p
+
     return dep
 
 

@@ -23,11 +23,23 @@ async def test_aws_backend_roundtrip(fk):
     doc = await b.put("demo", "prod", None, "TOKEN", "s3cret")
     assert doc == {"value": None, "ref": "asm://ramen/demo/prod/all/TOKEN"}
     d = sm.describe_secret(SecretId="ramen/demo/prod/all/TOKEN")
-    assert {t["Key"]: t["Value"] for t in d["Tags"]} == {"ramen": "secret", "group": "demo", "env": "prod", "zone": "all"}
+    assert {t["Key"]: t["Value"] for t in d["Tags"]} == {
+        "ramen": "secret",
+        "group": "demo",
+        "env": "prod",
+        "zone": "all",
+    }
     doc2 = await b.put("demo", "prod", None, "TOKEN", "v2")  # exists → new version
     assert doc2 == doc and await b.resolve(doc["ref"]) == "v2"
-    assert await b.resolve("plain") == "plain" and await b.resolve(None) is None and await b.resolve("sm://projects/p/secrets/x") == "sm://projects/p/secrets/x"
-    assert await b.resolve_config({"RAMEN_MCP_KEYS": f"{doc['ref']},{doc['ref']}", "X": "1"}) == {"RAMEN_MCP_KEYS": "v2,v2", "X": "1"}
+    assert (
+        await b.resolve("plain") == "plain"
+        and await b.resolve(None) is None
+        and await b.resolve("sm://projects/p/secrets/x") == "sm://projects/p/secrets/x"
+    )
+    assert await b.resolve_config({"RAMEN_MCP_KEYS": f"{doc['ref']},{doc['ref']}", "X": "1"}) == {
+        "RAMEN_MCP_KEYS": "v2,v2",
+        "X": "1",
+    }
     await b.delete(doc)
     assert not sm.list_secrets()["SecretList"]
     await b.delete(doc)  # gone: ignored
@@ -52,6 +64,7 @@ async def test_aws_backend_errors(fk):
 
         def delete_secret(self, **kw):
             raise ClientError({"Error": {"Code": "InternalServiceError", "Message": "x"}}, "DeleteSecret")
+
     b = AwsSecrets("us-east-1", Boom())
     with pytest.raises(ApiError, match="secrets manager"):
         await b.put("g", None, None, "A", "v")

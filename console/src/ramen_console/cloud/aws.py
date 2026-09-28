@@ -1,17 +1,29 @@
 """AWS cloud adapter (CONTRACTS §8, UNTESTED on a real account): EKS namespaces per zone, S3 group prefix, CloudWatch
 Logs Insights, ALB weighted target groups, WAFv2 allow-lists, IAM roles for service accounts (IRSA).
 The Kubernetes-side flow (canary deploy, workers, abort) is the GCP one, reused verbatim."""
+
 import asyncio
 import functools
 import os
 from typing import Any
 
+from .. import __version__
 from ..errors import ApiError
 from ..policy import permissions as perm
 from ..util import now
 from . import aws_api
 from .aws_api import AwsClients
-from .aws_k8s import ACTION, ROLE_ANNOTATION, AwsKube, helm_available, helm_manifests, manifests, parse_weights, split_weights, weights
+from .aws_k8s import (
+    ACTION,
+    ROLE_ANNOTATION,
+    AwsKube,
+    helm_available,
+    helm_manifests,
+    manifests,
+    parse_weights,
+    split_weights,
+    weights,
+)
 from .gcp import GcpCloud
 from .gcp_k8s import ns_name
 
@@ -24,15 +36,33 @@ def _guard(fn):
         except ApiError:
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
-            raise ApiError(502, f"aws {fn.__name__}: {type(e).__name__}: {str(e)[:300]}")
+            raise ApiError(502, f"aws {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
+
     return wrapper
 
 
 class AwsCloud(GcpCloud):
-    def __init__(self, region="us-east-1", bucket="", image="", admin_key="", cluster="ramen", alb_group="ramen", clients=None,
-                 transport=None, timeout=10.0, wait_secs=300, poll=2.0, pod_proxy=False, chart=None, log_group=None):
+    def __init__(
+        self,
+        region="us-east-1",
+        bucket="",
+        image="",
+        admin_key="",
+        cluster="ramen",
+        alb_group="ramen",
+        clients=None,
+        transport=None,
+        timeout=10.0,
+        wait_secs=300,
+        poll=2.0,
+        pod_proxy=False,
+        chart=None,
+        log_group=None,
+    ):
         clients = clients or AwsClients(region)
-        super().__init__("", region, bucket, image, admin_key, clients, transport, timeout, wait_secs, poll, pod_proxy, chart)
+        super().__init__(
+            "", region, bucket, image, admin_key, clients, transport, timeout, wait_secs, poll, pod_proxy, chart
+        )
         self.kube = AwsKube(clients, poll=poll, wait_secs=wait_secs)
         self.cluster, self.alb_group = cluster, alb_group
         self.log_group = log_group or aws_api.log_group_name(cluster)
@@ -40,11 +70,18 @@ class AwsCloud(GcpCloud):
     @classmethod
     def from_env(cls):
         region = os.environ.get("RAMEN_AWS_REGION") or os.environ.get("AWS_REGION") or "us-east-1"
-        return cls(region, os.environ.get("RAMEN_GROUPS_BUCKET", ""), os.environ.get("RAMEN_IMAGE_WORKER", "ramen-worker:0.3.0"),
-                   os.environ.get("RAMEN_ADMIN_KEY", ""), os.environ.get("RAMEN_EKS_CLUSTER", "ramen"), os.environ.get("RAMEN_ALB_GROUP", "ramen"),
-                   wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
-                   pod_proxy=os.environ.get("RAMEN_AWS_POD_PROXY", "0") == "1", chart=os.environ.get("RAMEN_WORKER_CHART"),
-                   log_group=os.environ.get("RAMEN_LOG_GROUP"))
+        return cls(
+            region,
+            os.environ.get("RAMEN_GROUPS_BUCKET", ""),
+            os.environ.get("RAMEN_IMAGE_WORKER", f"ramen-worker:{__version__}"),
+            os.environ.get("RAMEN_ADMIN_KEY", ""),
+            os.environ.get("RAMEN_EKS_CLUSTER", "ramen"),
+            os.environ.get("RAMEN_ALB_GROUP", "ramen"),
+            wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
+            pod_proxy=os.environ.get("RAMEN_AWS_POD_PROXY", "0") == "1",
+            chart=os.environ.get("RAMEN_WORKER_CHART"),
+            log_group=os.environ.get("RAMEN_LOG_GROUP"),
+        )
 
     # the k8s-side flow is the GCP one; re-guard so errors say "aws"
     workers = _guard(GcpCloud.workers.__wrapped__)
@@ -71,8 +108,22 @@ class AwsCloud(GcpCloud):
         w = parse_weights(self.kube.read("Ingress", ns, "worker"))  # re-applying never resets the traffic split
         stable, canary = w.get("worker", 100), w.get("worker-canary", 0)
         if helm_available(self.chart):
-            return "helm", helm_manifests(self.chart, group, zone, spec, self.image, self.bucket_uri(group), role, self.alb_group, self.region, stable, canary)
-        return "python", manifests(group, zone, spec, self.image, self.bucket_uri(group), role, self.alb_group, stable, canary)
+            return "helm", helm_manifests(
+                self.chart,
+                group,
+                zone,
+                spec,
+                self.image,
+                self.bucket_uri(group),
+                role,
+                self.alb_group,
+                self.region,
+                stable,
+                canary,
+            )
+        return "python", manifests(
+            group, zone, spec, self.image, self.bucket_uri(group), role, self.alb_group, stable, canary
+        )
 
     def _set_weights(self, ns, stable, canary) -> dict:
         if self.kube.read("Ingress", ns, "worker") is None:
@@ -92,7 +143,9 @@ class AwsCloud(GcpCloud):
         try:
             main = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker") or {}
             can = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary") or {}
-            s, c = split_weights(main.get("spec", {}).get("replicas", 0), can.get("spec", {}).get("replicas", 0) if res["ok"] else 0)
+            s, c = split_weights(
+                main.get("spec", {}).get("replicas", 0), can.get("spec", {}).get("replicas", 0) if res["ok"] else 0
+            )
             res["weights"] = await asyncio.to_thread(self._set_weights, ns, s, c)
             line = f"{now()} alb: traffic split stable {s}% / canary {c}%"
         except Exception as e:  # noqa: BLE001 - the rollout itself succeeded; the split is reconciled by the next rebalance
@@ -105,7 +158,9 @@ class AwsCloud(GcpCloud):
     # observe ------------------------------------------------------------
     @_guard
     async def logs(self, group, zone, worker=None, tail=500):
-        return await asyncio.to_thread(aws_api.fetch_logs, self.c.logs, self.log_group, ns_name(group, zone), worker, tail)
+        return await asyncio.to_thread(
+            aws_api.fetch_logs, self.c.logs, self.log_group, ns_name(group, zone), worker, tail
+        )
 
     # traffic ------------------------------------------------------------
     @_guard
@@ -113,14 +168,23 @@ class AwsCloud(GcpCloud):
         ns = ns_name(group, zone)
         ws = await self.workers(group, zone)
         loads = [w["load"] for w in ws]
-        load = "high" if "high" in loads else ("low" if loads and all(l in ("low", "down") for l in loads) else "even")
+        load = "high" if "high" in loads else ("low" if loads and all(x in ("low", "down") for x in loads) else "even")
         canary_ok = [w for w in ws if w["track"] == "canary" and w["load"] not in ("down", "high")]
         stable_n = len([w for w in ws if w["track"] == "stable"])
         s, c = split_weights(stable_n, len(canary_ok))  # a busy or unhealthy canary gets no traffic
-        out = {"ok": True, "load": load, "weights": await asyncio.to_thread(self._set_weights, ns, s, c), "applied": False, "alb": None}
+        out = {
+            "ok": True,
+            "load": load,
+            "weights": await asyncio.to_thread(self._set_weights, ns, s, c),
+            "applied": False,
+            "alb": None,
+        }
         alb = await asyncio.to_thread(aws_api.Alb(self.c.elbv2).find, self.alb_group)
         if alb is None:
-            out["note"] = f"weights written to Ingress {ns}/worker but ALB group {self.alb_group} is not provisioned yet (Load Balancer Controller reconciling?)"
+            out["note"] = (
+                f"weights written to Ingress {ns}/worker but ALB group {self.alb_group} is not provisioned yet "
+                "(Load Balancer Controller reconciling?)"
+            )
         else:
             out.update(applied=True, alb=alb["dns"])
         hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
@@ -143,8 +207,11 @@ class AwsCloud(GcpCloud):
             if v6:
                 arns.append(waf.ensure_ip_set(f"ramen-{group}-v6", v6, "IPV6"))
             return waf.set_group_rule(self.alb_group, group, arns)
+
         acl = await asyncio.to_thread(write_waf)
-        await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"})
+        await asyncio.to_thread(
+            self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
+        )
         # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
         for dep in ("worker", "worker-canary"):
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
@@ -154,7 +221,10 @@ class AwsCloud(GcpCloud):
         out = {"ok": True, "policy": f"ramen-{group}", "cidrs": cidrs, "web_acl": acl, "alb": None, "attached": False}
         alb = await asyncio.to_thread(aws_api.Alb(self.c.elbv2).find, self.alb_group)
         if alb is None:
-            out["note"] = f"rules written to Secret and web ACL but not attached: ALB group {self.alb_group} is not provisioned yet"
+            out["note"] = (
+                f"rules written to Secret and web ACL but not attached: "
+                f"ALB group {self.alb_group} is not provisioned yet"
+            )
             return out
         try:
             await asyncio.to_thread(waf.associate, acl, alb["arn"], 3)  # ~15s; a new ALB is not associable for a while
@@ -162,7 +232,11 @@ class AwsCloud(GcpCloud):
             if aws_api.aws_error_code(e) not in aws_api.RETRYABLE:
                 raise
             self._background(waf.associate, acl, alb["arn"], 60)
-            return {**out, "alb": alb["dns"], "note": "web ACL association pending: ALB not ready, retrying in background"}
+            return {
+                **out,
+                "alb": alb["dns"],
+                "note": "web ACL association pending: ALB not ready, retrying in background",
+            }
         return {**out, "alb": alb["dns"], "attached": True}
 
     @_guard
@@ -191,10 +265,28 @@ class AwsCloud(GcpCloud):
             name = iam.role_name(group, zone)
             arn, created = iam.ensure_role(name, ns, "worker", group, zone)
             policy = iam.put_worker_policy(name, self._bucket(), group)
-            self.kube.apply({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}}})
-            self.kube.apply({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {"name": "worker", "namespace": ns, "annotations": {ROLE_ANNOTATION: arn}}})
-            return {"name": arn, "created": created, "roles": [policy], "ksa": f"{ns}/worker",
-                    "workload_identity": f"system:serviceaccount:{ns}:worker@{iam.issuer()}"}
+            self.kube.apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {"name": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}},
+                }
+            )
+            self.kube.apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ServiceAccount",
+                    "metadata": {"name": "worker", "namespace": ns, "annotations": {ROLE_ANNOTATION: arn}},
+                }
+            )
+            return {
+                "name": arn,
+                "created": created,
+                "roles": [policy],
+                "ksa": f"{ns}/worker",
+                "workload_identity": f"system:serviceaccount:{ns}:worker@{iam.issuer()}",
+            }
+
         return await asyncio.to_thread(run)
 
     @_guard
@@ -203,9 +295,17 @@ class AwsCloud(GcpCloud):
         s3/secretsmanager actions stay scoped to the group's prefix / secrets path, the rest are unconditional."""
         ns, actions = ns_name(group, zone), perm.mapped(permissions, "aws")
         sa = await self.create_service_account(group, zone)
-        applied = await asyncio.to_thread(self._iam().put_sa_permissions, aws_api.Iam.role_name(group, zone), self._bucket(), group, actions)
-        return {"ok": True, "service_account": sa["name"], "applied": applied, "permissions": list(permissions), "ksa": f"{ns}/worker",
-                "policy": aws_api.Iam.SA_POLICY if applied else None}
+        applied = await asyncio.to_thread(
+            self._iam().put_sa_permissions, aws_api.Iam.role_name(group, zone), self._bucket(), group, actions
+        )
+        return {
+            "ok": True,
+            "service_account": sa["name"],
+            "applied": applied,
+            "permissions": list(permissions),
+            "ksa": f"{ns}/worker",
+            "policy": aws_api.Iam.SA_POLICY if applied else None,
+        }
 
     @_guard
     async def refresh(self):
@@ -216,11 +316,24 @@ class AwsCloud(GcpCloud):
                 main = self.kube.read("Deployment", ns, "worker") or {}
                 can = self.kube.read("Deployment", ns, "worker-canary") or {}
                 ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
-                zones.append({"group": labels.get("ramen.io/group"), "zone": labels.get("ramen.io/zone"), "namespace": ns,
-                              "replicas": main.get("spec", {}).get("replicas", 0), "ready": (main.get("status") or {}).get("readyReplicas", 0),
-                              "canary_replicas": can.get("spec", {}).get("replicas", 0), "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
-                              "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(ROLE_ANNOTATION),
-                              "weights": parse_weights(self.kube.read("Ingress", ns, "worker"))})
-            return {"groups": sorted({z["group"] for z in zones if z.get("group")}), "zones": zones,
-                    "service_accounts": [r["Arn"] for r in self._iam().list_roles()], "at": now()}
+                zones.append(
+                    {
+                        "group": labels.get("ramen.io/group"),
+                        "zone": labels.get("ramen.io/zone"),
+                        "namespace": ns,
+                        "replicas": main.get("spec", {}).get("replicas", 0),
+                        "ready": (main.get("status") or {}).get("readyReplicas", 0),
+                        "canary_replicas": can.get("spec", {}).get("replicas", 0),
+                        "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
+                        "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(ROLE_ANNOTATION),
+                        "weights": parse_weights(self.kube.read("Ingress", ns, "worker")),
+                    }
+                )
+            return {
+                "groups": sorted({z["group"] for z in zones if z.get("group")}),
+                "zones": zones,
+                "service_accounts": [r["Arn"] for r in self._iam().list_roles()],
+                "at": now(),
+            }
+
         return await asyncio.to_thread(run)

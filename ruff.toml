@@ -1,0 +1,11 @@
+# Shared lint/format settings; console/, runtime-py/ and tests/ extend this file from their pyproject.toml.
+line-length = 120
+target-version = "py314"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"] # FastAPI Depends()/Form() in parameter defaults
+
+[lint.per-file-ignores]
+"**/tests/**/*.py" = ["F811"]         # pytest fixtures imported from fakes/test modules and taken as parameters
+"console/tests/conftest.py" = ["E402"] # env vars must be set before the app modules import

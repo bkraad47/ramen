@@ -1,11 +1,12 @@
 """Walks <bucket>/mcp/{tools,resources,prompts} and builds a Registry; errors are per package."""
+
 import importlib
 import json
 import sys
 import types
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from .log import log
 from .proto import KINDS, ProtoError, input_schema, validate_proto
@@ -36,13 +37,27 @@ class Registry:
 
     def describe(self) -> dict:
         return {
-            "tools": [{"name": t.name, "description": t.proto.get("description", ""), "inputSchema": t.schema} for t in self.tools],
-            "resources": [{"uri": r.proto["uri"], "name": r.name, "description": r.proto.get("description", ""), "mimeType": r.proto["mime_type"]} for r in self.resources],
+            "tools": [
+                {"name": t.name, "description": t.proto.get("description", ""), "inputSchema": t.schema}
+                for t in self.tools
+            ],
+            "resources": [
+                {
+                    "uri": r.proto["uri"],
+                    "name": r.name,
+                    "description": r.proto.get("description", ""),
+                    "mimeType": r.proto["mime_type"],
+                }
+                for r in self.resources
+            ],
             "prompts": [
                 {
                     "name": p.name,
                     "description": p.proto.get("description", ""),
-                    "arguments": [{"name": a, "description": s.get("description", ""), "required": True} for a, s in p.proto.get("input", {}).items()],
+                    "arguments": [
+                        {"name": a, "description": s.get("description", ""), "required": True}
+                        for a, s in p.proto.get("input", {}).items()
+                    ],
                     "_meta": {"settings": p.settings},
                 }
                 for p in self.prompts
@@ -63,8 +78,21 @@ def load(bucket: Path) -> Registry:
                 pkg = _load_package(folder, d)
                 getattr(reg, folder).append(pkg)
             except Exception as e:  # noqa: BLE001 - every failure is reported, never fatal
-                reg.errors.append({"package": f"{folder}/{d.name}", "reason": f"{type(e).__name__}: {e}" if not isinstance(e, ProtoError) else str(e)})
-    log("info", "loaded", bucket=str(bucket), tools=len(reg.tools), resources=len(reg.resources), prompts=len(reg.prompts), errors=len(reg.errors))
+                reg.errors.append(
+                    {
+                        "package": f"{folder}/{d.name}",
+                        "reason": f"{type(e).__name__}: {e}" if not isinstance(e, ProtoError) else str(e),
+                    }
+                )
+    log(
+        "info",
+        "loaded",
+        bucket=str(bucket),
+        tools=len(reg.tools),
+        resources=len(reg.resources),
+        prompts=len(reg.prompts),
+        errors=len(reg.errors),
+    )
     return reg
 
 

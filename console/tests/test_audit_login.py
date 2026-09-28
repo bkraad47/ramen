@@ -1,5 +1,6 @@
-from ramen_console.app import create_app
 from fastapi.testclient import TestClient
+
+from ramen_console.app import create_app
 
 
 def test_login_audit_records_email(monkeypatch):

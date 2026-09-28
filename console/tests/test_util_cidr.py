@@ -11,6 +11,7 @@ def test_is_cidr_rejects_garbage():
 
 def test_rebalance_unknown_zone_is_404(monkeypatch):
     from fastapi.testclient import TestClient
+
     from ramen_console.app import create_app
 
     monkeypatch.setenv("RAMEN_STORE", "memory")

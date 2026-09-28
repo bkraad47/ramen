@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CONTRACTS §6: VERSION is the single source; Cargo.toml and every pyproject must equal it.
 Usage: check_versions.py [--root <ramen>] [--tag vX.Y.Z]   exit 1 on any mismatch."""
+
 import argparse
 import re
 import sys

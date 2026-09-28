@@ -1,4 +1,5 @@
 """Newline-delimited JSON-RPC 2.0 server over stdin/stdout (CONTRACTS §2)."""
+
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,15 @@ from .executor import Executor
 from .loader import load
 from .log import log
 
-PARSE, INVALID_REQ, NOT_FOUND, INVALID_PARAMS, INTERNAL, NOT_LOADED, PKG_NOT_FOUND = -32700, -32600, -32601, -32602, -32603, -32002, -32004
+PARSE, INVALID_REQ, NOT_FOUND, INVALID_PARAMS, INTERNAL, NOT_LOADED, PKG_NOT_FOUND = (
+    -32700,
+    -32600,
+    -32601,
+    -32602,
+    -32603,
+    -32002,
+    -32004,
+)
 
 
 class RpcError(Exception):
@@ -52,7 +61,14 @@ class Server:
         return None if rid is None else {"jsonrpc": "2.0", "id": rid, "result": result}
 
     def dispatch(self, method: str, params: dict) -> dict:
-        handler = {"runtime.load": self.load, "runtime.call_tool": self.call_tool, "runtime.read_resource": self.read_resource, "runtime.get_prompt": self.get_prompt, "runtime.ping": lambda p: {"ok": True}, "runtime.shutdown": self.shutdown}.get(method)
+        handler = {
+            "runtime.load": self.load,
+            "runtime.call_tool": self.call_tool,
+            "runtime.read_resource": self.read_resource,
+            "runtime.get_prompt": self.get_prompt,
+            "runtime.ping": lambda p: {"ok": True},
+            "runtime.shutdown": self.shutdown,
+        }.get(method)
         if handler is None:
             raise RpcError(NOT_FOUND, f"method not found: {method}")
         if not isinstance(params, dict):

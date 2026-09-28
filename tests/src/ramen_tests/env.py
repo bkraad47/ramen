@@ -1,4 +1,5 @@
 """Environment lookup. Missing env → pytest.skip, never a failure."""
+
 import os
 from pathlib import Path
 from urllib.parse import urlsplit

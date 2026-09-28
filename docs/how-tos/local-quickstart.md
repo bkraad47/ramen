@@ -34,8 +34,9 @@ login: 303
 ready: http://localhost:8080/readyz
 tools: ['demo_calculator_tool']
 demo_calculator_tool({"var1": 2, "var2": 3, "func": "add"}) -> 5
+PASS: demo_calculator_tool(2,3,add) -> 5
 ```
-The last line is the success marker. `make demo` is safe to re-run: existing zone/group/environment answer
+The `PASS:` line is the success marker. `make demo` is safe to re-run: existing zone/group/environment answer
 `... exists` and a fresh MCP key is minted each time.
 
 What it did, through the console API: `POST /api/v1/zones {local}` → `POST /api/v1/groups {demo, repo_url}`
@@ -93,7 +94,22 @@ The *API Keys* page is **not** where worker keys come from. See [DevOps with the
 - **Secrets** — add `{"name","value","env?","zone?"}`; values are never shown again. Reference as `{{$demo.NAME}}`.
 - **Logs** — one JSON line per MCP call (`ts, ip, group, method, name, status, ms, key_id`); *download* gets the file.
 - **Audit** — every mutation with user, IP, action, target, ok.
+- **Config** `/config` — auth toggles (password login, magic link), OAuth providers, SMTP, SA rules, permission catalogue.
 - **API docs** — `https://localhost:8443/api/docs` (OpenAPI).
+
+## 5. Try the v0.3.0 controls (API, cookie session + CSRF header from §3)
+```sh
+# block a tool for the environment, redeploy, and watch tools/list hide it (calls answer -32601); unblock the same way
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/groups/demo/environments/dev/blocked -d '{"blocked":["demo_calculator_tool"]}'
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://localhost:8443/api/v1/groups/demo/environments/dev/deploy -d '{"canary":true}'
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/groups/demo/environments/dev/blocked -d '{"blocked":[]}'
+# auth settings (super admin). Disabling password login needs another way in first (magic link, OAuth, or RAMEN_ADMIN_FORCE_PASSWORD=1) or you get 422.
+curl -sk -b c.txt https://localhost:8443/api/v1/config/auth
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/config/auth -d '{"magic_link":true}'
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/config/auth -d '{"password_login":false}'
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/config/auth -d '{"password_login":true,"magic_link":false}'
+```
+MCP keys live in the store, so `make down` (which discards the Firestore emulator) invalidates every key; mint again after a fresh `make up`.
 
 <figure markdown>
 ![Group page](../img/group.png){ .ramen-shot }

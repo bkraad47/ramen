@@ -43,8 +43,15 @@ class Services:
             raise invalid("group name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("groups", name):
             raise conflict(f"group {name} exists")
-        doc = {"name": name, "repo_url": repo_url, "ref": ref, "created": now(), "created_by": by,
-               "mcp_auth": {"mode": "bearer"}, "sa_restrictions": []}
+        doc = {
+            "name": name,
+            "repo_url": repo_url,
+            "ref": ref,
+            "created": now(),
+            "created_by": by,
+            "mcp_auth": {"mode": "bearer"},
+            "sa_restrictions": [],
+        }
         return public(await self.store.put("groups", name, doc))
 
     async def update_group(self, name, **fields) -> dict:
@@ -67,14 +74,14 @@ class Services:
         try:
             check_clash(cfg["rules"], rules)
         except RuleClash as e:
-            raise conflict(str(e))
+            raise conflict(str(e)) from e
         return await self.update_group(name, sa_restrictions=rules)
 
     async def set_sa_rules(self, rules: list[dict]) -> dict:
         try:
             check_clash(rules, [])
         except RuleClash as e:
-            raise invalid(str(e))
+            raise invalid(str(e)) from e
         return await self.store.put("config", "sa_rules", {"rules": rules})
 
     async def check_permission_request(self, p: Principal, group, zone, permission) -> None:
@@ -114,7 +121,9 @@ class Services:
             raise invalid("zone name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("zones", name):
             raise conflict(f"zone {name} exists")
-        return await self.store.put("zones", name, {"name": name, "provider": provider, "region": region, "created": now()})
+        return await self.store.put(
+            "zones", name, {"name": name, "provider": provider, "region": region, "created": now()}
+        )
 
     async def delete_zone(self, name) -> None:
         if not await self.store.get("zones", name):
@@ -148,8 +157,16 @@ class Services:
         if await self.store.get("environments", f"{group}:{name}"):
             raise conflict(f"environment {name} exists in {group}")
         await self._check_zones(zones)
-        doc = {"group": group, "name": name, "ref": ref or g.get("ref", "main"), "zones": list(zones),
-               "verbose": False, "blocked": [], "created": now(), "last_deploy": None}
+        doc = {
+            "group": group,
+            "name": name,
+            "ref": ref or g.get("ref", "main"),
+            "zones": list(zones),
+            "verbose": False,
+            "blocked": [],
+            "created": now(),
+            "last_deploy": None,
+        }
         await self._attach_zones(group, zones)
         return await self.store.put("environments", f"{group}:{name}", doc)
 
@@ -161,8 +178,13 @@ class Services:
     async def zone_spec(self, group, zone) -> dict:
         z = await self.store.get("zones", zone) or {}
         w = await self.worker_config(group, zone)
-        return {"region": z.get("region", ""), "size": normalize_size(w.get("size")) or "s", "count": w.get("count", 1),
-                "allowed_sizes": w.get("allowed_sizes", []), "service_account": w.get("service_account")}
+        return {
+            "region": z.get("region", ""),
+            "size": normalize_size(w.get("size")) or "s",
+            "count": w.get("count", 1),
+            "allowed_sizes": w.get("allowed_sizes", []),
+            "service_account": w.get("service_account"),
+        }
 
     async def update_env(self, group, name, **fields) -> dict:
         e = await self.get_env(group, name)
@@ -189,7 +211,13 @@ class Services:
         if not await self.store.get("zones", zone):
             raise not_found("zone")
         return await self.store.get("workers", f"{group}:{zone}") or {
-            "id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "size": "s", "allowed_sizes": []}
+            "id": f"{group}:{zone}",
+            "group": group,
+            "zone": zone,
+            "count": 1,
+            "size": "s",
+            "allowed_sizes": [],
+        }
 
     async def set_workers(self, group, zone, p: Principal, count=None, size=None, allowed_sizes=None) -> dict:
         w = await self.worker_config(group, zone)
@@ -220,8 +248,16 @@ class Services:
             if not (z.get("group") and z.get("zone")):
                 continue
             w = await self.store.get("workers", f"{z['group']}:{z['zone']}") or {
-                "id": f"{z['group']}:{z['zone']}", "group": z["group"], "zone": z["zone"], "count": 1, "size": "s", "allowed_sizes": []}
-            w["live_state"] = {k: z.get(k) for k in ("namespace", "replicas", "ready", "canary_replicas", "canary_ready")}
+                "id": f"{z['group']}:{z['zone']}",
+                "group": z["group"],
+                "zone": z["zone"],
+                "count": 1,
+                "size": "s",
+                "allowed_sizes": [],
+            }
+            w["live_state"] = {
+                k: z.get(k) for k in ("namespace", "replicas", "ready", "canary_replicas", "canary_ready")
+            }
             if z.get("service_account"):
                 w["service_account"] = z["service_account"]
             await self.store.put("workers", w["id"], w)
@@ -255,8 +291,17 @@ class Services:
             if s.get("env") == env and s.get("zone") == zone:
                 raise conflict(f"secret {name} exists for that scope")
         stored = await self.secrets_backend.put(group, env, zone, name, value, kind)
-        doc = {"group": group, "name": name, "env": env, "zone": zone, "kind": kind, "created": now(), "created_by": by,
-               "backend": self.secrets_backend.kind, **stored}
+        doc = {
+            "group": group,
+            "name": name,
+            "env": env,
+            "zone": zone,
+            "kind": kind,
+            "created": now(),
+            "created_by": by,
+            "backend": self.secrets_backend.kind,
+            **stored,
+        }
         return public(await self.store.put("secrets", uid(), doc))
 
     async def delete_secret(self, group, sid, kind="secret") -> None:

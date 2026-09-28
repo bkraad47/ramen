@@ -1,5 +1,6 @@
 """Cloud suite fixtures. Needs RAMEN_CONSOLE_URL (else everything skips); RAMEN_NODE_URL enables worker-side
 checks; RAMEN_GCP_PROJECT (+ gcloud on PATH) enables the GCP resource assertions."""
+
 import time
 
 import httpx
@@ -15,7 +16,9 @@ ZONE = E.env("RAMEN_E2E_ZONE", "local")
 
 
 def ok(r, *codes):
-    assert r.status_code in (codes or (200, 201)), f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    assert r.status_code in (codes or (200, 201)), (
+        f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    )
     return r
 
 
@@ -79,12 +82,25 @@ def world(admin, demo_repo, node_opt):
         job = admin.wait_job(ok(admin.deploy(GROUP, ENV, canary=True), 202).json()["id"])
         assert job["status"] == "ok", job
     if node_opt and E.node_admin(node_opt):
-        poll(lambda: httpx.get(f"{node_opt}/readyz", verify=E.tls_verify(), timeout=5).status_code == 200,
-             timeout=180, what=f"{node_opt}/readyz")
+        poll(
+            lambda: httpx.get(f"{node_opt}/readyz", verify=E.tls_verify(), timeout=5).status_code == 200,
+            timeout=180,
+            what=f"{node_opt}/readyz",
+        )
     elif node_opt:
-        poll(lambda: httpx.post(E.mcp_url(node_opt), json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
-                                verify=E.tls_verify(), timeout=15).status_code in (200, 401),
-             timeout=180, what=f"{E.mcp_url(node_opt)} answering")
+        poll(
+            lambda: (
+                httpx.post(
+                    E.mcp_url(node_opt),
+                    json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    verify=E.tls_verify(),
+                    timeout=15,
+                ).status_code
+                in (200, 401)
+            ),
+            timeout=180,
+            what=f"{E.mcp_url(node_opt)} answering",
+        )
     return {"group": GROUP, "env": ENV, "zone": ZONE}
 
 

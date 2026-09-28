@@ -21,6 +21,7 @@ console:
   replicas: 1
   port: 8000
   resources: { requests: { cpu: 250m, memory: 512Mi } }   # Autopilot sets limits = requests
+  backendTimeoutSec: 300     # GCPBackendPolicy timeout (gcp only): IAM/compute calls exceed the LB's 30s default
   env:                       # CONTRACTS §7 console runtime env; RAMEN_GCP_PROJECT/REGION/GROUPS_BUCKET/IMAGE_WORKER default from project/region
     RAMEN_STORE: firestore
     RAMEN_CLOUD: gcp

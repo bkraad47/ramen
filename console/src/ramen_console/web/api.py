@@ -6,7 +6,7 @@ from ..audit import note, write_audit
 from ..errors import invalid, not_found
 from ..rbac import Principal, can, require
 from . import models as m
-from .helpers import is_hx, respond, svc, tabular
+from .helpers import respond, svc, tabular
 
 r = APIRouter(prefix="/api/v1")
 viewer, viewer_g = require("viewer"), require("viewer", "group")
@@ -32,6 +32,7 @@ async def create_group(request: Request, body: m.GroupIn, p: Principal = Depends
 @r.get("/groups/{group}")
 async def get_group(request: Request, group: str, p: Principal = Depends(viewer_g)):
     from ..util import public
+
     return public(await svc(request).get_group(group))
 
 
@@ -92,8 +93,9 @@ async def delete_zone(request: Request, zone: str, p: Principal = Depends(super_
 
 
 @r.get("/environments")
-async def environments(request: Request, group: str | None = None, format: str | None = None,
-                       p: Principal = Depends(viewer)):
+async def environments(
+    request: Request, group: str | None = None, format: str | None = None, p: Principal = Depends(viewer)
+):
     envs = [e for e in await svc(request).environments(group) if can(p, "viewer", e["group"])]
     return tabular(envs, format, "environments")
 
@@ -131,8 +133,9 @@ async def delete_env(request: Request, group: str, env: str, p: Principal = Depe
 
 
 @r.post("/groups/{group}/environments/{env}/deploy", status_code=202)
-async def deploy(request: Request, group: str, env: str, body: m.DeployIn, bg: BackgroundTasks,
-                 p: Principal = Depends(admin_g)):
+async def deploy(
+    request: Request, group: str, env: str, body: m.DeployIn, bg: BackgroundTasks, p: Principal = Depends(admin_g)
+):
     s = svc(request)
     e = await s.get_env(group, env)
     if body.zone and body.zone not in e.get("zones", []):
@@ -140,10 +143,12 @@ async def deploy(request: Request, group: str, env: str, body: m.DeployIn, bg: B
     note(request, "deploy.start", f"{group}/{env}", [f"group:{group}", f"canary:{body.canary}"])
     job = request.app.state.jobs.create("deploy", f"{group}/{env}")
     from ..audit import client_ip
+
     ip = client_ip(request)
 
     async def audit(action, target, ok, tags):
         await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)
+
     bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit)
     html = request.app.state.templates.get_template("partials/job.html").render(job=job)
     return respond(request, job, 202, hx_html=html)
@@ -194,15 +199,23 @@ async def service_account(request: Request, group: str, zone: str, p: Principal 
 
 
 @r.get("/groups/{group}/secrets")
-async def secrets(request: Request, group: str, env: str | None = None, zone: str | None = None,
-                  format: str | None = None, p: Principal = Depends(viewer_g)):
+async def secrets(
+    request: Request,
+    group: str,
+    env: str | None = None,
+    zone: str | None = None,
+    format: str | None = None,
+    p: Principal = Depends(viewer_g),
+):
     return tabular(await svc(request).secrets(group, env, zone), format, "secrets")
 
 
 @r.post("/groups/{group}/secrets", status_code=201)
 async def add_secret(request: Request, group: str, body: m.SecretIn, p: Principal = Depends(admin_g)):
     note(request, "secret.create", f"{group}/{body.name}", [f"group:{group}"])
-    return respond(request, await svc(request).add_secret(group, body.name, body.value, body.env, body.zone, p.name), 201)
+    return respond(
+        request, await svc(request).add_secret(group, body.name, body.value, body.env, body.zone, p.name), 201
+    )
 
 
 @r.delete("/groups/{group}/secrets/{sid}")
@@ -219,10 +232,18 @@ async def dashboard(request: Request, p: Principal = Depends(viewer)):
 
 
 @r.get("/logs")
-async def logs(request: Request, group: str, zone: str, worker: str | None = None, tail: int = 500,
-               download: int = 0, p: Principal = Depends(viewer)):
+async def logs(
+    request: Request,
+    group: str,
+    zone: str,
+    worker: str | None = None,
+    tail: int = 500,
+    download: int = 0,
+    p: Principal = Depends(viewer),
+):
     if not can(p, "viewer", group):
         from ..errors import forbidden
+
         raise forbidden(f"no access to group {group}")
     s = svc(request)
     await s.get_group(group)
@@ -233,4 +254,5 @@ async def logs(request: Request, group: str, zone: str, worker: str | None = Non
 
 def _once(label: str, value: str) -> str:
     from markupsafe import escape
+
     return f'<div class="once"><strong>{label} (shown once):</strong> <code>{escape(value)}</code></div>'

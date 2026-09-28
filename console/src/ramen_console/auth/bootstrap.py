@@ -2,12 +2,8 @@ import os
 import uuid
 
 from ..storage.base import Store
+from ..util import now
 from .passwords import hash_password
-
-
-def now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 async def ensure_super_admin(store: Store) -> dict | None:

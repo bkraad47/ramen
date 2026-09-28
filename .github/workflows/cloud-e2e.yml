@@ -12,6 +12,8 @@ on:
       zone_region: { description: "Cloud zone for the zone record", required: false, type: string, default: "us-central1-a" }
       tls_insecure: { description: "Accept self-signed certs", required: false, type: boolean, default: true }
       trusted_cidrs: { description: "CIDRs that must stay allowed during the IP-rules lock test (console → worker path)", required: false, type: string, default: "" }
+permissions:
+  contents: read
 env:
   UV_PYTHON: "3.14"
 jobs:

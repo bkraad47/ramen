@@ -1,5 +1,6 @@
 """CONTRACTS §4: console API — bootstrap login, RBAC matrix, secret values never leak, API keys, audit, backup.
 Needs RAMEN_CONSOLE_URL (+ RAMEN_ADMIN_EMAIL/RAMEN_ADMIN_PASSWORD, default admin@ramen.local / ramen-admin)."""
+
 import json
 
 import pytest
@@ -13,7 +14,9 @@ SECRET_VALUE = "s3cr3t-value-must-never-appear-9b1d"
 
 
 def ok(r, *codes):
-    assert r.status_code in (codes or (200, 201)), f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    assert r.status_code in (codes or (200, 201)), (
+        f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    )
     return r
 
 
@@ -31,8 +34,10 @@ def world(admin: Console, console_url, suffix):
         ok(admin.create_group(g, DEMO_REPO), 201)
         ok(admin.create_environment(g, "dev", [zone]), 201)
     viewer, gadmin = f"viewer-{suffix}@ramen.test", f"gadmin-{suffix}@ramen.test"
-    uids = [ok(admin.create_user(viewer, PW, "viewer", [ga]), 201).json()["id"],
-            ok(admin.create_user(gadmin, PW, "group_admin", [ga]), 201).json()["id"]]
+    uids = [
+        ok(admin.create_user(viewer, PW, "viewer", [ga]), 201).json()["id"],
+        ok(admin.create_user(gadmin, PW, "group_admin", [ga]), 201).json()["id"],
+    ]
     w = {"zone": zone, "ga": ga, "gb": gb, "viewer": viewer, "gadmin": gadmin, "uids": uids}
     w["viewer_c"] = Console(console_url)
     ok(w["viewer_c"].login(viewer, PW), 303, 200)
@@ -138,7 +143,10 @@ def test_secret_values_never_in_any_response(admin, world):
         admin.get("dashboard"),
         admin.get("backups"),
         admin.get("backup_download", id=b["id"]),
-        admin.page("/secrets"), admin.page(f"/secrets?group={ga}"), admin.page(f"/groups/{ga}"), admin.page("/audit"),
+        admin.page("/secrets"),
+        admin.page(f"/secrets?group={ga}"),
+        admin.page(f"/groups/{ga}"),
+        admin.page("/audit"),
     ]
     for r in responses:
         assert SECRET_VALUE not in r.text, f"secret leaked by {r.request.method} {r.request.url}"

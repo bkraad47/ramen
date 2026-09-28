@@ -1,6 +1,8 @@
 [project]
 name = "ramen-console"
 version = "0.3.0"
+description = "Ramen console: FastAPI + Jinja2 + HTMX manager UI and /api/v1 for groups, environments, zones, secrets and deploys"
+license = "BSD-3-Clause"
 requires-python = ">=3.14"
 dependencies = [
   "fastapi>=0.115",
@@ -18,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "pytest-asyncio>=0.24", "moto[dynamodb]>=5"]
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-asyncio>=0.24", "moto[dynamodb]>=5", "ruff>=0.16"]
 gcp = ["google-cloud-storage>=2.18", "google-cloud-secret-manager>=2.20", "google-cloud-logging>=3.11",
        "google-api-python-client>=2.140", "google-auth-httplib2>=0.2", "kubernetes>=30"]
 aws = ["kubernetes>=30"]
@@ -39,3 +41,6 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["src"]
+
+[tool.ruff]
+extend = "../ruff.toml"

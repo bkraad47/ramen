@@ -11,8 +11,16 @@ from .base import Cloud
 
 
 class LocalCloud(Cloud):
-    def __init__(self, bucket_root, log_root=None, workers=None, default_worker="http://worker:8080",
-                 admin_key="", transport=None, timeout=10.0):
+    def __init__(
+        self,
+        bucket_root,
+        log_root=None,
+        workers=None,
+        default_worker="http://worker:8080",
+        admin_key="",
+        transport=None,
+        timeout=10.0,
+    ):
         self.root = Path(bucket_root)
         self.log_root = Path(log_root) if log_root else self.root / "_logs"
         self.workers_map = workers or {}
@@ -25,8 +33,13 @@ class LocalCloud(Cloud):
         for item in filter(None, os.environ.get("RAMEN_LOCAL_WORKERS", "").split(",")):
             k, _, v = item.partition("=")
             workers[k.strip()] = [u.strip() for u in v.split("|") if u.strip()]
-        return cls(os.environ.get("RAMEN_BUCKET_ROOT", "./buckets"), os.environ.get("RAMEN_LOG_ROOT"), workers,
-                   os.environ.get("RAMEN_WORKER_URL", "http://worker:8080"), os.environ.get("RAMEN_ADMIN_KEY", ""))
+        return cls(
+            os.environ.get("RAMEN_BUCKET_ROOT", "./buckets"),
+            os.environ.get("RAMEN_LOG_ROOT"),
+            workers,
+            os.environ.get("RAMEN_WORKER_URL", "http://worker:8080"),
+            os.environ.get("RAMEN_ADMIN_KEY", ""),
+        )
 
     @staticmethod
     def auth_url(url: str, token: str | None) -> str:
@@ -45,9 +58,11 @@ class LocalCloud(Cloud):
         dest = self._bucket(group)
         url = self.auth_url(repo_url, token)
         if (dest / ".git").exists():
-            cmds = [["git", "-C", str(dest), "remote", "set-url", "origin", url],
-                    ["git", "-C", str(dest), "fetch", "-q", "origin", ref],
-                    ["git", "-C", str(dest), "checkout", "-q", "-f", "FETCH_HEAD"]]
+            cmds = [
+                ["git", "-C", str(dest), "remote", "set-url", "origin", url],
+                ["git", "-C", str(dest), "fetch", "-q", "origin", ref],
+                ["git", "-C", str(dest), "checkout", "-q", "-f", "FETCH_HEAD"],
+            ]
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             cmds = [["git", "clone", "-q", "--depth", "1", "--branch", ref, url, str(dest)]]
@@ -67,8 +82,14 @@ class LocalCloud(Cloud):
         return {"ok": True, "cidrs": cidrs}
 
     async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None):
-        vars_ = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone, "RAMEN_CANARY": "1" if canary else "0",
-                 "RAMEN_BUCKET": str(self._bucket(group)), **(config or {})}
+        vars_ = {
+            "RAMEN_GROUP": group,
+            "RAMEN_ENV": env,
+            "RAMEN_ZONE": zone,
+            "RAMEN_CANARY": "1" if canary else "0",
+            "RAMEN_BUCKET": str(self._bucket(group)),
+            **(config or {}),
+        }
         rp = self._rules_path(group, zone)
         if rp.exists():
             vars_["RAMEN_ALLOWED_CIDRS"] = ",".join(json.loads(rp.read_text()))
@@ -114,12 +135,21 @@ class LocalCloud(Cloud):
         p = self._bucket(group) / ".ramen" / f"sa_permissions_{zone}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(permissions))
-        return {"ok": True, "applied": [], "permissions": list(permissions), "recorded": str(p),
-                "note": "local adapter: recorded only, no cloud IAM"}
+        return {
+            "ok": True,
+            "applied": [],
+            "permissions": list(permissions),
+            "recorded": str(p),
+            "note": "local adapter: recorded only, no cloud IAM",
+        }
 
     async def create_service_account(self, group, zone):
         return {"name": f"local-sa-{group}-{zone}", "note": "local adapter: no cloud IAM"}
 
     async def refresh(self):
-        groups = sorted(p.name for p in self.root.iterdir() if p.is_dir() and not p.name.startswith("_")) if self.root.exists() else []
+        groups = (
+            sorted(p.name for p in self.root.iterdir() if p.is_dir() and not p.name.startswith("_"))
+            if self.root.exists()
+            else []
+        )
         return {"groups": groups, "workers": {k: v for k, v in self.workers_map.items()}}

@@ -26,7 +26,7 @@ from . import env as E
 PROTOCOL = "2025-06-18"
 UNSET = object()
 MAX_MESSAGE = 4 * 1024 * 1024
-CLIENT_INFO = {"name": "ramen-tests", "version": "0.3.2"}
+CLIENT_INFO = {"name": "ramen-tests", "version": "0.4.0"}
 _ids = itertools.count(1)
 
 

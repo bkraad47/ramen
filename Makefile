@@ -1,4 +1,4 @@
-# Ramen v0.3.1 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
+# Ramen v0.3.2 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
 export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
 VERSION := $(shell cat VERSION)
 COMPOSE := docker compose -f deploy/local/docker-compose.yml
@@ -56,6 +56,7 @@ push-console:
 
 env:
 	@[ -f deploy/local/.env ] || cp deploy/local/.env.example deploy/local/.env
+	@[ deploy/local/.env -nt deploy/local/.env.example ] || echo "note: deploy/local/.env is older than .env.example — new keys may be missing (diff them or delete .env to regenerate)"
 
 up: env
 	$(COMPOSE) up -d --build

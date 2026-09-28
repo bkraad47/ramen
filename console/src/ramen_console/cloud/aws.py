@@ -256,29 +256,40 @@ class AwsCloud(GcpCloud):
         return removed
 
     # identity -----------------------------------------------------------
+    def _ksa_gsa(self, group, zone) -> str | None:
+        ksa = self.kube.read("ServiceAccount", ns_name(group, zone), "worker") or {}
+        return (ksa.get("metadata", {}).get("annotations") or {}).get(ROLE_ANNOTATION)
+
+    def _identity(self, group, zone) -> dict:
+        """IAM role ramen-<group>-<zone> (path /ramen/, IRSA trust for KSA <ns>/worker) with the baseline worker policy
+        (group prefix in the bucket, group secrets). Idempotent. Created on attach when the KSA has no role."""
+        ns, iam = ns_name(group, zone), self._iam()
+        name = iam.role_name(group, zone)
+        arn, created = iam.ensure_role(name, ns, "worker", group, zone)
+        policy = iam.put_worker_policy(name, self._bucket(), group)
+        return {
+            "name": arn,
+            "created": created,
+            "roles": [policy],
+            "ksa": f"{ns}/worker",
+            "workload_identity": f"system:serviceaccount:{ns}:worker@{iam.issuer()}",
+        }
+
     @_guard
     async def create_service_account(self, group, zone):
-        ns, iam = ns_name(group, zone), self._iam()
+        ns = ns_name(group, zone)
 
         def run():
-            name = iam.role_name(group, zone)
-            arn, created = iam.ensure_role(name, ns, "worker", group, zone)
-            policy = iam.put_worker_policy(name, self._bucket(), group)
+            out = self._identity(group, zone)
             self._ensure_namespace(group, zone)
             self.kube.apply(
                 {
                     "apiVersion": "v1",
                     "kind": "ServiceAccount",
-                    "metadata": {"name": "worker", "namespace": ns, "annotations": {ROLE_ANNOTATION: arn}},
+                    "metadata": {"name": "worker", "namespace": ns, "annotations": {ROLE_ANNOTATION: out["name"]}},
                 }
             )
-            return {
-                "name": arn,
-                "created": created,
-                "roles": [policy],
-                "ksa": f"{ns}/worker",
-                "workload_identity": f"system:serviceaccount:{ns}:worker@{iam.issuer()}",
-            }
+            return out
 
         return await asyncio.to_thread(run)
 

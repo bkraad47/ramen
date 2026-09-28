@@ -285,7 +285,15 @@ class Iam:
         if [role for role, cond in bindings if self._add(doc, role, f"serviceAccount:{email}", cond)]:
             pol.version = 3
             pol.bindings = doc["bindings"]
-            bucket.set_iam_policy(pol)
+            # a freshly created GSA takes a few seconds to become visible to GCS IAM: 400 "… does not exist" until then
+            for attempt in range(12):
+                try:
+                    bucket.set_iam_policy(pol)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    if http_status(e) != 400 or "does not exist" not in str(e) or attempt == 11:
+                        raise
+                    time.sleep(min(2**attempt, 10))
         return [r for r, _ in bindings]
 
     def group_secrets(self, sm, group) -> list[str]:
@@ -316,8 +324,10 @@ class Iam:
                     b["members"].append(m)
                     changed = True
         if changed:
+            from google.iam.v1 import policy_pb2  # the policy is a proto message: bindings must be Binding messages
+
             del pol.bindings[:]
-            pol.bindings.extend(doc)
+            pol.bindings.extend(policy_pb2.Binding(role=b["role"], members=b["members"]) for b in doc)
             sm.set_iam_policy(request={"resource": name, "policy": pol})
         return changed
 

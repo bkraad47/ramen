@@ -5,7 +5,7 @@
 | `local/` | docker compose stack (Firestore emulator + console + one worker). `make demo` from the repo root. |
 | `terraform/gcp/` | GCP infra per `docs/CONTRACTS.md` §7: GKE Autopilot (regional), Firestore Native, Artifact Registry, static IP, groups bucket, console GSA + Workload Identity. |
 | `helm/ramen/` | console chart → namespace `ramen-system`: KSA `console` (Workload Identity + ClusterRole), Service, GKE **Gateway** `ramen` (global external HTTPS LB on the static IP, self-signed TLS Secret), HTTPRoute `/` → console, HealthCheckPolicy. |
-| `helm/ramen-worker/` | one zone → namespace `ramen-<group>-<zone>` (labelled `ramen.io/routes=true`): `worker` + `worker-canary` Deployments pinned to a GCP zone, NEG Service, HTTPRoute `/mcp/<group>/<zone>` → `worker:8080/mcp` on the console Gateway, HealthCheckPolicy, KSA `worker`, Secret `ramen-deploy`. The console's gcp adapter renders/applies it; you can also apply it by hand. |
+| `helm/ramen-worker/` | one zone → namespace `ramen-<group>-<zone>` (labelled `ramen.io/routes=true`): `worker` + `worker-canary` Deployments pinned to a GCP zone, NEG Service (`appProtocol: kubernetes.io/h2c`), HTTPRoute on the console Gateway matching gRPC metadata `ramen-group`/`ramen-zone` (paths `/ramen.v1.Mcp`, `/grpc.health.v1.Health`, reflection; Admin stays internal), HealthCheckPolicy (GRPC), KSA `worker`, Secret `ramen-deploy`. The console's gcp adapter renders/applies it; you can also apply it by hand. |
 | `scripts/selfsigned.sh` | creates the console TLS Secret for an IP or host (D17). |
 | `terraform/aws/` | **UNTESTED** AWS infra per `docs/CONTRACTS.md` §8: VPC (2 public subnets), EKS + one small managed node group, OIDC provider (IRSA), DynamoDB `ramen` table, S3 groups bucket, ECR `ramen/console` + `ramen/worker`, console IAM role, AWS Load Balancer Controller + Fluent Bit (CloudWatch Container Insights) via Helm, self-signed cert imported into ACM. |
 | `cloudformation/ramen.yaml` | **UNTESTED** CloudFormation equivalent of the Terraform base (no Helm, no ACM import) for teams that cannot run Terraform. `cfn-lint` clean. |
@@ -56,12 +56,12 @@ helm template ramen-worker deploy/helm/ramen-worker --set project=$PROJECT,group
   --set secret.data.RAMEN_MCP_KEYS=rmk_$(openssl rand -hex 16),secret.data.RAMEN_ADMIN_KEY=$(openssl rand -hex 16) | kubectl apply -f -
 kubectl -n ramen-demo-a rollout status deploy/worker        # first start: pod sync + pip install, 1-3 min
 kubectl -n ramen-demo-a port-forward svc/worker 8080 &
-curl -s localhost:8080/mcp -H "Authorization: Bearer <RAMEN_MCP_KEYS>" -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
-# same call through the LB once the Gateway has picked up the route (~2 min):
-curl -sk https://$IP/mcp/demo/a -H "Authorization: Bearer <RAMEN_MCP_KEYS>" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+grpcurl -plaintext -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" localhost:8080 ramen.v1.Mcp/Call
+# same call through the LB once the Gateway has programmed the route (~2 min; routing by metadata, TLS at the LB):
+grpcurl -insecure -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" $IP:443 ramen.v1.Mcp/Call
 ```
-MCP clients use `https://<console_ip>/mcp/<group>/<zone>` with `Authorization: Bearer rmk_…`. The LB backend service
+MCP clients reach `<console_ip>:443` over gRPC with metadata `ramen-group`/`ramen-zone` + `authorization: Bearer rmk_…` (standard
+clients: `ramen-mcp-bridge --target <console_ip>:443 --tls --key rmk_… --group demo --zone a`, see docs). The LB backend service
 for a zone is auto-named by GKE (`gkegw1-…-ramen-<group>-<zone>-worker-8080-…`); the console finds it by the NEG name
 `ramen-<group>-<zone>` (worker Service `cloud.google.com/neg` annotation) for rebalance and Cloud Armor rules.
 
@@ -87,8 +87,7 @@ Needs: aws CLI (logged in, `aws sts get-caller-identity` works), terraform ≥1.
 Mirror of the GCP flow: EKS instead of GKE Autopilot, DynamoDB instead of Firestore, S3 instead of GCS, Secrets Manager
 instead of Secret Manager, one ALB (IngressGroup `ramen`, AWS Load Balancer Controller) instead of the GKE Gateway,
 WAFv2 instead of Cloud Armor, IAM roles for service accounts (IRSA) instead of Workload Identity, CloudWatch Logs Insights
-instead of Cloud Logging. Regional AWS API differences: the ALB cannot rewrite paths, so workers serve
-`/mcp/<group>/<zone>` themselves (`RAMEN_MCP_PATH_PREFIX`); traffic splitting uses weighted target groups (stable/canary).
+instead of Cloud Logging. The ALB routes gRPC by the `ramen-group`/`ramen-zone` header conditions to GRPC target groups (CONTRACTS §11); traffic splitting uses weighted target groups (stable/canary).
 ```sh
 export AWS_REGION=us-east-1 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
@@ -123,7 +122,7 @@ The console runs with `RAMEN_STORE=dynamodb RAMEN_CLOUD=aws RAMEN_SECRETS_BACKEN
 RAMEN_IMAGE_WORKER RAMEN_EKS_CLUSTER RAMEN_ALB_GROUP=ramen` (all set by the chart). Then in the console: add zone `a`
 (provider aws, region `us-east-1a` = the availability zone used as `nodeSelector`), add group `demo` pointing at
 `https://github.com/bkraad47/ramen-demo-mcp-group`, attach the zone, deploy. The console creates the per-zone namespace
-(Deployments `worker`/`worker-canary`, Services, ALB Ingress `/mcp/demo/a`, KSA), the IAM role `ramen-demo-a`
+(Deployments `worker`/`worker-canary`, Services, ALB Ingress with header conditions, KSA), the IAM role `ramen-demo-a`
 (path `/ramen/`, trusts the cluster OIDC provider for `ramen-demo-a/worker`, read-only on `s3://<bucket>/demo/` and
 `ramen/demo/*` secrets) and Secret `ramen-deploy`; workers sync `s3://ramen-<account>-groups/<group>` on every reload.
 
@@ -136,7 +135,7 @@ helm template ramen-worker deploy/helm/ramen-worker --set provider=aws --set-str
   --set aws.region=$AWS_REGION,group=demo,zone=a,aws.zone=${AWS_REGION}a,aws.roleArn=<role arn> \
   --set secret.data.RAMEN_MCP_KEYS=rmk_$(openssl rand -hex 16),secret.data.RAMEN_ADMIN_KEY=$(openssl rand -hex 16) | kubectl apply -f -
 kubectl -n ramen-demo-a rollout status deploy/worker
-curl -sk https://$HOST/mcp/demo/a -H "Authorization: Bearer <RAMEN_MCP_KEYS>" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+grpcurl -insecure -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" $HOST:443 ramen.v1.Mcp/Call
 ```
 How the AWS adapter maps §7 features: `rebalance` rewrites the weighted forward action on the zone's Ingress (stable vs
 canary target groups, canary share proportional to replicas, 0 when the canary is busy or down; `applied:false` + note

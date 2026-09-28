@@ -741,3 +741,66 @@ for line in sys.stdin:
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Live GKE (0.3.2): the first `runtime.load` can fail transiently (Workload Identity / IAM propagation right after
+/// the zone is attached, bucket not yet synced). The node must keep retrying the initial load on its own — the console
+/// only sends `Admin/Reload` once the pod is ready, so a single attempt would leave the pod NOT_SERVING for ever.
+#[tokio::test]
+async fn initial_load_is_retried_until_it_succeeds() {
+    let dir = std::env::temp_dir().join(format!("ramen-retry-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("ramen_runtime")).unwrap();
+    std::fs::write(
+        dir.join("ramen_runtime/__main__.py"),
+        r#"import json, os, sys
+counter = os.path.join(os.environ["RAMEN_RETRY_DIR"], "loads")
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["method"] == "runtime.load":
+        n = int(open(counter).read()) if os.path.exists(counter) else 0
+        open(counter, "w").write(str(n + 1))
+        if n < 2:
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32603, "message": "RefreshError: metadata not ready"}}), flush=True)
+            continue
+        r = {"tools": [], "resources": [], "prompts": [], "errors": [], "sync": {"downloaded": 1}}
+    else:
+        r = {"ok": True}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#,
+    )
+    .unwrap();
+    let pp = dir.display().to_string();
+    unsafe { std::env::set_var("RAMEN_RETRY_DIR", &pp) };
+    let c = cfg(&[
+        ("RAMEN_PYTHON", "python3"),
+        ("RAMEN_PYTHONPATH", &pp),
+        ("RAMEN_BUCKET_URI", "gs://groups/demo"),
+        ("RAMEN_LOAD_RETRY_SECS", "1"),
+    ]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(ramen_node::server::run(c, listener, async move {
+        let _ = rx.await;
+    }));
+    let mut hc = HealthClient::new(channel(addr).await);
+    let mut status = ServingStatus::NotServing;
+    for _ in 0..40 {
+        status = hc
+            .check(HealthCheckRequest {
+                service: String::new(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .status();
+        if status == ServingStatus::Serving {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert_eq!(status, ServingStatus::Serving, "initial load never retried");
+    assert_eq!(std::fs::read_to_string(dir.join("loads")).unwrap(), "3");
+    tx.send(()).unwrap();
+    server.await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}

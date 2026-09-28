@@ -79,6 +79,14 @@ async def zones(request: Request, format: str | None = None, p: Principal = Depe
     return tabular(await svc(request).zones(), format, "zones")
 
 
+@r.get("/zones/{zone}")
+async def get_zone(request: Request, zone: str, p: Principal = Depends(viewer)):
+    z = await svc(request).store.get("zones", zone)
+    if not z:
+        raise not_found("zone")
+    return respond(request, z)
+
+
 @r.post("/zones", status_code=201)
 async def create_zone(request: Request, body: m.ZoneIn, p: Principal = Depends(super_)):
     note(request, "zone.create", body.name)
@@ -104,6 +112,11 @@ async def environments(
 async def create_env(request: Request, group: str, body: m.EnvIn, p: Principal = Depends(admin_g)):
     note(request, "environment.create", f"{group}/{body.name}", [f"group:{group}"])
     return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones), 201)
+
+
+@r.get("/groups/{group}/environments/{env}")
+async def get_environment(request: Request, group: str, env: str, p: Principal = Depends(viewer_g)):
+    return respond(request, await svc(request).get_env(group, env))
 
 
 @r.put("/groups/{group}/environments/{env}")

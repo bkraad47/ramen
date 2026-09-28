@@ -36,12 +36,22 @@ def test_gsa_exists_with_expected_roles(sa, gcp_project):
         what=f"GSA {email}",
     )
     assert desc["email"] == email
-    policy = gcp.get("projects", "get-iam-policy", gcp_project, project=gcp_project)
-    roles = gcp.roles_of(policy, f"serviceAccount:{email}")
-    assert EXPECTED_ROLES <= roles, roles
-    assert not roles - EXPECTED_ROLES - {"roles/logging.logWriter", "roles/monitoring.metricWriter"}, (
-        f"unexpected extra roles on worker GSA: {roles}"
-    )
+    member = f"serviceAccount:{email}"
+    # SEC-08 (0.3.1, CONTRACTS §11): resource-level bindings only — objectViewer on the groups bucket (conditioned to
+    # the group prefix), secretAccessor on each ramen-<group>-* secret; the project policy never mentions worker GSAs.
+    bucket = gcp.get("storage", "buckets", "get-iam-policy", f"gs://ramen-{gcp_project}-groups", project=gcp_project)
+    viewer = [
+        b
+        for b in (bucket or {}).get("bindings", [])
+        if b["role"] == "roles/storage.objectViewer" and member in b.get("members", [])
+    ]
+    assert viewer and f"/objects/{GROUP}/" in viewer[0].get("condition", {}).get("expression", ""), bucket
+    secrets = gcp.get("secrets", "list", f"--filter=name:ramen-{GROUP}-", project=gcp_project) or []
+    for sec in secrets:
+        pol = gcp.get("secrets", "get-iam-policy", sec["name"].rsplit("/", 1)[1], project=gcp_project)
+        assert "roles/secretmanager.secretAccessor" in gcp.roles_of(pol, member), (sec["name"], pol)
+    project_roles = gcp.roles_of(gcp.get("projects", "get-iam-policy", gcp_project, project=gcp_project), member)
+    assert project_roles <= {"roles/logging.logWriter", "roles/monitoring.metricWriter"}, project_roles
 
 
 def test_workload_identity_binding(gcp_project, sa):

@@ -58,7 +58,9 @@ STEP="tools/call";  R=$(mcp "$KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/call
 OUT=$(echo "$R" | jget '["result"]["content"][0]["text"]'); [ "${OUT%.0}" = 5 ] || fail "$R"
 STEP="unauth";      ERR=$(mcp "" '{"jsonrpc":"2.0","id":3,"method":"ping"}' 2>&1 >/dev/null); echo "$ERR" | grep -q Unauthenticated || fail "no-key call → ${ERR:-OK}"
 STEP="bad key";     ERR=$(mcp "not-a-key" '{"jsonrpc":"2.0","id":4,"method":"ping"}' 2>&1 >/dev/null); echo "$ERR" | grep -q Unauthenticated || fail "bad-key call → ${ERR:-OK}"
-STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied' || fail "Admin/Reload without key → ${ERR:-OK}"
+# Admin/Reload without a key: UNAUTHENTICATED (direct), PERMISSION_DENIED (outside RAMEN_ADMIN_CIDRS) or UNIMPLEMENTED/404
+# through an LB that does not route ramen.v1.Admin at all (CONTRACTS §11: Admin stays cluster-internal) — all three mean "gated".
+STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented' || fail "Admin/Reload without key → ${ERR:-OK}"
 if [ "${RAMEN_SMOKE_ADMIN:-0}" = 1 ]; then
   STEP="admin reload"; "${G[@]}" -max-time 180 -proto ramen/v1/admin.proto -H "x-ramen-admin-key: $ADMIN_KEY" "$NODE" ramen.v1.Admin/Reload >/dev/null 2>&1 || fail "Admin/Reload with key failed"
 fi

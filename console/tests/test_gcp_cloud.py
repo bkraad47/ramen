@@ -79,13 +79,18 @@ def test_manifests_shape():
     assert route["spec"]["parentRefs"] == [
         {"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}
     ]
-    rule = route["spec"]["rules"][0]  # CONTRACTS §11: header routing, no rewrite, only the Mcp service via the LB
+    rule = route["spec"]["rules"][0]  # CONTRACTS §11: header routing, no rewrite; Mcp + Health + reflection, no Admin
+    headers = [{"name": "ramen-group", "value": "demo"}, {"name": "ramen-zone", "value": "a"}]
     assert rule["matches"] == [
-        {
-            "path": {"type": "PathPrefix", "value": "/ramen.v1.Mcp"},
-            "headers": [{"name": "ramen-group", "value": "demo"}, {"name": "ramen-zone", "value": "a"}],
-        }
+        {"path": {"type": "PathPrefix", "value": p}, "headers": headers}
+        for p in (
+            "/ramen.v1.Mcp",
+            "/grpc.health.v1.Health",
+            "/grpc.reflection.v1.ServerReflection",
+            "/grpc.reflection.v1alpha.ServerReflection",
+        )
     ]
+    assert not any("/ramen.v1.Admin" in json.dumps(m) for m in rule["matches"])
     assert "filters" not in rule and rule["backendRefs"] == [{"name": "worker", "port": 8080}]
     hcp = docs[8]
     assert hcp["apiVersion"] == "networking.gke.io/v1" and hcp["spec"]["targetRef"]["name"] == "worker"
@@ -111,6 +116,62 @@ def test_manifests_shape():
     no_zone = manifests("demo", "a", {"region": "", "size": "xl", "count": 1}, "img", "gs://b/demo")
     assert "nodeSelector" not in no_zone[4]["spec"]["template"]["spec"]
     assert no_zone[4]["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["s"]
+
+
+async def test_attach_zone_waits_for_rbac_propagation(cloud, fk):
+    """A RoleBinding is not honoured the instant it is created (API-server RBAC cache lags): zone-scoped reads answer
+    403 for a moment. Seen live on GKE (0.3.2); attach_zone must wait, not fail."""
+    fk.k8s.rbac_lag = 3
+    r = await cloud.attach_zone("demo", "a", SPEC)
+    assert r["ok"] and fk.k8s.rbac_lag == 0
+    assert ("ServiceAccount", "ramen-demo-a", "worker") in fk.k8s.objs
+
+
+async def test_attach_zone_gives_up_when_rbac_never_propagates(cloud, fk):
+    fk.k8s.rbac_lag, cloud.kube.rbac_wait = 10**6, 0.01
+    with pytest.raises(ApiError) as e:
+        await cloud.attach_zone("demo", "a", SPEC)
+    assert e.value.status_code == 502 and "Forbidden" in e.value.detail
+
+
+async def test_attach_zone_ensures_worker_identity(cloud, fk):
+    """CONTRACTS §7: the console creates the per-zone GSA. A zone attached without an explicit service-account call
+    still gets its worker identity (live 0.3.1: the KSA had no GSA → runtime.load 403 on GCS → deploy timed out)."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    ksa = obj(fk, "ServiceAccount", "ramen-demo-a", "worker")
+    gsa = "ramen-demo-a@p1.iam.gserviceaccount.com"
+    assert ksa["metadata"]["annotations"] == {"iam.gke.io/gcp-service-account": gsa}
+    bucket = fk.storage.buckets["p1-groups"].policy
+    assert [b["role"] for b in bucket.bindings] == ["roles/storage.objectViewer"]
+    assert "p1-groups/objects/demo/" in bucket.bindings[0]["condition"]["expression"]
+    r = await cloud.create_service_account("demo", "a")  # the explicit super-admin call is then a no-op create
+    assert r["created"] is False
+    await cloud.attach_zone("demo", "a", {**SPEC, "count": 3})  # re-attach keeps the identity, creates nothing
+    assert obj(fk, "ServiceAccount", "ramen-demo-a", "worker")["metadata"]["annotations"] == {
+        "iam.gke.io/gcp-service-account": gsa
+    }
+
+
+async def test_attach_zone_retries_bucket_grant_until_new_gsa_is_visible(cloud, fk, monkeypatch):
+    """Live GKE: the bucket setIamPolicy issued right after the GSA was created fails with 400 "Service account … does
+    not exist" until IAM has propagated the new account (a few seconds). Retry instead of failing the attach."""
+    import ramen_console.cloud.gcp_api as api
+
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    fk.storage.bucket("p1-groups").iam_lag = 3
+    r = await cloud.attach_zone("demo", "a", SPEC)
+    assert r["ok"] and fk.storage.bucket("p1-groups").iam_lag == 0
+    assert [b["role"] for b in fk.storage.buckets["p1-groups"].policy.bindings] == ["roles/storage.objectViewer"]
+
+
+async def test_attach_zone_gives_up_on_persistent_bad_request(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    fk.storage.bucket("p1-groups").iam_lag = 10**6
+    with pytest.raises(ApiError) as e:
+        await cloud.attach_zone("demo", "a", SPEC)
+    assert e.value.status_code == 502 and "does not exist" in e.value.detail
 
 
 async def test_attach_zone_idempotent(cloud, fk):
@@ -390,15 +451,17 @@ async def test_create_service_account_idempotent(cloud, fk):
     assert "p1-groups/objects/demo/" in bucket.bindings[0]["condition"]["expression"]
     assert bucket.bindings[0]["members"] == [f"serviceAccount:{r['name']}"]
     sec = fk.secretmanager.secrets
-    assert sec["projects/p1/secrets/ramen-demo-prod-all-TOKEN"]["policy"] == [
-        {"role": "roles/secretmanager.secretAccessor", "members": [f"serviceAccount:{r['name']}"]}
+    # Secret Manager policies are proto messages (google.iam.v1 Binding), never dicts (live TypeError otherwise)
+    assert [(b.role, list(b.members)) for b in sec["projects/p1/secrets/ramen-demo-prod-all-TOKEN"]["policy"]] == [
+        ("roles/secretmanager.secretAccessor", [f"serviceAccount:{r['name']}"])
     ]
     assert sec["projects/p1/secrets/ramen-other-prod-all-X"]["policy"] == []
     # a secret created later gets the group's worker accounts bound at creation
     cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")  # not created yet: no-op, no error
     fk.secretmanager.create_secret({"parent": "projects/p1", "secret_id": "ramen-demo-dev-all-NEW", "secret": {}})
     cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")
-    assert sec["projects/p1/secrets/ramen-demo-dev-all-NEW"]["policy"][0]["members"] == [f"serviceAccount:{r['name']}"]
+    new_pol = sec["projects/p1/secrets/ramen-demo-dev-all-NEW"]["policy"]
+    assert list(new_pol[0].members) == [f"serviceAccount:{r['name']}"]
     cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")  # idempotent
     assert fk.secretmanager.calls.count("set_iam_policy") == 2
     wi = fk.iam_state["sa_policy"][r["name"]]["bindings"]
@@ -613,7 +676,11 @@ async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
     await cloud.create_service_account("other", "a")
     r = await cloud.detach_group("demo")
     assert r["namespaces"] == ["ramen-demo-a", "ramen-demo-b"]
-    assert r["service_accounts"] == ["ramen-demo-a@p1.iam.gserviceaccount.com"]
+    # every attached zone got its identity on attach (§7), so detach removes both demo GSAs
+    assert r["service_accounts"] == [
+        "ramen-demo-a@p1.iam.gserviceaccount.com",
+        "ramen-demo-b@p1.iam.gserviceaccount.com",
+    ]
     assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and (
         "Namespace",
         None,

@@ -2,6 +2,8 @@
 from tools/list and answers -32601 → unblock → deploy → back. Runs after test_demo_flow (same group/env/zone, same key).
 Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL (+ key from the e2e deploy or RAMEN_MCP_KEY)."""
 
+import time
+
 import pytest
 
 from ramen_tests import env as E
@@ -36,15 +38,24 @@ def deploy(admin, blocked):
     assert job["status"] == "ok", job
 
 
+def settled(node, hidden: bool, timeout: float = 90) -> list[str]:
+    """tools/list once the LB has stopped routing to the pre-deploy pods (they drain a few seconds after the job)."""
+    deadline, names = time.monotonic() + timeout, tool_names(node)
+    while (TOOL not in names) != hidden and time.monotonic() < deadline:
+        time.sleep(3)
+        names = tool_names(node)
+    return names
+
+
 def test_block_hides_and_denies_then_unblock_restores(admin, node):
     assert TOOL in tool_names(node), "run e2e/test_demo_flow first (deploys the demo group)"
     deploy(admin, [TOOL])
     try:
-        assert TOOL not in tool_names(node)
+        assert TOOL not in settled(node, hidden=True)
         assert call_blocked(node) == "jsonrpc -32601"
         envs = [e for e in admin.get("environments_all", params={"group": GROUP}).json() if e["name"] == ENV]
         assert envs[0]["blocked"] == [TOOL]
     finally:
         deploy(admin, [])
-    assert TOOL in tool_names(node)
+    assert TOOL in settled(node, hidden=False)
     assert call_blocked(node) == "ok"

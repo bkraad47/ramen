@@ -26,7 +26,7 @@ from . import env as E
 PROTOCOL = "2025-06-18"
 UNSET = object()
 MAX_MESSAGE = 4 * 1024 * 1024
-CLIENT_INFO = {"name": "ramen-tests", "version": "0.3.1"}
+CLIENT_INFO = {"name": "ramen-tests", "version": "0.3.2"}
 _ids = itertools.count(1)
 
 
@@ -237,7 +237,7 @@ class Node:
             response_deserializer=reflection_pb2.ServerReflectionResponse.FromString,
         )
         req = reflection_pb2.ServerReflectionRequest(list_services="")
-        for resp in call(iter([req]), timeout=10):
+        for resp in call(iter([req]), metadata=self.metadata(None), timeout=10):
             return [s.name for s in resp.list_services_response.service]
         return []
 
@@ -292,7 +292,10 @@ async def bridge_session(node: Node, key: str | None = None, timeout: float = 60
     cmd = bridge_command()
     assert cmd, "ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../runtime-py/.venv)"
     k = node.key if key is None else key
-    ca = None if node._ca is None else _ca_file(node._ca)
+    ca_pem = node._ca
+    if ca_pem is None and node.tls and not E.tls_verify():
+        ca_pem = _insecure_root(node.target)[0]  # RAMEN_TLS_INSECURE=1: pin the server's own (self-signed) cert
+    ca = None if ca_pem is None else _ca_file(ca_pem)
     params = StdioServerParameters(
         command=cmd[0],
         args=cmd[1:] + bridge_args(node.target, k or "", node.group or "demo", node.zone or "local", node.tls, ca),

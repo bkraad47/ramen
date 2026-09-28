@@ -15,7 +15,7 @@ environment: default        # → RAMEN_ENV in Secret ramen-deploy
 zone: a                     # zone record name → namespace ramen-<group>-<zone>
 gcpZone: us-central1-a      # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
 image: ""                   # default: <region>-docker.pkg.dev/<project>/ramen/worker:<tag>
-tag: 0.3.1
+tag: 0.3.2
 pullPolicy: Always
 createNamespace: true
 serviceAccount:
@@ -44,7 +44,11 @@ route:                      # LB routing (CONTRACTS §11): clients send metadata
   gateway: ramen
   gatewayNamespace: ramen-system
   label: ramen.io/routes    # namespace label the Gateway's allowedRoutes selector requires
-  mcpPath: /ramen.v1.Mcp    # only the Mcp service is exposed through the LB (Admin/Health stay cluster-internal)
+  paths:                    # gRPC services exposed through the LB; Admin (/ramen.v1.Admin) stays cluster-internal
+    - /ramen.v1.Mcp
+    - /grpc.health.v1.Health
+    - /grpc.reflection.v1.ServerReflection
+    - /grpc.reflection.v1alpha.ServerReflection
 
 consoleNamespace: ramen-system
 networkPolicy:

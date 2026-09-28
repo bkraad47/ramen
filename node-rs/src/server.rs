@@ -25,6 +25,7 @@ pub async fn run(
     if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
         if let Err(e) = app.load().await {
             emit("warn", "initial load failed", json!({"error": e.message}));
+            retry_initial_load(app.clone(), cfg.load_retry_secs);
         }
     } else {
         emit(
@@ -52,6 +53,42 @@ pub async fn run(
     }
     app.sidecar.kill("shutdown").await;
     app
+}
+
+/// Keep retrying the initial `runtime.load` (backoff ×2, capped at 60 s) until something is loaded. Transient failures
+/// (Workload Identity / IAM propagation right after a zone is attached, bucket still syncing) must not leave the pod
+/// NOT_SERVING for ever: the console only sends `Admin/Reload` once the pod is ready.
+fn retry_initial_load(app: Shared, first_delay_secs: u64) {
+    if first_delay_secs == 0 {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut delay = first_delay_secs;
+        let mut attempt = 1u32;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            if app.sidecar.loaded().await.is_some() {
+                return; // an Admin/Reload got there first
+            }
+            match app.load().await {
+                Ok(_) => {
+                    emit(
+                        "info",
+                        "initial load succeeded on retry",
+                        json!({"attempt": attempt}),
+                    );
+                    return;
+                }
+                Err(e) => emit(
+                    "warn",
+                    "initial load retry failed",
+                    json!({"attempt": attempt, "next_in_secs": (delay * 2).min(60), "error": e.message}),
+                ),
+            }
+            delay = (delay * 2).min(60);
+            attempt += 1;
+        }
+    });
 }
 
 fn tls(cfg: &Config) -> Result<Option<ServerTlsConfig>, String> {

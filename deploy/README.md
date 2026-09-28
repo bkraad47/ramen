@@ -74,6 +74,9 @@ helm uninstall ramen -n ramen-system                    # lets GKE release the G
 terraform -chdir=deploy/terraform/gcp destroy           # cluster, bucket (force_destroy), Firestore, AR, IP, GSA
 scripts/gcp_test_project.sh delete                      # RAMEN_GCP_PROJECT=<id>; deletes the whole project
 ```
+Cost while running: the Autopilot cluster (pod-based billing, ~$0.05/h for console + 2 small workers, plus the
+Autopilot control-plane fee after the free tier), the global HTTPS LB forwarding rule (~$0.025/h), a static IP,
+Artifact Registry storage, Firestore/GCS at negligible usage. Terraform state is local (`terraform.tfstate`, git-ignored).
 
 ## AWS bring-up — UNTESTED ON A REAL ACCOUNT
 > **Nothing in this section has been applied to an AWS account** (none was available while building v0.3.0, F10.3 / D18).
@@ -153,6 +156,3 @@ terraform -chdir=deploy/terraform/aws destroy           # EKS, VPC, bucket (forc
 Estimated cost while running (us-east-1, on-demand): EKS control plane ~$0.10/h, 2× t3.small ~$0.04/h, ALB ~$0.025/h + LCU,
 WAF web ACL ~$5/month + $1/rule, CloudWatch Logs ingestion, DynamoDB/S3/ECR at negligible usage. State is local
 (`terraform.tfstate`, git-ignored).
-Cost while running: the Autopilot cluster (pod-based billing, ~$0.05/h for console + 2 small workers, plus the
-Autopilot control-plane fee after the free tier), the global HTTPS LB forwarding rule (~$0.025/h), a static IP,
-Artifact Registry storage, Firestore/GCS at negligible usage. Terraform state is local (`terraform.tfstate`, git-ignored).

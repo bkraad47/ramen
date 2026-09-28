@@ -1,6 +1,6 @@
 import os
 
-from .base import REF_PREFIX, SecretsBackend, StoreBackend
+from .base import SecretsBackend, StoreBackend
 
 
 def make_secrets_backend(cloud=None) -> SecretsBackend:
@@ -9,15 +9,18 @@ def make_secrets_backend(cloud=None) -> SecretsBackend:
         return StoreBackend()
     if kind == "gcp":
         from .gcp import GcpSecrets
+
         project = os.environ.get("RAMEN_GCP_PROJECT")
         if not project:
             raise ValueError("RAMEN_SECRETS_BACKEND=gcp needs RAMEN_GCP_PROJECT")
         client = getattr(getattr(cloud, "c", None), "secretmanager", None)
         if client is None:
             from ..cloud.gcp_clients import GcpClients
+
             client = GcpClients(project).secretmanager
         return GcpSecrets(project, client)
     if kind == "aws":
         from .aws import from_env
+
         return from_env(cloud)
     raise ValueError(f"unknown RAMEN_SECRETS_BACKEND={kind!r}; use store|gcp|aws")

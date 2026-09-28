@@ -2,13 +2,13 @@
 SA permission requests → approve, tool blocking on deploy config. Needs RAMEN_CONSOLE_URL.
 The reset/magic-link cases also need RAMEN_MAIL_DIR = the host path of the console's `RAMEN_SMTP_HOST=file://` dir
 (compose: deploy/local/.mail); otherwise they skip."""
+
 import email
 import email.policy
 import re
 import time
 from pathlib import Path
 
-import httpx
 import pytest
 
 from ramen_tests import env as E
@@ -20,7 +20,9 @@ PW = "Passw0rd!-for-tests"
 
 
 def ok(r, *codes):
-    assert r.status_code in (codes or (200, 201)), f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    assert r.status_code in (codes or (200, 201)), (
+        f"{r.request.method} {r.request.url} -> {r.status_code}: {r.text[:400]}"
+    )
     return r
 
 
@@ -78,8 +80,10 @@ def test_permission_request_approve_and_rules(admin, world):
     try:
         r = c.post("requests", {"group": g, "zone": z, "permission": "kms.decrypt"})
         assert r.status_code == 409, r.text
-        assert any(a["action"] == "permission.request" and not a["ok"] and "permission:kms.decrypt" in a.get("tags", [])
-                   for a in items(admin.audit()))
+        assert any(
+            a["action"] == "permission.request" and not a["ok"] and "permission:kms.decrypt" in a.get("tags", [])
+            for a in items(admin.audit())
+        )
         r = ok(c.post("requests", {"group": g, "zone": z, "permission": "bucket.read"}), 201).json()
         assert r["status"] == "pending" and r["type"] == "permission"
         assert c.get("requests").status_code == 403
@@ -95,7 +99,9 @@ def test_permission_request_approve_and_rules(admin, world):
 
 def test_blocked_list_reaches_deploy_config(admin, world):
     g, c = world["group"], world["gadmin_c"]
-    r = ok(c.put("env_blocked", {"blocked": ["demo_calculator_tool", "demo_calculator_tool"]}, group=g, env="dev")).json()
+    r = ok(
+        c.put("env_blocked", {"blocked": ["demo_calculator_tool", "demo_calculator_tool"]}, group=g, env="dev")
+    ).json()
     assert r["blocked"] == ["demo_calculator_tool"]
     assert c.put("env_blocked", {"blocked": ["a,b"]}, group=g, env="dev").status_code == 422
     envs = [e for e in ok(admin.get("environments_all", params={"group": g})).json() if e["name"] == "dev"]
@@ -119,7 +125,9 @@ def newest_link(maildir: Path, kind: str, since: float) -> str:
     while time.monotonic() < deadline:
         for p in sorted(maildir.glob("*.eml"), reverse=True):
             if p.stat().st_mtime >= since:
-                body = email.message_from_bytes(p.read_bytes(), policy=email.policy.default).get_content()  # decodes QP wrapping
+                body = email.message_from_bytes(
+                    p.read_bytes(), policy=email.policy.default
+                ).get_content()  # decodes QP wrapping
                 m = re.search(rf"https?://\S+?/auth/{kind}/(\S+)", body)
                 if m:
                     return m.group(1)

@@ -1,6 +1,7 @@
 """Secrets backend (CONTRACTS §7): create → Secret Manager secret `ramen-<group>-<env>-<zone>-<NAME>` exists with
 labels, value never returned by the console, delete → gone. Needs RAMEN_CONSOLE_URL; SM checks need
 RAMEN_GCP_PROJECT and a console running RAMEN_SECRETS_BACKEND=gcp."""
+
 import pytest
 
 from ramen_tests import gcp

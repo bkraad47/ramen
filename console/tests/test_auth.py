@@ -1,5 +1,3 @@
-import pytest
-
 from ramen_console.auth import apikeys, passwords
 from ramen_console.auth.bootstrap import ensure_super_admin
 from ramen_console.auth.oauth import OAuthRegistry

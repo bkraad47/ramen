@@ -1,4 +1,5 @@
 """In-memory fakes for kubernetes, GCS, Secret Manager, Cloud Logging and discovery-style compute/iam/crm clients."""
+
 import base64
 import copy
 import hashlib
@@ -49,8 +50,13 @@ class FakeK8s:
         if kind == "Deployment":
             reps = obj["spec"].get("replicas", 1)
             ready = reps if self.ready else 0
-            obj["status"] = {"replicas": reps, "readyReplicas": ready, "updatedReplicas": ready,
-                             "availableReplicas": ready, "observedGeneration": 1}
+            obj["status"] = {
+                "replicas": reps,
+                "readyReplicas": ready,
+                "updatedReplicas": ready,
+                "availableReplicas": ready,
+                "observedGeneration": 1,
+            }
             obj["metadata"]["generation"] = 1
         return obj
 
@@ -65,8 +71,12 @@ class FakeK8s:
                 continue
             for i in range(d["spec"].get("replicas", 1)):
                 ip = f"10.{1 if labels.get('ramen.io/track') == 'canary' else 2}.0.{i + 1}"
-                out.append({"metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
-                            "status": {"phase": "Running" if self.ready else "Pending", "podIP": ip}})
+                out.append(
+                    {
+                        "metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
+                        "status": {"phase": "Running" if self.ready else "Pending", "podIP": ip},
+                    }
+                )
         return out
 
     @property
@@ -123,9 +133,15 @@ class _Core:
 
     def list_namespace(self, label_selector=""):
         key, _, want = label_selector.partition("=")
-        return {"items": [copy.deepcopy(v) for (k, _, _), v in self.s.objs.items()
-                          if k == "Namespace" and key in v["metadata"].get("labels", {})
-                          and (not want or v["metadata"]["labels"][key] == want)]}
+        return {
+            "items": [
+                copy.deepcopy(v)
+                for (k, _, _), v in self.s.objs.items()
+                if k == "Namespace"
+                and key in v["metadata"].get("labels", {})
+                and (not want or v["metadata"]["labels"][key] == want)
+            ]
+        }
 
     def delete_namespace(self, name):
         if ("Namespace", None, name) not in self.s.objs:
@@ -180,7 +196,11 @@ class _Apps:
         return self.s._read("Deployment", ns, name)
 
     def list_namespaced_deployment(self, ns):
-        return {"items": [self.s._read("Deployment", ns, n) for (k, s_, n) in list(self.s.objs) if k == "Deployment" and s_ == ns]}
+        return {
+            "items": [
+                self.s._read("Deployment", ns, n) for (k, s_, n) in list(self.s.objs) if k == "Deployment" and s_ == ns
+            ]
+        }
 
 
 class _Hpa:
@@ -278,6 +298,7 @@ class FakeLogging:
 # discovery-style (compute / iam / cloudresourcemanager) -------------------
 class FakeDiscovery:
     """handler(collection, method, kwargs) -> response; collections chain through SUB names."""
+
     SUB = {"serviceAccounts"}
 
     def __init__(self, handler):
@@ -298,16 +319,20 @@ class _Coll:
         def call(**kw):
             self.d.calls.append((self.name, method, kw))
             return NS(execute=lambda **_: self.d.handler(self.name, method, kw))
+
         return call
 
 
 def compute_handler(state):
     """state: {'backend': {...} | None, 'policies': {name: policy}}"""
+
     def h(coll, method, kw):
         if coll == "backendServices":
             if method in ("patch", "setSecurityPolicy") and state.get("bs_not_ready", 0) > 0:
                 state["bs_not_ready"] -= 1
-                raise FakeApiError(400, f"The resource 'projects/p1/global/backendServices/{kw['backendService']}' is not ready")
+                raise FakeApiError(
+                    400, f"The resource 'projects/p1/global/backendServices/{kw['backendService']}' is not ready"
+                )
             if method == "list":
                 if kw.get("pageToken") is None and state.get("paged"):
                     return {"items": [{"name": "other", "backends": []}], "nextPageToken": "p2"}
@@ -326,7 +351,9 @@ def compute_handler(state):
             pols = state.setdefault("policies", {})
             if method in ("addRule", "removeRule", "patchRule") and state.get("not_ready", 0) > 0:
                 state["not_ready"] -= 1
-                raise FakeApiError(400, f"The resource 'projects/p1/global/securityPolicies/{kw['securityPolicy']}' is not ready")
+                raise FakeApiError(
+                    400, f"The resource 'projects/p1/global/securityPolicies/{kw['securityPolicy']}' is not ready"
+                )
             if method == "get":
                 if kw["securityPolicy"] not in pols:
                     raise FakeApiError(404, "policy not found")
@@ -337,11 +364,15 @@ def compute_handler(state):
             p = pols[kw["securityPolicy"]]
             if method == "addRule":
                 if any(r["priority"] == kw["body"]["priority"] for r in p["rules"]):
-                    raise FakeApiError(400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities.")
+                    raise FakeApiError(
+                        400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities."
+                    )
                 p["rules"].append(kw["body"])
                 if state.get("dup_once"):
                     state["dup_once"] = False
-                    raise FakeApiError(400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities.")
+                    raise FakeApiError(
+                        400, "Invalid value for field 'resource.priority'. Cannot have rules with the same priorities."
+                    )
             if method == "removeRule":
                 p["rules"] = [r for r in p["rules"] if r["priority"] != kw["priority"]]
             if method == "patchRule":
@@ -350,11 +381,13 @@ def compute_handler(state):
                         r.update(kw["body"])
             return {"status": "DONE"}
         raise AssertionError(f"unexpected {coll}.{method}")
+
     return h
 
 
 def iam_handler(state):
     """state: {'accounts': {email: {...}}, 'sa_policy': {email: policy}, 'project_policy': policy, 'number': '123'}"""
+
     def h(coll, method, kw):
         if coll == "projects.serviceAccounts":
             accts = state.setdefault("accounts", {})
@@ -393,6 +426,7 @@ def iam_handler(state):
                 state["project_policy"] = copy.deepcopy(kw["body"]["policy"])
                 return kw["body"]["policy"]
         raise AssertionError(f"unexpected {coll}.{method}")
+
     return h
 
 

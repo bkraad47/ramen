@@ -5,7 +5,10 @@ from ramen_console.config import apply_config, flatten, load_yaml
 
 def test_flatten():
     assert flatten({"console_port": 9, "RAMEN_STORE": "memory", "oauth": {"oidc": {"client_id": "a"}}}) == {
-        "RAMEN_CONSOLE_PORT": "9", "RAMEN_STORE": "memory", "RAMEN_OAUTH_OIDC_CLIENT_ID": "a"}
+        "RAMEN_CONSOLE_PORT": "9",
+        "RAMEN_STORE": "memory",
+        "RAMEN_OAUTH_OIDC_CLIENT_ID": "a",
+    }
 
 
 def test_load_and_apply(tmp_path, monkeypatch):

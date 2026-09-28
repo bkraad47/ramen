@@ -1,6 +1,7 @@
 """Tiny MCP client (official `mcp` 2.x SDK): list tools and call one over Streamable HTTP.
 Usage: uv run --with 'mcp>=2,<3' python mcp_call.py URL KEY [tool] [json-args]
 """
+
 import asyncio
 import json
 import sys

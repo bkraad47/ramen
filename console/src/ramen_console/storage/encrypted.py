@@ -24,7 +24,7 @@ class FieldCipher:
     def decrypt(self, value: str) -> str:
         if not isinstance(value, str) or not value.startswith(PREFIX):
             return value
-        return self._f.decrypt(value[len(PREFIX):].encode()).decode()
+        return self._f.decrypt(value[len(PREFIX) :].encode()).decode()
 
 
 class EncryptedStore(Store):

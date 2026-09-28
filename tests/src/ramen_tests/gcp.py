@@ -1,4 +1,5 @@
 """gcloud shell-outs for GCP-only assertions. Every helper skips (never fails) when gcloud is unavailable."""
+
 import json
 import shutil
 import subprocess

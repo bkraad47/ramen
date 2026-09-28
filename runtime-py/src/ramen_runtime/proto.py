@@ -1,11 +1,16 @@
 """Proto JSON validation (CONTRACTS §1) and MCP inputSchema derivation (§2)."""
+
 import jsonschema
 
 KINDS = {"tools": "tool", "resources": "resource", "prompts": "prompt"}
 _TYPES = ["number", "string", "integer", "boolean"]
 _PARAM = {
     "type": "object",
-    "properties": {"type": {"enum": _TYPES}, "enum": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "description": {"type": "string"}},
+    "properties": {
+        "type": {"enum": _TYPES},
+        "enum": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "description": {"type": "string"},
+    },
     "oneOf": [{"required": ["type"]}, {"required": ["enum"]}],
     "additionalProperties": False,
 }
@@ -17,10 +22,19 @@ _COMMON = {
 }
 _CALLABLE = {"callable": {"type": "string", "minLength": 1}, "output": {"type": "object"}, "error": {"type": "object"}}
 SCHEMAS = {
-    "tool": {"type": "object", "properties": {**_COMMON, **_CALLABLE}, "required": ["type", "name", "callable", "input"]},
+    "tool": {
+        "type": "object",
+        "properties": {**_COMMON, **_CALLABLE},
+        "required": ["type", "name", "callable", "input"],
+    },
     "resource": {
         "type": "object",
-        "properties": {**_COMMON, **_CALLABLE, "uri": {"type": "string", "minLength": 1}, "mime_type": {"type": "string"}},
+        "properties": {
+            **_COMMON,
+            **_CALLABLE,
+            "uri": {"type": "string", "minLength": 1},
+            "mime_type": {"type": "string"},
+        },
         "required": ["type", "name", "callable", "input", "uri", "mime_type"],
     },
     "prompt": {

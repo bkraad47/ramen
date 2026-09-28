@@ -1,4 +1,5 @@
 """Executes loaded packages (CONTRACTS §2 result shapes)."""
+
 import json
 
 import jsonschema

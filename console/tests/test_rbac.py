@@ -48,7 +48,10 @@ async def test_require():
 
 
 def test_check_clash():
-    super_rules = [{"effect": "deny", "permission": "iam.*"}, {"effect": "deny", "permission": "storage.buckets.delete"}]
+    super_rules = [
+        {"effect": "deny", "permission": "iam.*"},
+        {"effect": "deny", "permission": "storage.buckets.delete"},
+    ]
     check_clash(super_rules, [{"effect": "allow", "permission": "storage.objects.get"}])
     check_clash(super_rules, [{"effect": "deny", "permission": "iam.roles.create"}])
     with pytest.raises(RuleClash, match="iam.roles.create"):

@@ -62,7 +62,7 @@ CI: `.github/workflows/cloud-e2e.yml` is `workflow_dispatch` only (inputs `conso
 `zone_region`, `trusted_cidrs`; secrets `RAMEN_ADMIN_EMAIL/PASSWORD/KEY`, optional `GCP_SA_KEY`) and runs smoke + e2e + conformance + cloud.
 
 ## Console routes
-CONTRACTS §4 fixes auth/roles/`/api/v1/*` but not paths. `src/ramen_tests/console.py::ROUTES` mirrors
+CONTRACTS §4a is the binding route table. `src/ramen_tests/console.py::ROUTES` mirrors it and
 `console/tests/test_api.py` (form `POST /login` → 303 + `ramen_session` cookie; users by id; global `/api/v1/zones`;
 environments bound to zones; `POST .../environments/{env}/deploy` → 202 job polled at `/api/v1/jobs/{id}`;
 group secrets by id, never returning `value`; `POST /api/v1/groups/{g}/mcp-keys` → `rmk_` worker key;
@@ -74,7 +74,7 @@ v0.3.0 (§9): `POST /api/v1/requests {group,zone,permission}` + `POST /api/v1/re
 `PUT …/environments/{env}/blocked {blocked}`, `GET|PUT /api/v1/config/auth`, forms `POST /auth/reset`, `POST /auth/reset/{token}`,
 `POST /auth/magic`, `GET /auth/magic/{token}`, OAuth `GET /auth/{name}/login` → `/auth/{name}/callback`. Cookie sessions must send
 `X-Ramen-CSRF: <ramen_csrf cookie>` on mutations (`Console` does this automatically; API-key clients are exempt).
-Edit `ROUTES` if the console moves them. Console `/healthz` is not in the contract yet; the harness waits on `/login`.
+Edit `ROUTES` (and §4a) if the console moves them. Probes `/healthz` and `/readyz` are in §4; the harness waits on `/login` so the UI is proven up too.
 
 ## Fixtures
 - `fixtures/demo_group/` — verbatim copy of `ramen-demo-mcp-group`.

@@ -1,6 +1,7 @@
 """CONTRACTS §9 tool blocking end to end: block demo_calculator_tool on the deployed env → deploy → the node hides it
 from tools/list and answers -32601 → unblock → deploy → back. Runs after test_demo_flow (same group/env/zone, same key).
 Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL (+ key from the e2e deploy or RAMEN_MCP_KEY)."""
+
 import pytest
 
 from ramen_tests import env as E

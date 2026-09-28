@@ -1,4 +1,5 @@
 """GCP cloud adapter (CONTRACTS §7): GKE namespaces per zone, GCS group bucket, Cloud Logging, Cloud Armor, IAM."""
+
 import asyncio
 import functools
 import json
@@ -7,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from .. import __version__
 from ..errors import ApiError
 from ..policy import permissions as perm
 from ..util import now
@@ -24,13 +26,27 @@ def _guard(fn):
         except ApiError:
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
-            raise ApiError(502, f"gcp {fn.__name__}: {type(e).__name__}: {str(e)[:300]}")
+            raise ApiError(502, f"gcp {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
+
     return wrapper
 
 
 class GcpCloud(Cloud):
-    def __init__(self, project, region="us-central1", bucket="", image="", admin_key="", clients=None, transport=None,
-                 timeout=10.0, wait_secs=300, poll=2.0, pod_proxy=False, chart=None):
+    def __init__(
+        self,
+        project,
+        region="us-central1",
+        bucket="",
+        image="",
+        admin_key="",
+        clients=None,
+        transport=None,
+        timeout=10.0,
+        wait_secs=300,
+        poll=2.0,
+        pod_proxy=False,
+        chart=None,
+    ):
         self.project, self.region, self.bucket, self.image, self.admin_key = project, region, bucket, image, admin_key
         self.c = clients or GcpClients(project)
         self.kube = Kube(self.c, poll=poll, wait_secs=wait_secs)
@@ -42,11 +58,16 @@ class GcpCloud(Cloud):
         project = os.environ.get("RAMEN_GCP_PROJECT")
         if not project:
             raise ValueError("RAMEN_CLOUD=gcp needs RAMEN_GCP_PROJECT")
-        return cls(project, os.environ.get("RAMEN_GCP_REGION", "us-central1"),
-                   os.environ.get("RAMEN_GROUPS_BUCKET", f"ramen-{project}-groups"),
-                   os.environ.get("RAMEN_IMAGE_WORKER", "ramen-worker:0.2.0"), os.environ.get("RAMEN_ADMIN_KEY", ""),
-                   wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
-                   pod_proxy=os.environ.get("RAMEN_GCP_POD_PROXY", "0") == "1", chart=os.environ.get("RAMEN_WORKER_CHART"))
+        return cls(
+            project,
+            os.environ.get("RAMEN_GCP_REGION", "us-central1"),
+            os.environ.get("RAMEN_GROUPS_BUCKET", f"ramen-{project}-groups"),
+            os.environ.get("RAMEN_IMAGE_WORKER", f"ramen-worker:{__version__}"),
+            os.environ.get("RAMEN_ADMIN_KEY", ""),
+            wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
+            pod_proxy=os.environ.get("RAMEN_GCP_POD_PROXY", "0") == "1",
+            chart=os.environ.get("RAMEN_WORKER_CHART"),
+        )
 
     def bucket_uri(self, group) -> str:
         return f"gs://{self.bucket}/{group}"
@@ -55,16 +76,25 @@ class GcpCloud(Cloud):
     def _render(self, group, zone, spec):
         ns = ns_name(group, zone)
         ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
-        gsa = (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account") or spec.get("service_account")
+        gsa = (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account") or spec.get(
+            "service_account"
+        )
         if helm_available(self.chart):
-            return "helm", helm_manifests(self.chart, self.project, group, zone, spec, self.image, self.bucket_uri(group), gsa)
+            return "helm", helm_manifests(
+                self.chart, self.project, group, zone, spec, self.image, self.bucket_uri(group), gsa
+            )
         return "python", manifests(group, zone, spec, self.image, self.bucket_uri(group), gsa)
 
     def _attach(self, group, zone, spec) -> dict:
         renderer, docs = self._render(group, zone, spec or {})
         for d in docs:
             self.kube.apply(d, keep=("replicas",) if d["metadata"]["name"] == "worker-canary" else ())
-        return {"ok": True, "namespace": ns_name(group, zone), "renderer": renderer, "applied": [d["kind"] for d in docs]}
+        return {
+            "ok": True,
+            "namespace": ns_name(group, zone),
+            "renderer": renderer,
+            "applied": [d["kind"] for d in docs],
+        }
 
     @_guard
     async def attach_zone(self, group, zone, spec=None) -> dict:
@@ -77,7 +107,9 @@ class GcpCloud(Cloud):
     # repo sync ----------------------------------------------------------
     @_guard
     async def sync_repo(self, group, repo_url, ref, token):
-        return await asyncio.to_thread(gcp_api.sync_repo_to_gcs, self.c.storage, self.bucket, group, repo_url, ref, token)
+        return await asyncio.to_thread(
+            gcp_api.sync_repo_to_gcs, self.c.storage, self.bucket, group, repo_url, ref, token
+        )
 
     # deploy -------------------------------------------------------------
     def _pod_url(self, pod) -> str:
@@ -96,8 +128,11 @@ class GcpCloud(Cloud):
         result = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
         log(f"{name}: reload ok ({len(result.get('tools', []))} tools, {len(result.get('errors', []))} errors)")
         if mcp_key:
-            s = await client.post(f"{url}/mcp", headers={"Authorization": f"Bearer {mcp_key}"},
-                                  json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+            s = await client.post(
+                f"{url}/mcp",
+                headers={"Authorization": f"Bearer {mcp_key}"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            )
             ok = s.status_code == 200 and "result" in s.json()
         else:
             s = await client.get(f"{url}/readyz")
@@ -114,8 +149,9 @@ class GcpCloud(Cloud):
             lines.append(f"{now()} {msg}")
             if log:
                 log(lines[-1])
+
         ns, config = ns_name(group, zone), dict(config or {})
-        workers, canary_up = [], False  # noqa: F841 - kept for log clarity
+        workers = []
         try:
             note(f"{ns}: applying zone manifests")
             await asyncio.to_thread(self._attach, group, zone, spec or {})
@@ -131,7 +167,6 @@ class GcpCloud(Cloud):
             mcp_key = (config.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
             async with httpx.AsyncClient(**self._client_kw) as client:
                 if canary:
-                    canary_up = True
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 1)
                     await asyncio.to_thread(self.kube.restart, ns, "worker-canary")
                     note("canary: restarted worker-canary, waiting for ready")
@@ -155,11 +190,14 @@ class GcpCloud(Cloud):
         except Exception as e:  # noqa: BLE001 - reported in the job, canary torn down
             err = f"{type(e).__name__}: {e}"
             note(f"deploy failed: {err}")
-            if canary:  # also tears down a canary left from an earlier deploy (canary_up tracks this attempt only)
+            if canary:  # also tears down a canary left from an earlier deploy
                 try:
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
                     gone = await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
-                    note("scaled canary to 0; main deployment untouched" + ("" if gone else " (canary pod still terminating)"))
+                    note(
+                        "scaled canary to 0; main deployment untouched"
+                        + ("" if gone else " (canary pod still terminating)")
+                    )
                 except Exception as e2:  # noqa: BLE001
                     note(f"could not scale canary down: {type(e2).__name__}: {e2}")
             workers.append({"id": "worker-canary" if canary else "worker", "ok": False, "error": err})
@@ -197,7 +235,7 @@ class GcpCloud(Cloud):
         ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
         ws = await self.workers(group, zone)
         loads = [w["load"] for w in ws]
-        load = "high" if "high" in loads else ("low" if loads and all(l in ("low", "down") for l in loads) else "even")
+        load = "high" if "high" in loads else ("low" if loads and all(x in ("low", "down") for x in loads) else "even")
         scaler = 0.5 if load == "high" else 1.0
         out = {"ok": True, "load": load, "capacity_scaler": scaler, "backend_service": None, "applied": False}
         try:
@@ -211,7 +249,10 @@ class GcpCloud(Cloud):
                 if "not ready" not in str(e):
                     raise
                 self._background(comp.set_capacity, bs, ns, scaler, 120)
-                out.update(backend_service=bs["name"], note="capacity change pending: backend service busy, retrying in background")
+                out.update(
+                    backend_service=bs["name"],
+                    note="capacity change pending: backend service busy, retrying in background",
+                )
             else:
                 out.update(backend_service=bs["name"], applied=True)
         hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
@@ -225,7 +266,9 @@ class GcpCloud(Cloud):
     async def set_ip_rules(self, group, zone, cidrs):
         ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
         ref = await asyncio.to_thread(comp.set_armor, f"ramen-{group}", list(cidrs))
-        await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"})
+        await asyncio.to_thread(
+            self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
+        )
         # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
         for dep in ("worker", "worker-canary"):
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
@@ -244,7 +287,11 @@ class GcpCloud(Cloud):
             if "not ready" not in str(e):
                 raise
             self._background(comp.attach_armor, bs["name"], ref, 120)
-            return {**out, "backend_service": bs["name"], "note": "Cloud Armor attach pending: backend service busy, retrying in background"}
+            return {
+                **out,
+                "backend_service": bs["name"],
+                "note": "Cloud Armor attach pending: backend service busy, retrying in background",
+            }
         return {**out, "backend_service": bs["name"], "attached": True}
 
     def _background(self, fn, *args):
@@ -274,6 +321,24 @@ class GcpCloud(Cloud):
         return removed
 
     # identity -----------------------------------------------------------
+    def _bucket_condition(self, group) -> dict:
+        """IAM condition restricting a storage role to the group's prefix in the groups bucket."""
+        return {
+            "title": f"ramen {group} bucket prefix",
+            "expression": (
+                f'resource.name.startsWith("projects/_/buckets/{self.bucket}/objects/{group}/") '
+                f'|| resource.name == "projects/_/buckets/{self.bucket}"'
+            ),
+        }
+
+    @staticmethod
+    def _secrets_condition(group, project_number) -> dict:
+        """IAM condition restricting a Secret Manager role to `ramen-<group>-*` secrets."""
+        return {
+            "title": f"ramen {group} secrets",
+            "expression": f'resource.name.startsWith("projects/{project_number}/secrets/ramen-{group}-")',
+        }
+
     @_guard
     async def create_service_account(self, group, zone):
         ns, iam = ns_name(group, zone), gcp_api.Iam(self.c.iam, self.c.crm, self.project)
@@ -281,22 +346,47 @@ class GcpCloud(Cloud):
         def run():
             email, created = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
             number = iam.project_number()
-            roles = iam.grant_project_roles(email, [
-                ("roles/storage.objectViewer", {"title": f"ramen {group} bucket prefix", "expression":
-                    f'resource.name.startsWith("projects/_/buckets/{self.bucket}/objects/{group}/") || '
-                    f'resource.name == "projects/_/buckets/{self.bucket}"'}),
-                ("roles/secretmanager.secretAccessor", {"title": f"ramen {group} secrets", "expression":
-                    f'resource.name.startsWith("projects/{number}/secrets/ramen-{group}-")'})])
+            roles = iam.grant_project_roles(
+                email,
+                [
+                    ("roles/storage.objectViewer", self._bucket_condition(group)),
+                    ("roles/secretmanager.secretAccessor", self._secrets_condition(group, number)),
+                ],
+            )
             member = iam.bind_workload_identity(email, ns, "worker")
-            self.kube.apply({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}}})
-            self.kube.apply({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {
-                "name": "worker", "namespace": ns, "annotations": {"iam.gke.io/gcp-service-account": email}}})
-            return {"name": email, "created": created, "roles": roles, "ksa": f"{ns}/worker", "workload_identity": member}
+            self.kube.apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {"name": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}},
+                }
+            )
+            self.kube.apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ServiceAccount",
+                    "metadata": {
+                        "name": "worker",
+                        "namespace": ns,
+                        "annotations": {"iam.gke.io/gcp-service-account": email},
+                    },
+                }
+            )
+            return {
+                "name": email,
+                "created": created,
+                "roles": roles,
+                "ksa": f"{ns}/worker",
+                "workload_identity": member,
+            }
+
         return await asyncio.to_thread(run)
 
     @_guard
     async def apply_sa_permissions(self, group, zone, permissions):
-        """Grant the mapped IAM roles to the zone GSA (created if missing). bucket.* stays scoped to the group prefix."""
+        """Grant the mapped IAM roles to the zone GSA (created if missing).
+
+        bucket.* stays scoped to the group prefix, secrets.* to the group's secrets."""
         ns, iam = ns_name(group, zone), gcp_api.Iam(self.c.iam, self.c.crm, self.project)
         roles = perm.mapped(permissions, "gcp")
 
@@ -306,15 +396,19 @@ class GcpCloud(Cloud):
             for role in roles:
                 cond = None
                 if role.startswith("roles/storage."):
-                    cond = {"title": f"ramen {group} bucket prefix", "expression":
-                            f'resource.name.startsWith("projects/_/buckets/{self.bucket}/objects/{group}/") || '
-                            f'resource.name == "projects/_/buckets/{self.bucket}"'}
+                    cond = self._bucket_condition(group)
                 elif role.startswith("roles/secretmanager."):
-                    cond = {"title": f"ramen {group} secrets", "expression":
-                            f'resource.name.startsWith("projects/{iam.project_number()}/secrets/ramen-{group}-")'}
+                    cond = self._secrets_condition(group, iam.project_number())
                 bindings.append((role, cond))
             applied = iam.grant_project_roles(email, bindings) if bindings else []
-            return {"ok": True, "service_account": email, "applied": applied, "permissions": list(permissions), "ksa": f"{ns}/worker"}
+            return {
+                "ok": True,
+                "service_account": email,
+                "applied": applied,
+                "permissions": list(permissions),
+                "ksa": f"{ns}/worker",
+            }
+
         return await asyncio.to_thread(run)
 
     @_guard
@@ -326,10 +420,25 @@ class GcpCloud(Cloud):
                 main = self.kube.read("Deployment", ns, "worker") or {}
                 can = self.kube.read("Deployment", ns, "worker-canary") or {}
                 ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
-                zones.append({"group": labels.get("ramen.io/group"), "zone": labels.get("ramen.io/zone"), "namespace": ns,
-                              "replicas": main.get("spec", {}).get("replicas", 0), "ready": (main.get("status") or {}).get("readyReplicas", 0),
-                              "canary_replicas": can.get("spec", {}).get("replicas", 0), "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
-                              "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account")})
-            return {"groups": sorted({z["group"] for z in zones if z.get("group")}), "zones": zones,
-                    "service_accounts": gcp_api.Iam(self.c.iam, self.c.crm, self.project).list_accounts(), "at": now()}
+                zones.append(
+                    {
+                        "group": labels.get("ramen.io/group"),
+                        "zone": labels.get("ramen.io/zone"),
+                        "namespace": ns,
+                        "replicas": main.get("spec", {}).get("replicas", 0),
+                        "ready": (main.get("status") or {}).get("readyReplicas", 0),
+                        "canary_replicas": can.get("spec", {}).get("replicas", 0),
+                        "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
+                        "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(
+                            "iam.gke.io/gcp-service-account"
+                        ),
+                    }
+                )
+            return {
+                "groups": sorted({z["group"] for z in zones if z.get("group")}),
+                "zones": zones,
+                "service_accounts": gcp_api.Iam(self.c.iam, self.c.crm, self.project).list_accounts(),
+                "at": now(),
+            }
+
         return await asyncio.to_thread(run)

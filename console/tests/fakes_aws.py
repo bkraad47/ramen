@@ -1,5 +1,7 @@
-"""AWS test doubles: the shared FakeK8s (+ an Ingress view) and real boto3 clients under moto's mock_aws; CloudWatch Logs
+"""AWS test doubles: the shared FakeK8s (+ an Ingress view) and real boto3 clients under moto's mock_aws;
+CloudWatch Logs
 Insights is a hand fake because moto does not evaluate Insights queries."""
+
 import os
 from contextlib import contextmanager
 
@@ -35,7 +37,10 @@ class FakeLogsInsights:
     def start_query(self, **kw):
         if self.missing:
             from botocore.exceptions import ClientError
-            raise ClientError({"Error": {"Code": "ResourceNotFoundException", "Message": "no such log group"}}, "StartQuery")
+
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "no such log group"}}, "StartQuery"
+            )
         self.queries.append(kw)
         return {"queryId": f"q{len(self.queries)}"}
 
@@ -45,7 +50,10 @@ class FakeLogsInsights:
             return {"status": "Running", "results": []}
         if self.fail:
             return {"status": self.fail, "results": []}
-        return {"status": "Complete", "results": [[{"field": k, "value": v} for k, v in row.items()] for row in self.results]}
+        return {
+            "status": "Complete",
+            "results": [[{"field": k, "value": v} for k, v in row.items()] for row in self.results],
+        }
 
     def stop_query(self, queryId):
         self.stopped.append(queryId)
@@ -56,7 +64,17 @@ class FakeLogsInsights:
 def aws_env():
     """moto sandbox + fake credentials; boto3 clients created inside are served by moto."""
     from moto import mock_aws
-    old = {k: os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION", "AWS_SECURITY_TOKEN", "AWS_SESSION_TOKEN")}
+
+    old = {
+        k: os.environ.get(k)
+        for k in (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_DEFAULT_REGION",
+            "AWS_SECURITY_TOKEN",
+            "AWS_SESSION_TOKEN",
+        )
+    }
     os.environ.update(AWS_ACCESS_KEY_ID="testing", AWS_SECRET_ACCESS_KEY="testing", AWS_DEFAULT_REGION=REGION)
     try:
         with mock_aws():
@@ -80,22 +98,32 @@ class FakeAwsClients:
 
     def seed(self, cluster="ramen", bucket=BUCKET):
         self.s3.create_bucket(Bucket=bucket)
-        self.eks.create_cluster(name=cluster, roleArn=f"arn:aws:iam::{ACCOUNT}:role/eks", resourcesVpcConfig={"subnetIds": ["subnet-1"]})
+        self.eks.create_cluster(
+            name=cluster, roleArn=f"arn:aws:iam::{ACCOUNT}:role/eks", resourcesVpcConfig={"subnetIds": ["subnet-1"]}
+        )
         return self
 
     def alb(self, group="ramen"):
         """Create an ALB tagged like the Load Balancer Controller would for IngressGroup `group`."""
         ec2 = self._client("ec2")
         vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
-        subnets = [ec2.create_subnet(VpcId=vpc, CidrBlock=f"10.0.{i}.0/24", AvailabilityZone=f"{self.region}{az}")["Subnet"]["SubnetId"]
-                   for i, az in ((1, "a"), (2, "b"))]
-        lb = self.elbv2.create_load_balancer(Name=f"k8s-{group}-abc", Subnets=subnets,
-                                             Tags=[{"Key": "ingress.k8s.aws/stack", "Value": group}, {"Key": "elbv2.k8s.aws/cluster", "Value": "ramen"}])
+        subnets = [
+            ec2.create_subnet(VpcId=vpc, CidrBlock=f"10.0.{i}.0/24", AvailabilityZone=f"{self.region}{az}")["Subnet"][
+                "SubnetId"
+            ]
+            for i, az in ((1, "a"), (2, "b"))
+        ]
+        lb = self.elbv2.create_load_balancer(
+            Name=f"k8s-{group}-abc",
+            Subnets=subnets,
+            Tags=[{"Key": "ingress.k8s.aws/stack", "Value": group}, {"Key": "elbv2.k8s.aws/cluster", "Value": "ramen"}],
+        )
         return lb["LoadBalancers"][0]
 
     def _client(self, name):
         if name not in self._boto:
             import boto3
+
             self._boto[name] = boto3.client(name, region_name=self.region)
         return self._boto[name]
 

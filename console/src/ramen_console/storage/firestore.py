@@ -10,6 +10,7 @@ class FirestoreStore(Store):
     @classmethod
     def from_env(cls):
         from google.cloud import firestore
+
         project = os.environ.get("RAMEN_GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
         if os.environ.get("FIRESTORE_EMULATOR_HOST") and not project:
             project = "ramen-local"
@@ -32,6 +33,7 @@ class FirestoreStore(Store):
 
     async def list(self, collection, filters: Filters = None):
         from google.cloud.firestore_v1.base_query import FieldFilter
+
         q = self._col(collection)
         for k, v in (filters or {}).items():
             q = q.where(filter=FieldFilter(k, "==", v))

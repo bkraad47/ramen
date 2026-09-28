@@ -48,8 +48,14 @@ class Accounts:
         if await self.store.list("users", {"email": email}):
             raise conflict(f"user {email} exists")
         await self._check_scope(p, role, groups)
-        doc = {"email": email, "role": role, "groups": list(groups), "created": now(), "provider": provider,
-               "password_hash": hash_password(password) if password else ""}
+        doc = {
+            "email": email,
+            "role": role,
+            "groups": list(groups),
+            "created": now(),
+            "provider": provider,
+            "password_hash": hash_password(password) if password else "",
+        }
         return public(await self.store.put("users", uid(), doc))
 
     async def upsert_sso_user(self, email, role="viewer", groups=(), provider="oauth") -> dict:
@@ -57,7 +63,14 @@ class Accounts:
         found = await self.store.list("users", {"email": email})
         if found:
             return found[0]
-        doc = {"email": email, "role": role, "groups": list(groups), "created": now(), "provider": provider, "password_hash": ""}
+        doc = {
+            "email": email,
+            "role": role,
+            "groups": list(groups),
+            "created": now(),
+            "provider": provider,
+            "password_hash": "",
+        }
         return await self.store.put("users", uid(), doc)
 
     async def start_token(self, email, kind) -> tuple[dict, str] | None:
@@ -134,13 +147,30 @@ class Accounts:
     async def request_permission(self, p: Principal, role=None, group=None, zone=None, permission=None) -> dict:
         """Role request (viewer → admin) or SA permission request (group+zone+permission, CONTRACTS §9)."""
         if permission:
-            doc = {"kind": "permission_request", "type": "permission", "user": p.id, "email": p.name, "group": group,
-                   "zone": zone, "permission": permission, "status": "pending", "created": now()}
+            doc = {
+                "kind": "permission_request",
+                "type": "permission",
+                "user": p.id,
+                "email": p.name,
+                "group": group,
+                "zone": zone,
+                "permission": permission,
+                "status": "pending",
+                "created": now(),
+            }
         else:
             if role not in ROLES:
                 raise invalid("bad role")
-            doc = {"kind": "permission_request", "type": "role", "user": p.id, "email": p.name, "role": role, "group": group,
-                   "status": "pending", "created": now()}
+            doc = {
+                "kind": "permission_request",
+                "type": "role",
+                "user": p.id,
+                "email": p.name,
+                "role": role,
+                "group": group,
+                "status": "pending",
+                "created": now(),
+            }
         return await self.store.put("activity", uid(), doc)
 
     async def list_requests(self) -> list[dict]:

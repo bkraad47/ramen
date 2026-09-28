@@ -7,8 +7,16 @@ class Cloud(ABC):
     async def sync_repo(self, group: str, repo_url: str, ref: str, token: str | None) -> str: ...
 
     @abstractmethod
-    async def deploy(self, group: str, env: str, zone: str, canary: bool = True, config: dict[str, str] | None = None,
-                     spec: dict[str, Any] | None = None, log=None) -> dict[str, Any]: ...
+    async def deploy(
+        self,
+        group: str,
+        env: str,
+        zone: str,
+        canary: bool = True,
+        config: dict[str, str] | None = None,
+        spec: dict[str, Any] | None = None,
+        log=None,
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     async def rebalance(self, group: str, zone: str) -> dict[str, Any]: ...

@@ -3,6 +3,7 @@ name = "ramen-tests"
 version = "0.3.0"
 description = "Ramen cross-component conformance + e2e tests (run locally or against a cloud URL)"
 requires-python = ">=3.14"
+license = "BSD-3-Clause"
 dependencies = [
   "pytest>=8",
   "pytest-asyncio>=1.0",
@@ -12,6 +13,9 @@ dependencies = [
   "jsonschema>=4.23",
   "pyyaml>=6",
 ]
+
+[dependency-groups]
+dev = ["ruff>=0.16"]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,3 +37,6 @@ markers = [
 
 [tool.coverage.run]
 source = ["src"]
+
+[tool.ruff]
+extend = "../ruff.toml"

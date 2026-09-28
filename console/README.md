@@ -45,14 +45,17 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `FIRESTORE_EMULATOR_HOST`, `RAMEN_GCP_PROJECT`, `RAMEN_FIRESTORE_PREFIX` | – / – / `ramen_` | Firestore adapter (emulator honored automatically) |
 | `RAMEN_DDB_TABLE`, `RAMEN_DDB_ENDPOINT` + AWS creds | `ramen` / – | DynamoDB adapter (single table, pk=collection, sk=id; created if missing) |
 | `RAMEN_CLOUD` | `local` | `local` / `gcp` / `aws` (`aws` implemented in v0.3.0 but untested on a real account) |
-| `RAMEN_SECRETS_BACKEND` | `store` | `store` keeps secret values Fernet-encrypted in the store; `gcp` writes them to Secret Manager as `ramen-<group>-<env|all>-<zone|all>-<NAME>` (labels group/env/zone) and the store keeps only name + `sm://` ref. Deploy resolves refs into the worker Secret |
+| `RAMEN_SECRETS_BACKEND` | `store` | `store` keeps secret values Fernet-encrypted in the store; `gcp` writes them to Secret Manager as `ramen-<group>-<env|all>-<zone|all>-<NAME>` (labels group/env/zone) and the store keeps only name + `sm://` ref; `aws` writes them to Secrets Manager as `ramen/<group>/<env|all>/<zone|all>/<NAME>` (tags) with an `asm://` ref. Deploy resolves refs into the worker Secret |
 | `RAMEN_GCP_PROJECT` | – | GCP project (Firestore, Secret Manager, Logging, Compute, IAM). Required for `RAMEN_CLOUD=gcp` / `RAMEN_SECRETS_BACKEND=gcp` |
 | `RAMEN_GCP_REGION` | `us-central1` | GKE cluster region |
 | `RAMEN_GROUPS_BUCKET` | `ramen-<project>-groups` | One GCS bucket, one prefix per group (`gs://<bucket>/<group>/`) |
-| `RAMEN_IMAGE_WORKER` | `ramen-worker:0.2.0` | Worker image used in the per-zone Deployments |
+| `RAMEN_IMAGE_WORKER` | `ramen-worker:<console version>` | Worker image used in the per-zone Deployments (the Helm chart sets the registry path) |
 | `RAMEN_DEPLOY_TIMEOUT_SECS` | `300` | Max wait for a Deployment rollout during deploy |
 | `RAMEN_GCP_POD_PROXY` | `0` | `1` reads worker `/metrics` through the API-server pod proxy (for running the console outside the cluster) |
 | `RAMEN_WORKER_CHART` | – | Path to `deploy/helm/ramen-worker`; when set and `helm` is on PATH the zone manifests are rendered with `helm template`, otherwise the built-in Python manifest set is used |
+| `RAMEN_GCP_FRESH_HTTP` | `1` | `0` lets googleapiclient reuse its shared (not thread-safe) transport instead of a per-call authorized `httplib2.Http` |
+| `GOOGLE_OAUTH_ACCESS_TOKEN` | – | Explicit OAuth token for the Google clients when no ADC is available (`gcloud auth print-access-token`); dev only |
+| `GOOGLE_CLOUD_PROJECT` | – | Firestore project fallback when `RAMEN_GCP_PROJECT` is unset (the compose stack sets it for the emulator) |
 | `RAMEN_AWS_REGION` | `AWS_REGION` or `us-east-1` | AWS region for `RAMEN_CLOUD=aws` / `RAMEN_SECRETS_BACKEND=aws` (untested on a real account, CONTRACTS §8) |
 | `RAMEN_EKS_CLUSTER`, `RAMEN_ALB_GROUP` | `ramen` / `ramen` | EKS cluster name (OIDC issuer for worker IAM roles, Container Insights log group) and the ALB IngressGroup shared by console + workers |
 | `RAMEN_AWS_POD_PROXY` | `0` | `1` reads worker `/metrics` through the API-server pod proxy (console running outside EKS); AWS twin of `RAMEN_GCP_POD_PROXY` |
@@ -74,6 +77,7 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_CONSOLE_PORT` | `8000` | HTTP port |
 | `RAMEN_TLS` / `RAMEN_TLS_PORT` / `RAMEN_TLS_HOST` | – / `8443` / `localhost` | `RAMEN_TLS=self` serves HTTPS with a generated cert |
 | `RAMEN_LOG_LEVEL` | `INFO` | Console log level |
+| `RAMEN_APP_AUTOCREATE` | `1` | `0` skips building the module-level `app` on import (tests build their own with `create_app`) |
 
 ### Auth config yaml example
 

@@ -20,6 +20,7 @@ async def auth_settings(request: Request):
 
 def base_url(request: Request) -> str:
     import os
+
     return (os.environ.get("RAMEN_PUBLIC_URL") or str(request.base_url)).rstrip("/")
 
 
@@ -34,8 +35,12 @@ def _login_response(request: Request, user: dict, next_: str = "/"):
 async def _login_page(request: Request, status=200, **ctx) -> Response:
     st, auth = request.app.state, await auth_settings(request)
     ctx.setdefault("next", "/")
-    return st.templates.TemplateResponse(request, "login.html", {**ctx, "providers": st.oauth.providers(), "auth": auth,
-                                                                  "mail": st.mailer.enabled}, status_code=status)
+    return st.templates.TemplateResponse(
+        request,
+        "login.html",
+        {**ctx, "providers": st.oauth.providers(), "auth": auth, "mail": st.mailer.enabled},
+        status_code=status,
+    )
 
 
 @r.get("/login")
@@ -44,12 +49,16 @@ async def login_page(request: Request, next: str = "/", msg: str | None = None):
 
 
 @r.post("/login")
-async def login(request: Request, email: str = Form(), password: str = Form(), next: str = Form("/"), _=Depends(csrf.csrf_form)):
+async def login(
+    request: Request, email: str = Form(), password: str = Form(), next: str = Form("/"), _=Depends(csrf.csrf_form)
+):
     note(request, "login", email, user=email)
     auth = await auth_settings(request)
     if not auth.can_password(email):
         note(request, "login", email, ["password_login:disabled"], user=email)
-        return await _login_page(request, 403, error="Password login is disabled; use a configured provider or a sign-in link", next=next)
+        return await _login_page(
+            request, 403, error="Password login is disabled; use a configured provider or a sign-in link", next=next
+        )
     user = await request.app.state.accounts.authenticate(email, password)
     if not user:
         return await _login_page(request, 401, error="Invalid email or password", next=next)
@@ -67,7 +76,9 @@ async def logout():
 # password reset / invite ------------------------------------------------
 @r.get("/auth/reset")
 async def reset_page(request: Request):
-    return request.app.state.templates.TemplateResponse(request, "reset.html", {"stage": "request", "mail": request.app.state.mailer.enabled})
+    return request.app.state.templates.TemplateResponse(
+        request, "reset.html", {"stage": "request", "mail": request.app.state.mailer.enabled}
+    )
 
 
 @r.post("/auth/reset")
@@ -121,7 +132,11 @@ async def magic_request(request: Request, email: str = Form(), _=Depends(csrf.cs
 async def magic_login(request: Request, token: str):
     st = request.app.state
     parsed = st.tokens.load("magic", token)
-    user = parsed and (await auth_settings(request)).magic_link and await st.accounts.redeem_token(parsed[0], "magic", parsed[1])
+    user = (
+        parsed
+        and (await auth_settings(request)).magic_link
+        and await st.accounts.redeem_token(parsed[0], "magic", parsed[1])
+    )
     note(request, "login.magic", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
         raise ApiError(400, "sign-in link is invalid, expired or already used")
@@ -144,11 +159,12 @@ async def oauth_login(request: Request, name: str):
 async def oauth_callback(request: Request, name: str):
     client = _client(request, name)
     from authlib.integrations.base_client.errors import OAuthError
+
     try:
         token = await client.authorize_access_token(request)
     except OAuthError as e:
         note(request, "login.oauth", name, [f"provider:{name}"], user="-")
-        raise ApiError(401, f"oauth error: {e.error}")
+        raise ApiError(401, f"oauth error: {e.error}") from e
     info = dict(token.get("userinfo") or {})
     if not info.get("email"):
         info = dict(await client.userinfo(token=token))

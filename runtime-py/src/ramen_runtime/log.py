@@ -1,4 +1,5 @@
 """JSON-lines logging on stderr. Never pass secret values as fields."""
+
 import json
 import sys
 import time

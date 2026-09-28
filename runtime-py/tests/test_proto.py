@@ -2,7 +2,15 @@ import pytest
 
 from ramen_runtime.proto import ProtoError, input_schema, validate_proto
 
-BASE = {"type": "tool", "name": "t", "description": "d", "callable": "f", "input": {}, "output": {"type": "number"}, "error": {"type": "string"}}
+BASE = {
+    "type": "tool",
+    "name": "t",
+    "description": "d",
+    "callable": "f",
+    "input": {},
+    "output": {"type": "number"},
+    "error": {"type": "string"},
+}
 
 
 def test_valid_tool():
@@ -41,7 +49,14 @@ def test_resource_requires_uri():
 
 
 def test_prompt_has_no_callable_but_skill():
-    p = {"type": "prompt", "name": "p", "description": "d", "input": {}, "skill": "SKILL.md", "settings": "settings.json"}
+    p = {
+        "type": "prompt",
+        "name": "p",
+        "description": "d",
+        "input": {},
+        "skill": "SKILL.md",
+        "settings": "settings.json",
+    }
     validate_proto(p, "prompts", "p", "p")
     with pytest.raises(ProtoError, match="skill"):
         validate_proto({k: v for k, v in p.items() if k != "skill"}, "prompts", "p", "p")
@@ -53,7 +68,15 @@ def test_bad_param_type():
 
 
 def test_input_schema_maps_types():
-    s = input_schema({"a": {"type": "number", "description": "A"}, "b": {"type": "string"}, "c": {"type": "integer"}, "d": {"type": "boolean"}, "e": {"enum": ["x", "y"], "description": "E"}})
+    s = input_schema(
+        {
+            "a": {"type": "number", "description": "A"},
+            "b": {"type": "string"},
+            "c": {"type": "integer"},
+            "d": {"type": "boolean"},
+            "e": {"enum": ["x", "y"], "description": "E"},
+        }
+    )
     assert s["type"] == "object"
     assert s["properties"]["a"] == {"type": "number", "description": "A"}
     assert s["properties"]["b"] == {"type": "string"}

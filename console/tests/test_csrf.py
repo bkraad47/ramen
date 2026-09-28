@@ -1,7 +1,8 @@
 """CONTRACTS §9 CSRF: ramen_csrf cookie + X-Ramen-CSRF header / hidden field; API keys exempt."""
+
 from fastapi.testclient import TestClient
 
-from tests.test_api import app, client, cloud, demo, root, login  # noqa: F401 - pytest fixtures
+from tests.test_api import app, client, cloud, demo, login, root  # noqa: F401 - pytest fixtures
 
 
 def bare(app):
@@ -21,7 +22,10 @@ def test_cookie_authenticated_api_mutation_needs_header(demo):
     tok = c.cookies.get("ramen_csrf")
     assert c.post("/api/v1/zones", json={"name": "z-csrf"}, headers={"X-Ramen-CSRF": tok}).status_code == 201
     rows = demo.get("/api/v1/audit").json()  # rejected attempts are audited (generic action: the route never ran)
-    assert sum(1 for a in rows if a["action"] == "POST /api/v1/zones" and not a["ok"] and a["user"] == "root@ramen.local") == 2
+    assert (
+        sum(1 for a in rows if a["action"] == "POST /api/v1/zones" and not a["ok"] and a["user"] == "root@ramen.local")
+        == 2
+    )
     assert any(a["action"] == "zone.create" and a["ok"] for a in rows)
     assert c.post("/api/v1/config/auth", headers={"X-Ramen-CSRF": tok}).status_code == 405
 
@@ -42,9 +46,13 @@ def test_login_form_double_submit(client):
     assert tok in page.text
     r = c.post("/login", data={"email": "root@ramen.local", "password": "rootpw"}, follow_redirects=False)
     assert r.status_code == 403  # cookie present, field missing
-    r = c.post("/login", data={"email": "root@ramen.local", "password": "rootpw", "csrf_token": "nope"}, follow_redirects=False)
+    r = c.post(
+        "/login", data={"email": "root@ramen.local", "password": "rootpw", "csrf_token": "nope"}, follow_redirects=False
+    )
     assert r.status_code == 403
-    r = c.post("/login", data={"email": "root@ramen.local", "password": "rootpw", "csrf_token": tok}, follow_redirects=False)
+    r = c.post(
+        "/login", data={"email": "root@ramen.local", "password": "rootpw", "csrf_token": tok}, follow_redirects=False
+    )
     assert r.status_code == 303
     assert c.get("/logout", follow_redirects=False).status_code == 303
     assert not c.cookies.get("ramen_session")

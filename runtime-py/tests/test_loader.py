@@ -4,7 +4,15 @@ from conftest import write_pkg
 
 from ramen_runtime.loader import load
 
-TOOL = {"type": "tool", "name": "x", "description": "d", "callable": "f", "input": {"a": {"type": "string"}}, "output": {"type": "string"}, "error": {"type": "string"}}
+TOOL = {
+    "type": "tool",
+    "name": "x",
+    "description": "d",
+    "callable": "f",
+    "input": {"a": {"type": "string"}},
+    "output": {"type": "string"},
+    "error": {"type": "string"},
+}
 
 
 def test_loads_demo(demo_bucket):
@@ -15,8 +23,15 @@ def test_loads_demo(demo_bucket):
     assert reg.errors == []
     d = reg.describe()
     assert d["tools"][0]["inputSchema"]["required"] == ["var1", "var2", "func"]
-    assert d["resources"][0] == {"uri": "ramen://demo/readme", "name": "demo_readme", "description": "README of the demo group repo.", "mimeType": "text/markdown"}
-    assert d["prompts"][0]["arguments"] == [{"name": "request", "description": "the user's arithmetic question", "required": True}]
+    assert d["resources"][0] == {
+        "uri": "ramen://demo/readme",
+        "name": "demo_readme",
+        "description": "README of the demo group repo.",
+        "mimeType": "text/markdown",
+    }
+    assert d["prompts"][0]["arguments"] == [
+        {"name": "request", "description": "the user's arithmetic question", "required": True}
+    ]
     assert d["prompts"][0]["_meta"]["settings"]["max_tool_calls"] == 10
     assert d["errors"] == []
 
@@ -33,7 +48,9 @@ def test_missing_mcp_dir(tmp_path):
 
 def test_errors_are_per_package(tmp_path):
     write_pkg(tmp_path, "tools", "good", {**TOOL, "name": "good"}, "def f(a):\n    return a\n")
-    write_pkg(tmp_path, "tools", "badtype", {**TOOL, "name": "badtype", "type": "resource"}, "def f(a):\n    return a\n")
+    write_pkg(
+        tmp_path, "tools", "badtype", {**TOOL, "name": "badtype", "type": "resource"}, "def f(a):\n    return a\n"
+    )
     write_pkg(tmp_path, "tools", "nojson", {}, "def f(a): pass\n", stem="wrongstem")
     write_pkg(tmp_path, "tools", "nofunc", {**TOOL, "name": "nofunc"}, "y = 1\n")
     write_pkg(tmp_path, "tools", "nopy", {**TOOL, "name": "nopy"})
@@ -51,13 +68,27 @@ def test_errors_are_per_package(tmp_path):
 
 
 def test_prompt_missing_skill_file(tmp_path):
-    write_pkg(tmp_path, "prompts", "p", {"type": "prompt", "name": "p", "description": "d", "input": {}, "skill": "SKILL.md", "settings": "settings.json"})
+    write_pkg(
+        tmp_path,
+        "prompts",
+        "p",
+        {
+            "type": "prompt",
+            "name": "p",
+            "description": "d",
+            "input": {},
+            "skill": "SKILL.md",
+            "settings": "settings.json",
+        },
+    )
     reg = load(tmp_path)
     assert reg.prompts == [] and "SKILL.md" in reg.errors[0]["reason"]
 
 
 def test_prompt_without_settings_file_ok(tmp_path):
-    d = write_pkg(tmp_path, "prompts", "p", {"type": "prompt", "name": "p", "description": "d", "input": {}, "skill": "SKILL.md"})
+    d = write_pkg(
+        tmp_path, "prompts", "p", {"type": "prompt", "name": "p", "description": "d", "input": {}, "skill": "SKILL.md"}
+    )
     (d / "SKILL.md").write_text("hi")
     reg = load(tmp_path)
     assert reg.prompts[0].settings == {}

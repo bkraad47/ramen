@@ -13,8 +13,17 @@ class Jobs:
         self._jobs: dict[str, dict] = {}
 
     def create(self, kind, target) -> dict:
-        job = {"id": uid(), "kind": kind, "target": target, "status": "running", "started": now(),
-               "finished": None, "result": None, "error": None, "log": []}
+        job = {
+            "id": uid(),
+            "kind": kind,
+            "target": target,
+            "status": "running",
+            "started": now(),
+            "finished": None,
+            "result": None,
+            "error": None,
+            "log": [],
+        }
         self._jobs[job["id"]] = job
         return job
 
@@ -22,8 +31,11 @@ class Jobs:
         return self._jobs.get(jid)
 
     def recent(self, target_prefix="") -> list[dict]:
-        return sorted((j for j in self._jobs.values() if j["target"].startswith(target_prefix)),
-                      key=lambda j: j["started"], reverse=True)[:20]
+        return sorted(
+            (j for j in self._jobs.values() if j["target"].startswith(target_prefix)),
+            key=lambda j: j["started"],
+            reverse=True,
+        )[:20]
 
 
 async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: str | None, canary: bool, audit):
@@ -39,20 +51,35 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
         for z in zones:
             vars_, _, mcp = await svc.secrets_for(group, env_name, z)
-            cfg = {"RAMEN_VERBOSE": "1" if env.get("verbose") else "0", "RAMEN_BLOCKED": ",".join(env.get("blocked") or []), **vars_}
+            cfg = {
+                "RAMEN_VERBOSE": "1" if env.get("verbose") else "0",
+                "RAMEN_BLOCKED": ",".join(env.get("blocked") or []),
+                **vars_,
+            }
             if mcp:
                 cfg["RAMEN_MCP_KEYS"] = ",".join(mcp)
             cfg = await svc.secrets_backend.resolve_config(cfg)
             job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
-            results[z] = await svc.cloud.deploy(group, env_name, z, canary=canary, config=cfg,
-                                                spec=await svc.zone_spec(group, z), log=job["log"].append)
+            results[z] = await svc.cloud.deploy(
+                group, env_name, z, canary=canary, config=cfg, spec=await svc.zone_spec(group, z), log=job["log"].append
+            )
         ok = all(r.get("ok") for r in results.values()) if results else False
-        failed = [f"{z} {w['id']}: {w.get('error') or w.get('status')}" for z, r in results.items()
-                  for w in r.get("workers", []) if not w.get("ok")]
-        for z, r in results.items():
+        failed = [
+            f"{z} {w['id']}: {w.get('error') or w.get('status')}"
+            for z, r in results.items()
+            for w in r.get("workers", [])
+            if not w.get("ok")
+        ]
+        for r in results.values():
             r.pop("log", None)
-        job.update(status="ok" if ok else "error", result=results, finished=now(),
-                   error=None if ok else ("no zones configured" if not results else "workers failed to reload: " + "; ".join(failed)))
+        job.update(
+            status="ok" if ok else "error",
+            result=results,
+            finished=now(),
+            error=None
+            if ok
+            else ("no zones configured" if not results else "workers failed to reload: " + "; ".join(failed)),
+        )
     except Exception as e:  # noqa: BLE001 - surfaced to the UI
         log.exception("deploy failed")
         for z in zones:  # a failure before the adapter ran (e.g. bad git ref) must still tear down any canary (§7)
@@ -64,8 +91,13 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         job.update(status="error", error=f"{type(e).__name__}: {e}", finished=now())
     try:
         env = await svc.get_env(group, env_name)
-        env["last_deploy"] = {"job": job["id"], "status": job["status"], "at": job["finished"], "error": job["error"],
-                              "packages": _packages(job.get("result") or {})}
+        env["last_deploy"] = {
+            "job": job["id"],
+            "status": job["status"],
+            "at": job["finished"],
+            "error": job["error"],
+            "packages": _packages(job.get("result") or {}),
+        }
         await svc.store.put("environments", env["id"], env)
     except Exception:  # noqa: BLE001
         log.exception("could not record last_deploy")
@@ -88,9 +120,9 @@ def cell_color(workers: list[dict]) -> str:
         return "grey"
     if "high" in loads:
         return "red"
-    if all(l == "down" for l in loads):
+    if all(x == "down" for x in loads):
         return "grey"
-    if all(l in ("low", "down") for l in loads):
+    if all(x in ("low", "down") for x in loads):
         return "blue"
     return "green"
 
@@ -108,5 +140,6 @@ async def dashboard(svc: Services, groups: list[dict]) -> dict:
         except Exception as e:  # noqa: BLE001
             ws = [{"id": "?", "load": "down", "metrics": {}, "error": str(e)}]
         cells[z][g] = {"color": cell_color(ws), "workers": ws}
+
     await asyncio.gather(*(one(g, z) for g, z in pairs))
     return {"zones": [z["id"] for z in zones], "groups": [g["id"] for g in groups], "cells": cells, "at": now()}

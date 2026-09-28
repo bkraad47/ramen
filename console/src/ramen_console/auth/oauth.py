@@ -1,4 +1,7 @@
-"""OAuth/OIDC providers (CONTRACTS §9) from `RAMEN_OAUTH_<NAME>_{ISSUER|METADATA_URL,CLIENT_ID,CLIENT_SECRET,SCOPES}`."""
+"""OAuth/OIDC providers (CONTRACTS §9).
+
+Configured from `RAMEN_OAUTH_<NAME>_{ISSUER|METADATA_URL,CLIENT_ID,CLIENT_SECRET,SCOPES}`."""
+
 import os
 
 from authlib.integrations.starlette_client import OAuth
@@ -17,15 +20,23 @@ def metadata_url(p: dict) -> str | None:
 
 class OAuthRegistry:
     def __init__(self, providers: dict[str, dict], transport=None):
-        self._cfg = {n: p for n, p in providers.items()
-                     if n not in RESERVED and all(p.get(k) for k in REQUIRED) and metadata_url(p)}
+        self._cfg = {
+            n: p
+            for n, p in providers.items()
+            if n not in RESERVED and all(p.get(k) for k in REQUIRED) and metadata_url(p)
+        }
         self._oauth = OAuth()
         for name, p in self._cfg.items():
             kw = {"scope": p.get("scopes", "openid email profile")}
             if transport is not None:
                 kw["transport"] = transport
-            self._oauth.register(name, client_id=p["client_id"], client_secret=p["client_secret"],
-                                 server_metadata_url=metadata_url(p), client_kwargs=kw)
+            self._oauth.register(
+                name,
+                client_id=p["client_id"],
+                client_secret=p["client_secret"],
+                server_metadata_url=metadata_url(p),
+                client_kwargs=kw,
+            )
 
     @classmethod
     def from_env(cls, env=None, transport=None):

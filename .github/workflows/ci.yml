@@ -2,9 +2,22 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+permissions:
+  contents: read
 env:
   UV_PYTHON: "3.14"
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - name: ruff (ruff.toml) on console, runtime-py, tests, scripts, deploy/local
+        run: |
+          for d in console runtime-py tests; do (cd "$d" && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .); done
+          (cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local)
+
   versions:
     runs-on: ubuntu-latest
     steps:
@@ -35,7 +48,7 @@ jobs:
       - working-directory: node-rs
         run: |
           if [ -f Cargo.toml ]; then
-            cargo fmt --check && cargo clippy -- -D warnings && cargo test
+            cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
             cargo llvm-cov --cobertura --output-path coverage.xml
           else echo "no crate yet"; fi
       - uses: actions/upload-artifact@v4
@@ -63,7 +76,7 @@ jobs:
           if [ "${{ hashFiles('deploy/local/docker-compose.yml') }}" != "" ]; then echo present=true >> "$GITHUB_OUTPUT"; else echo present=false >> "$GITHUB_OUTPUT"; fi
 
   e2e:
-    needs: [versions, python, rust, tests, compose-check]
+    needs: [lint, versions, python, rust, tests, compose-check]
     if: needs.compose-check.outputs.present == 'true'
     continue-on-error: false
     runs-on: ubuntu-latest

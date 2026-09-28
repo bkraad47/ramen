@@ -15,7 +15,8 @@ from . import __version__
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth.bootstrap import ensure_super_admin
-from .auth.csrf import CsrfMiddleware, token as csrf_token
+from .auth.csrf import CsrfMiddleware
+from .auth.csrf import token as csrf_token
 from .auth.oauth import OAuthRegistry
 from .auth.sessions import SessionSigner
 from .auth.settings import AuthSettings
@@ -55,7 +56,9 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.accounts = Accounts(st.store)
     st.backups = Backups(st.services)
     st.jobs = Jobs()
-    st.signer = SessionSigner(os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure")
+    st.signer = SessionSigner(
+        os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure"
+    )
     st.tokens = Tokens(os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure")
     st.oauth = OAuthRegistry.from_env()
     st.auth_env = AuthSettings.from_env()
@@ -66,7 +69,11 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
 
     app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
     app.add_middleware(AuthAuditMiddleware)
-    app.add_middleware(SessionMiddleware, secret_key=os.environ.get("RAMEN_SESSION_SECRET", "dev-insecure"), https_only=st.cookie_secure)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=os.environ.get("RAMEN_SESSION_SECRET", "dev-insecure"),
+        https_only=st.cookie_secure,
+    )
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     for router in (auth_routes.r, pages.r, api.r, api_admin.r):
         app.include_router(router)
@@ -103,7 +110,9 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         except Exception as e:  # noqa: BLE001 - probe reports the failure
             return JSONResponse({"ok": False, "error": f"store: {type(e).__name__}: {e}"}, 503)
         if not admins:
-            return JSONResponse({"ok": False, "error": "no super admin yet (set RAMEN_ADMIN_EMAIL/RAMEN_ADMIN_PASSWORD)"}, 503)
+            return JSONResponse(
+                {"ok": False, "error": "no super admin yet (set RAMEN_ADMIN_EMAIL/RAMEN_ADMIN_PASSWORD)"}, 503
+            )
         return {"ok": True, "store": os.environ.get("RAMEN_STORE", "memory"), "version": __version__}
 
     return app

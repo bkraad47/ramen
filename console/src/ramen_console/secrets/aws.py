@@ -1,5 +1,6 @@
 """Secrets Manager backend (CONTRACTS §8, untested on a real account): values live in AWS Secrets Manager as
 ramen/<group>/<env|all>/<zone|all>/<NAME> (tagged group/env/zone); the store keeps name + `asm://` ref only."""
+
 import asyncio
 import os
 
@@ -23,8 +24,12 @@ class AwsSecrets(SecretsBackend):
 
     def _put(self, group, env, zone, name, value, kind):
         sid = secret_name(group, env, zone, name, kind)
-        tags = [{"Key": "ramen", "Value": "secret"}, {"Key": "group", "Value": group},
-                {"Key": "env", "Value": env or "all"}, {"Key": "zone", "Value": zone or "all"}]
+        tags = [
+            {"Key": "ramen", "Value": "secret"},
+            {"Key": "group", "Value": group},
+            {"Key": "env", "Value": env or "all"},
+            {"Key": "zone", "Value": zone or "all"},
+        ]
         try:
             self.client.create_secret(Name=sid, SecretString=value, Tags=tags)
         except Exception as e:  # noqa: BLE001
@@ -41,10 +46,10 @@ class AwsSecrets(SecretsBackend):
         try:
             return await asyncio.to_thread(self._put, group, env, zone, name, value, kind)
         except Exception as e:  # noqa: BLE001
-            raise ApiError(502, f"secrets manager: {type(e).__name__}: {str(e)[:200]}")
+            raise ApiError(502, f"secrets manager: {type(e).__name__}: {str(e)[:200]}") from e
 
     def _resolve(self, ref):
-        return self.client.get_secret_value(SecretId=ref[len(REF):])["SecretString"]
+        return self.client.get_secret_value(SecretId=ref[len(REF) :])["SecretString"]
 
     async def resolve(self, value):
         if not value or not value.startswith(REF):
@@ -52,17 +57,19 @@ class AwsSecrets(SecretsBackend):
         try:
             return await asyncio.to_thread(self._resolve, value)
         except Exception as e:  # noqa: BLE001
-            raise ApiError(502, f"secrets manager: cannot read {value}: {type(e).__name__}")
+            raise ApiError(502, f"secrets manager: cannot read {value}: {type(e).__name__}") from e
 
     async def delete(self, doc):
         ref = doc.get("ref")
         if not ref or not ref.startswith(REF):
             return
         try:
-            await asyncio.to_thread(self.client.delete_secret, SecretId=ref[len(REF):], ForceDeleteWithoutRecovery=True)
+            await asyncio.to_thread(
+                self.client.delete_secret, SecretId=ref[len(REF) :], ForceDeleteWithoutRecovery=True
+            )
         except Exception as e:  # noqa: BLE001
             if aws_error_code(e) != "ResourceNotFoundException":
-                raise ApiError(502, f"secrets manager: {type(e).__name__}: {str(e)[:200]}")
+                raise ApiError(502, f"secrets manager: {type(e).__name__}: {str(e)[:200]}") from e
 
 
 def from_env(cloud=None) -> AwsSecrets:
@@ -70,5 +77,6 @@ def from_env(cloud=None) -> AwsSecrets:
     client = getattr(getattr(cloud, "c", None), "secretsmanager", None)
     if client is None:
         from ..cloud.aws_api import AwsClients
+
         client = AwsClients(region).secretsmanager
     return AwsSecrets(region, client)

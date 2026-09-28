@@ -18,7 +18,7 @@ Mirror of the GCP path with AWS primitives:
 | Identity | console IAM role via IRSA (S3, Secrets Manager, DynamoDB, EKS describe, IAM create-role under path `/ramen/`, WAF, ELB); per group+zone IAM role `ramen-<group>-<zone>` trusting the cluster OIDC provider for KSA `ramen-<group>-<zone>/worker` |
 | Edge | AWS Load Balancer Controller; one ALB (Ingress group `ramen`, HTTPS 443, self-signed cert imported into ACM); console Ingress `/`, per-zone Ingress `/mcp/<group>/<zone>` |
 | Logs | Fluent Bit → CloudWatch Logs (Container Insights); console queries Logs Insights by namespace/pod |
-| IP rules | WAFv2 IPSet + web ACL on the ALB (allow list, default block) + `RAMEN_ALLOWED_CIDRS` + worker roll |
+| IP rules | WAFv2 IPSets `ramen-<group>` (+`-v6`) and a rule in web ACL `ramen` that blocks `/mcp/<group>/` unless the source is in the set (the ACL default stays allow so the console path is reachable) + `RAMEN_ALLOWED_CIDRS` + worker roll |
 | Rebalance | weighted target groups (stable/canary) via the Ingress `actions` annotation |
 
 ALB cannot rewrite paths, so worker pods run with `RAMEN_MCP_PATH_PREFIX=/mcp/<group>/<zone>` and the node
@@ -37,7 +37,7 @@ accepts that path as an alias of `/mcp`.
 === "CloudFormation"
     ```sh
     aws cloudformation deploy --stack-name ramen --template-file deploy/cloudformation/ramen.yaml \
-      --capabilities CAPABILITY_NAMED_IAM --parameter-overrides Region=us-east-1
+      --capabilities CAPABILITY_NAMED_IAM --region us-east-1
     ```
     Same base resources (EKS, node group, DynamoDB, S3, Secrets Manager, ECR, IAM roles, OIDC provider). The Helm
     steps below are documented, not templated.
@@ -52,9 +52,10 @@ docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=$(cat VERSI
 ## 3. Console
 ```sh
 aws eks update-kubeconfig --name ramen --region $REGION
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+CERT=$(terraform -chdir=deploy/terraform/aws output -raw certificate_arn)     # or the ARN of the cert you imported into ACM
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
-  --set provider=aws,region=$REGION,image.console=<ecr_console>:$(cat VERSION),image.worker=<ecr_worker>:$(cat VERSION) \
-  --set console.roleArn=<console_role_arn>,console.certificateArn=<acm_arn> \
+  --set provider=aws,region=$REGION --set-string aws.account=$ACCOUNT --set aws.certificateArn=$CERT \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
@@ -63,7 +64,8 @@ kubectl -n ramen-system get ingress console          # ADDRESS = ALB DNS name af
 curl -k https://<alb-dns>/readyz
 ```
 Console env on AWS: `RAMEN_STORE=dynamodb RAMEN_CLOUD=aws RAMEN_SECRETS_BACKEND=aws RAMEN_AWS_REGION
-RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER RAMEN_EKS_CLUSTER RAMEN_ALB_GROUP=ramen`.
+RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER RAMEN_EKS_CLUSTER RAMEN_ALB_GROUP=ramen` (all set by the chart from `region`, `aws.account`,
+`aws.cluster`, `aws.albGroup` and `image.tag`; override with `console.env`).
 
 ## 4. Zone, group, deploy
 Same as [GCP step 5](gcp.md#5-first-zone-group-and-deploy-console-or-api) with provider `aws` and region e.g.

@@ -1,6 +1,7 @@
 """Full flow: console → zone/group/env → mint MCP key → deploy demo repo (job) → worker ready → MCP calls.
 Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL. The minted key is reused by conformance/test_mcp_node.py when it
 runs later in the same process (`pytest e2e conformance`); RAMEN_MCP_KEY is the fallback."""
+
 import time
 import uuid
 
@@ -48,8 +49,13 @@ def ready(node_url: str, key: str, timeout: float = 180) -> None:
     deadline, last, streak = time.monotonic() + timeout, None, 0
     while time.monotonic() < deadline:
         try:
-            r = httpx.post(E.mcp_url(node_url), json=INIT_BODY, verify=E.tls_verify(), timeout=15,
-                           headers={**MCP_HEADERS, "Authorization": f"Bearer {key}"})
+            r = httpx.post(
+                E.mcp_url(node_url),
+                json=INIT_BODY,
+                verify=E.tls_verify(),
+                timeout=15,
+                headers={**MCP_HEADERS, "Authorization": f"Bearer {key}"},
+            )
             if r.status_code == 200:
                 streak += 1  # the LB may still route some requests to a draining pod with the old key set
                 if streak >= 3:

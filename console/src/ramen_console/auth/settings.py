@@ -1,4 +1,5 @@
 """Auth settings (CONTRACTS §9): yaml/env defaults, overridden by the store doc `config/auth` (super-admin toggle)."""
+
 import os
 from dataclasses import dataclass, field
 
@@ -39,33 +40,42 @@ class AuthSettings:
     role_map: dict[str, dict[str, tuple[str, list[str]]]] = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls, env=None) -> "AuthSettings":
+    def from_env(cls, env=None) -> AuthSettings:
         env = env or os.environ
-        s = cls(password_login=_bool(env.get("RAMEN_AUTH_PASSWORD_LOGIN"), True),
-                magic_link=_bool(env.get("RAMEN_AUTH_MAGIC_LINK"), False),
-                force_password=_bool(env.get("RAMEN_ADMIN_FORCE_PASSWORD"), False),
-                admin_email=(env.get("RAMEN_ADMIN_EMAIL") or "").strip().lower())
+        s = cls(
+            password_login=_bool(env.get("RAMEN_AUTH_PASSWORD_LOGIN"), True),
+            magic_link=_bool(env.get("RAMEN_AUTH_MAGIC_LINK"), False),
+            force_password=_bool(env.get("RAMEN_ADMIN_FORCE_PASSWORD"), False),
+            admin_email=(env.get("RAMEN_ADMIN_EMAIL") or "").strip().lower(),
+        )
         for k, v in env.items():
             if not k.startswith(PREFIX):
                 continue
-            name, _, rest = k[len(PREFIX):].partition("_")
+            name, _, rest = k[len(PREFIX) :].partition("_")
             name = name.lower()
             if rest == "ROLE_CLAIM":
                 s.role_claim[name] = v.strip()
             elif rest == "ROLE_MAP":
                 s.role_map.setdefault(name, {}).update(parse_role_map(v))
             elif rest.startswith("ROLE_MAP_"):
-                s.role_map.setdefault(name, {})[rest[len("ROLE_MAP_"):].lower()] = parse_role(v)
+                s.role_map.setdefault(name, {})[rest[len("ROLE_MAP_") :].lower()] = parse_role(v)
         return s
 
-    def with_doc(self, doc: dict | None) -> "AuthSettings":
+    def with_doc(self, doc: dict | None) -> AuthSettings:
         doc = doc or {}
-        return AuthSettings(password_login=bool(doc.get("password_login", self.password_login)),
-                            magic_link=bool(doc.get("magic_link", self.magic_link)), force_password=self.force_password,
-                            admin_email=self.admin_email, role_claim=self.role_claim, role_map=self.role_map)
+        return AuthSettings(
+            password_login=bool(doc.get("password_login", self.password_login)),
+            magic_link=bool(doc.get("magic_link", self.magic_link)),
+            force_password=self.force_password,
+            admin_email=self.admin_email,
+            role_claim=self.role_claim,
+            role_map=self.role_map,
+        )
 
     def can_password(self, email: str) -> bool:
-        return self.password_login or (self.force_password and bool(email) and email.strip().lower() == self.admin_email)
+        return self.password_login or (
+            self.force_password and bool(email) and email.strip().lower() == self.admin_email
+        )
 
     def map_role(self, provider: str, claims: dict) -> tuple[str, list[str]]:
         """Role + groups for a new SSO user: `role_claim` value(s) looked up in `role_map`, else viewer/no groups."""
@@ -82,6 +92,10 @@ class AuthSettings:
         return best or ("viewer", [])
 
     def public(self) -> dict:
-        return {"password_login": self.password_login, "magic_link": self.magic_link,
-                "break_glass": self.force_password, "role_claim": dict(self.role_claim),
-                "role_map": {p: {k: {"role": r, "groups": g} for k, (r, g) in m.items()} for p, m in self.role_map.items()}}
+        return {
+            "password_login": self.password_login,
+            "magic_link": self.magic_link,
+            "break_glass": self.force_password,
+            "role_claim": dict(self.role_claim),
+            "role_map": {p: {k: {"role": r, "groups": g} for k, (r, g) in m.items()} for p, m in self.role_map.items()},
+        }

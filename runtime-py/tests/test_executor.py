@@ -4,7 +4,15 @@ from conftest import write_pkg
 from ramen_runtime.executor import Executor
 from ramen_runtime.loader import load
 
-TOOL = {"type": "tool", "name": "t", "description": "d", "callable": "f", "input": {"a": {"type": "string"}}, "output": {"type": "string"}, "error": {"type": "string"}}
+TOOL = {
+    "type": "tool",
+    "name": "t",
+    "description": "d",
+    "callable": "f",
+    "input": {"a": {"type": "string"}},
+    "output": {"type": "string"},
+    "error": {"type": "string"},
+}
 
 
 @pytest.fixture
@@ -43,7 +51,9 @@ def test_dict_result_is_json(tmp_path):
 
 def test_secret_substituted_and_never_echoed(tmp_path, monkeypatch):
     monkeypatch.setenv("RAMEN_SECRET_G__K", "hunter2")
-    write_pkg(tmp_path, "tools", "t", TOOL, "def f(a):\n    assert a == 'hunter2'\n    raise RuntimeError('boom ' + a)\n")
+    write_pkg(
+        tmp_path, "tools", "t", TOOL, "def f(a):\n    assert a == 'hunter2'\n    raise RuntimeError('boom ' + a)\n"
+    )
     ex = Executor(load(tmp_path))
     r = ex.call_tool("t", {"a": "{{$g.k}}"})
     assert r["isError"] and "hunter2" not in r["content"][0]["text"] and "***" in r["content"][0]["text"]
@@ -64,7 +74,23 @@ def test_read_resource_unknown(demo):
 
 
 def test_read_resource_error(tmp_path):
-    write_pkg(tmp_path, "resources", "r", {"type": "resource", "name": "r", "description": "d", "uri": "u://r", "mime_type": "text/plain", "callable": "f", "input": {}, "output": {"type": "string"}, "error": {"type": "string"}}, "def f():\n    raise ValueError('bad')\n")
+    write_pkg(
+        tmp_path,
+        "resources",
+        "r",
+        {
+            "type": "resource",
+            "name": "r",
+            "description": "d",
+            "uri": "u://r",
+            "mime_type": "text/plain",
+            "callable": "f",
+            "input": {},
+            "output": {"type": "string"},
+            "error": {"type": "string"},
+        },
+        "def f():\n    raise ValueError('bad')\n",
+    )
     with pytest.raises(RuntimeError, match="ValueError: bad"):
         Executor(load(tmp_path)).read_resource("u://r")
 

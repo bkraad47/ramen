@@ -7,11 +7,18 @@ from ramen_console.policy import permissions as perm
 
 
 def test_settings_from_env_and_doc():
-    s = AuthSettings.from_env({"RAMEN_ADMIN_EMAIL": "Root@X ", "RAMEN_AUTH_PASSWORD_LOGIN": "false",
-                               "RAMEN_AUTH_MAGIC_LINK": "yes", "RAMEN_ADMIN_FORCE_PASSWORD": "1",
-                               "RAMEN_AUTH_OAUTH_OIDC_ROLE_CLAIM": "groups",
-                               "RAMEN_AUTH_OAUTH_OIDC_ROLE_MAP": "Admins=super_admin; devs=group_admin:demo,other",
-                               "RAMEN_AUTH_OAUTH_OIDC_ROLE_MAP_OPS": "viewer:demo", "OTHER": "x"})
+    s = AuthSettings.from_env(
+        {
+            "RAMEN_ADMIN_EMAIL": "Root@X ",
+            "RAMEN_AUTH_PASSWORD_LOGIN": "false",
+            "RAMEN_AUTH_MAGIC_LINK": "yes",
+            "RAMEN_ADMIN_FORCE_PASSWORD": "1",
+            "RAMEN_AUTH_OAUTH_OIDC_ROLE_CLAIM": "groups",
+            "RAMEN_AUTH_OAUTH_OIDC_ROLE_MAP": "Admins=super_admin; devs=group_admin:demo,other",
+            "RAMEN_AUTH_OAUTH_OIDC_ROLE_MAP_OPS": "viewer:demo",
+            "OTHER": "x",
+        }
+    )
     assert (s.password_login, s.magic_link, s.force_password, s.admin_email) == (False, True, True, "root@x")
     assert s.role_claim == {"oidc": "groups"}
     assert s.role_map["oidc"]["admins"] == ("super_admin", []) and s.role_map["oidc"]["ops"] == ("viewer", ["demo"])
@@ -23,7 +30,10 @@ def test_settings_from_env_and_doc():
     assert d.password_login and d.magic_link and d.force_password and d.can_password("bob@x")
     assert s.with_doc(None).password_login is False
     pub = s.public()
-    assert pub["break_glass"] and pub["role_map"]["oidc"]["devs"] == {"role": "group_admin", "groups": ["demo", "other"]}
+    assert pub["break_glass"] and pub["role_map"]["oidc"]["devs"] == {
+        "role": "group_admin",
+        "groups": ["demo", "other"],
+    }
     assert AuthSettings.from_env({}).password_login and not AuthSettings.from_env({}).magic_link
 
 
@@ -45,17 +55,27 @@ def test_tokens_roundtrip():
 def test_oauth_registry_issuer_and_reserved():
     assert metadata_url({"issuer": "https://idp/"}) == "https://idp/.well-known/openid-configuration"
     assert metadata_url({"metadata_url": "https://m"}) == "https://m" and metadata_url({}) is None
-    reg = OAuthRegistry.from_env({"RAMEN_OAUTH_IDP_ISSUER": "https://idp", "RAMEN_OAUTH_IDP_CLIENT_ID": "c",
-                                  "RAMEN_OAUTH_IDP_CLIENT_SECRET": "s", "RAMEN_OAUTH_RESET_ISSUER": "https://x",
-                                  "RAMEN_OAUTH_RESET_CLIENT_ID": "c", "RAMEN_OAUTH_RESET_CLIENT_SECRET": "s",
-                                  "RAMEN_OAUTH_NOMETA_CLIENT_ID": "c", "RAMEN_OAUTH_NOMETA_CLIENT_SECRET": "s"})
+    reg = OAuthRegistry.from_env(
+        {
+            "RAMEN_OAUTH_IDP_ISSUER": "https://idp",
+            "RAMEN_OAUTH_IDP_CLIENT_ID": "c",
+            "RAMEN_OAUTH_IDP_CLIENT_SECRET": "s",
+            "RAMEN_OAUTH_RESET_ISSUER": "https://x",
+            "RAMEN_OAUTH_RESET_CLIENT_ID": "c",
+            "RAMEN_OAUTH_RESET_CLIENT_SECRET": "s",
+            "RAMEN_OAUTH_NOMETA_CLIENT_ID": "c",
+            "RAMEN_OAUTH_NOMETA_CLIENT_SECRET": "s",
+        }
+    )
     assert reg.providers() == ["idp"] and reg.client("reset") is None
 
 
 def test_permission_table_and_rules():
     assert perm.known("bucket.read") and not perm.known("root.everything")
     assert perm.mapped(["bucket.read", "secrets.read", "bucket.read", "nope"], "gcp") == [
-        "roles/storage.objectViewer", "roles/secretmanager.secretAccessor"]
+        "roles/storage.objectViewer",
+        "roles/secretmanager.secretAccessor",
+    ]
     assert "s3:GetObject" in perm.mapped(["bucket.read"], "aws")
     assert {"permission", "desc", "gcp", "aws"} <= set(perm.table()[0])
     assert perm.evaluate("bucket.read", [], []) is None

@@ -1,4 +1,5 @@
 """Render a prompt package: SKILL.md with `{{param}}` substituted, settings appended."""
+
 import json
 import re
 

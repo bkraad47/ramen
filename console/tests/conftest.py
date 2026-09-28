@@ -2,8 +2,6 @@ import os
 
 os.environ.setdefault("RAMEN_GCP_FRESH_HTTP", "0")  # fakes never need a real transport; avoids ADC probing
 
-import os
-
 import pytest
 from cryptography.fernet import Fernet
 
@@ -30,6 +28,7 @@ def _csrf_init(self, *a, **kw):
         t = self.cookies.get("ramen_csrf")
         if t and "X-Ramen-CSRF" not in request.headers:
             request.headers["X-Ramen-CSRF"] = t
+
     self.event_hooks = {"request": [hook]}
 
 

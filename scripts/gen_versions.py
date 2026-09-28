@@ -5,6 +5,7 @@ Standalone: `python3 scripts/gen_versions.py` (writes docs/versions.md).
 MkDocs hook (mkdocs.yml `hooks:`): regenerates the page on every build.
 Tag dates come from `git log -1 --format=%as v<version>` when the tag exists locally.
 """
+
 from __future__ import annotations
 
 import re
@@ -22,10 +23,13 @@ def tag_date(version: str) -> str:
     try:
         out = subprocess.run(
             ["git", "log", "-1", "--format=%as", f"v{version}"],
-            cwd=ROOT, capture_output=True, text=True, check=True,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
         return out or "—"
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError, FileNotFoundError:
         return "—"
 
 
@@ -54,10 +58,16 @@ def render(entries: list[dict], current: str) -> str:
             links.append(f"[architecture]({arch})")
         status = " **(current)**" if v == current else ""
         rows.append(f"| `{v}`{status} | {tag_date(v)} | {e['title'] or '—'} | {' · '.join(links)} |")
-    body = ["# Versions", "",
-            "Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) by "
-            "`scripts/gen_versions.py`; do not edit by hand. Semver, `0.x` is pre-stable; each release is tagged "
-            "`v<version>` and GitHub Actions attaches downloadable zips.", "", *rows, ""]
+    body = [
+        "# Versions",
+        "",
+        "Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) by "
+        "`scripts/gen_versions.py`; do not edit by hand. Semver, `0.x` is pre-stable; each release is tagged "
+        "`v<version>` and GitHub Actions attaches downloadable zips.",
+        "",
+        *rows,
+        "",
+    ]
     for e in entries:
         if e["version"].lower() == "unreleased" and not e["items"]:
             continue

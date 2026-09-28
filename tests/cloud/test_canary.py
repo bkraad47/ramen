@@ -1,10 +1,10 @@
 """Canary rollout (CONTRACTS §7 deploy): a bad ref/broken package fails the job, the canary is scaled to 0 and the
 main worker keeps serving; a good ref then succeeds. Needs RAMEN_CONSOLE_URL; worker checks need RAMEN_NODE_URL."""
+
 import pytest
 
 from ramen_tests import env as E
 from ramen_tests.console import items
-
 from ramen_tests.mcp_client import INIT_BODY
 
 from .conftest import GROUP, ZONE, mcp_post, metrics, ok
@@ -41,7 +41,9 @@ def test_bad_ref_fails_job_and_records_error(admin, canary_env):
     e = next(x for x in envs if x["name"] == canary_env)
     assert e["last_deploy"]["status"] == "error" and e["last_deploy"]["job"] == job["id"]
     audit = items(ok(admin.audit()))
-    assert any(a.get("action") == "deploy" and a.get("ok") is False and f"job:{job['id']}" in a.get("tags", []) for a in audit)
+    assert any(
+        a.get("action") == "deploy" and a.get("ok") is False and f"job:{job['id']}" in a.get("tags", []) for a in audit
+    )
 
 
 def test_failed_canary_is_scaled_to_zero(admin, canary_env, gcp_project):

@@ -1,4 +1,5 @@
 """Fixtures are self-consistent with CONTRACTS §1 (no env needed; always runs)."""
+
 import json
 from pathlib import Path
 
@@ -13,7 +14,9 @@ PKG_DIRS = ("tools", "resources", "prompts")
 
 def protos(group: str) -> list[Path]:
     root = FIXTURES / group / "mcp"
-    return sorted(p for d in PKG_DIRS if (root / d).exists() for p in (root / d).glob("*/*.json") if p.stem == p.parent.name)
+    return sorted(
+        p for d in PKG_DIRS if (root / d).exists() for p in (root / d).glob("*/*.json") if p.stem == p.parent.name
+    )
 
 
 def test_schema_is_valid_2020_12():
@@ -41,12 +44,15 @@ def test_demo_group_mirrors_upstream_layout():
     assert (root / "mcp/prompts/get_calculation_prompt/SKILL.md").exists()
 
 
-@pytest.mark.parametrize("pkg,schema_rejects", [
-    ("bad_type_tool", True),      # type "widget"
-    ("no_callable_tool", False),  # structurally fine; loader must fail at import (callable missing)
-    ("wrong_type_tool", False),   # valid resource proto in tools/ → loader folder/type mismatch
-    ("misnamed_tool", False),     # valid proto; folder ≠ name → loader error
-])
+@pytest.mark.parametrize(
+    "pkg,schema_rejects",
+    [
+        ("bad_type_tool", True),  # type "widget"
+        ("no_callable_tool", False),  # structurally fine; loader must fail at import (callable missing)
+        ("wrong_type_tool", False),  # valid resource proto in tools/ → loader folder/type mismatch
+        ("misnamed_tool", False),  # valid proto; folder ≠ name → loader error
+    ],
+)
 def test_broken_fixture_shape(pkg: str, schema_rejects: bool):
     folder = FIXTURES / "broken_group" / "mcp" / "tools" / pkg
     [path] = list(folder.glob("*.json"))

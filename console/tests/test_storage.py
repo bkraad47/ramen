@@ -7,7 +7,7 @@ from moto import mock_aws
 from ramen_console.storage import make_store
 from ramen_console.storage.base import Store
 from ramen_console.storage.dynamodb import DynamoStore
-from ramen_console.storage.encrypted import EncryptedStore, FieldCipher, SENSITIVE
+from ramen_console.storage.encrypted import SENSITIVE, EncryptedStore, FieldCipher
 from ramen_console.storage.firestore import FirestoreStore
 from ramen_console.storage.memory import MemoryStore
 from tests.fakes import FakeFirestoreClient

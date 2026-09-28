@@ -1,9 +1,9 @@
 import pytest
 
+from ramen_console.errors import ApiError
 from ramen_console.secrets import make_secrets_backend
 from ramen_console.secrets.base import StoreBackend
 from ramen_console.secrets.gcp import GcpSecrets, secret_id
-from ramen_console.errors import ApiError
 from tests.fakes_gcp import FakeApiError, FakeClients, FakeSM
 
 
@@ -30,7 +30,10 @@ async def test_gcp_backend_roundtrip():
     assert doc2 == doc and sm.calls.count("create") == 2 and sm.calls.count("add_version") == 2
     assert await b.resolve(doc["ref"]) == "v2"
     assert await b.resolve("plain") == "plain" and await b.resolve(None) is None
-    assert await b.resolve_config({"RAMEN_MCP_KEYS": f"{doc['ref']},{doc['ref']}", "X": "1"}) == {"RAMEN_MCP_KEYS": "v2,v2", "X": "1"}
+    assert await b.resolve_config({"RAMEN_MCP_KEYS": f"{doc['ref']},{doc['ref']}", "X": "1"}) == {
+        "RAMEN_MCP_KEYS": "v2,v2",
+        "X": "1",
+    }
     await b.delete(doc)
     assert not sm.secrets
     await b.delete(doc)  # 404 ignored
@@ -47,6 +50,7 @@ async def test_gcp_backend_errors():
 
         def delete_secret(self, request):
             raise FakeApiError(500, "internal")
+
     b = GcpSecrets("p1", Boom())
     with pytest.raises(ApiError, match="secret manager"):
         await b.put("g", None, None, "A", "v")

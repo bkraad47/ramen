@@ -1,5 +1,6 @@
 """Rebalance (CONTRACTS §4a/§7): POST → 200 {ok} + audit record; on GCP the zone's NEG backend has a capacity
 scaler of 0.5 (high) or 1.0. Needs RAMEN_CONSOLE_URL; RAMEN_GCP_PROJECT for the compute check."""
+
 import pytest
 
 from ramen_tests import gcp

@@ -1,4 +1,5 @@
 """httpx client for the console (CONTRACTS §4). Routes mirror console/tests/test_api.py; edit ROUTES if they move."""
+
 import time
 
 import httpx
@@ -6,52 +7,52 @@ import httpx
 from .env import env, strip, tls_verify
 
 ROUTES = {
-    "login": "/login",                      # form POST {email,password} → 303 (401 on bad password)
+    "login": "/login",  # form POST {email,password} → 303 (401 on bad password)
     "logout": "/logout",
     "me": "/api/v1/me",
-    "users": "/api/v1/users",               # POST {email,password,role,groups} → 201 {id,...}
+    "users": "/api/v1/users",  # POST {email,password,role,groups} → 201 {id,...}
     "user": "/api/v1/users/{id}",
-    "groups": "/api/v1/groups",             # POST {name,repo_url,ref} → 201
+    "groups": "/api/v1/groups",  # POST {name,repo_url,ref} → 201
     "group": "/api/v1/groups/{group}",
-    "zones": "/api/v1/zones",               # POST {name,provider,region} → 201 (super admin)
+    "zones": "/api/v1/zones",  # POST {name,provider,region} → 201 (super admin)
     "zone": "/api/v1/zones/{zone}",
-    "environments": "/api/v1/groups/{group}/environments",   # POST {name,ref,zones:[...]} → 201
+    "environments": "/api/v1/groups/{group}/environments",  # POST {name,ref,zones:[...]} → 201
     "environment": "/api/v1/groups/{group}/environments/{env}",
-    "environments_all": "/api/v1/environments",              # ?group=
+    "environments_all": "/api/v1/environments",  # ?group=
     "deploy": "/api/v1/groups/{group}/environments/{env}/deploy",  # POST {canary,zone?} → 202 {id,status}
     "job": "/api/v1/jobs/{id}",
-    "workers": "/api/v1/groups/{group}/zones/{zone}/workers",       # GET {live:[{load}],count,size}
+    "workers": "/api/v1/groups/{group}/zones/{zone}/workers",  # GET {live:[{load}],count,size}
     "rebalance": "/api/v1/groups/{group}/zones/{zone}/rebalance",
-    "ip_rules": "/api/v1/groups/{group}/zones/{zone}/ip-rules",             # PUT {cidrs:[...]}
+    "ip_rules": "/api/v1/groups/{group}/zones/{zone}/ip-rules",  # PUT {cidrs:[...]}
     "service_account": "/api/v1/groups/{group}/zones/{zone}/service-account",  # POST → {name,...} (super admin)
-    "sa_restrictions": "/api/v1/groups/{group}/sa-restrictions",           # PUT {rules:[...]}
-    "env_verbose": "/api/v1/groups/{group}/environments/{env}/verbose",    # POST {verbose}
-    "secrets": "/api/v1/groups/{group}/secrets",             # POST {name,value,env?,zone?} → 201 {id,name}
+    "sa_restrictions": "/api/v1/groups/{group}/sa-restrictions",  # PUT {rules:[...]}
+    "env_verbose": "/api/v1/groups/{group}/environments/{env}/verbose",  # POST {verbose}
+    "secrets": "/api/v1/groups/{group}/secrets",  # POST {name,value,env?,zone?} → 201 {id,name}
     "secret": "/api/v1/groups/{group}/secrets/{id}",
-    "mcp_keys": "/api/v1/groups/{group}/mcp-keys",           # POST {name} → 201 {id,key:"rmk_..."}
+    "mcp_keys": "/api/v1/groups/{group}/mcp-keys",  # POST {name} → 201 {id,key:"rmk_..."}
     "mcp_key": "/api/v1/groups/{group}/mcp-keys/{id}",
-    "api_keys": "/api/v1/api-keys",                          # POST {name,role?,groups?} → 201 {id,key:"rmn_..."}
+    "api_keys": "/api/v1/api-keys",  # POST {name,role?,groups?} → 201 {id,key:"rmn_..."}
     "api_key": "/api/v1/api-keys/{id}",
     "audit": "/api/v1/audit",
-    "backups": "/api/v1/backups",                            # POST {target:"local"} → 201 {id,release_version}
+    "backups": "/api/v1/backups",  # POST {target:"local"} → 201 {id,release_version}
     "backup_download": "/api/v1/backups/{id}/download",
     "config": "/api/v1/config",
     "config_reload": "/api/v1/config/reload",
     "sa_rules": "/api/v1/config/sa-rules",
     "refresh": "/api/v1/refresh",
     "dashboard": "/api/v1/dashboard",
-    "logs": "/api/v1/logs",                                  # ?group&zone&worker?&tail&download=1 → text/plain
+    "logs": "/api/v1/logs",  # ?group&zone&worker?&tail&download=1 → text/plain
     "healthz": "/healthz",
     # v0.3.0 (CONTRACTS §9)
-    "requests": "/api/v1/requests",                          # POST {role,group?} | {group,zone,permission} → 201; GET (super admin)
-    "request_approve": "/api/v1/requests/{id}/approve",      # POST → applied SA permissions / role granted
-    "policy_permissions": "/api/v1/policy/permissions",      # GET catalogue [{permission,desc,gcp,aws}]
+    "requests": "/api/v1/requests",  # POST {role,group?} | {group,zone,permission} → 201; GET (super admin)
+    "request_approve": "/api/v1/requests/{id}/approve",  # POST → applied SA permissions / role granted
+    "policy_permissions": "/api/v1/policy/permissions",  # GET catalogue [{permission,desc,gcp,aws}]
     "env_blocked": "/api/v1/groups/{group}/environments/{env}/blocked",  # PUT {blocked:[names]}
-    "config_auth": "/api/v1/config/auth",                    # GET|PUT {password_login?, magic_link?} (super admin)
-    "auth_reset": "/auth/reset",                             # form POST {email} → 200 always
-    "auth_reset_token": "/auth/reset/{token}",               # form POST {password} → 303 /login
-    "auth_magic": "/auth/magic",                             # form POST {email} (auth.magic_link)
-    "auth_magic_token": "/auth/magic/{token}",               # GET → 303 + session
+    "config_auth": "/api/v1/config/auth",  # GET|PUT {password_login?, magic_link?} (super admin)
+    "auth_reset": "/auth/reset",  # form POST {email} → 200 always
+    "auth_reset_token": "/auth/reset/{token}",  # form POST {password} → 303 /login
+    "auth_magic": "/auth/magic",  # form POST {email} (auth.magic_link)
+    "auth_magic_token": "/auth/magic/{token}",  # GET → 303 + session
     "oauth_login": "/auth/{name}/login",
     "oauth_callback": "/auth/{name}/callback",
 }
@@ -60,7 +61,9 @@ CSRF_COOKIE, CSRF_HEADER = "ramen_csrf", "X-Ramen-CSRF"
 
 
 class Console:
-    def __init__(self, base: str, api_key: str | None = None, timeout: float = 180):  # cloud ops (Armor/backends) retry for minutes
+    def __init__(
+        self, base: str, api_key: str | None = None, timeout: float = 180
+    ):  # cloud ops (Armor/backends) retry for minutes
         headers = {API_KEY_HEADER: api_key} if api_key else {}
         self.http = httpx.Client(base_url=strip(base), verify=tls_verify(), timeout=timeout, headers=headers)
         self.http.event_hooks["request"].append(self._csrf)  # cookie sessions must echo the csrf cookie (CONTRACTS §9)

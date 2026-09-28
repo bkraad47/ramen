@@ -1,4 +1,5 @@
 """CONTRACTS §2: node ↔ runtime sidecar protocol, exercised directly against `python -m ramen_runtime`."""
+
 import json
 
 import pytest
@@ -49,14 +50,18 @@ def test_load_shape(demo):
 
 @pytest.mark.parametrize("func,expected", [("add", 5), ("subtract", -1), ("multiply", 6), ("divide", 2 / 3)])
 def test_call_tool(demo, func, expected):
-    r = demo.call("runtime.call_tool", {"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 3, "func": func}})
+    r = demo.call(
+        "runtime.call_tool", {"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 3, "func": func}}
+    )
     assert r["isError"] is False
     assert r["content"][0]["type"] == "text"
     assert float(text(r)) == pytest.approx(expected)
 
 
 def test_call_tool_error_is_flagged_not_raised(demo):
-    r = demo.call("runtime.call_tool", {"name": "demo_calculator_tool", "arguments": {"var1": 1, "var2": 0, "func": "divide"}})
+    r = demo.call(
+        "runtime.call_tool", {"name": "demo_calculator_tool", "arguments": {"var1": 1, "var2": 0, "func": "divide"}}
+    )
     assert r["isError"] is True
     assert "division by zero" in text(r).lower()
     assert "Traceback" not in text(r)
@@ -105,9 +110,9 @@ def test_shutdown_exits(demo):
 
 def test_stderr_is_json_lines(demo):
     demo.call("runtime.ping", {})
-    lines = [l for l in demo.stderr.splitlines() if l.strip()]
-    for l in lines:
-        json.loads(l)
+    lines = [x for x in demo.stderr.splitlines() if x.strip()]
+    for x in lines:
+        json.loads(x)
 
 
 def test_broken_packages_reported_valid_still_load():

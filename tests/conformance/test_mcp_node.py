@@ -1,4 +1,5 @@
 """CONTRACTS §3: node HTTP surface, via the official mcp client. Needs RAMEN_NODE_URL + RAMEN_MCP_KEY."""
+
 import json
 
 import httpx
@@ -106,8 +107,11 @@ def test_health_ready_metrics(http, node_admin_url):
 
 def test_metrics_counts_calls(http, node_url, mcp_key, node_admin_url):
     before = http.get("/metrics").json()["total"]
-    r = http.post(endpoint(node_url), json={"jsonrpc": "2.0", "id": 9, "method": "ping"},
-                  headers={**MCP_HEADERS, "Authorization": f"Bearer {mcp_key}"})
+    r = http.post(
+        endpoint(node_url),
+        json={"jsonrpc": "2.0", "id": 9, "method": "ping"},
+        headers={**MCP_HEADERS, "Authorization": f"Bearer {mcp_key}"},
+    )
     assert r.status_code == 200
     assert http.get("/metrics").json()["total"] >= before + 1
 

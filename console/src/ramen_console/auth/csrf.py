@@ -1,6 +1,7 @@
 """CSRF (CONTRACTS §9): double-submit token. `ramen_csrf` cookie (readable by JS) must match the
 `X-Ramen-CSRF` header on cookie-authenticated `/api/*` mutations, or the hidden `csrf_token` field on HTML forms.
 API-key requests are exempt; a form POST without any csrf cookie (non-browser client) is accepted."""
+
 import hmac
 import secrets
 
@@ -39,14 +40,20 @@ async def csrf_form(request: Request, csrf_token: str = Form("")) -> None:
 
 class CsrfMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if (request.method not in SAFE and request.url.path.startswith("/api/") and SESSION_COOKIE in request.cookies
-                and not request.headers.get(API_KEY_HEADER)
-                and not _ok(request.cookies.get(COOKIE), request.headers.get(HEADER))):
+        if (
+            request.method not in SAFE
+            and request.url.path.startswith("/api/")
+            and SESSION_COOKIE in request.cookies
+            and not request.headers.get(API_KEY_HEADER)
+            and not _ok(request.cookies.get(COOKIE), request.headers.get(HEADER))
+        ):
             from fastapi.responses import JSONResponse
+
             return JSONResponse({"detail": "csrf token missing or invalid"}, 403)
         response = await call_next(request)
         issue = getattr(request.state, "csrf_issue", None)
         if issue and COOKIE not in request.cookies:
-            response.set_cookie(COOKIE, issue, httponly=False, samesite="lax", secure=request.app.state.cookie_secure,
-                                max_age=12 * 3600)
+            response.set_cookie(
+                COOKIE, issue, httponly=False, samesite="lax", secure=request.app.state.cookie_secure, max_age=12 * 3600
+            )
         return response

@@ -172,6 +172,8 @@ def test_admin_requires_admin_key(node):
                 fn(admin_key=bad)
             except grpc.RpcError as e:
                 code = e.code()
+            if code == S.UNIMPLEMENTED:
+                pytest.skip("ramen.v1.Admin is not routed through this LB (§11: Admin stays cluster-internal)")
             assert code in (S.UNAUTHENTICATED, S.PERMISSION_DENIED), f"{fn.__name__} key={bad!r} → {code}"
             if code == S.PERMISSION_DENIED:
                 pytest.skip("caller is outside the worker's RAMEN_ADMIN_CIDRS (CIDR gate runs before the key check)")

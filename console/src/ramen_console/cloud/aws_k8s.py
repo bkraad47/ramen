@@ -12,7 +12,7 @@ import yaml
 
 from ..errors import ApiError
 from .gcp_k8s import (
-    MCP_PATH,
+    LB_PATHS,
     PORT,
     PORT_NAME,
     Kube,
@@ -117,10 +117,11 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
                     "http": {
                         "paths": [
                             {
-                                "path": MCP_PATH,
+                                "path": path,
                                 "pathType": "Prefix",
                                 "backend": {"service": {"name": "worker", "port": {"name": "use-annotation"}}},
                             }
+                            for path in LB_PATHS  # Mcp, Health, reflection; Admin stays internal (CONTRACTS §11)
                         ]
                     }
                 }

@@ -377,15 +377,17 @@ async def test_refresh_scale_and_detach(cloud, fk):
         "worker": 100,
         "worker-canary": 0,
     }
-    assert r["service_accounts"] == [
+    assert r["service_accounts"] == [  # every attached zone gets its role on attach (§7/§8)
         f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-a",
+        f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-b",
         f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-other-a",
     ]
     s = await cloud.scale("demo", "a", {**SPEC, "count": 4, "size": "l"})
     assert s["ok"] and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 4
     d = await cloud.detach_group("demo")
     assert d["namespaces"] == ["ramen-demo-a", "ramen-demo-b"] and d["service_accounts"] == [
-        f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-a"
+        f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-a",
+        f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-b",
     ]
     assert ("Namespace", None, "ramen-other-a") in fk.k8s.objs and (
         "Namespace",

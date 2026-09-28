@@ -44,8 +44,8 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | me | `GET /api/v1/me` | |
 | users | `/api/v1/users`, `/api/v1/users/{id}` | POST {email,password,role,groups} → 201 |
 | groups | `/api/v1/groups`, `/api/v1/groups/{group}` | POST {name,repo_url,ref} → 201 |
-| zones | `/api/v1/zones`, `/api/v1/zones/{zone}` | POST {name,provider,region}, super admin |
-| environments | `/api/v1/groups/{group}/environments[/{env}]`, `/api/v1/environments?group=` | POST {name,ref,zones:[...]} |
+| zones | `/api/v1/zones`, `/api/v1/zones/{zone}` (GET/DELETE) | POST {name,provider,region}, super admin |
+| environments | `/api/v1/groups/{group}/environments[/{env}]` (GET/PUT/DELETE on the item), `/api/v1/environments?group=` | POST {name,ref,zones:[...]} |
 | deploy | `POST /api/v1/groups/{group}/environments/{env}/deploy` {canary,zone?} → 202 {id,status} | poll `GET /api/v1/jobs/{id}` |
 | workers | `GET /api/v1/groups/{group}/zones/{zone}/workers` → {live:[{load}],count,size} | scale count via PUT (size super admin only) |
 | rebalance / ip-rules | `POST .../zones/{zone}/rebalance`, `PUT .../zones/{zone}/ip-rules` | |

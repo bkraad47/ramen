@@ -19,7 +19,15 @@ SIZES = {
 ALIASES = {"small": "s", "medium": "m", "large": "l"}
 PORT = 8080
 PORT_NAME = "grpc"
-MCP_PATH = "/ramen.v1.Mcp"  # only the MCP service is reachable through the LB; Admin/Health stay cluster-internal
+MCP_PATH = "/ramen.v1.Mcp"
+# Services reachable through the LB (CONTRACTS §11): Mcp (bearer key), Health and reflection (unauthenticated by
+# contract; clients/harness probe readiness and discover services through the LB). Admin stays cluster-internal.
+LB_PATHS = (
+    MCP_PATH,
+    "/grpc.health.v1.Health",
+    "/grpc.reflection.v1.ServerReflection",
+    "/grpc.reflection.v1alpha.ServerReflection",
+)
 CANARY_KEEP = ("replicas",)  # never reset canary replicas on re-apply
 GW_GROUP, GW_VERSION, GW_PLURAL = "gateway.networking.k8s.io", "v1", "httproutes"
 GKE_GROUP, GKE_VERSION, HCP_PLURAL = "networking.gke.io", "v1", "healthcheckpolicies"
@@ -95,7 +103,7 @@ def route_headers(group, zone) -> list[dict]:
 
 def httproute(group, zone) -> dict:
     """HTTPRoute `worker`: Gateway ramen-system/ramen routes gRPC calls carrying metadata ramen-group/ramen-zone
-    (path /ramen.v1.Mcp/*, no rewrite) → Service worker:8080 (h2c)."""
+    (paths LB_PATHS: Mcp, Health, reflection; no rewrite) → Service worker:8080 (h2c). Admin is not routed."""
     ns = ns_name(group, zone)
     return {
         "apiVersion": f"{GW_GROUP}/{GW_VERSION}",
@@ -106,7 +114,8 @@ def httproute(group, zone) -> dict:
             "rules": [
                 {
                     "matches": [
-                        {"path": {"type": "PathPrefix", "value": MCP_PATH}, "headers": route_headers(group, zone)}
+                        {"path": {"type": "PathPrefix", "value": path}, "headers": route_headers(group, zone)}
+                        for path in LB_PATHS
                     ],
                     "backendRefs": [{"name": "worker", "port": PORT}],
                 }
@@ -267,8 +276,8 @@ def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = N
 
 
 class Kube:
-    def __init__(self, clients, poll=2.0, wait_secs=300):
-        self.c, self.poll, self.wait_secs = clients, poll, wait_secs
+    def __init__(self, clients, poll=2.0, wait_secs=300, rbac_wait=30.0):
+        self.c, self.poll, self.wait_secs, self.rbac_wait = clients, poll, wait_secs, rbac_wait
 
     def _fns(self, kind):
         c = self.c
@@ -326,6 +335,19 @@ class Kube:
             lambda name, ns: c.get_namespaced_custom_object(group, version, ns, plural, name),
             True,
         )
+
+    def wait_rbac(self, ns: str, kind: str = "ServiceAccount", name: str = "worker") -> None:
+        """Block until a zone-scoped read in `ns` is authorised. A RoleBinding is not honoured the instant it is
+        created (the API server's RBAC cache lags by up to a few seconds): reads answer 403, not 404, until then."""
+        deadline = time.monotonic() + self.rbac_wait
+        while True:
+            try:
+                self.read(kind, ns, name)
+                return
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 403 or time.monotonic() > deadline:
+                    raise
+                time.sleep(min(self.poll, 1.0))
 
     def wait_terminated(self, ns: str, selector: str, timeout: float | None = None) -> bool:
         """True once no pod matching `selector` is still terminating (old ReplicaSet drained), False on timeout."""

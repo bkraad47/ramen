@@ -95,18 +95,32 @@ class Console:
     def me(self) -> httpx.Response:
         return self.http.get(self.url("me"))
 
+    # A single-replica console behind a cloud LB drops requests for ~1 min when its pod is rescheduled (Autopilot node
+    # churn) or right after a rollout: the LB answers 502/503/504 with an envoy-style upstream error. Retry those; the
+    # API is idempotent for our purposes (creates answer 409 on a repeat and every caller accepts 409).
+    TRANSIENT = ("upstream connect error", "no healthy upstream", "upstream request timeout", "connection termination")
+
+    def _send(self, method: str, url: str, retries: int = 12, **kw) -> httpx.Response:
+        for attempt in range(retries + 1):
+            r = self.http.request(method, url, **kw)
+            body = r.text[:300].lower()
+            if r.status_code not in (502, 503, 504) or not any(t in body for t in self.TRANSIENT) or attempt == retries:
+                return r
+            time.sleep(5)
+        return r  # pragma: no cover
+
     def get(self, key: str, **kw) -> httpx.Response:
         params = kw.pop("params", None)
-        return self.http.get(self.url(key, **kw), params=params)
+        return self._send("GET", self.url(key, **kw), params=params)
 
     def post(self, key: str, body: dict | None = None, **kw) -> httpx.Response:
-        return self.http.post(self.url(key, **kw), json=body if body is not None else {})
+        return self._send("POST", self.url(key, **kw), json=body if body is not None else {})
 
     def put(self, key: str, body: dict, **kw) -> httpx.Response:
-        return self.http.put(self.url(key, **kw), json=body)
+        return self._send("PUT", self.url(key, **kw), json=body)
 
     def delete(self, key: str, **kw) -> httpx.Response:
-        return self.http.delete(self.url(key, **kw))
+        return self._send("DELETE", self.url(key, **kw))
 
     def page(self, path: str) -> httpx.Response:
         return self.http.get(path)

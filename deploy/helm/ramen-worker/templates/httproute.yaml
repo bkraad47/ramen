@@ -1,6 +1,6 @@
 {{- if and .Values.route.enabled (ne .Values.provider "aws") }}
-# CONTRACTS §11: the Gateway routes gRPC calls by metadata ramen-group / ramen-zone (no path rewrite). Only the Mcp
-# service (/ramen.v1.Mcp/*) is reachable through the LB; Admin and Health stay cluster-internal.
+# CONTRACTS §11: the Gateway routes gRPC calls by metadata ramen-group / ramen-zone (no path rewrite). Mcp, Health and
+# reflection (route.paths) are reachable through the LB; Admin stays cluster-internal.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -11,10 +11,12 @@ spec:
   parentRefs: [{ name: {{ .Values.route.gateway }}, namespace: {{ .Values.route.gatewayNamespace }} }]
   rules:
     - matches:
-        - path: { type: PathPrefix, value: {{ .Values.route.mcpPath | quote }} }
+        {{- range .Values.route.paths }}
+        - path: { type: PathPrefix, value: {{ . | quote }} }
           headers:
-            - { name: ramen-group, value: {{ .Values.group | quote }} }
-            - { name: ramen-zone, value: {{ .Values.zone | quote }} }
+            - { name: ramen-group, value: {{ $.Values.group | quote }} }
+            - { name: ramen-zone, value: {{ $.Values.zone | quote }} }
+        {{- end }}
       backendRefs: [{ name: worker, port: {{ .Values.port }} }]
 ---
 apiVersion: networking.gke.io/v1

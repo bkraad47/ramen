@@ -29,7 +29,9 @@ spec:
   rules:
     - http:
         paths:
-          - path: {{ .Values.route.mcpPath | quote }}
+          {{- range .Values.route.paths }}
+          - path: {{ . | quote }}
             pathType: Prefix
             backend: { service: { name: worker, port: { name: use-annotation } } }
+          {{- end }}
 {{- end }}

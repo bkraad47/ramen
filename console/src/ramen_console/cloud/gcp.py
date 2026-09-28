@@ -94,9 +94,21 @@ class GcpCloud(Cloud):
             }
         )
         self.kube.apply(rolebinding(group, zone))
+        self.kube.wait_rbac(ns)  # the binding takes a moment to be honoured (API-server RBAC cache)
+
+    def _ksa_gsa(self, group, zone) -> str | None:
+        ksa = self.kube.read("ServiceAccount", ns_name(group, zone), "worker") or {}
+        return (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account")
 
     def _attach(self, group, zone, spec) -> dict:
-        renderer, docs = self._render(group, zone, spec or {})
+        # Namespace + RoleBinding first: _render reads the zone's KSA, which the console may only do once its
+        # RoleBinding exists in that namespace (SEC-09; the API server answers 403, not 404, before that).
+        self._ensure_namespace(group, zone)
+        spec = dict(spec or {})
+        if not spec.get("service_account") and not self._ksa_gsa(group, zone):
+            # CONTRACTS §7: the console creates the per-zone GSA; without it workers have no GCS/Secret identity
+            spec["service_account"] = self._identity(group, zone)["name"]
+        renderer, docs = self._render(group, zone, spec)
         docs.insert(1, rolebinding(group, zone))  # right after the Namespace: everything else needs it
         for d in docs:
             self.kube.apply(d, keep=("replicas",) if d["metadata"]["name"] == "worker-canary" else ())
@@ -306,6 +318,9 @@ class GcpCloud(Cloud):
     @_guard
     async def abort_deploy(self, group, zone):
         ns = ns_name(group, zone)
+        # Namespace reads are cluster-scoped; a Deployment read in a namespace without our RoleBinding is 403
+        if not await asyncio.to_thread(self.kube.read, "Namespace", None, ns):
+            return
         if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary"):
             await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
             await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
@@ -369,14 +384,22 @@ class GcpCloud(Cloud):
             return applied, project
         return applied, []
 
+    def _identity(self, group, zone) -> dict:
+        """GSA ramen-<group>-<zone>@ with the baseline grants (bucket prefix viewer, group secrets accessor) and the
+        Workload Identity binding for KSA <ns>/worker. Idempotent."""
+        ns, iam = ns_name(group, zone), self._iam()
+        email, created = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
+        roles, _ = self._grant(iam, email, group, ["roles/storage.objectViewer", self.SECRET_ROLE])
+        member = iam.bind_workload_identity(email, ns, "worker")
+        return {"name": email, "created": created, "roles": roles, "ksa": f"{ns}/worker", "workload_identity": member}
+
     @_guard
     async def create_service_account(self, group, zone):
-        ns, iam = ns_name(group, zone), self._iam()
+        ns = ns_name(group, zone)
 
         def run():
-            email, created = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
-            roles, _ = self._grant(iam, email, group, ["roles/storage.objectViewer", self.SECRET_ROLE])
-            member = iam.bind_workload_identity(email, ns, "worker")
+            out = self._identity(group, zone)
+            email = out["name"]
             self._ensure_namespace(group, zone)
             self.kube.apply(
                 {
@@ -389,13 +412,7 @@ class GcpCloud(Cloud):
                     },
                 }
             )
-            return {
-                "name": email,
-                "created": created,
-                "roles": roles,
-                "ksa": f"{ns}/worker",
-                "workload_identity": member,
-            }
+            return out
 
         return await asyncio.to_thread(run)
 

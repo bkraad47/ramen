@@ -19,6 +19,7 @@ class FakeK8s:
         self.objs: dict[tuple, dict] = {}
         self.ready = True
         self.calls: list[tuple] = []
+        self.rbac_lag = 0  # zone-scoped reads still answering 403 after the RoleBinding exists (RBAC cache lag)
 
     # generic helpers ---------------------------------------------------
     def _key(self, kind, body, ns=None):
@@ -41,8 +42,17 @@ class FakeK8s:
         _merge(self.objs[k], copy.deepcopy(body))
         return copy.deepcopy(self.objs[k])
 
+    # SEC-09: the console KSA may read these kinds only inside a namespace where its RoleBinding exists; before that
+    # the API server answers 403, not 404 (RBAC is checked before the object lookup).
+    ZONE_KINDS = ("ServiceAccount", "Secret", "Service", "Deployment", "HorizontalPodAutoscaler")
+
     def _read(self, kind, ns, name):
         k = (kind, ns, name)
+        if kind in self.ZONE_KINDS and ("RoleBinding", ns, "ramen-console") not in self.objs:
+            raise FakeApiError(403, "Forbidden")
+        if kind in self.ZONE_KINDS and self.rbac_lag > 0:
+            self.rbac_lag -= 1
+            raise FakeApiError(403, "Forbidden")
         if k not in self.objs:
             raise FakeApiError(404, "NotFound")
         obj = copy.deepcopy(self.objs[k])
@@ -262,11 +272,15 @@ class FakeBucket:
     def __init__(self):
         self.data: dict[str, bytes] = {}
         self.policy = NS(version=1, bindings=[])
+        self.iam_lag = 0  # set_iam_policy calls still answering 400 "Service account … does not exist" (IAM lag)
 
     def get_iam_policy(self, requested_policy_version=1):
         return NS(version=self.policy.version, bindings=copy.deepcopy(self.policy.bindings))
 
     def set_iam_policy(self, policy):
+        if self.iam_lag > 0:
+            self.iam_lag -= 1
+            raise FakeApiError(400, "Service account ramen-x-y@p1.iam.gserviceaccount.com does not exist.")
         self.policy = NS(version=policy.version, bindings=copy.deepcopy(list(policy.bindings)))
         return self.policy
 
@@ -303,10 +317,28 @@ class FakeSM:
         want = request.get("filter", "").removeprefix("name:")
         return [NS(name=n) for n in sorted(self.secrets) if want in n.rsplit("/", 1)[1]]
 
+    class _Bindings(list):
+        """Like a proto repeated field: only google.iam.v1 Binding messages may be added (dicts → TypeError)."""
+
+        def _check(self, items):
+            from google.iam.v1 import policy_pb2
+
+            items = list(items)
+            for it in items:
+                if not isinstance(it, policy_pb2.Binding):
+                    raise TypeError(f"Expected a message object, but got {it}.")
+            return items
+
+        def extend(self, items):
+            super().extend(self._check(items))
+
+        def append(self, item):
+            super().extend(self._check([item]))
+
     def get_iam_policy(self, request):
         if request["resource"] not in self.secrets:
             raise FakeApiError(404, "not found")
-        return NS(bindings=copy.deepcopy(self.secrets[request["resource"]]["policy"]))
+        return NS(bindings=self._Bindings(copy.deepcopy(self.secrets[request["resource"]]["policy"])))
 
     def set_iam_policy(self, request):
         self.calls.append("set_iam_policy")

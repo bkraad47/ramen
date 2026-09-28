@@ -4,10 +4,17 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.3.1` **(current)** | — | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
+| `0.3.2` **(current)** | — | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
+| `0.3.1` | 2026-09-28 | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.3.2 — verified on GKE
+
+- gRPC header routing verified on a live GKE Gateway over cleartext HTTP/2 (h2c); no TLS fallback needed. Live harness: 126 passed, 0 failed.
+- Fixes from the live run: zone identity (GSA + Workload Identity + baseline grants) is ensured when a zone is attached, not only by an explicit service-account call; IAM bindings on new service accounts wait for propagation; all worker services (Mcp, Health, reflection) are routed through the Gateway; the node retries its initial load instead of waiting for an admin reload; the bridge pins the server certificate in insecure-TLS mode.
+- API: `GET /api/v1/zones/{zone}` and `GET /api/v1/groups/{group}/environments/{env}`. `make env` warns when `.env` is older than the example. Terraform lock files are committed.
 
 ## 0.3.1 — gRPC transport
 

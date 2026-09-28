@@ -551,7 +551,7 @@ def test_oauth_routes(demo, monkeypatch):
             return RedirectResponse("https://issuer/authorize?redirect_uri=" + redirect_uri)
 
         async def authorize_access_token(self, request):
-            return {"userinfo": {"email": "sso@x"}}
+            return {"userinfo": {"email": "sso@x", "email_verified": True}}
 
     monkeypatch.setattr(demo.app.state.oauth, "client", lambda name: FakeClient() if name == "oidc" else None)
     with TestClient(demo.app) as anon:

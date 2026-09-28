@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -40,7 +41,19 @@ def sync_repo_to_gcs(storage, bucket_name, group, repo_url, ref, token) -> str:
     return f"gs://{bucket_name}/{group}"
 
 
+_K8S_NAME = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
+
+
+def k8s_name(value: str, what: str) -> str:
+    """Namespace/pod names only: anything else could rewrite a log filter or query (SEC-02)."""
+    if not isinstance(value, str) or not _K8S_NAME.match(value):
+        raise ApiError(422, f"invalid {what} name")
+    return value
+
+
 def fetch_logs(client, ns, worker, tail) -> str:
+    ns = k8s_name(ns, "namespace")
+    worker = k8s_name(worker, "worker") if worker else None
     f = f'resource.type="k8s_container" AND resource.labels.namespace_name="{ns}"'
     if worker:
         f += f' AND resource.labels.pod_name="{worker}"'

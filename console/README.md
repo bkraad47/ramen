@@ -52,6 +52,8 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_IMAGE_WORKER` | `ramen-worker:<console version>` | Worker image used in the per-zone Deployments (the Helm chart sets the registry path) |
 | `RAMEN_DEPLOY_TIMEOUT_SECS` | `300` | Max wait for a Deployment rollout during deploy |
 | `RAMEN_GCP_POD_PROXY` | `0` | `1` reads worker `/metrics` through the API-server pod proxy (for running the console outside the cluster) |
+| `RAMEN_LOGIN_RATE_LIMIT` | `20` | POST attempts per IP per minute on login/reset/magic before 429 |
+| `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` | `0` | accept SSO emails without `email_verified: true` (only for providers that never send the claim) |
 | `RAMEN_WORKER_CHART` | – | Path to `deploy/helm/ramen-worker`; when set and `helm` is on PATH the zone manifests are rendered with `helm template`, otherwise the built-in Python manifest set is used |
 | `RAMEN_GCP_FRESH_HTTP` | `1` | `0` lets googleapiclient reuse its shared (not thread-safe) transport instead of a per-call authorized `httplib2.Http` |
 | `GOOGLE_OAUTH_ACCESS_TOKEN` | – | Explicit OAuth token for the Google clients when no ADC is available (`gcloud auth print-access-token`); dev only |

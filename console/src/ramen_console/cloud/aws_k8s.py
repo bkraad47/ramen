@@ -4,12 +4,13 @@ weighted forward action. Everything else (Deployments, HPA, apply/wait) is share
 
 import copy
 import json
+import os
 import subprocess
 
 import yaml
 
 from ..errors import ApiError
-from .gcp_k8s import PORT, Kube, _deployment, helm_available, normalize_size, ns_name
+from .gcp_k8s import PORT, Kube, _deployment, helm_available, networkpolicy, normalize_size, ns_name
 
 __all__ = [
     "ACTION",
@@ -135,6 +136,7 @@ def manifests(
         deps.append(d)
     return [
         {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns, "labels": labels}},
+        networkpolicy(ns, group, zone, [os.environ.get("RAMEN_AWS_VPC_CIDR", "10.0.0.0/16")]),
         ksa,
         _service(ns, "worker", "stable", labels),
         _service(ns, "worker-canary", "canary", labels),

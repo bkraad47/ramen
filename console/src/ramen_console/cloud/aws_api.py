@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from ..errors import ApiError
+from .gcp_api import k8s_name
 from .gcp_clients import GcpClients
 from .local import LocalCloud
 
@@ -144,6 +145,8 @@ def log_group_name(cluster) -> str:
 
 
 def fetch_logs(logs, log_group, ns, worker, tail, poll=1.0, timeout=60.0, days=7) -> str:
+    ns = k8s_name(ns, "namespace")
+    worker = k8s_name(worker, "worker") if worker else None
     q = f'fields @timestamp, kubernetes.pod_name, stream, log | filter kubernetes.namespace_name = "{ns}"'
     if worker:
         q += f' and kubernetes.pod_name = "{worker}"'

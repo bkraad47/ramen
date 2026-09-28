@@ -8,15 +8,11 @@ from fastapi.testclient import TestClient
 from ramen_console.app import create_app
 from ramen_console.auth.sessions import SessionSigner
 from ramen_console.cloud import gcp_api
+from ramen_console.errors import ApiError
 from ramen_console.storage import make_store
 from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401
 
 
-@pytest.mark.xfail(
-    reason="SEC-01: signing secret falls back to the public constant 'dev-insecure' when "
-    "RAMEN_SESSION_SECRET and RAMEN_FERNET_KEY are unset; sessions/tokens become forgeable",
-    strict=False,
-)
 def test_sec01_no_dev_insecure_signing_fallback(monkeypatch):
     monkeypatch.delenv("RAMEN_SESSION_SECRET", raising=False)
     monkeypatch.delenv("RAMEN_FERNET_KEY", raising=False)
@@ -27,11 +23,6 @@ def test_sec01_no_dev_insecure_signing_fallback(monkeypatch):
     assert app.state.signer.load(forged) is None, "console signs sessions with the public 'dev-insecure' constant"
 
 
-@pytest.mark.xfail(
-    reason="SEC-02: `worker` (and `zone`) log-query params are interpolated unescaped into the "
-    "Cloud Logging filter / Logs Insights queryString, enabling cross-namespace log reads",
-    strict=False,
-)
 def test_sec02_log_query_injection_is_neutralised():
     captured = {}
 
@@ -41,16 +32,12 @@ def test_sec02_log_query_injection_is_neutralised():
             return []
 
     inj = 'x" OR resource.labels.namespace_name="ramen-victim-prod'
-    gcp_api.fetch_logs(FakeGcp(), "ramen-demo-local", inj, 100)
-    # The victim namespace must never appear in the filter for a caller scoped to ramen-demo-local.
-    assert "ramen-victim-prod" not in captured["f"], f"injectable log filter: {captured['f']}"
+    with pytest.raises(ApiError) as e:
+        gcp_api.fetch_logs(FakeGcp(), "ramen-demo-local", inj, 100)
+    # The victim namespace must never reach the logging client for a caller scoped to ramen-demo-local.
+    assert e.value.status_code == 422 and "f" not in captured
 
 
-@pytest.mark.xfail(
-    reason="SEC-03: post-login redirect accepts protocol-relative `next` (e.g. //evil.example.com), "
-    "an open redirect usable for phishing",
-    strict=False,
-)
 def test_sec03_login_next_open_redirect(demo):  # noqa: F811
     c: TestClient = demo
     r = c.post(

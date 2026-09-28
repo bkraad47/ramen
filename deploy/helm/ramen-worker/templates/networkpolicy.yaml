@@ -1,0 +1,19 @@
+{{- if .Values.networkPolicy.enabled }}
+# Workers accept ingress only from the console namespace and the load balancer ranges (SEC-04).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker
+  namespace: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: { app: worker } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.consoleNamespace | quote }} } }
+        {{- range (ternary .Values.networkPolicy.awsCidrs .Values.networkPolicy.gcpCidrs (eq .Values.provider "aws")) }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+      ports: [{ port: {{ .Values.port }}, protocol: TCP }]
+{{- end }}

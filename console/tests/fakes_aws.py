@@ -25,6 +25,15 @@ class _Networking:
     def read_namespaced_ingress(self, name, ns):
         return self.s._read("Ingress", ns, name)
 
+    def create_namespaced_network_policy(self, ns, body):
+        return self.s._create("NetworkPolicy", ns, body)
+
+    def patch_namespaced_network_policy(self, name, ns, body):
+        return self.s._patch("NetworkPolicy", ns, name, body)
+
+    def read_namespaced_network_policy(self, name, ns):
+        return self.s._read("NetworkPolicy", ns, name)
+
 
 class FakeLogsInsights:
     """results: list of {field: value} rows; `pending` = polls answering Running first; `fail` = final status."""

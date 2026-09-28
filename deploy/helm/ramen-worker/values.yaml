@@ -43,3 +43,9 @@ route:                      # HTTPRoute on the console Gateway (gcp only; aws re
   gateway: ramen
   gatewayNamespace: ramen-system
   label: ramen.io/routes    # namespace label the Gateway's allowedRoutes selector requires
+
+consoleNamespace: ramen-system
+networkPolicy:
+  enabled: true
+  gcpCidrs: ["35.191.0.0/16", "130.211.0.0/22"]   # Google front ends / health checkers
+  awsCidrs: ["10.0.0.0/16"]                        # the VPC CIDR from deploy/terraform/aws (ALB targets)

@@ -27,6 +27,12 @@ from .config import apply_config
 from .deploy import Jobs
 from .mail import Mailer
 from .secrets import make_secrets_backend
+from .security import (
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    redact_tokens_in_access_log,
+    resolve_signing_secret,
+)
 from .services import Services
 from .storage import make_store
 from .web import api, api_admin, auth_routes, pages
@@ -56,10 +62,9 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.accounts = Accounts(st.store)
     st.backups = Backups(st.services)
     st.jobs = Jobs()
-    st.signer = SessionSigner(
-        os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure"
-    )
-    st.tokens = Tokens(os.environ.get("RAMEN_SESSION_SECRET") or os.environ.get("RAMEN_FERNET_KEY") or "dev-insecure")
+    signing_secret = resolve_signing_secret()
+    st.signer = SessionSigner(signing_secret)
+    st.tokens = Tokens(signing_secret)
     st.oauth = OAuthRegistry.from_env()
     st.auth_env = AuthSettings.from_env()
     st.mailer = Mailer.from_env()
@@ -69,11 +74,10 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
 
     app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
     app.add_middleware(AuthAuditMiddleware)
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=os.environ.get("RAMEN_SESSION_SECRET", "dev-insecure"),
-        https_only=st.cookie_secure,
-    )
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=st.cookie_secure)
+    app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
+    redact_tokens_in_access_log()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     for router in (auth_routes.r, pages.r, api.r, api_admin.r):
         app.include_router(router)

@@ -159,6 +159,15 @@ class _Core:
     def read_namespaced_service_account(self, name, ns):
         return self.s._read("ServiceAccount", ns, name)
 
+    def create_namespaced_network_policy(self, ns, body):
+        return self.s._create("NetworkPolicy", ns, body)
+
+    def patch_namespaced_network_policy(self, name, ns, body):
+        return self.s._patch("NetworkPolicy", ns, name, body)
+
+    def read_namespaced_network_policy(self, name, ns):
+        return self.s._read("NetworkPolicy", ns, name)
+
     def create_namespaced_secret(self, ns, body):
         return self.s._create("Secret", ns, body)
 
@@ -453,6 +462,10 @@ class FakeClients:
     @property
     def autoscaling(self):
         return self.k8s.autoscaling
+
+    @property
+    def networking(self):
+        return self.k8s.core
 
     @property
     def custom(self):

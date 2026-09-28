@@ -16,7 +16,7 @@ jobs:
           echo "VER=$TAG" >> "$GITHUB_ENV"
       - name: Versions
         run: python3 scripts/check_versions.py --tag "$GITHUB_REF_NAME"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
         with: { toolchain: "1.98.1" }
       - name: Build node
         working-directory: node-rs

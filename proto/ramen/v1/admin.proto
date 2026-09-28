@@ -1,0 +1,13 @@
+// Ramen worker admin surface (CONTRACTS §11). Auth: metadata `x-ramen-admin-key`. Health uses grpc.health.v1.
+syntax = "proto3";
+package ramen.v1;
+
+service Admin {
+  rpc Reload(ReloadRequest) returns (LoadResult);
+  rpc Metrics(MetricsRequest) returns (MetricsReply);
+}
+
+message ReloadRequest {}
+message LoadResult { bytes json = 1; }     // the runtime.load result (tools/resources/prompts/errors/sync) as JSON
+message MetricsRequest {}
+message MetricsReply { bytes json = 1; }   // same fields as the former GET /metrics

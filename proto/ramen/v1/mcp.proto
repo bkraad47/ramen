@@ -1,0 +1,16 @@
+// Ramen MCP transport (CONTRACTS §11): one JSON-RPC 2.0 message per call, carried as UTF-8 JSON bytes so the MCP
+// semantics are untouched. Auth: metadata `authorization: Bearer <key>`. Routing at the LB: metadata
+// `ramen-group` / `ramen-zone`.
+syntax = "proto3";
+package ramen.v1;
+
+service Mcp {
+  // Unary: a JSON-RPC request in, its response out. A JSON-RPC notification returns an empty body.
+  rpc Call(JsonRpc) returns (JsonRpc);
+  // Bidirectional session for clients that need server-initiated messages (reserved; servers may return UNIMPLEMENTED).
+  rpc Session(stream JsonRpc) returns (stream JsonRpc);
+}
+
+message JsonRpc {
+  bytes body = 1;  // UTF-8 JSON-RPC 2.0 request or response
+}

@@ -28,7 +28,7 @@ before `apply`, and refuses to call the job done without the validator. Narrativ
 (read-only sub-agent; `CONSOLE=https://<alb-dns>`, `rmk_` key, viewer `rmn_` key)
 - V1 `curl -sk $CONSOLE/readyz` → 200, `"store":"dynamodb"`.
 - V2 `curl -sk -H "X-Ramen-Api-Key: $RMN" $CONSOLE/api/v1/groups/<g>/zones/<z>/workers` → 200, ≥1 live stable worker.
-- V3 `curl -sk "$CONSOLE/mcp/<g>/<z>" -H "Authorization: Bearer $RMK" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'` → `"text":"5"`, `isError:false`.
+- V3 (gRPC through the ALB, `lb.pem` = the cert imported into ACM) `REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64); grpcurl -cacert lb.pem -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: <z>' -d "{\"body\":\"$REQ\"}" <alb-dns>:443 ramen.v1.Mcp/Call` → status OK; base64-decoded `body` contains `"text":"5"`, `isError:false`.
 - V4 Same without the header → 401.
 - V5 `aws logs describe-log-groups --log-group-name-prefix /aws/containerinsights/ramen` lists a group; `curl -sk -H "X-Ramen-Api-Key: $RMN" "$CONSOLE/api/v1/logs?group=<g>&zone=<z>&tail=5"` → 200 with ≥1 line.
 - V6 `aws wafv2 list-web-acls --scope REGIONAL` shows no ACL for the group unless IP rules were set; if they were, `curl` from a disallowed IP → 403.

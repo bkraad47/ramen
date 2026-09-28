@@ -2,8 +2,8 @@
 
 [agentskills](https://agentskills.io)-style skills for agents (Claude Code, Cursor, CI bots) that operate a Ramen
 deployment. Each folder has one `SKILL.md`: front matter (`name`, `description`), **Inputs**, numbered **Steps**,
-**Validate**, **Boundaries**. Skills only use the documented surfaces: the console API (`rmn_` key), `terraform`,
-`helm`, `kubectl`, `make`. They never read secret values and never post anything outside the deployment.
+**Validate**, **Boundaries**. Skills only use the documented surfaces: the console API (`rmn_` key), the worker's gRPC surface
+(`grpcurl` / `ramen-mcp-bridge` with an `rmk_` key), `terraform`, `helm`, `kubectl`, `make`. They never read secret values and never post anything outside the deployment.
 
 | Skill | Use when |
 |---|---|
@@ -25,8 +25,8 @@ sub-agent. Convention:
 1. The parent agent finishes the Steps, then spawns a sub-agent with **only** the Validate section, the URLs, and
    a key that cannot mutate (a `viewer`-scoped `rmn_` key, or the `rmk_` key for `tools/call`).
 2. The sub-agent runs the listed checks and replies `PASS` or `FAIL: <check> — <evidence>` (HTTP status, job
-   status, JSON result). It must not run any write call, `terraform apply`, `helm`, or `kubectl` verbs other than
-   `get`/`describe`/`logs`.
+   status, gRPC status, JSON result). It must not run any write call, `terraform apply`, `helm`, or `kubectl` verbs
+   other than `get`/`describe`/`logs`/`port-forward`.
 3. The parent may not report the task as done until it has a `PASS`. On `FAIL` it fixes and re-validates; after
    three failures it stops and asks a human.
 

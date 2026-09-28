@@ -11,6 +11,10 @@ Parameters:
     Type: String
     Default: ramen
     Description: EKS cluster name (also node group name and Container Insights log group).
+  AlbGroup:
+    Type: String
+    Default: ramen
+    Description: ALB IngressGroup name (helm value aws.albGroup / RAMEN_ALB_GROUP); scopes the console's WAF and ALB permissions.
   KubernetesVersion:
     Type: String
     Default: "1.31"
@@ -197,6 +201,29 @@ Resources:
       LogGroupName: !Sub "/aws/containerinsights/${ClusterName}/application"
       RetentionInDays: !Ref LogRetentionDays
 
+  # --- permissions boundary for the worker roles the console creates (SEC-10) ---
+  WorkerBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: ramen-worker-boundary
+      Path: /ramen/
+      Description: Upper bound for every ramen worker role (policy engine grants can never exceed it)
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetBucketLocation]
+            Resource: [!GetAtt GroupsBucket.Arn, !Sub "${GroupsBucket.Arn}/*"]
+          - Effect: Allow
+            Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+          - Effect: Allow
+            Action: [logs:CreateLogStream, logs:PutLogEvents, cloudwatch:PutMetricData, sns:Publish,
+                     sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes,
+                     dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query, dynamodb:UpdateItem, dynamodb:DeleteItem,
+                     kms:Decrypt, bedrock:InvokeModel]
+            Resource: "*"
+
   # --- console role (KSA ramen-system/console), scoped like the Terraform variant ---
   ConsoleRole:
     Type: AWS::IAM::Role
@@ -239,18 +266,30 @@ Resources:
                 Action: eks:DescribeCluster
                 Resource: !GetAtt Cluster.Arn
               - Effect: Allow
-                Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:UpdateAssumeRolePolicy, iam:TagRole, iam:PutRolePolicy,
+                Action: [iam:DeleteRole, iam:GetRole, iam:UpdateAssumeRolePolicy, iam:TagRole,
                          iam:DeleteRolePolicy, iam:GetRolePolicy, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:DetachRolePolicy]
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ramen/*"
+              - Effect: Allow   # SEC-10: worker roles only with the permissions boundary attached
+                Action: [iam:CreateRole, iam:PutRolePolicy, iam:AttachRolePolicy]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ramen/*"
+                Condition: { StringEquals: { "iam:PermissionsBoundary": !Ref WorkerBoundary } }
               - Effect: Allow
                 Action: iam:ListRoles
                 Resource: "*"
+              - Effect: Allow   # SEC-10: the `ramen` web ACL and `ramen-*` IP sets only
+                Action: [wafv2:CreateIPSet, wafv2:GetIPSet, wafv2:UpdateIPSet, wafv2:DeleteIPSet,
+                         wafv2:CreateWebACL, wafv2:GetWebACL, wafv2:UpdateWebACL, wafv2:DeleteWebACL, wafv2:TagResource]
+                Resource:
+                  - !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/webacl/${AlbGroup}/*"
+                  - !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/ipset/ramen-*/*"
               - Effect: Allow
-                Action: wafv2:*
-                Resource: !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/*"
-              - Effect: Allow
-                Action: [wafv2:ListWebACLs, wafv2:ListIPSets, wafv2:GetWebACLForResource, wafv2:AssociateWebACL, wafv2:DisassociateWebACL]
+                Action: [wafv2:ListWebACLs, wafv2:ListIPSets]
                 Resource: "*"
+              - Effect: Allow
+                Action: [wafv2:GetWebACLForResource, wafv2:AssociateWebACL, wafv2:DisassociateWebACL]
+                Resource:
+                  - !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/webacl/${AlbGroup}/*"
+                  - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:loadbalancer/app/k8s-${AlbGroup}*/*"
               - Effect: Allow
                 Action: [elasticloadbalancing:DescribeLoadBalancers, elasticloadbalancing:DescribeTags, elasticloadbalancing:SetWebAcl]
                 Resource: "*"
@@ -547,6 +586,9 @@ Resources:
 Outputs:
   ClusterName:
     Value: !Ref Cluster
+  WorkerBoundaryArn:
+    Value: !Ref WorkerBoundary
+    Description: RAMEN_AWS_PERMISSIONS_BOUNDARY (the console default matches this name)
   Region:
     Value: !Ref AWS::Region
   Account:

@@ -1,4 +1,4 @@
-/* Ramen theme: coral #F26B3A strokes on off-white #F4F1EC (facts F1.2). */
+/* Ramen theme: coral #F26B3A strokes on off-white #F4F1EC (logo v2, same palette as v1). */
 :root {
   --md-primary-fg-color: #F26B3A;
   --md-primary-fg-color--light: #F58B62;
@@ -29,7 +29,7 @@
 .md-header, .md-tabs { background-color: #F26B3A; color: #fff; }
 .md-header__button.md-logo img { height: 2rem; width: 2rem; border-radius: 6px; background: #F4F1EC; }
 .ramen-hero { text-align: center; padding: 1.5rem 0 .5rem; }
-.ramen-hero img { width: 180px; max-width: 60%; border-radius: 18px; }
+.ramen-hero img { width: 360px; max-width: 80%; border-radius: 18px; }
 .ramen-hero h1 { margin: .6rem 0 .2rem; font-weight: 700; }
 .ramen-hero p.tag { color: var(--md-default-fg-color--light); font-size: 1.05rem; margin: 0 0 .8rem; }
 .ramen-badges img { margin: 0 .15rem; }

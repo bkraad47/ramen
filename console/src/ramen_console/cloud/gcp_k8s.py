@@ -1,4 +1,5 @@
-"""Worker namespace manifests (CONTRACTS §7) and a thin apply/wait layer over the kubernetes client."""
+"""Worker namespace manifests (CONTRACTS §7, §11: gRPC h2c, header routing) and a thin apply/wait layer over the
+kubernetes client."""
 
 import shutil
 import subprocess
@@ -17,8 +18,12 @@ SIZES = {
 }
 ALIASES = {"small": "s", "medium": "m", "large": "l"}
 PORT = 8080
+PORT_NAME = "grpc"
+MCP_PATH = "/ramen.v1.Mcp"  # only the MCP service is reachable through the LB; Admin/Health stay cluster-internal
 CANARY_KEEP = ("replicas",)  # never reset canary replicas on re-apply
 GW_GROUP, GW_VERSION, GW_PLURAL = "gateway.networking.k8s.io", "v1", "httproutes"
+GKE_GROUP, GKE_VERSION, HCP_PLURAL = "networking.gke.io", "v1", "healthcheckpolicies"
+ZONE_CLUSTERROLE = "ramen-console-zone"  # unbound ClusterRole from deploy/helm/ramen; bound per zone namespace
 
 
 def normalize_size(size) -> str | None:
@@ -45,7 +50,7 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
                     "capabilities": {"drop": ["ALL"]},
                     "seccompProfile": {"type": "RuntimeDefault"},
                 },
-                "ports": [{"name": "http", "containerPort": PORT}],
+                "ports": [{"name": PORT_NAME, "containerPort": PORT}],
                 "env": [
                     {"name": k, "value": v}
                     for k, v in {
@@ -60,8 +65,10 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
                 ],
                 "envFrom": [{"secretRef": {"name": "ramen-deploy", "optional": True}}],
                 "resources": {"requests": res, "limits": res},
-                "readinessProbe": {"httpGet": {"path": "/readyz", "port": "http"}, "periodSeconds": 5},
-                "livenessProbe": {"httpGet": {"path": "/healthz", "port": "http"}, "periodSeconds": 10},
+                # grpc.health.v1: "" / ramen.v1.Mcp = SERVING once runtime.load succeeded (readiness),
+                # ramen.v1.Admin = process alive (liveness) so a slow load never gets the pod killed
+                "readinessProbe": {"grpc": {"port": PORT}, "periodSeconds": 5, "failureThreshold": 60},
+                "livenessProbe": {"grpc": {"port": PORT, "service": "ramen.v1.Admin"}, "periodSeconds": 10},
                 "volumeMounts": [{"name": "bucket", "mountPath": "/data/bucket"}],
             }
         ],
@@ -82,8 +89,13 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
     }
 
 
+def route_headers(group, zone) -> list[dict]:
+    return [{"name": "ramen-group", "value": group}, {"name": "ramen-zone", "value": zone}]
+
+
 def httproute(group, zone) -> dict:
-    """HTTPRoute `worker`: Gateway ramen-system/ramen routes /mcp/<group>/<zone> → Service worker:8080 as /mcp."""
+    """HTTPRoute `worker`: Gateway ramen-system/ramen routes gRPC calls carrying metadata ramen-group/ramen-zone
+    (path /ramen.v1.Mcp/*, no rewrite) → Service worker:8080 (h2c)."""
     ns = ns_name(group, zone)
     return {
         "apiVersion": f"{GW_GROUP}/{GW_VERSION}",
@@ -93,17 +105,44 @@ def httproute(group, zone) -> dict:
             "parentRefs": [{"group": GW_GROUP, "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}],
             "rules": [
                 {
-                    "matches": [{"path": {"type": "PathPrefix", "value": f"/mcp/{group}/{zone}"}}],
-                    "filters": [
-                        {
-                            "type": "URLRewrite",
-                            "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}},
-                        }
+                    "matches": [
+                        {"path": {"type": "PathPrefix", "value": MCP_PATH}, "headers": route_headers(group, zone)}
                     ],
                     "backendRefs": [{"name": "worker", "port": PORT}],
                 }
             ],
         },
+    }
+
+
+def healthcheckpolicy(group, zone) -> dict:
+    """GKE health check of type GRPC (grpc.health.v1: SERVING once runtime.load succeeded)."""
+    ns = ns_name(group, zone)
+    return {
+        "apiVersion": f"{GKE_GROUP}/{GKE_VERSION}",
+        "kind": "HealthCheckPolicy",
+        "metadata": {"name": "worker", "namespace": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}},
+        "spec": {
+            "default": {"checkIntervalSec": 15, "config": {"type": "GRPC", "grpcHealthCheck": {"port": PORT}}},
+            "targetRef": {"group": "", "kind": "Service", "name": "worker"},
+        },
+    }
+
+
+def rolebinding(group, zone, ksa_namespace="ramen-system", ksa="console") -> dict:
+    """RoleBinding of the console KSA to the unbound ClusterRole `ramen-console-zone` inside this zone namespace only
+    (SEC-09: secrets/serviceaccounts/deployments verbs are never granted cluster-wide)."""
+    ns = ns_name(group, zone)
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {
+            "name": "ramen-console",
+            "namespace": ns,
+            "labels": {"ramen.io/group": group, "ramen.io/zone": zone},
+        },
+        "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": ZONE_CLUSTERROLE},
+        "subjects": [{"kind": "ServiceAccount", "name": ksa, "namespace": ksa_namespace}],
     }
 
 
@@ -138,7 +177,9 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
             "spec": {
                 "type": "ClusterIP",
                 "selector": {"app": "worker"},
-                "ports": [{"name": "http", "port": PORT, "targetPort": "http"}],
+                "ports": [
+                    {"name": PORT_NAME, "port": PORT, "targetPort": PORT_NAME, "appProtocol": "kubernetes.io/h2c"}
+                ],
             },
         },
         _deployment(ns, "worker", "stable", group, zone, spec, image, bucket_uri),
@@ -160,6 +201,7 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
             },
         },
         httproute(group, zone),
+        healthcheckpolicy(group, zone),
     ]
 
 
@@ -200,6 +242,8 @@ def helm_manifests(chart, project, group, zone, spec, image, bucket_uri, gsa=Non
             d["metadata"].setdefault("labels", {})["ramen.io/routes"] = "true"
     if not any(d["kind"] == "HTTPRoute" for d in docs):
         docs.append(httproute(group, zone))
+    if not any(d["kind"] == "HealthCheckPolicy" for d in docs):
+        docs.append(healthcheckpolicy(group, zone))
     return docs
 
 
@@ -261,18 +305,27 @@ class Kube:
                 c.autoscaling.read_namespaced_horizontal_pod_autoscaler,
                 True,
             ),
-            "HTTPRoute": (
-                lambda ns, body: c.custom.create_namespaced_custom_object(GW_GROUP, GW_VERSION, ns, GW_PLURAL, body),
-                lambda name, ns, body: c.custom.patch_namespaced_custom_object(
-                    GW_GROUP, GW_VERSION, ns, GW_PLURAL, name, body
-                ),
-                lambda name, ns: c.custom.get_namespaced_custom_object(GW_GROUP, GW_VERSION, ns, GW_PLURAL, name),
+            "HTTPRoute": self._custom(GW_GROUP, GW_VERSION, GW_PLURAL),
+            "HealthCheckPolicy": self._custom(GKE_GROUP, GKE_VERSION, HCP_PLURAL),
+            "RoleBinding": (
+                c.rbac.create_namespaced_role_binding,
+                c.rbac.patch_namespaced_role_binding,
+                c.rbac.read_namespaced_role_binding,
                 True,
             ),
         }
         if kind not in table:
             raise ApiError(502, f"unsupported manifest kind {kind}")
         return table[kind]
+
+    def _custom(self, group, version, plural):
+        c = self.c.custom
+        return (
+            lambda ns, body: c.create_namespaced_custom_object(group, version, ns, plural, body),
+            lambda name, ns, body: c.patch_namespaced_custom_object(group, version, ns, plural, name, body),
+            lambda name, ns: c.get_namespaced_custom_object(group, version, ns, plural, name),
+            True,
+        )
 
     def wait_terminated(self, ns: str, selector: str, timeout: float | None = None) -> bool:
         """True once no pod matching `selector` is still terminating (old ReplicaSet drained), False on timeout."""
@@ -388,7 +441,3 @@ class Kube:
     def pods(self, ns, selector="app=worker") -> list[dict]:
         items = self.c.to_dict(self.c.core.list_namespaced_pod(ns, label_selector=selector)).get("items", [])
         return [p for p in items if not p["metadata"].get("deletionTimestamp")]
-
-    def proxy_get(self, ns, pod, path) -> str:
-        r = self.c.core.connect_get_namespaced_pod_proxy_with_path(f"{pod}:{PORT}", ns, path, _preload_content=False)
-        return r.data.decode() if hasattr(r, "data") else r

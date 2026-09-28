@@ -1,10 +1,8 @@
 {
   "mcpServers": {
     "ramen-demo": {
-      "url": "http://localhost:8080/mcp",
-      "headers": {
-        "Authorization": "Bearer local-mcp-key"
-      }
+      "command": "ramen-mcp-bridge",
+      "args": ["--target", "localhost:8080", "--key", "local-mcp-key", "--group", "demo", "--zone", "local", "--insecure"]
     }
   }
 }

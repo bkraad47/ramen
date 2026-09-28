@@ -4,9 +4,20 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.3.0` **(current)** | — | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
+| `0.3.1` **(current)** | — | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
+| `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.3.1 — gRPC transport
+
+- **Breaking for HTTP MCP clients** (D19, contract §11): the worker's HTTP surface (`POST /mcp`, `/healthz`, `/readyz`, `/metrics`, `/admin/reload`, `RAMEN_MCP_PATH_PREFIX`) is removed. Workers speak JSON-RPC 2.0 over gRPC: `ramen.v1.Mcp/Call` carries one JSON-RPC message as `bytes body`, `ramen.v1.Admin/{Reload,Metrics}` replace the admin routes, `grpc.health.v1.Health` reports `SERVING` once code is loaded; one h2c port `RAMEN_NODE_PORT` (8080), optional node TLS via `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`. Standard MCP clients (Claude Desktop, Cursor, the mcp SDK) connect through **`ramen-mcp-bridge`** (stdio; `ramen-runtime[grpc]` console script, also in the worker image): `--target <host:port> --key <rmk_> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]`. Migration: docs *Migrate 0.3.0 → 0.3.1*.
+- Security parity on gRPC: metadata `authorization: Bearer <rmk_key>` with constant-time compare (`UNAUTHENTICATED`; empty key set = deny all), `RAMEN_ALLOWED_CIDRS` / `x-forwarded-for` with `RAMEN_TRUST_PROXY=1` (`PERMISSION_DENIED`), `x-ramen-admin-key` + `RAMEN_ADMIN_CIDRS` on `Admin/*`, blocked names hidden from `*/list` and answered `-32601`, 4 MiB message limit, `RAMEN_MAX_INFLIGHT` → `RESOURCE_EXHAUSTED`, unauthenticated health, access log gains `grpc_code`.
+- Edge routing by metadata: clients and the bridge send `ramen-group` / `ramen-zone`; GKE Gateway HTTPRoutes match on those headers (worker Service `appProtocol: kubernetes.io/h2c`, `HealthCheckPolicy` type `GRPC`, no path rewrite); AWS ALB target groups `backend-protocol-version: GRPC` with header listener rules and gRPC health code 0; Cloud Armor / WAF unchanged.
+- Console: `ramen_console.grpcclient` (grpcio) replaces every HTTP call to workers (`Admin/Reload` + `tools/list` smoke, `Admin/Metrics` for load, `Health/Check` for readiness); `RAMEN_GCP_POD_PROXY` / `RAMEN_AWS_POD_PROXY` removed. Local stack, `make demo`, `mcp_call.py` and `mcp-client-config.example.json` use gRPC / the bridge; harness `ramen_tests.mcp_client` speaks gRPC and covers the bridge end to end through the mcp stdio client; `scripts/cloud_smoke.sh` uses `grpcurl`.
+- Protos: `proto/ramen/v1/{mcp,admin}.proto` are the single source; Rust via tonic-build, Python stubs (`ramen_proto`) vendored in console, runtime-py and tests, regenerated with `make proto`.
+- Carried security mediums fixed: GCP console GSA drops `resourcemanager.projectIamAdmin` for `iam.serviceAccountAdmin` + a custom role limited to `setIamPolicy` on `ramen-*` service accounts, with bucket-/secret-level bindings; AWS console role narrows `wafv2:*` to the `ramen` web ACL / IP sets and `iam:PutRolePolicy` to `/ramen/` roles; console ClusterRole loses cluster-wide `secrets`/`serviceaccounts` in favour of a namespaced Role + RoleBinding per attached zone; `sync_repo` passes the GitHub token via `http.extraheader`/`GIT_ASKPASS` and strips credentials from `.git/config`; OIDC uses PKCE (S256) + `nonce`; node key compares are constant-time.
+- Logo v2 (same coral/off-white palette) in the console, docs site (`docs/img/logo.png`, `logo-mark.png`, `favicon.png`), README and launch drafts. Docs: architecture v0.3.1, transport sections in how-it-works / protos / concepts, bridge + grpcurl quickstart, GCP/AWS header routing and gRPC health, security parity table, migration note; `mkdocs.yml` `version_current: 0.3.1`.
 
 ## 0.3.0 — AWS, auth & policy, docs
 
@@ -16,6 +27,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - Tool blocking per environment: `PUT …/environments/{env}/blocked` → `RAMEN_BLOCKED` on deploy; the node hides blocked names from `*/list` and answers `-32601`; block/unblock toggle on the group page.
 - Docs: MkDocs Material site on GitHub Pages (architecture per version, how-tos for local/GCP/AWS/security/secrets/DevOps API, wiki, generated version tracker, `llms.txt` + JSON-LD), README with screenshots and a 5-command quickstart, `skills/` cloud-ops agent skills, launch drafts.
 - Tooling: `ruff` lint/format config shared via `ruff.toml`, `make lint`, CI lint job; Dockerfiles pin `uv` and carry OCI labels.
+- Hardening after the security audit: no constant signing secret, security headers, failure-only login rate limit, token redaction in logs, same-origin login redirect, strict names in log queries, OIDC email verification, CSV formula escaping, worker NetworkPolicy + container securityContext, pinned CI actions. Standards pass: ruff across the repo, `make lint`, CI lint job.
 
 ## 0.2.0 — GCP
 

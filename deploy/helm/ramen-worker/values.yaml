@@ -1,4 +1,5 @@
 # helm template ramen-worker deploy/helm/ramen-worker --set project=<p>,group=demo,zone=a,gcpZone=us-central1-a | kubectl apply -f -
+# Workers serve gRPC (h2c) on `port` (CONTRACTS §11): ramen.v1.Mcp, ramen.v1.Admin, grpc.health.v1.Health.
 provider: gcp               # gcp | aws (CONTRACTS §7 / §8). provider=aws is UNTESTED on a real account.
 project: ""                 # GCP project id (required on gcp)
 aws:                        # provider=aws only
@@ -6,7 +7,7 @@ aws:                        # provider=aws only
   region: us-east-1
   zone: us-east-1a          # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
   roleArn: ""               # IAM role for KSA worker (IRSA); empty = no annotation (console sets it via create_service_account)
-  albGroup: ramen           # ALB IngressGroup shared with the console Ingress
+  albGroup: ramen           # ALB IngressGroup shared with the console Ingress (worker rule = header conditions, gRPC target groups)
   canaryWeight: 0           # 0-50, traffic share of worker-canary; the console rewrites it on deploy/rebalance
 region: us-central1
 group: demo
@@ -22,7 +23,7 @@ serviceAccount:
   gsa: ""                   # default: ramen-<group>-<zone>@<project>.iam.gserviceaccount.com; "-" = no WI annotation
 bucketUri: ""               # default: gs://ramen-<project>-groups/<group>
 bucketPath: /data/bucket
-port: 8080
+port: 8080                  # gRPC h2c; set RAMEN_TLS_CERT/RAMEN_TLS_KEY in env for node TLS (then the LB backend needs HTTP2)
 replicas: 1                 # stable `worker`
 canaryReplicas: 1           # `worker-canary` (console scales to 0 on failed canary)
 size: s                     # key into sizes (super admin allowlist per group+zone)
@@ -38,11 +39,12 @@ secret:
   data:                     # RAMEN_ENV, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_ALLOWED_CIDRS, RAMEN_SIDECAR_IDLE_SECS, RAMEN_SECRET_<GROUP>__<VAR>...
     RAMEN_MCP_KEYS: ""
     RAMEN_ADMIN_KEY: ""
-route:                      # HTTPRoute on the console Gateway (gcp only; aws renders an ALB Ingress instead): https://<console_ip>/mcp/<group>/<zone> → worker:8080/mcp
-  enabled: true
+route:                      # LB routing (CONTRACTS §11): clients send metadata ramen-group=<group>, ramen-zone=<zone> to https://<console_ip>
+  enabled: true             # gcp: HTTPRoute (header matches, no rewrite) + HealthCheckPolicy GRPC; aws: ALB Ingress with header conditions
   gateway: ramen
   gatewayNamespace: ramen-system
   label: ramen.io/routes    # namespace label the Gateway's allowedRoutes selector requires
+  mcpPath: /ramen.v1.Mcp    # only the Mcp service is exposed through the LB (Admin/Health stay cluster-internal)
 
 consoleNamespace: ramen-system
 networkPolicy:

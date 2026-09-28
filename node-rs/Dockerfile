@@ -1,5 +1,5 @@
-# Worker image: ramen-node (Rust) + ramen_runtime (Python 3.14, gcp+aws extras) in one container.
-# Build context = ramen repo root (needs node-rs/ and runtime-py/):
+# Worker image: ramen-node (Rust, gRPC) + ramen_runtime (Python 3.14, gcp+aws+grpc extras incl. ramen-mcp-bridge) in one container.
+# Build context = ramen repo root (needs node-rs/, runtime-py/ and proto/):
 #   docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .                       # native
 #   docker buildx build --platform linux/amd64 -f node-rs/Dockerfile -t <ar>/worker:<v> --push . # GKE
 # The Rust stage runs on the build host and cross-compiles for TARGETARCH (no QEMU for cargo).
@@ -9,8 +9,9 @@ RUN case "$TARGETARCH" in amd64) echo x86_64-unknown-linux-gnu ;; arm64) echo aa
  && rustup target add "$(cat /target.txt)" \
  && apt-get update && apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu gcc-aarch64-linux-gnu libc6-dev-amd64-cross libc6-dev-arm64-cross && rm -rf /var/lib/apt/lists/*
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+COPY proto /src/proto
 WORKDIR /src/node-rs
-COPY node-rs/Cargo.toml node-rs/Cargo.lock ./
+COPY node-rs/Cargo.toml node-rs/Cargo.lock node-rs/build.rs ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs && cargo build --release --target "$(cat /target.txt)" && rm -rf src
 COPY node-rs/src ./src
 RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /target.txt)" \
@@ -22,10 +23,11 @@ LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.ver
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws]'
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,grpc]'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080
 VOLUME ["/buckets"]
-HEALTHCHECK --interval=15s --timeout=3s CMD ["/opt/venv/bin/python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+# Liveness: ramen.v1.Admin is SERVING from process start; readiness (loaded) is the overall "" service.
+HEALTHCHECK --interval=15s --timeout=5s CMD ["/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--health", "ramen.v1.Admin", "--timeout", "3"]
 ENTRYPOINT ["ramen-node"]

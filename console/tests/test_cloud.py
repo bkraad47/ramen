@@ -1,13 +1,15 @@
+import base64
 import subprocess
 
-import httpx
 import pytest
 
 from ramen_console.cloud import make_cloud
 from ramen_console.cloud.aws import AwsCloud
 from ramen_console.cloud.base import Cloud
 from ramen_console.cloud.gcp import GcpCloud
-from ramen_console.cloud.local import LocalCloud
+from ramen_console.cloud.local import LocalCloud, git_env
+from ramen_console.grpcclient import Client
+from tests.fake_grpc import FakeWorker
 
 
 @pytest.fixture
@@ -25,31 +27,23 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def calls():
-    return []
+def worker():
+    w = FakeWorker(admin_key="adm").start()
+    w.metrics = {"inflight": 1, "total": 5, "errors": 0, "load": "even"}
+    w.load_result = {"tools": [{"name": "t"}], "errors": []}
+    yield w
+    w.stop()
 
 
 @pytest.fixture
-def cloud(tmp_path, calls):
-    def handler(req: httpx.Request):
-        calls.append(req)
-        if req.url.host == "down":
-            raise httpx.ConnectError("down")
-        if req.url.path == "/metrics":
-            return httpx.Response(200, json={"inflight": 1, "total": 5, "errors": 0, "load": "even"})
-        if req.url.path == "/admin/reload":
-            if req.headers.get("X-Ramen-Admin-Key") != "adm":
-                return httpx.Response(401, json={"error": "unauthorized"})
-            return httpx.Response(200, json={"tools": [{"name": "t"}], "errors": []})
-        return httpx.Response(404)
-
+def cloud(tmp_path, worker):
     return LocalCloud(
         bucket_root=tmp_path / "buckets",
         log_root=tmp_path / "logs",
-        workers={"demo/local-a": ["http://w1:8080", "http://down:8080"]},
-        default_worker="http://default:8080",
+        workers={"demo/local-a": [f"http://{worker.target}", "down:8080"]},
+        default_worker="default:8080",
         admin_key="adm",
-        transport=httpx.MockTransport(handler),
+        rpc=Client(deadline=2, resolve=lambda t: worker.target if t.startswith("default") else worker.resolve(t)),
     )
 
 
@@ -71,13 +65,27 @@ async def test_sync_repo_bad_url(cloud, tmp_path):
         await cloud.sync_repo("demo", str(tmp_path / "nope"), "main", None)
 
 
-def test_auth_url():
-    assert LocalCloud.auth_url("https://github.com/a/b.git", "tok") == "https://x-access-token:tok@github.com/a/b.git"
-    assert LocalCloud.auth_url("https://github.com/a/b.git", None) == "https://github.com/a/b.git"
-    assert LocalCloud.auth_url("/local/path", "tok") == "/local/path"
+def test_git_env_never_puts_the_token_in_argv_or_url(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "9")  # stale caller config must not leak into the child
+    env = git_env("tok")
+    assert env["GIT_CONFIG_COUNT"] == "1" and env["GIT_CONFIG_KEY_0"] == "http.extraheader"
+    basic = base64.b64decode(env["GIT_CONFIG_VALUE_0"].split()[-1]).decode()
+    assert basic == "x-access-token:tok" and "tok" not in env["GIT_CONFIG_VALUE_0"]
+    assert "GIT_CONFIG_COUNT" not in git_env(None) and git_env(None)["GIT_TERMINAL_PROMPT"] == "0"
 
 
-async def test_deploy_writes_env_and_reloads(cloud, tmp_path, calls):
+async def test_sync_repo_keeps_token_out_of_git_config(cloud, repo, tmp_path):  # SEC-12
+    await cloud.sync_repo("demo", str(repo), "main", "ghp_secret_token")
+    await cloud.sync_repo("demo", str(repo), "main", "ghp_secret_token")  # fetch path too
+    cfg = (tmp_path / "buckets" / "demo" / ".git" / "config").read_text()
+    assert "ghp_secret_token" not in cfg and "x-access-token" not in cfg and "extraheader" not in cfg.lower()
+    assert f"url = {repo}" in cfg
+    with pytest.raises(RuntimeError) as e:
+        await cloud.sync_repo("demo", str(tmp_path / "nope"), "main", "ghp_secret_token")
+    assert "ghp_secret_token" not in str(e.value)
+
+
+async def test_deploy_writes_env_and_reloads(cloud, tmp_path, worker):
     await cloud.set_ip_rules("demo", "local-a", ["10.0.0.0/8"])
     res = await cloud.deploy(
         "demo", "prod", "local-a", canary=True, config={"RAMEN_VERBOSE": "1", "RAMEN_SECRET_DEMO__TOKEN": "s3cret"}
@@ -88,22 +96,27 @@ async def test_deploy_writes_env_and_reloads(cloud, tmp_path, calls):
     assert "RAMEN_GROUP=demo" in env and "RAMEN_ENV=prod" in env and "RAMEN_ZONE=local-a" in env
     assert "RAMEN_ALLOWED_CIDRS=10.0.0.0/8" in env and "RAMEN_CANARY=1" in env
     assert res["ok"] is False and len(res["workers"]) == 2
-    assert res["workers"][0]["ok"] is True and res["workers"][1]["ok"] is False
-    assert "down" in res["workers"][1]["error"]
-    reload_calls = [c for c in calls if c.url.path == "/admin/reload"]
-    assert reload_calls and reload_calls[0].headers["X-Ramen-Admin-Key"] == "adm"
+    assert res["workers"][0]["ok"] is True and res["workers"][0]["result"]["tools"] == [{"name": "t"}]
+    assert res["workers"][1]["ok"] is False and res["workers"][1]["status"] == "UNAVAILABLE"
+    assert res["workers"][1]["id"] == "down:8080" and "UNAVAILABLE" in res["workers"][1]["error"]
+    reloads = [c for c in worker.calls if c[0] == "Admin/Reload"]
+    assert reloads and reloads[0][1]["x-ramen-admin-key"] == "adm"
 
 
-async def test_deploy_default_worker(cloud, calls):
+async def test_deploy_default_worker(cloud, worker):
     res = await cloud.deploy("other", "dev", "zone-x")
-    assert res["ok"] is True and res["workers"][0]["id"] == "http://default:8080"
+    assert res["ok"] is True and res["workers"][0]["id"] == "default:8080"
+    worker.admin_key = "other"
+    res = await cloud.deploy("other", "dev", "zone-x")
+    assert res["ok"] is False and res["workers"][0]["status"] == "UNAUTHENTICATED"
 
 
 async def test_workers(cloud):
     ws = await cloud.workers("demo", "local-a")
-    assert ws[0]["id"] == "http://w1:8080" and ws[0]["load"] == "even" and ws[0]["metrics"]["total"] == 5
-    assert ws[1]["load"] == "down" and "down" in ws[1]["error"]
-    assert (await cloud.workers("nogroup", "z"))[0]["id"] == "http://default:8080"
+    assert ws[0]["id"] == cloud.workers_map["demo/local-a"][0] and ws[0]["load"] == "even"
+    assert ws[0]["metrics"]["total"] == 5
+    assert ws[1]["load"] == "down" and ws[1]["id"] == "down:8080" and "UNAVAILABLE" in ws[1]["error"]
+    assert (await cloud.workers("nogroup", "z"))[0]["id"] == "default:8080"
 
 
 async def test_logs(cloud, tmp_path):
@@ -142,9 +155,16 @@ def test_aws_adapter_is_a_full_cloud():  # v0.3.0: the AWS stub is gone (tests/t
 def test_factory(monkeypatch, tmp_path):
     monkeypatch.setenv("RAMEN_CLOUD", "local")
     monkeypatch.setenv("RAMEN_BUCKET_ROOT", str(tmp_path))
-    monkeypatch.setenv("RAMEN_LOCAL_WORKERS", "demo/z=http://a:1|http://b:2,g2/z=http://c:3")
+    monkeypatch.setenv("RAMEN_LOCAL_WORKERS", "demo/z=http://a:1|b:2,g2/z=http://c:3")
+    monkeypatch.setenv("RAMEN_WORKER_TLS", "1")
+    monkeypatch.setenv("RAMEN_WORKER_CA", "/etc/ramen/ca.pem")
     c = make_cloud()
-    assert isinstance(c, LocalCloud) and c.workers_map["demo/z"] == ["http://a:1", "http://b:2"]
+    assert isinstance(c, LocalCloud) and c.workers_map["demo/z"] == ["a:1", "b:2"]
+    assert c.default_worker == "worker:8080" and c.rpc.tls == {"ca": "/etc/ramen/ca.pem"}
+    monkeypatch.delenv("RAMEN_WORKER_CA")
+    assert make_cloud().rpc.tls is True
+    monkeypatch.setenv("RAMEN_WORKER_TLS", "0")
+    assert make_cloud().rpc.tls is None
     monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     monkeypatch.setenv("RAMEN_GCP_PROJECT", "p1")
     assert isinstance(make_cloud(), GcpCloud)

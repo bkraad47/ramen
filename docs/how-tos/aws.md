@@ -15,14 +15,16 @@ Mirror of the GCP path with AWS primitives:
 | Bucket | S3 `ramen-<account>-groups`, one prefix per group |
 | Secrets | Secrets Manager `ramen/<group>/<env|all>/<zone|all>/<NAME>` → `RAMEN_SECRETS_BACKEND=aws` |
 | Images | ECR `ramen/console`, `ramen/worker` |
-| Identity | console IAM role via IRSA (S3, Secrets Manager, DynamoDB, EKS describe, IAM create-role under path `/ramen/`, WAF, ELB); per group+zone IAM role `ramen-<group>-<zone>` trusting the cluster OIDC provider for KSA `ramen-<group>-<zone>/worker` |
-| Edge | AWS Load Balancer Controller; one ALB (Ingress group `ramen`, HTTPS 443, self-signed cert imported into ACM); console Ingress `/`, per-zone Ingress `/mcp/<group>/<zone>` |
+| Identity | console IAM role via IRSA (S3, Secrets Manager, DynamoDB, EKS describe, IAM create-role and `PutRolePolicy` limited to path `/ramen/`, `wafv2` scoped to the `ramen` web ACL / IP sets, ELB); per group+zone IAM role `ramen-<group>-<zone>` trusting the cluster OIDC provider for KSA `ramen-<group>-<zone>/worker` |
+| Edge | AWS Load Balancer Controller; one ALB (Ingress group `ramen`, HTTPS 443, self-signed cert imported into ACM); console Ingress `/`; per-zone Ingress with a **gRPC target group** (`alb.ingress.kubernetes.io/backend-protocol-version: GRPC`), listener conditions on headers `ramen-group` / `ramen-zone`, health check gRPC code `0` (`success-codes: "0"`) |
 | Logs | Fluent Bit → CloudWatch Logs (Container Insights); console queries Logs Insights by namespace/pod |
-| IP rules | WAFv2 IPSets `ramen-<group>` (+`-v6`) and a rule in web ACL `ramen` that blocks `/mcp/<group>/` unless the source is in the set (the ACL default stays allow so the console path is reachable) + `RAMEN_ALLOWED_CIDRS` + worker roll |
+| IP rules | WAFv2 IPSets `ramen-<group>` (+`-v6`) and a rule in web ACL `ramen` that blocks requests carrying `ramen-group: <group>` unless the source is in the set (the ACL default stays allow so the console path is reachable) + `RAMEN_ALLOWED_CIDRS` + worker roll |
 | Rebalance | weighted target groups (stable/canary) via the Ingress `actions` annotation |
 
-ALB cannot rewrite paths, so worker pods run with `RAMEN_MCP_PATH_PREFIX=/mcp/<group>/<zone>` and the node
-accepts that path as an alias of `/mcp`.
+Since 0.3.1 there is no path to rewrite: the ALB routes on the two gRPC metadata headers and forwards HTTP/2 to
+the worker port. gRPC target groups require an **HTTPS** listener on the ALB (the self-signed ACM cert satisfies
+that) and the target group health check is a gRPC status (`0` = OK) against `grpc.health.v1.Health/Check`, so a
+worker is out of rotation until its first successful load.
 
 ## 1. Infrastructure
 === "Terraform"
@@ -69,7 +71,14 @@ RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER RAMEN_EKS_CLUSTER RAMEN_ALB_GROUP=ramen` 
 
 ## 4. Zone, group, deploy
 Same as [GCP step 5](gcp.md#5-first-zone-group-and-deploy-console-or-api) with provider `aws` and region e.g.
-`us-east-1a`. The MCP endpoint is `https://<alb-dns>/mcp/<group>/<zone>`.
+`us-east-1a`. Clients target the ALB with gRPC and the routing metadata; export the ACM cert (or the PEM you
+imported) for `--ca`:
+```sh
+ramen-mcp-bridge --target <alb-dns>:443 --tls --ca ramen-lb.pem --key rmk_… --group demo --zone a
+grpc_health_probe -addr <alb-dns>:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'
+```
+The raw `grpcurl` form is in [GCP step 6](gcp.md#6-call-it-through-the-load-balancer-grpc-routed-by-metadata)
+(swap `$IP` for the ALB DNS name).
 
 ## Teardown
 `helm uninstall ramen -n ramen-system` (releases the ALB), then `terraform -chdir=deploy/terraform/aws destroy` or
@@ -77,6 +86,7 @@ Same as [GCP step 5](gcp.md#5-first-zone-group-and-deploy-console-or-api) with p
 CloudWatch log groups — these are the pieces most likely to survive a partial failure.
 
 ## Known unknowns
-IRSA trust policies, ALB controller IAM, WAF association timing and CloudWatch Insights quotas were all written
-from documentation, not from a run. Retry/backoff on ELB/WAF propagation is implemented as on GCP. Use the
+IRSA trust policies, ALB controller IAM, WAF association timing, CloudWatch Insights quotas, and (new in 0.3.1)
+gRPC target groups with header-conditioned listener rules and a header-matched WAF rule were all written from
+documentation, not from a run. Retry/backoff on ELB/WAF propagation is implemented as on GCP. Use the
 [deploy-aws skill](../wiki/skills.md) which insists on a validator pass before calling the deployment done.

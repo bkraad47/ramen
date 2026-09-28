@@ -1,4 +1,4 @@
-//! MCP JSON-RPC methods (CONTRACTS §3) → sidecar `runtime.*` calls.
+//! MCP JSON-RPC methods (CONTRACTS §3 methods, carried over gRPC per §11) → sidecar `runtime.*` calls.
 use crate::sidecar::{RpcErr, Sidecar};
 use serde_json::{Value, json};
 

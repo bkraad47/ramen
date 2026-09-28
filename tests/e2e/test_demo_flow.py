@@ -1,17 +1,17 @@
-"""Full flow: console → zone/group/env → mint MCP key → deploy demo repo (job) → worker ready → MCP calls.
-Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL. The minted key is reused by conformance/test_mcp_node.py when it
-runs later in the same process (`pytest e2e conformance`); RAMEN_MCP_KEY is the fallback."""
+"""Full flow: console → zone/group/env → mint MCP key → deploy demo repo (job) → worker SERVING → MCP calls over gRPC.
+Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL (host:port). The minted key is reused by conformance/test_mcp_node.py and
+test_bridge.py when they run later in the same process (`pytest e2e conformance`); RAMEN_MCP_KEY is the fallback."""
 
 import time
 import uuid
 
-import httpx
+import grpc
 import pytest
 
 from ramen_tests import env as E
 from ramen_tests import state
 from ramen_tests.console import items
-from ramen_tests.mcp_client import INIT_BODY, MCP_HEADERS, session, text_of
+from ramen_tests.mcp_client import PROTOCOL, Node, text_of
 
 pytestmark = pytest.mark.e2e
 GROUP = E.env("RAMEN_E2E_GROUP", "demo")
@@ -24,49 +24,25 @@ def ok(r, *codes):
     return r
 
 
-def wait(url: str, timeout: float = 180) -> None:
-    deadline, last = time.monotonic() + timeout, None
-    while time.monotonic() < deadline:
-        try:
-            r = httpx.get(url, verify=E.tls_verify(), timeout=5)
-            if r.status_code == 200:
-                return
-            last = r.status_code
-        except httpx.HTTPError as e:
-            last = e
-        time.sleep(2)
-    raise AssertionError(f"{url} not ready after {timeout}s: {last}")
-
-
-def metrics(node_url) -> dict:
-    return httpx.get(f"{node_url}/metrics", verify=E.tls_verify(), timeout=10).json()
-
-
-def ready(node_url: str, key: str, timeout: float = 180) -> None:
-    """Bare node: /readyz 200. MCP-only LB route: an authenticated initialize answers 200."""
-    if E.node_admin(node_url):
-        return wait(f"{node_url}/readyz", timeout)
+def ready(node: Node, timeout: float = 180) -> None:
+    """Health/Check SERVING and an authenticated ping OK three times in a row (an LB may still route a few calls to a
+    draining pod with the old key set right after a deploy)."""
     deadline, last, streak = time.monotonic() + timeout, None, 0
     while time.monotonic() < deadline:
         try:
-            r = httpx.post(
-                E.mcp_url(node_url),
-                json=INIT_BODY,
-                verify=E.tls_verify(),
-                timeout=15,
-                headers={**MCP_HEADERS, "Authorization": f"Bearer {key}"},
-            )
-            if r.status_code == 200:
-                streak += 1  # the LB may still route some requests to a draining pod with the old key set
+            last = node.health()
+            if last == "SERVING":
+                node.ping()
+                streak += 1
                 if streak >= 3:
                     return
                 time.sleep(1)
                 continue
-            streak, last = 0, r.status_code
-        except httpx.HTTPError as e:
-            last = e
+        except grpc.RpcError as e:
+            last = f"{e.code().name}: {e.details()}"
+        streak = 0
         time.sleep(3)
-    raise AssertionError(f"{E.mcp_url(node_url)} not ready after {timeout}s: {last}")
+    raise AssertionError(f"{node.target} not ready after {timeout}s: {last}")
 
 
 @pytest.fixture(scope="module")
@@ -81,8 +57,9 @@ def deployed(admin, node_url, demo_repo):
     job = admin.wait_job(job["id"])
     assert job["status"] == "ok", job
     assert key not in str(job)
-    ready(node_url, key)
-    return {"key": key, "job": job}
+    with Node.from_env(key, group=GROUP, zone=ZONE) as node:
+        ready(node)
+        yield {"key": key, "job": job, "node": node}
 
 
 def test_environment_records_last_deploy(admin, deployed):
@@ -97,21 +74,25 @@ def test_workers_visible_with_load(admin, deployed):
     assert body["live"][0]["load"] in ("low", "even", "high")
 
 
-async def test_mcp_call_through_deployed_worker(deployed, node_url):
-    async with session(node_url, deployed["key"]) as s:
-        assert s.protocol_version == "2025-06-18"
-        names = {t.name for t in (await s.list_tools()).tools}
-        assert "demo_calculator_tool" in names
-        r = await s.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
-        assert not r.is_error and float(text_of(r)) == 5
-        readme = await s.read_resource("ramen://demo/readme")
-        assert "ramen-demo-mcp-group" in readme.contents[0].text
-        p = await s.get_prompt("get_calculation_prompt", {"request": "2+3"})
-        assert "2+3" in p.messages[0].content.text
+def test_mcp_call_through_deployed_worker(deployed):
+    n = deployed["node"]
+    assert n.initialize()["protocolVersion"] == PROTOCOL
+    assert "demo_calculator_tool" in {t["name"] for t in n.list_tools()}
+    r = n.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
+    assert not r.get("isError") and float(text_of(r)) == 5
+    assert "ramen-demo-mcp-group" in n.read_resource("ramen://demo/readme")["contents"][0]["text"]
+    assert "2+3" in n.get_prompt("get_calculation_prompt", {"request": "2+3"})["messages"][0]["content"]["text"]
 
 
-def test_worker_metrics_reflect_load(deployed, node_admin_url):
-    m = metrics(node_admin_url)
+def test_minted_key_is_the_only_one_accepted(deployed):
+    n = deployed["node"]
+    ping = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    assert n.status(ping, key="rmk_not_minted") == grpc.StatusCode.UNAUTHENTICATED
+    assert n.status(ping, key=None) == grpc.StatusCode.UNAUTHENTICATED
+
+
+def test_worker_metrics_reflect_load(deployed, node_admin):
+    m = node_admin.admin_metrics()
     assert m["total"] >= 1 and m["sidecar_alive"] is True
     assert m["packages"]["tools"] >= 1 and m["packages"]["errors"] == 0
 
@@ -127,12 +108,11 @@ def test_dashboard_shows_group_in_zone(admin, deployed):
     assert cell["color"] in ("blue", "green", "red")
 
 
-def test_redeploy_is_idempotent(admin, deployed, node_url):
+def test_redeploy_is_idempotent(admin, deployed):
     job = admin.wait_job(ok(admin.deploy(GROUP, ENV), 202).json()["id"])
     assert job["status"] == "ok", job
-    ready(node_url, deployed["key"])
-    if E.node_admin(node_url):
-        assert metrics(node_url)["packages"]["tools"] >= 1
+    ready(deployed["node"])
+    assert "demo_calculator_tool" in {t["name"] for t in deployed["node"].list_tools()}
 
 
 def test_console_logs_reach_worker_output(admin, deployed):

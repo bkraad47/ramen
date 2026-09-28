@@ -15,7 +15,7 @@ spec:
   {{- else }}
   selector: { app: worker }
   {{- end }}
-  ports: [{ name: http, port: {{ .Values.port }}, targetPort: http }]
+  ports: [{ name: grpc, port: {{ .Values.port }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }]   # CONTRACTS §11: gRPC h2c
 {{- if eq .Values.provider "aws" }}
 ---
 # aws: separate canary Service so the ALB Ingress can weight stable/canary target groups (CONTRACTS §8)
@@ -28,5 +28,5 @@ metadata:
 spec:
   type: ClusterIP
   selector: { app: worker, ramen.io/track: canary }
-  ports: [{ name: http, port: {{ .Values.port }}, targetPort: http }]
+  ports: [{ name: grpc, port: {{ .Values.port }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }]
 {{- end }}

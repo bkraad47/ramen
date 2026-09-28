@@ -70,6 +70,10 @@ class GcpClients:
     def networking(self):
         return self._cached("networking", lambda: self._kube().NetworkingV1Api())
 
+    @property
+    def rbac(self):
+        return self._cached("rbac", lambda: self._kube().RbacAuthorizationV1Api())
+
     def to_dict(self, obj):
         if isinstance(obj, dict):
             return obj

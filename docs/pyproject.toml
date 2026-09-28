@@ -1,7 +1,7 @@
 # Docs toolchain only. Build from the repo root: `uv run --project docs --group docs mkdocs build --strict`.
 [project]
 name = "ramen-docs"
-version = "0.3.0"
+version = "0.3.1"
 description = "MkDocs Material site for Ramen (docs/, mkdocs.yml at the repo root)"
 requires-python = ">=3.12"
 dependencies = []

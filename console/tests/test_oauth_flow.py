@@ -1,6 +1,8 @@
 """CONTRACTS §9 OAuth/OIDC: full code flow against a fake OIDC provider (discovery, token with RS256 id_token,
 userinfo), user link/create by verified email, role_claim/role_map."""
 
+import base64
+import hashlib
 import time
 from urllib.parse import parse_qs, urlsplit
 
@@ -21,6 +23,7 @@ class FakeIdp:
 
     def __init__(self, claims, id_token=True):
         self.claims, self.id_token, self.nonce, self.token_calls = claims, id_token, None, []
+        self.challenge = None
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
@@ -43,6 +46,9 @@ class FakeIdp:
             self.token_calls.append(form)
             if form.get("code") != ["good-code"]:
                 return httpx.Response(400, json={"error": "invalid_grant"})
+            if self.challenge:  # PKCE: the verifier must hash to the challenge sent on /authorize
+                digest = hashlib.sha256(form["code_verifier"][0].encode()).digest()
+                assert base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == self.challenge
             body = {"access_token": "at-1", "token_type": "Bearer", "expires_in": 3600}
             if self.id_token:
                 now = int(time.time())
@@ -79,7 +85,9 @@ def start(client: TestClient, idp: FakeIdp, name="idp") -> str:
     q = parse_qs(urlsplit(r.headers["location"]).query)
     assert r.headers["location"].startswith(f"{ISSUER}/authorize?") and q["client_id"] == ["cid"]
     assert q["redirect_uri"] == ["http://testserver/auth/idp/callback"] and q["response_type"] == ["code"]
-    idp.nonce = q.get("nonce", [None])[0]  # no nonce without the openid scope
+    idp.nonce = q["nonce"][0]  # openid is always requested (SEC-06), so a nonce is always issued and verified
+    assert q["code_challenge_method"] == ["S256"] and len(q["code_challenge"][0]) >= 43  # PKCE
+    idp.challenge = q["code_challenge"][0]
     return q["state"][0]
 
 

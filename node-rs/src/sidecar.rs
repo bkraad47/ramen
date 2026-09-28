@@ -81,7 +81,7 @@ impl Sidecar {
             .is_some_and(|p| p.alive.load(Relaxed))
     }
 
-    /// `runtime.load` for the configured bucket; stores the result for `/readyz`, lists and `/metrics`.
+    /// `runtime.load` for the configured bucket; stores the result for health, lists and metrics.
     pub async fn load(&self) -> Result<Value, RpcErr> {
         let bucket = self.cfg.read().await.bucket.display().to_string();
         let result = self

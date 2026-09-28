@@ -6,7 +6,7 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   account: ""                # AWS account id (required): ECR image + groups bucket ramen-<account>-groups defaults
   cluster: ramen             # EKS cluster name (RAMEN_EKS_CLUSTER; CloudWatch log group /aws/containerinsights/<cluster>/application)
   certificateArn: ""         # ACM certificate for the ALB HTTPS listener (terraform output certificate_arn; self-signed import)
-  albGroup: ramen            # ALB IngressGroup shared by the console Ingress ("/") and every worker Ingress ("/mcp/<g>/<z>")
+  albGroup: ramen            # ALB IngressGroup shared by the console Ingress ("/") and every worker Ingress (gRPC, header rules; CONTRACTS §11)
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
@@ -41,4 +41,4 @@ gateway:                     # GKE Gateway API (gcp only; on aws the ALB Ingress
   tlsSecret: ramen-console-tls         # created by deploy/scripts/selfsigned.sh <console_ip>
   routesLabel: ramen.io/routes         # namespaces labelled <routesLabel>=true may attach HTTPRoutes (worker namespaces; label ramen-system too)
 rbac:
-  create: true                         # ClusterRole for the console KSA (manages worker namespaces, HTTPRoutes)
+  create: true                         # ClusterRole ramen-console (namespaces, networkpolicies, routes, rolebindings) + unbound ramen-console-zone bound per zone namespace by the console (SEC-09)

@@ -1,6 +1,7 @@
-"""Worker namespace manifests for EKS (CONTRACTS §8): ALB Ingress in IngressGroup `ramen` (ALB cannot rewrite paths,
-so the node serves `/mcp/<group>/<zone>` via RAMEN_MCP_PATH_PREFIX), IRSA KSA, stable/canary Services behind one
-weighted forward action. Everything else (Deployments, HPA, apply/wait) is shared with the GCP layer."""
+"""Worker namespace manifests for EKS (CONTRACTS §8, §11): ALB Ingress in IngressGroup `ramen` routing gRPC calls by
+the `ramen-group`/`ramen-zone` headers (target groups `backend-protocol-version: GRPC`, health check gRPC code 0),
+IRSA KSA, stable/canary Services behind one weighted forward action. Everything else (Deployments, HPA, apply/wait)
+is shared with the GCP layer."""
 
 import copy
 import json
@@ -10,10 +11,21 @@ import subprocess
 import yaml
 
 from ..errors import ApiError
-from .gcp_k8s import PORT, Kube, _deployment, helm_available, networkpolicy, normalize_size, ns_name
+from .gcp_k8s import (
+    MCP_PATH,
+    PORT,
+    PORT_NAME,
+    Kube,
+    _deployment,
+    helm_available,
+    networkpolicy,
+    normalize_size,
+    ns_name,
+)
 
 __all__ = [
     "ACTION",
+    "CONDITIONS",
     "ROLE_ANNOTATION",
     "AwsKube",
     "helm_available",
@@ -26,6 +38,7 @@ __all__ = [
 ]
 
 ACTION = "alb.ingress.kubernetes.io/actions.worker"
+CONDITIONS = "alb.ingress.kubernetes.io/conditions.worker"
 ROLE_ANNOTATION = "eks.amazonaws.com/role-arn"
 
 
@@ -62,6 +75,16 @@ def split_weights(stable_replicas: int, canary_replicas: int) -> tuple[int, int]
     return 100 - c, c
 
 
+def conditions(group, zone) -> str:
+    """Value of the `conditions.worker` annotation: both routing headers must match (CONTRACTS §11)."""
+    return json.dumps(
+        [
+            {"field": "http-header", "httpHeaderConfig": {"httpHeaderName": h, "values": [v]}}
+            for h, v in (("ramen-group", group), ("ramen-zone", zone))
+        ]
+    )
+
+
 def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
     ns = ns_name(group, zone)
     ann = {
@@ -69,8 +92,13 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
         "alb.ingress.kubernetes.io/scheme": "internet-facing",
         "alb.ingress.kubernetes.io/target-type": "ip",
         "alb.ingress.kubernetes.io/listen-ports": '[{"HTTPS":443}]',
-        "alb.ingress.kubernetes.io/healthcheck-path": "/healthz",
+        "alb.ingress.kubernetes.io/backend-protocol": "HTTP",
+        "alb.ingress.kubernetes.io/backend-protocol-version": "GRPC",
+        "alb.ingress.kubernetes.io/healthcheck-protocol": "HTTP",
+        "alb.ingress.kubernetes.io/healthcheck-path": "/grpc.health.v1.Health/Check",
+        "alb.ingress.kubernetes.io/success-codes": "0",
         "alb.ingress.kubernetes.io/group.order": "10",
+        CONDITIONS: conditions(group, zone),
         ACTION: weights(stable, canary),
     }
     return {
@@ -89,7 +117,7 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
                     "http": {
                         "paths": [
                             {
-                                "path": f"/mcp/{group}/{zone}",
+                                "path": MCP_PATH,
                                 "pathType": "Prefix",
                                 "backend": {"service": {"name": "worker", "port": {"name": "use-annotation"}}},
                             }
@@ -109,7 +137,7 @@ def _service(ns, name, track, labels) -> dict:
         "spec": {
             "type": "ClusterIP",
             "selector": {"app": "worker", "ramen.io/track": track},
-            "ports": [{"name": "http", "port": PORT, "targetPort": "http"}],
+            "ports": [{"name": PORT_NAME, "port": PORT, "targetPort": PORT_NAME, "appProtocol": "kubernetes.io/h2c"}],
         },
     }
 
@@ -127,13 +155,10 @@ def manifests(
     }
     if role_arn:
         ksa["metadata"]["annotations"] = {ROLE_ANNOTATION: role_arn}
-    deps = []
-    for name, track in (("worker", "stable"), ("worker-canary", "canary")):
-        d = _deployment(ns, name, track, group, zone, spec, image, bucket_uri)
-        d["spec"]["template"]["spec"]["containers"][0]["env"].append(
-            {"name": "RAMEN_MCP_PATH_PREFIX", "value": f"/mcp/{group}/{zone}"}
-        )
-        deps.append(d)
+    deps = [
+        _deployment(ns, name, track, group, zone, spec, image, bucket_uri)
+        for name, track in (("worker", "stable"), ("worker-canary", "canary"))
+    ]
     return [
         {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns, "labels": labels}},
         networkpolicy(ns, group, zone, [os.environ.get("RAMEN_AWS_VPC_CIDR", "10.0.0.0/16")]),
@@ -197,7 +222,8 @@ def helm_manifests(
         if d["kind"] != "Namespace":
             d["metadata"].setdefault("namespace", ns)
         if d["kind"] == "Ingress":
-            d["metadata"].setdefault("annotations", {})[ACTION] = weights(stable, canary)
+            ann = d["metadata"].setdefault("annotations", {})
+            ann[ACTION], ann[CONDITIONS] = weights(stable, canary), conditions(group, zone)
     if not any(d["kind"] == "Ingress" for d in docs):
         docs.append(ingress(group, zone, alb_group, stable, canary))
     return copy.deepcopy(docs)

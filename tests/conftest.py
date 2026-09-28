@@ -3,22 +3,16 @@ import uuid
 
 import pytest
 
-from ramen_tests import env as E
+from ramen_tests import env as E  # ramen_tests before grpc: sets GRPC_ENABLE_FORK_SUPPORT
 from ramen_tests import state
 from ramen_tests.console import Console
+from ramen_tests.mcp_client import Node, code_of
 
 
 @pytest.fixture(scope="session")
 def node_url() -> str:
-    return E.strip(E.require("RAMEN_NODE_URL"))
-
-
-@pytest.fixture(scope="session")
-def node_admin_url(node_url) -> str:
-    """Bare node URL with /healthz, /readyz, /metrics, /admin. Skips when RAMEN_NODE_URL is an MCP-only LB route."""
-    if not E.node_admin(node_url):
-        pytest.skip(f"{node_url} is an MCP-only route (LB); health/metrics/admin are not exposed there")
-    return node_url
+    """gRPC target `host:port` (CONTRACTS §11) parsed from RAMEN_NODE_URL."""
+    return E.node_target(E.require("RAMEN_NODE_URL"))[0]
 
 
 @pytest.fixture(scope="session")
@@ -28,6 +22,25 @@ def mcp_key() -> str:
     if not k:
         pytest.skip("RAMEN_MCP_KEY not set and no key minted by e2e")
     return k
+
+
+@pytest.fixture(scope="session")
+def node(node_url, mcp_key) -> Node:
+    """Authenticated gRPC client (bearer + ramen-group/ramen-zone metadata) against RAMEN_NODE_URL."""
+    with Node.from_env(mcp_key) as n:
+        yield n
+
+
+@pytest.fixture(scope="session")
+def node_admin(node) -> Node:
+    """The same client when the Admin surface is reachable and RAMEN_ADMIN_KEY is set; skips otherwise
+    (through an LB the worker's RAMEN_ADMIN_CIDRS usually exclude external callers → PERMISSION_DENIED)."""
+    if not node.admin_key:
+        pytest.skip("RAMEN_ADMIN_KEY not set")
+    code = code_of(node.admin_metrics)
+    if code.name != "OK":
+        pytest.skip(f"Admin/Metrics not reachable with RAMEN_ADMIN_KEY from here: {code.name}")
+    return node
 
 
 @pytest.fixture(scope="session")

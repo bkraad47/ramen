@@ -15,8 +15,8 @@ def secret_id(group, env, zone, name, kind="secret") -> str:
 class GcpSecrets(SecretsBackend):
     kind = "gcp"
 
-    def __init__(self, project, client):
-        self.project, self.client = project, client
+    def __init__(self, project, client, on_create=None):
+        self.project, self.client, self.on_create = project, client, on_create
 
     def _put(self, group, env, zone, name, value, kind):
         sid = secret_id(group, env, zone, name, kind)
@@ -33,6 +33,9 @@ class GcpSecrets(SecretsBackend):
         except Exception as e:  # noqa: BLE001
             if http_status(e) != 409:
                 raise
+        else:
+            if self.on_create:  # SEC-08: secret-level accessor bindings for the group's worker GSAs
+                self.on_create(f"{parent}/secrets/{sid}", group)
         self.client.add_secret_version(
             request={"parent": f"{parent}/secrets/{sid}", "payload": {"data": value.encode()}}
         )

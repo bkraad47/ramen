@@ -57,6 +57,31 @@ Any string argument containing `{{$<group>.<NAME>}}` is replaced by the runtime 
 `RAMEN_SECRET_<GROUP>__<NAME>`; code can also call `ramen_runtime.secrets.resolve(text)`. Values are redacted
 from errors and never logged. See [Secrets](../how-tos/secrets.md).
 
+## Transport: JSON-RPC 2.0 over gRPC
+How a call reaches a package is a separate contract ([§11](../CONTRACTS.md), `proto/ramen/v1/mcp.proto`): the
+MCP messages your tool sees are the standard ones, but since 0.3.1 they travel as the `bytes body` of one
+`ramen.v1.Mcp/Call` per request (a notification returns an empty body) rather than over HTTP.
+
+```proto
+service Mcp {
+  rpc Call(JsonRpc) returns (JsonRpc);                 // one JSON-RPC 2.0 message in, its response out
+  rpc Session(stream JsonRpc) returns (stream JsonRpc); // reserved; may return UNIMPLEMENTED
+}
+message JsonRpc { bytes body = 1; }                    // UTF-8 JSON-RPC 2.0 request or response
+```
+
+| Metadata | Meaning |
+|---|---|
+| `authorization: Bearer rmk_…` | the group's MCP key; missing/wrong → gRPC `UNAUTHENTICATED` (empty key set = deny all) |
+| `ramen-group`, `ramen-zone` | routing at the load balancer; not an auth signal |
+| (peer address / `x-forwarded-for` with `RAMEN_TRUST_PROXY=1`) | must match `RAMEN_ALLOWED_CIDRS` → else `PERMISSION_DENIED` |
+
+Transport failures are gRPC statuses; protocol failures stay JSON-RPC errors in the body (`-32601` for a blocked or
+unknown tool, `-32602` for bad arguments, `isError: true` for an exception in your code). Messages are capped at
+4 MiB; `RAMEN_MAX_INFLIGHT` overflows answer `RESOURCE_EXHAUSTED`. `grpc.health.v1.Health/Check` on the same port
+is `SERVING` once your packages loaded. Standard MCP clients do not see any of this: `ramen-mcp-bridge` turns the
+worker into an ordinary stdio server ([local quickstart](../how-tos/local-quickstart.md#4-call-the-worker-with-the-bridge-claude-desktop-cursor-the-mcp-sdk)).
+
 ## Validate before you push
 `tests/fixtures/proto.schema.json` in the Ramen repo is the JSON Schema for `<name>.json`; the runtime's tests
 load `tests/fixtures/broken_group` to show every rejection case.

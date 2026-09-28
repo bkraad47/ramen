@@ -1,8 +1,10 @@
 Zone {{ .Values.group }}/{{ .Values.zone }} → namespace {{ include "rw.ns" . }} on {{ include "rw.az" . }}, bucket {{ include "rw.bucketUri" . }}.
-Deploy env lives in Secret ramen-deploy (RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, ...); POST /admin/reload after changing it.
+Deploy env lives in Secret ramen-deploy (RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, ...); the console calls Admin/Reload after changing it.
+gRPC (CONTRACTS §11): send metadata ramen-group={{ .Values.group }} ramen-zone={{ .Values.zone }} authorization="Bearer rmk_..." to
 {{- if eq .Values.provider "aws" }}
-Via ALB (UNTESTED provider): https://<alb address>/mcp/{{ .Values.group }}/{{ .Values.zone }} (IngressGroup {{ .Values.aws.albGroup }}; kubectl -n ramen-system get ingress console)
+  https://<alb address>:443 (UNTESTED provider; IngressGroup {{ .Values.aws.albGroup }}; kubectl -n ramen-system get ingress console)
 {{- else }}
-Via LB: https://<console_ip>/mcp/{{ .Values.group }}/{{ .Values.zone }} (Gateway {{ .Values.route.gateway }} in {{ .Values.route.gatewayNamespace }})
+  https://<console_ip>:443 (Gateway {{ .Values.route.gateway }} in {{ .Values.route.gatewayNamespace }})
 {{- end }}
-Test: kubectl -n {{ include "rw.ns" . }} port-forward svc/worker 8080 ; curl localhost:8080/readyz
+Standard MCP clients: ramen-mcp-bridge --target <host>:443 --tls --key rmk_... --group {{ .Values.group }} --zone {{ .Values.zone }}
+Test in-cluster: kubectl -n {{ include "rw.ns" . }} port-forward svc/worker 8080 ; grpc_health_probe -addr localhost:8080

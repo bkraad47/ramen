@@ -5,7 +5,7 @@ Needs RAMEN_CONSOLE_URL + RAMEN_NODE_URL (+ key from the e2e deploy or RAMEN_MCP
 import pytest
 
 from ramen_tests import env as E
-from ramen_tests.mcp_client import session
+from ramen_tests.mcp_client import JsonRpcError
 
 pytestmark = pytest.mark.e2e
 GROUP = E.env("RAMEN_E2E_GROUP", "demo")
@@ -18,18 +18,16 @@ def ok(r, *codes):
     return r
 
 
-async def tool_names(node_url, key) -> list[str]:
-    async with session(node_url, key) as s:
-        return sorted(t.name for t in (await s.list_tools()).tools)
+def tool_names(node) -> list[str]:
+    return sorted(t["name"] for t in node.list_tools())
 
 
-async def call_blocked(node_url, key) -> str:
-    async with session(node_url, key) as s:
-        try:
-            r = await s.call_tool(TOOL, {"var1": 2, "var2": 3, "func": "add"})
-        except Exception as e:  # noqa: BLE001 - the SDK raises McpError for a JSON-RPC error
-            return f"{type(e).__name__}: {e}"
-        return "isError" if r.is_error else "ok"
+def call_blocked(node) -> str:
+    try:
+        r = node.call_tool(TOOL, {"var1": 2, "var2": 3, "func": "add"})
+    except JsonRpcError as e:
+        return f"jsonrpc {e.code}"
+    return "isError" if r.get("isError") else "ok"
 
 
 def deploy(admin, blocked):
@@ -38,16 +36,15 @@ def deploy(admin, blocked):
     assert job["status"] == "ok", job
 
 
-async def test_block_hides_and_denies_then_unblock_restores(admin, node_url, mcp_key):
-    assert TOOL in await tool_names(node_url, mcp_key), "run e2e/test_demo_flow first (deploys the demo group)"
+def test_block_hides_and_denies_then_unblock_restores(admin, node):
+    assert TOOL in tool_names(node), "run e2e/test_demo_flow first (deploys the demo group)"
     deploy(admin, [TOOL])
     try:
-        assert TOOL not in await tool_names(node_url, mcp_key)
-        out = await call_blocked(node_url, mcp_key)
-        assert "32601" in out or "not found" in out or out == "isError", out
+        assert TOOL not in tool_names(node)
+        assert call_blocked(node) == "jsonrpc -32601"
         envs = [e for e in admin.get("environments_all", params={"group": GROUP}).json() if e["name"] == ENV]
         assert envs[0]["blocked"] == [TOOL]
     finally:
         deploy(admin, [])
-    assert TOOL in await tool_names(node_url, mcp_key)
-    assert await call_blocked(node_url, mcp_key) == "ok"
+    assert TOOL in tool_names(node)
+    assert call_blocked(node) == "ok"

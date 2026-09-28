@@ -1,6 +1,6 @@
 ---
 title: Ramen
-description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes.
+description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. JSON-RPC 2.0 over gRPC.
 hide: [toc]
 ---
 
@@ -13,14 +13,14 @@ hide: [toc]
   "applicationCategory": "DeveloperApplication",
   "applicationSubCategory": "MCP server (Model Context Protocol)",
   "operatingSystem": "Kubernetes (GKE, EKS), Docker",
-  "softwareVersion": "0.3.0",
+  "softwareVersion": "0.3.1",
   "license": "https://opensource.org/licenses/BSD-3-Clause",
   "url": "https://bkraad47.github.io/ramen/",
   "codeRepository": "https://github.com/bkraad47/ramen",
   "downloadUrl": "https://github.com/bkraad47/ramen/releases",
   "programmingLanguage": ["Rust", "Python"],
-  "description": "Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. A Rust MCP node and a Python 3.14 runtime run your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit.",
-  "keywords": "MCP, Model Context Protocol, MCP server, self-hosted, Kubernetes, GKE, EKS, JSON-RPC, agent tools, Rust, Python, canary deploy, multi-zone, high availability",
+  "description": "Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. A Rust MCP node speaks JSON-RPC 2.0 over gRPC and a Python 3.14 runtime runs your tools, resources and prompts from a git repo; a stdio bridge serves standard MCP clients; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit.",
+  "keywords": "MCP, Model Context Protocol, MCP server, self-hosted, Kubernetes, GKE, EKS, gRPC, JSON-RPC, agent tools, Rust, Python, canary deploy, multi-zone, high availability",
   "author": {"@type": "Person", "name": "Raad", "url": "https://github.com/bkraad47"},
   "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
   "isAccessibleForFree": true
@@ -28,7 +28,7 @@ hide: [toc]
 </script>
 
 <div class="ramen-hero" markdown>
-![Ramen logo](img/logo.png){ width=180 }
+![Project Ramen](img/logo.png){ width=360 }
 
 # Ramen
 
@@ -38,14 +38,15 @@ hide: [toc]
 [![release](https://img.shields.io/github/v/release/bkraad47/ramen?color=F26B3A&label=release)](https://github.com/bkraad47/ramen/releases)
 [![ci](https://github.com/bkraad47/ramen/actions/workflows/ci.yml/badge.svg)](https://github.com/bkraad47/ramen/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-F26B3A)](https://github.com/bkraad47/ramen/blob/main/LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%202025--06--18-2B2622)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0%20over%20gRPC-2B2622)](https://modelcontextprotocol.io)
 </div>
 </div>
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
-Each worker is a **Rust MCP node** (protocol, auth, IP allow-lists, metrics) paired 1:1 with a **Python 3.14 runtime**
-that runs your code. A single **FastAPI console** manages groups, environments, zones, secrets, canary deploys,
-rebalancing, logs and audit, and every action is also available through an API key.
+Each worker is a **Rust MCP node** (JSON-RPC 2.0 over gRPC, auth, IP allow-lists, metrics) paired 1:1 with a
+**Python 3.14 runtime** that runs your code. Standard MCP clients (Claude Desktop, Cursor, the `mcp` SDK) connect
+through the **`ramen-mcp-bridge`** stdio bridge. A single **FastAPI console** manages groups, environments, zones,
+secrets, canary deploys, rebalancing, logs and audit, and every action is also available through an API key.
 
 <div class="ramen-grid" markdown>
 <div markdown>
@@ -53,12 +54,12 @@ rebalancing, logs and audit, and every action is also available through an API k
 Push `mcp/tools/<name>/<name>.py` + `<name>.json` to a repo. Deploy syncs it to a bucket; workers pip-install and load it. [Protos →](wiki/protos.md)
 </div>
 <div markdown>
-### Canary by default
-Every deploy rolls a canary first, smoke-tests `tools/list`, then rolls the stable track. Failure = canary scaled to 0, stable untouched. [Canary →](wiki/canary.md)
+### gRPC transport (v0.3.1)
+One `ramen.v1.Mcp/Call` per JSON-RPC message: binary framing, HTTP/2 multiplexing, first-class health and deadlines. The LB routes on `ramen-group` / `ramen-zone` metadata. [Transport →](wiki/protos.md#transport-json-rpc-20-over-grpc)
 </div>
 <div markdown>
-### Multi-zone from day one
-Group → Environment → Zone → Worker. One zone today, N tomorrow, same data model, same LB. [Concepts →](wiki/concepts.md)
+### Canary by default
+Every deploy rolls a canary first, smoke-tests `tools/list`, then rolls the stable track. Failure = canary scaled to 0, stable untouched. [Canary →](wiki/canary.md)
 </div>
 <div markdown>
 ### Enterprise controls
@@ -72,17 +73,24 @@ Needs Docker (compose v2), `uv`, `git`. About 3–5 minutes on the first run (im
 
 ```sh
 git clone https://github.com/bkraad47/ramen && cd ramen
-make up          # Firestore emulator + console (https://localhost:8443) + one worker (http://localhost:8080)
-make demo        # creates group `demo` from the demo repo, mints an rmk_ key, deploys, calls the tool
+make up          # Firestore emulator + console (https://localhost:8443) + one worker (gRPC localhost:8080, h2c)
+make demo        # creates group `demo` from the demo repo, mints an rmk_ key, deploys, calls the tool via the bridge
 # → demo_calculator_tool({"var1": 2, "var2": 3, "func": "add"}) -> 5
 open https://localhost:8443   # self-signed cert; login admin@ramen.local / changeme-ramen
 make down        # stop and remove volumes
 ```
 
 The console is `https://localhost:8443` (accept the self-signed certificate), login **admin@ramen.local** /
-**changeme-ramen** (from `deploy/local/.env`). The worker's MCP endpoint is `http://localhost:8080/mcp` with a
-**`rmk_` MCP key** minted on the group page. Full walkthrough with a `curl` example and the difference between
-`rmk_` and `rmn_` keys: [Local quickstart](how-tos/local-quickstart.md).
+**changeme-ramen** (from `deploy/local/.env`). The worker is a **gRPC** endpoint on `localhost:8080` that takes a
+**`rmk_` MCP key** minted on the group page. Point Claude Desktop, Cursor or the `mcp` SDK at it with the bridge:
+
+```sh
+ramen-mcp-bridge --target localhost:8080 --insecure --key rmk_… --group demo --zone local
+```
+
+Full walkthrough with a Claude Desktop config, an `mcp` SDK snippet and a raw `grpcurl` call:
+[Local quickstart](how-tos/local-quickstart.md). Coming from 0.3.0? The HTTP `/mcp` endpoint is gone:
+[migration note](how-tos/migrate-0.3.1.md).
 
 <figure markdown>
 ![Ramen console dashboard](img/dashboard.png){ .ramen-shot }
@@ -93,8 +101,8 @@ The console is `https://localhost:8443` (accept the self-signed certificate), lo
 
 | Target | Status | Guide |
 |---|---|---|
-| GCP (GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB, Cloud Armor) | verified on a throwaway project, 89/89 cloud tests | [GCP how-to](how-tos/gcp.md) |
-| AWS (EKS, DynamoDB, S3, Secrets Manager, ALB, WAF) | **built and unit-tested only; never applied to a real account** | [AWS how-to](how-tos/aws.md) |
+| GCP (GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB with gRPC header routing, Cloud Armor) | verified on a throwaway project in 0.3.0 (89/89 cloud tests); 0.3.1 gRPC routing re-verified locally, cloud re-run pending | [GCP how-to](how-tos/gcp.md) |
+| AWS (EKS, DynamoDB, S3, Secrets Manager, ALB gRPC target groups, WAF) | **built and unit-tested only; never applied to a real account** | [AWS how-to](how-tos/aws.md) |
 | Local (docker compose) | CI e2e on every push | [Local quickstart](how-tos/local-quickstart.md) |
 
 ## Where next

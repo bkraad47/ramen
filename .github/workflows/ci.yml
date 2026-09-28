@@ -45,12 +45,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
         with: { toolchain: "1.98.1", components: "clippy,rustfmt,llvm-tools-preview" }
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: protoc (tonic-prost-build compiles proto/ramen/v1)
+        run: sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler && protoc --version
       - working-directory: node-rs
         run: |
           if [ -f Cargo.toml ]; then
-            cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+            cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build
             cargo llvm-cov --cobertura --output-path coverage.xml
           else echo "no crate yet"; fi
+      - uses: actions/upload-artifact@v4
+        with: { name: ramen-node, path: node-rs/target/debug/ramen-node, if-no-files-found: error }
       - uses: actions/upload-artifact@v4
         if: hashFiles('node-rs/coverage.xml') != ''
         with: { name: coverage-node-rs, path: node-rs/coverage.xml }
@@ -64,6 +68,31 @@ jobs:
       - run: uv python install 3.14
       - working-directory: tests
         run: uv sync && uv run pytest -q -rs
+      - name: generated gRPC stubs match proto/ramen/v1 (tests/gen_proto.sh)
+        working-directory: tests
+        run: ./gen_proto.sh && git diff --exit-code -- src/ramen_proto
+
+  node-conformance:
+    # CONTRACTS §11 guards on real ramen-node processes (tests/conformance/test_mcp_node_local.py) + bridge via the mcp SDK.
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAMEN_TEST_TLS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - uses: actions/download-artifact@v4
+        with: { name: ramen-node, path: bin }
+      - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
+      - name: runtime-py venv (sidecar + ramen-mcp-bridge)
+        run: |
+          (cd runtime-py && uv sync --all-extras)
+          echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
+          echo "RAMEN_BRIDGE_CMD=$PWD/runtime-py/.venv/bin/ramen-mcp-bridge" >> "$GITHUB_ENV"
+      - working-directory: tests
+        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_sidecar_protocol.py
 
   compose-check:
     # hashFiles() is empty at job level (no checkout yet), so the e2e guard is computed here.
@@ -83,7 +112,9 @@ jobs:
     timeout-minutes: 40
     env:
       RAMEN_CONSOLE_URL: https://localhost:8443
-      RAMEN_NODE_URL: http://localhost:8080
+      RAMEN_NODE_URL: localhost:8080   # gRPC h2c target (CONTRACTS §11)
+      RAMEN_E2E_GROUP: demo
+      RAMEN_E2E_ZONE: local
       RAMEN_MCP_KEY: ci-mcp-key
       RAMEN_MCP_KEYS: ci-mcp-key
       RAMEN_ADMIN_KEY: ci-admin-key
@@ -97,21 +128,29 @@ jobs:
       - run: uv python install 3.14
       - uses: actions/download-artifact@v4
         with: { path: artifacts, pattern: "coverage-*" }
-      - name: Runtime venv for sidecar conformance
+      - name: Runtime venv for sidecar conformance + ramen-mcp-bridge
         run: |
           if [ -f runtime-py/pyproject.toml ]; then
             (cd runtime-py && uv sync --all-extras)
             echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
+            echo "RAMEN_BRIDGE_CMD=$PWD/runtime-py/.venv/bin/ramen-mcp-bridge" >> "$GITHUB_ENV"
           fi
+      - name: grpcurl (wait_ready gRPC health mode)
+        run: |
+          curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin grpcurl
+          grpcurl -version
       - name: Compose up
         run: docker compose -f deploy/local/docker-compose.yml up -d --build
       - name: Wait ready
         run: |
           scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/login" 180
-          scripts/wait_ready.sh "$RAMEN_NODE_URL/healthz" 180
-      - name: e2e (deploys demo, mints MCP key) then conformance
+          scripts/wait_ready.sh "$RAMEN_NODE_URL" 180 2 --any   # gRPC health answers (NOT_SERVING before the first deploy)
+      - name: e2e (deploys demo, mints MCP key) then conformance (gRPC + bridge)
         working-directory: tests
         run: uv sync && uv run pytest -q -rs e2e conformance --cov --cov-report=xml --cov-report=term
+      - name: Smoke script (grpcurl path)
+        run: scripts/cloud_smoke.sh "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_EMAIL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_ADMIN_KEY" "$RAMEN_NODE_URL"
+        env: { RAMEN_SMOKE_ZONE: local, RAMEN_ZONE_PROVIDER: local, RAMEN_ZONE_REGION: local, RAMEN_SMOKE_ADMIN: "1" }
       - name: Compose logs
         if: failure()
         run: docker compose -f deploy/local/docker-compose.yml logs --no-color --tail=300

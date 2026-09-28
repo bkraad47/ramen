@@ -112,7 +112,10 @@ def test_stderr_is_json_lines(demo):
     demo.call("runtime.ping", {})
     lines = [x for x in demo.stderr.splitlines() if x.strip()]
     for x in lines:
-        json.loads(x)
+        try:
+            json.loads(x)
+        except ValueError as e:
+            raise AssertionError(f"non-JSON stderr line: {x[:300]!r}") from e
 
 
 def test_broken_packages_reported_valid_still_load():

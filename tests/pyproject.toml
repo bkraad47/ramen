@@ -10,19 +10,23 @@ dependencies = [
   "pytest-cov>=5",
   "httpx>=0.28",
   "mcp>=2,<3",
+  "grpcio>=1.75",
+  "grpcio-health-checking>=1.75",
+  "grpcio-reflection>=1.75",
+  "protobuf>=6",
   "jsonschema>=4.23",
   "pyyaml>=6",
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.16"]
+dev = ["ruff>=0.16", "grpcio-tools>=1.75"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ramen_tests"]
+packages = ["src/ramen_tests", "src/ramen_proto"]
 
 [tool.pytest.ini_options]
 testpaths = ["conformance", "e2e", "cloud"]
@@ -36,7 +40,8 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src/ramen_tests"]
 
 [tool.ruff]
 extend = "../ruff.toml"
+extend-exclude = ["src/ramen_proto"]

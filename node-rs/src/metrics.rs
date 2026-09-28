@@ -1,4 +1,4 @@
-//! Counters behind `/metrics` (CONTRACTS §3).
+//! Counters behind `Admin/Metrics` (CONTRACTS §3 fields, §11 transport).
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 

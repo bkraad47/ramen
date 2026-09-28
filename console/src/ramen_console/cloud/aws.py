@@ -51,20 +51,18 @@ class AwsCloud(GcpCloud):
         cluster="ramen",
         alb_group="ramen",
         clients=None,
-        transport=None,
+        rpc=None,
         timeout=10.0,
         wait_secs=300,
         poll=2.0,
-        pod_proxy=False,
         chart=None,
         log_group=None,
+        boundary=None,
     ):
         clients = clients or AwsClients(region)
-        super().__init__(
-            "", region, bucket, image, admin_key, clients, transport, timeout, wait_secs, poll, pod_proxy, chart
-        )
+        super().__init__("", region, bucket, image, admin_key, clients, rpc, timeout, wait_secs, poll, chart)
         self.kube = AwsKube(clients, poll=poll, wait_secs=wait_secs)
-        self.cluster, self.alb_group = cluster, alb_group
+        self.cluster, self.alb_group, self.boundary = cluster, alb_group, boundary
         self.log_group = log_group or aws_api.log_group_name(cluster)
 
     @classmethod
@@ -77,10 +75,11 @@ class AwsCloud(GcpCloud):
             os.environ.get("RAMEN_ADMIN_KEY", ""),
             os.environ.get("RAMEN_EKS_CLUSTER", "ramen"),
             os.environ.get("RAMEN_ALB_GROUP", "ramen"),
+            timeout=float(os.environ.get("RAMEN_WORKER_DEADLINE", "10")),
             wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
-            pod_proxy=os.environ.get("RAMEN_AWS_POD_PROXY", "0") == "1",
             chart=os.environ.get("RAMEN_WORKER_CHART"),
             log_group=os.environ.get("RAMEN_LOG_GROUP"),
+            boundary=os.environ.get("RAMEN_AWS_PERMISSIONS_BOUNDARY"),
         )
 
     # the k8s-side flow is the GCP one; re-guard so errors say "aws"
@@ -90,7 +89,7 @@ class AwsCloud(GcpCloud):
     scale = _guard(GcpCloud.scale.__wrapped__)
 
     def _iam(self):
-        return aws_api.Iam(self.c.iam, self.c.sts, self.c.eks, self.region, self.cluster)
+        return aws_api.Iam(self.c.iam, self.c.sts, self.c.eks, self.region, self.cluster, self.boundary)
 
     def _bucket(self) -> str:
         if not self.bucket:
@@ -265,13 +264,7 @@ class AwsCloud(GcpCloud):
             name = iam.role_name(group, zone)
             arn, created = iam.ensure_role(name, ns, "worker", group, zone)
             policy = iam.put_worker_policy(name, self._bucket(), group)
-            self.kube.apply(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Namespace",
-                    "metadata": {"name": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}},
-                }
-            )
+            self._ensure_namespace(group, zone)
             self.kube.apply(
                 {
                     "apiVersion": "v1",

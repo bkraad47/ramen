@@ -9,7 +9,7 @@ STATE="${RAMEN_GCP_PROJECT_FILE:-$HOME/.ramen-test-project}"   # remembers the i
 if [ -n "${RAMEN_GCP_PROJECT:-}" ]; then PROJECT="$RAMEN_GCP_PROJECT"
 elif [ "$1" = "delete" ] && [ -s "$STATE" ]; then PROJECT="$(cat "$STATE")"
 else PROJECT="ramen-test-$(date +%y%m%d)"; fi
-BILLING="${RAMEN_BILLING_ACCOUNT:-012374-5439A5-74606A}"
+BILLING="${RAMEN_BILLING_ACCOUNT:?set RAMEN_BILLING_ACCOUNT to your billing account id}"
 APIS="container.googleapis.com firestore.googleapis.com secretmanager.googleapis.com storage.googleapis.com"
 
 run() { if [ "${DRY_RUN:-0}" = "1" ]; then echo "+ $*"; else echo "+ $*" >&2; "$@"; fi; }

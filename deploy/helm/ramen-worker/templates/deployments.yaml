@@ -26,6 +26,7 @@ spec:
         - name: worker
           image: {{ include "rw.image" $root | quote }}
           imagePullPolicy: {{ $root.Values.pullPolicy }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
           ports: [{ name: http, containerPort: {{ $root.Values.port }} }]
           env:
             - { name: RAMEN_GROUP, value: {{ $root.Values.group | quote }} }

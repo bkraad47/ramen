@@ -82,6 +82,7 @@ def test_manifests_shape():
     )
     assert [d["kind"] for d in docs] == [
         "Namespace",
+        "NetworkPolicy",
         "ServiceAccount",
         "Service",
         "Service",
@@ -90,21 +91,22 @@ def test_manifests_shape():
         "HorizontalPodAutoscaler",
         "Ingress",
     ]
-    assert docs[1]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].endswith("role/ramen/ramen-demo-a")
+    assert docs[2]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].endswith("role/ramen/ramen-demo-a")
+    assert docs[1]["spec"]["ingress"][0]["from"][1]["ipBlock"]["cidr"] == "10.0.0.0/16"
     assert (
-        docs[2]["spec"]["selector"] == {"app": "worker", "ramen.io/track": "stable"}
-        and docs[3]["spec"]["selector"]["ramen.io/track"] == "canary"
+        docs[3]["spec"]["selector"] == {"app": "worker", "ramen.io/track": "stable"}
+        and docs[4]["spec"]["selector"]["ramen.io/track"] == "canary"
     )
     assert "cloud.google.com/neg" not in json.dumps(docs)
-    dep = docs[4]
+    dep = docs[5]
     env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["RAMEN_BUCKET_URI"] == "s3://b/demo" and env["RAMEN_MCP_PATH_PREFIX"] == "/mcp/demo/a"
     assert (
         dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-east-1a"}
         and dep["spec"]["replicas"] == 2
     )
-    assert docs[5]["metadata"]["name"] == "worker-canary" and docs[5]["spec"]["replicas"] == 0
-    ing = docs[7]
+    assert docs[6]["metadata"]["name"] == "worker-canary" and docs[6]["spec"]["replicas"] == 0
+    ing = docs[8]
     ann = ing["metadata"]["annotations"]
     assert ing["spec"]["ingressClassName"] == "alb" and ann["alb.ingress.kubernetes.io/group.name"] == "ramen"
     assert (

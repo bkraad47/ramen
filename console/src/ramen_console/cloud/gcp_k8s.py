@@ -40,6 +40,11 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
             {
                 "name": "worker",
                 "image": image,
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "capabilities": {"drop": ["ALL"]},
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
                 "ports": [{"name": "http", "containerPort": PORT}],
                 "env": [
                     {"name": k, "value": v}
@@ -119,6 +124,7 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
             "kind": "Namespace",
             "metadata": {"name": ns, "labels": {**labels, "ramen.io/routes": "true"}},
         },
+        networkpolicy(ns, group, zone),
         ksa,
         {
             "apiVersion": "v1",
@@ -197,6 +203,25 @@ def helm_manifests(chart, project, group, zone, spec, image, bucket_uri, gsa=Non
     return docs
 
 
+GCP_LB_CIDRS = ["35.191.0.0/16", "130.211.0.0/22"]  # Google front ends / health checkers
+
+
+def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = None) -> dict:
+    """Workers accept ingress only from the console namespace and the load balancer (SEC-04)."""
+    peers = [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "ramen-system"}}}]
+    peers += [{"ipBlock": {"cidr": c}} for c in (lb_cidrs if lb_cidrs is not None else GCP_LB_CIDRS)]
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": "worker", "namespace": ns, "labels": {"ramen.io/group": group, "ramen.io/zone": zone}},
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "worker"}},
+            "policyTypes": ["Ingress"],
+            "ingress": [{"from": peers, "ports": [{"port": PORT, "protocol": "TCP"}]}],
+        },
+    }
+
+
 class Kube:
     def __init__(self, clients, poll=2.0, wait_secs=300):
         self.c, self.poll, self.wait_secs = clients, poll, wait_secs
@@ -209,6 +234,12 @@ class Kube:
                 c.core.create_namespaced_service_account,
                 c.core.patch_namespaced_service_account,
                 c.core.read_namespaced_service_account,
+                True,
+            ),
+            "NetworkPolicy": (
+                c.networking.create_namespaced_network_policy,
+                c.networking.patch_namespaced_network_policy,
+                c.networking.read_namespaced_network_policy,
                 True,
             ),
             "Secret": (

@@ -74,6 +74,7 @@ def test_manifests_shape():
     kinds = [d["kind"] for d in docs]
     assert kinds == [
         "Namespace",
+        "NetworkPolicy",
         "ServiceAccount",
         "Service",
         "Deployment",
@@ -82,7 +83,7 @@ def test_manifests_shape():
         "HTTPRoute",
     ]
     assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
-    route = docs[6]
+    route = docs[7]
     assert route["apiVersion"] == "gateway.networking.k8s.io/v1" and route["metadata"] == {
         "name": "worker",
         "namespace": "ramen-demo-a",
@@ -97,18 +98,18 @@ def test_manifests_shape():
         {"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}}}
     ]
     assert rule["backendRefs"] == [{"name": "worker", "port": 8080}]
-    dep = docs[3]
+    dep = docs[4]
     assert dep["metadata"]["name"] == "worker" and dep["spec"]["replicas"] == 2
     assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-central1-a"}
     env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["RAMEN_BUCKET_URI"] == "gs://b/demo" and env["RAMEN_BUCKET"] == "/data/bucket"
-    assert docs[4]["metadata"]["name"] == "worker-canary" and docs[4]["spec"]["replicas"] == 0
-    assert docs[1]["metadata"]["annotations"]["iam.gke.io/gcp-service-account"].startswith("ramen-demo-a@")
-    assert "ramen-demo-a" in docs[2]["metadata"]["annotations"]["cloud.google.com/neg"]
-    assert docs[5]["spec"]["minReplicas"] == 2 and docs[5]["spec"]["maxReplicas"] == 4
+    assert docs[5]["metadata"]["name"] == "worker-canary" and docs[5]["spec"]["replicas"] == 0
+    assert docs[2]["metadata"]["annotations"]["iam.gke.io/gcp-service-account"].startswith("ramen-demo-a@")
+    assert "ramen-demo-a" in docs[3]["metadata"]["annotations"]["cloud.google.com/neg"]
+    assert docs[6]["spec"]["minReplicas"] == 2 and docs[6]["spec"]["maxReplicas"] == 4
     no_zone = manifests("demo", "a", {"region": "", "size": "xl", "count": 1}, "img", "gs://b/demo")
-    assert "nodeSelector" not in no_zone[3]["spec"]["template"]["spec"]
-    assert no_zone[3]["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["s"]
+    assert "nodeSelector" not in no_zone[4]["spec"]["template"]["spec"]
+    assert no_zone[4]["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["s"]
 
 
 async def test_attach_zone_idempotent(cloud, fk):

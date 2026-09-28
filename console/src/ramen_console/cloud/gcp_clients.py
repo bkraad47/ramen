@@ -66,6 +66,10 @@ class GcpClients:
     def custom(self):
         return self._cached("custom", lambda: self._kube().CustomObjectsApi())
 
+    @property
+    def networking(self):
+        return self._cached("networking", lambda: self._kube().NetworkingV1Api())
+
     def to_dict(self, obj):
         if isinstance(obj, dict):
             return obj

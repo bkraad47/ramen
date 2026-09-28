@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
@@ -7,6 +9,7 @@ from ..auth import csrf
 from ..auth.sessions import COOKIE
 from ..errors import ApiError, not_found
 from ..mail import magic_mail, reset_mail
+from ..security import safe_next
 
 r = APIRouter()
 ALIASES = ("/auth/{name}/login", "/auth/oauth/{name}/login")
@@ -25,7 +28,7 @@ def base_url(request: Request) -> str:
 
 
 def _login_response(request: Request, user: dict, next_: str = "/"):
-    resp = RedirectResponse(next_ if next_.startswith("/") else "/", 303)
+    resp = RedirectResponse(safe_next(next_), 303)
     kw = {"samesite": "lax", "secure": request.app.state.cookie_secure, "max_age": 12 * 3600}
     resp.set_cookie(COOKIE, request.app.state.signer.sign({"uid": user["id"]}), httponly=True, **kw)
     resp.set_cookie(csrf.COOKIE, csrf.token(request), httponly=False, **kw)
@@ -153,7 +156,11 @@ def _client(request: Request, name: str):
 
 async def oauth_login(request: Request, name: str):
     client = _client(request, name)
-    return await client.authorize_redirect(request, str(request.url_for("oauth_callback", name=name)))
+    try:
+        return await client.authorize_redirect(request, str(request.url_for("oauth_callback", name=name)))
+    except Exception as e:  # noqa: BLE001 - issuer metadata unreachable/malformed: a clear 502, not a bare 500
+        note(request, "login.oauth", name, [f"provider:{name}", "error:issuer"], user="-")
+        raise ApiError(502, f"OAuth provider {name!r} is not reachable: {type(e).__name__}") from e
 
 
 async def oauth_callback(request: Request, name: str):
@@ -170,7 +177,8 @@ async def oauth_callback(request: Request, name: str):
         info = dict(await client.userinfo(token=token))
     email = (info.get("email") or "").strip().lower()
     note(request, "login.oauth", email or "-", [f"provider:{name}"], user=email or "-")
-    if not email or info.get("email_verified") is False:
+    trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
+    if not email or (info.get("email_verified") is not True and not trusted):
         raise ApiError(403, "provider did not return a verified email")
     role, groups = (await auth_settings(request)).map_role(name, info)
     user = await request.app.state.accounts.upsert_sso_user(email, role, groups, provider=name)

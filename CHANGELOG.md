@@ -9,6 +9,8 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 - Tool blocking per environment: `PUT …/environments/{env}/blocked` → `RAMEN_BLOCKED` on deploy; the node hides blocked names from `*/list` and answers `-32601`; block/unblock toggle on the group page.
 - Docs: MkDocs Material site on GitHub Pages (architecture per version, how-tos for local/GCP/AWS/security/secrets/DevOps API, wiki, generated version tracker, `llms.txt` + JSON-LD), README with screenshots and a 5-command quickstart, `skills/` cloud-ops agent skills, launch drafts.
 - Tooling: `ruff` lint/format config shared via `ruff.toml`, `make lint`, CI lint job; Dockerfiles pin `uv` and carry OCI labels.
+- Hardening after the security audit: no constant signing secret, security headers, failure-only login rate limit, token redaction in logs, same-origin login redirect, strict names in log queries, OIDC email verification, CSV formula escaping, worker NetworkPolicy + container securityContext, pinned CI actions. Standards pass: ruff across the repo, `make lint`, CI lint job.
+
 ## [0.2.0] — GCP
 - Console GCP adapter: zone = namespace, canary deploy flow, workers/metrics, Cloud Logging, rebalance via backend capacity, Cloud Armor IP rules, per-group+zone service accounts with Workload Identity, refresh, group destruction.
 - Secrets backend `store|gcp` (Secret Manager). Runtime syncs the group bucket from GCS on load.

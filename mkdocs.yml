@@ -1,5 +1,5 @@
 site_name: Ramen
-site_description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. Rust MCP node + Python 3.14 runtime workers, managed from a FastAPI console.
+site_description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. JSON-RPC 2.0 over gRPC; Rust MCP node + Python 3.14 runtime workers, managed from a FastAPI console.
 site_url: https://bkraad47.github.io/ramen/
 repo_url: https://github.com/bkraad47/ramen
 repo_name: bkraad47/ramen
@@ -16,7 +16,7 @@ hooks:
   - scripts/gen_versions.py
 theme:
   name: material
-  logo: img/logo.png
+  logo: img/logo-mark.png
   favicon: img/favicon.png
   language: en
   palette:
@@ -39,7 +39,7 @@ theme:
     - content.action.edit
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.3.0
+  version_current: 0.3.1
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -65,7 +65,8 @@ nav:
   - Home: index.md
   - How it works: how-it-works.md
   - Architecture:
-      - Current (v0.3.0): architecture/index.md
+      - Current (v0.3.1): architecture/index.md
+      - v0.3.1: architecture/v0.3.1.md
       - v0.3.0: architecture/v0.3.0.md
       - v0.2.0: architecture/v0.2.0.md
       - v0.1.0: architecture/v0.1.0.md
@@ -76,6 +77,7 @@ nav:
       - Security: how-tos/security.md
       - Secrets: how-tos/secrets.md
       - DevOps with the API and keys: how-tos/devops-api.md
+      - Migrate 0.3.0 → 0.3.1 (gRPC): how-tos/migrate-0.3.1.md
   - Wiki:
       - Concepts: wiki/concepts.md
       - Protos (group repo contract): wiki/protos.md

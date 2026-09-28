@@ -1,21 +1,21 @@
-"""IP rules (CONTRACTS §3/§7): PUT cidrs → next deploy locks the node to those CIDRs (403 outside), restore →
-open again; on GCP the Cloud Armor policy `ramen-<group>` exists. Needs RAMEN_CONSOLE_URL (+RAMEN_NODE_URL)."""
+"""IP rules (CONTRACTS §11/§7): PUT cidrs → next deploy locks the node to those CIDRs (PERMISSION_DENIED outside),
+restore → open again; on GCP the Cloud Armor policy `ramen-<group>` exists. Needs RAMEN_CONSOLE_URL, RAMEN_NODE_URL."""
 
+import grpc
 import pytest
 
 from ramen_tests import env as E
 from ramen_tests import gcp
-from ramen_tests.mcp_client import INIT_BODY
 
-from .conftest import ENV, GROUP, ZONE, mcp_post, ok, poll
+from .conftest import ENV, GROUP, ZONE, S, mcp_status, ok, poll
 
 pytestmark = pytest.mark.cloud
 LOCKED = ["192.0.2.0/24"]  # TEST-NET-1: never a real client
 OPEN = ["0.0.0.0/0"]  # finding: console CIDR_RE rejects IPv6 (::/0) although the node accepts it
 
 
-def _mcp(node_http, key):
-    return mcp_post(node_http, INIT_BODY, key or "no-key").status_code
+def _mcp(node, key) -> S:
+    return mcp_status(node, key or "no-key")
 
 
 def _apply(admin, cidrs):
@@ -35,27 +35,29 @@ def test_ip_rules_persist_in_worker_config(admin, world):
     assert cfg.get("cidrs") == OPEN, cfg
 
 
-def test_out_of_range_client_is_rejected_then_restored(admin, world, node_http, mcp_key_opt):
-    """The node gates /admin/reload by the same CIDRs (finding), so the console's own address must stay allowed:
-    RAMEN_TRUSTED_CIDRS = the console as the worker sees it (compose: `docker inspect ramen-console-1` → 172.18.0.4/32;
-    GKE: the cluster pod range)."""
+def test_out_of_range_client_is_rejected_then_restored(admin, world, node_grpc, mcp_key_opt):
+    """The node gates Admin/* by RAMEN_ADMIN_CIDRS, which the console derives from the same rules (finding carried from
+    0.2.0), so the console's own address must stay allowed: RAMEN_TRUSTED_CIDRS = the console as the worker sees it
+    (compose: `docker inspect ramen-console-1` → 172.18.0.4/32; GKE: the cluster pod range)."""
     trusted = [c.strip() for c in (E.env("RAMEN_TRUSTED_CIDRS") or "").split(",") if c.strip()]
     if not trusted:
-        pytest.skip("RAMEN_TRUSTED_CIDRS not set: locking would also lock out the console's /admin/reload (finding)")
+        pytest.skip("RAMEN_TRUSTED_CIDRS not set: locking would also lock out the console's Admin/Reload (finding)")
     _apply(admin, OPEN)  # self-heal: a previous aborted run may have left the node locked
     before = poll(
-        lambda: _mcp(node_http, mcp_key_opt) in (200, 401) and _mcp(node_http, mcp_key_opt),
+        lambda: _mcp(node_grpc, mcp_key_opt) in (S.OK, S.UNAUTHENTICATED) and _mcp(node_grpc, mcp_key_opt),
         timeout=120,
         what="node reachable before locking",
     )
     try:
         _apply(admin, LOCKED + trusted)
-        poll(lambda: _mcp(node_http, mcp_key_opt) == 403, timeout=420, what="node returns 403 outside CIDRs")
-        if E.node_admin(str(node_http.base_url)):
-            assert node_http.get("/healthz").status_code == 200, "health probes must stay reachable"
+        poll(lambda: _mcp(node_grpc, mcp_key_opt) == S.PERMISSION_DENIED, timeout=420, what="denied outside CIDRs")
+        try:
+            assert node_grpc.health() in ("SERVING", "NOT_SERVING"), "health probes must stay reachable"
+        except grpc.RpcError as e:
+            raise AssertionError(f"health must not be CIDR-gated: {e.code().name}") from e
     finally:
         _apply(admin, OPEN)
-    poll(lambda: _mcp(node_http, mcp_key_opt) == before, timeout=420, what="node open again")
+    poll(lambda: _mcp(node_grpc, mcp_key_opt) == before, timeout=420, what="node open again")
 
 
 def test_ip_rules_audited(admin, world, admin_creds):

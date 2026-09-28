@@ -5,10 +5,9 @@ import json
 
 import pytest
 
-from .conftest import GROUP, ZONE, mcp_post, ok, poll
+from .conftest import GROUP, PING, ZONE, ok, poll
 
 pytestmark = pytest.mark.cloud
-MARK = {"jsonrpc": "2.0", "id": 7, "method": "ping"}
 
 
 def _lines(text: str) -> list[dict]:
@@ -22,9 +21,9 @@ def _lines(text: str) -> list[dict]:
 
 
 @pytest.fixture(scope="module")
-def traffic(node_http, world, mcp_key_opt):
+def traffic(node_grpc, world, mcp_key_opt):
     for _ in range(3):
-        mcp_post(node_http, MARK, mcp_key_opt or "nope")
+        node_grpc.status(PING, key=mcp_key_opt or "nope")
     return 3
 
 

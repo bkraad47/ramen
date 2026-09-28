@@ -164,6 +164,10 @@ class FakeAwsClients:
     def networking(self):
         return _Networking(self.k8s)
 
+    @property
+    def rbac(self):
+        return self.k8s.rbac
+
     def to_dict(self, obj):
         return obj
 

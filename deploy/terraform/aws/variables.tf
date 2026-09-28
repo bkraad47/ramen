@@ -55,3 +55,8 @@ variable "fluent_bit_chart_version" {
   type    = string
   default = "0.1.35"
 }
+variable "alb_group" {
+  type        = string
+  default     = "ramen"
+  description = "ALB IngressGroup name (helm value aws.albGroup / RAMEN_ALB_GROUP): scopes the console's WAF and ALB permissions."
+}

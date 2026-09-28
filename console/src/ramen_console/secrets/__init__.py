@@ -18,7 +18,7 @@ def make_secrets_backend(cloud=None) -> SecretsBackend:
             from ..cloud.gcp_clients import GcpClients
 
             client = GcpClients(project).secretmanager
-        return GcpSecrets(project, client)
+        return GcpSecrets(project, client, on_create=getattr(cloud, "bind_new_secret", None))
     if kind == "aws":
         from .aws import from_env
 

@@ -15,6 +15,6 @@ Code, Cursor, a CI bot) can load to operate Ramen safely. Each skill is a folder
 ## Validation sub-agent convention
 Every skill ends with a **Validate** section. The convention is that the agent running the skill spawns a cheaper,
 read-only sub-agent with only that section and the URLs/keys it needs; the sub-agent reports PASS/FAIL with the
-evidence (HTTP status, job status, `tools/call` result) and never mutates anything. The parent agent may not
+evidence (HTTP status, gRPC status, job status, `tools/call` result) and never mutates anything. The parent agent may not
 declare the task done until the validator has passed. `skills/README.md` has the exact wording to hand to the
 sub-agent.

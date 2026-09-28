@@ -1,15 +1,21 @@
-//! HTTP surface tests; the ones marked `py` spawn the real Python runtime against the demo fixture.
-use axum::body::Body;
-use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
+//! gRPC surface tests over real TCP (peer address visible); the ones marked `py` spawn the real Python runtime
+//! against the demo fixture.
 use ramen_node::config::Config;
-use ramen_node::http::{Shared, app_with, router};
+use ramen_node::grpc::{Shared, app_with, routes};
+use ramen_node::pb::admin_client::AdminClient;
+use ramen_node::pb::mcp_client::McpClient;
+use ramen_node::pb::{JsonRpc, MetricsRequest, ReloadRequest};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tower::ServiceExt;
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::{Channel, Endpoint, Server};
+use tonic::{Code, Request, Status};
+use tonic_health::pb::HealthCheckRequest;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
 
 fn cfg(extra: &[(&str, &str)]) -> Config {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../runtime-py");
@@ -42,56 +48,116 @@ fn cfg(extra: &[(&str, &str)]) -> Config {
     Config::from_map(&m).unwrap()
 }
 
-fn app(c: Config) -> Shared {
+async fn app(c: Config) -> Shared {
     let mut reloaded = c.clone();
     reloaded.mcp_keys.push("k2".into());
-    app_with(c, Box::new(move || Ok(reloaded.clone())))
+    app_with(c, Box::new(move || Ok(reloaded.clone()))).await
 }
 
-async fn send(
-    state: &Shared,
-    method: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-    body: Option<Value>,
-    peer: &str,
-) -> (StatusCode, Value) {
-    let mut req = Request::builder().method(method).uri(path);
-    for (k, v) in headers {
-        req = req.header(*k, *v);
+struct Node {
+    app: Shared,
+    addr: SocketAddr,
+    _stop: oneshot::Sender<()>,
+}
+
+async fn serve(app: Shared) -> Node {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = oneshot::channel::<()>();
+    let r = routes(&app);
+    tokio::spawn(async move {
+        Server::builder()
+            .add_routes(r)
+            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                let _ = rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    Node {
+        app,
+        addr,
+        _stop: tx,
     }
-    let mut req = req
-        .body(body.map_or(Body::empty(), |b| match b {
-            Value::String(raw) => Body::from(raw),
-            v => Body::from(v.to_string()),
-        }))
-        .unwrap();
-    req.extensions_mut()
-        .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
-    let resp = router(state.clone()).oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes)
-            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into())),
-    )
 }
 
-async fn rpc(state: &Shared, key: &str, method: &str, params: Value) -> (StatusCode, Value) {
+async fn channel(addr: SocketAddr) -> Channel {
+    Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap()
+}
+
+fn with_md<T>(msg: T, md: &[(&str, &str)]) -> Request<T> {
+    let mut req = Request::new(msg);
+    for (k, v) in md {
+        let key = tonic::metadata::MetadataKey::from_bytes(k.as_bytes()).unwrap();
+        req.metadata_mut().insert(key, v.parse().unwrap());
+    }
+    req
+}
+
+/// `Mcp/Call` with raw bytes; `Ok(Null)` for an empty body (notification).
+async fn call_raw(node: &Node, md: &[(&str, &str)], body: &[u8]) -> Result<Value, Status> {
+    let mut c = McpClient::new(channel(node.addr).await).max_encoding_message_size(usize::MAX);
+    let out = c
+        .call(with_md(
+            JsonRpc {
+                body: body.to_vec(),
+            },
+            md,
+        ))
+        .await?
+        .into_inner()
+        .body;
+    if out.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(serde_json::from_slice(&out).expect("json body"))
+}
+
+async fn rpc(node: &Node, key: &str, method: &str, params: Value) -> Result<Value, Status> {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-    send(
-        state,
-        "POST",
-        "/mcp",
-        &[
-            ("authorization", &format!("Bearer {key}")),
-            ("content-type", "application/json"),
-        ],
-        Some(body),
-        "127.0.0.1:9",
+    call_raw(
+        node,
+        &[("authorization", &format!("Bearer {key}"))],
+        body.to_string().as_bytes(),
     )
     .await
+}
+
+async fn health(node: &Node, service: &str) -> ServingStatus {
+    let mut hc = HealthClient::new(channel(node.addr).await);
+    let st = hc
+        .check(HealthCheckRequest {
+            service: service.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status;
+    ServingStatus::try_from(st).unwrap()
+}
+
+async fn reload(node: &Node, md: &[(&str, &str)]) -> Result<Value, Status> {
+    let mut c = AdminClient::new(channel(node.addr).await);
+    let out = c.reload(with_md(ReloadRequest {}, md)).await?.into_inner();
+    Ok(serde_json::from_slice(&out.json).unwrap())
+}
+
+async fn metrics(node: &Node) -> Value {
+    let mut c = AdminClient::new(channel(node.addr).await);
+    let out = c
+        .metrics(with_md(MetricsRequest {}, &[("x-ramen-admin-key", "adm")]))
+        .await
+        .unwrap()
+        .into_inner();
+    serde_json::from_slice(&out.json).unwrap()
+}
+
+fn code(r: &Result<Value, Status>) -> Code {
+    r.as_ref().err().map_or(Code::Ok, Status::code)
 }
 
 fn python_ok() -> bool {
@@ -109,229 +175,230 @@ fn python_ok() -> bool {
 
 #[tokio::test]
 async fn health_auth_and_protocol_without_sidecar() {
-    let a = app(cfg(&[("RAMEN_ALLOWED_CIDRS", "127.0.0.0/8")]));
-    assert_eq!(
-        send(&a, "GET", "/healthz", &[], None, "127.0.0.1:1")
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        send(&a, "GET", "/readyz", &[], None, "127.0.0.1:1").await.0,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-    let (s, m) = send(&a, "GET", "/metrics", &[], None, "127.0.0.1:1").await;
+    let n = serve(app(cfg(&[("RAMEN_ALLOWED_CIDRS", "127.0.0.0/8")])).await).await;
+    assert_eq!(health(&n, "").await, ServingStatus::NotServing);
+    assert_eq!(health(&n, "ramen.v1.Mcp").await, ServingStatus::NotServing);
+    assert_eq!(health(&n, "ramen.v1.Admin").await, ServingStatus::Serving);
+    let m = metrics(&n).await;
     assert_eq!(
         (
-            s,
             m["load"].as_str(),
             m["sidecar_alive"].as_bool(),
             m["inflight"].as_u64()
         ),
-        (StatusCode::OK, Some("low"), Some(false), Some(0))
+        (Some("low"), Some(false), Some(0))
     );
-    let (s, b) = send(
-        &a,
-        "POST",
-        "/mcp",
-        &[],
-        Some(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})),
-        "127.0.0.1:1",
-    )
-    .await;
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
     assert_eq!(
-        (s, b["error"]["code"].as_i64()),
-        (StatusCode::UNAUTHORIZED, Some(-32001))
+        code(&call_raw(&n, &[], ping.as_bytes()).await),
+        Code::Unauthenticated
     );
-    let (s, _) = send(
-        &a,
-        "POST",
-        "/mcp",
-        &[("authorization", "Bearer k1")],
-        Some(json!({"method": "ping"})),
-        "10.0.0.1:1",
-    )
-    .await;
-    assert_eq!(s, StatusCode::FORBIDDEN);
-    let (s, b) = send(
-        &a,
-        "POST",
-        "/mcp",
-        &[("authorization", "Bearer k1")],
-        Some(Value::String("{nope".into())),
-        "127.0.0.1:1",
-    )
-    .await;
     assert_eq!(
-        (s, b["error"]["code"].as_i64()),
-        (StatusCode::BAD_REQUEST, Some(-32700))
+        code(&call_raw(&n, &[("authorization", "Bearer nope")], ping.as_bytes()).await),
+        Code::Unauthenticated
     );
-    let (s, b) = rpc(&a, "k1", "", json!({})).await;
     assert_eq!(
-        (s, b["error"]["code"].as_i64()),
-        (StatusCode::BAD_REQUEST, Some(-32600))
+        code(&call_raw(&n, &[("authorization", "Basic k1")], ping.as_bytes()).await),
+        Code::Unauthenticated
     );
-    let (s, b) = rpc(&a, "k1", "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})).await;
+    let auth = [("authorization", "Bearer k1")];
+    let b = call_raw(&n, &auth, b"{nope").await.unwrap();
+    assert_eq!(b["error"]["code"], -32700);
+    assert_eq!(
+        rpc(&n, "k1", "", json!({})).await.unwrap()["error"]["code"],
+        -32600
+    );
+    let b = rpc(&n, "k1", "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})).await.unwrap();
     assert_eq!(
         (
-            s,
             b["result"]["protocolVersion"].as_str(),
             b["result"]["serverInfo"]["name"].as_str()
         ),
-        (StatusCode::OK, Some("2025-06-18"), Some("ramen-node"))
+        (Some("2025-06-18"), Some("ramen-node"))
     );
     assert_eq!(
-        rpc(&a, "k1", "ping", json!({})).await.1["result"],
+        rpc(&n, "k1", "ping", json!({})).await.unwrap()["result"],
         json!({})
     );
-    let (s, b) = send(
-        &a,
-        "POST",
-        "/mcp",
-        &[("authorization", "Bearer k1")],
-        Some(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})),
-        "127.0.0.1:1",
-    )
-    .await;
-    assert_eq!((s, b.as_str()), (StatusCode::ACCEPTED, Some("")));
+    let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string();
     assert_eq!(
-        rpc(&a, "k1", "tools/list", json!({})).await.1["error"]["code"],
+        call_raw(&n, &auth, note.as_bytes()).await.unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        rpc(&n, "k1", "tools/list", json!({})).await.unwrap()["error"]["code"],
         -32002
     );
     assert_eq!(
-        rpc(&a, "k1", "nope/x", json!({})).await.1["error"]["code"],
+        rpc(&n, "k1", "nope/x", json!({})).await.unwrap()["error"]["code"],
         -32601
     );
     assert_eq!(
-        rpc(&a, "k1", "tools/call", json!({"name": 1})).await.1["error"]["code"],
-        -32602
-    );
-    assert_eq!(
-        rpc(&a, "k1", "resources/read", json!({})).await.1["error"]["code"],
-        -32602
-    );
-    assert_eq!(
-        send(&a, "POST", "/admin/reload", &[], None, "127.0.0.1:1")
+        rpc(&n, "k1", "tools/call", json!({"name": 1}))
             .await
-            .0,
-        StatusCode::FORBIDDEN
+            .unwrap()["error"]["code"],
+        -32602
     );
     assert_eq!(
-        send(
-            &a,
-            "POST",
-            "/admin/reload",
-            &[("x-ramen-admin-key", "wrong")],
-            None,
-            "127.0.0.1:1"
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
+        rpc(&n, "k1", "resources/read", json!({})).await.unwrap()["error"]["code"],
+        -32602
     );
-    let permit = a
+    assert_eq!(code(&reload(&n, &[]).await), Code::Unauthenticated);
+    assert_eq!(
+        code(&reload(&n, &[("x-ramen-admin-key", "wrong")]).await),
+        Code::Unauthenticated
+    );
+    // Session is reserved
+    let mut c = McpClient::new(channel(n.addr).await);
+    let st = c
+        .session(with_md(tokio_stream::iter(vec![JsonRpc::default()]), &auth))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(st.code(), Code::Unimplemented);
+    // 4 MiB message limit (codec)
+    let big = vec![b' '; ramen_node::grpc::MAX_MESSAGE_BYTES + 1];
+    assert_eq!(code(&call_raw(&n, &auth, &big).await), Code::OutOfRange);
+    // inflight bound
+    let permit = n
+        .app
         .sem
-        .acquire_many(a.cfg.read().await.max_inflight as u32)
+        .acquire_many(n.app.cfg.read().await.max_inflight as u32)
         .await
         .unwrap();
     assert_eq!(
-        rpc(&a, "k1", "ping", json!({})).await.0,
-        StatusCode::SERVICE_UNAVAILABLE
+        code(&rpc(&n, "k1", "ping", json!({})).await),
+        Code::ResourceExhausted
     );
     drop(permit);
-    let m = send(&a, "GET", "/metrics", &[], None, "127.0.0.1:1")
-        .await
-        .1;
+    let m = metrics(&n).await;
     assert!(m["total"].as_u64().unwrap() >= 6 && m["errors"].as_u64().unwrap() >= 4);
 }
 
 #[tokio::test]
-async fn mcp_path_prefix_serves_the_alias_like_mcp() {
-    let a = app(cfg(&[("RAMEN_MCP_PATH_PREFIX", "/mcp/demo/a")]));
-    for path in ["/mcp", "/mcp/demo/a"] {
-        let (s, v) = send(&a, "POST", path, &[], Some(json!({})), "127.0.0.1:1").await;
-        assert_eq!(
-            (path, s, v["error"]["code"].as_i64()),
-            (path, StatusCode::UNAUTHORIZED, Some(-32001))
-        );
-        let (s, v) = send(
-            &a,
-            "POST",
-            path,
-            &[("authorization", "Bearer k1")],
-            Some(json!({"jsonrpc": "2.0", "id": 1})),
-            "127.0.0.1:1",
-        )
-        .await;
-        assert_eq!(
-            (path, s, v["error"]["code"].as_i64()),
-            (path, StatusCode::BAD_REQUEST, Some(-32600))
-        );
-    }
-    let (s, _) = send(
-        &a,
-        "POST",
-        "/mcp/demo/b",
-        &[],
-        Some(json!({})),
-        "127.0.0.1:1",
-    )
-    .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
-    let plain = app(cfg(&[]));
-    let (s, _) = send(
-        &plain,
-        "POST",
-        "/mcp/demo/a",
-        &[],
-        Some(json!({})),
-        "127.0.0.1:1",
-    )
-    .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
+async fn cidr_denies_mcp_but_admin_has_its_own_list() {
+    let n = serve(app(cfg(&[("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8")])).await).await;
+    assert_eq!(
+        code(&rpc(&n, "k1", "ping", json!({})).await),
+        Code::PermissionDenied
+    );
+    // admin is not bound by the MCP allowlist: whatever the load outcome, it is never PERMISSION_DENIED
+    assert_ne!(
+        code(&reload(&n, &[("x-ramen-admin-key", "adm")]).await),
+        Code::PermissionDenied
+    );
+    let n = serve(app(cfg(&[("RAMEN_ADMIN_CIDRS", "10.0.0.0/8")])).await).await;
+    assert_eq!(
+        code(&reload(&n, &[("x-ramen-admin-key", "adm")]).await),
+        Code::PermissionDenied
+    );
+    let mut c = AdminClient::new(channel(n.addr).await);
+    assert_eq!(
+        c.metrics(with_md(MetricsRequest {}, &[("x-ramen-admin-key", "adm")]))
+            .await
+            .err()
+            .unwrap()
+            .code(),
+        Code::PermissionDenied
+    );
+    assert_eq!(
+        rpc(&n, "k1", "ping", json!({})).await.unwrap()["result"],
+        json!({})
+    );
 }
 
 #[tokio::test]
 async fn trust_proxy_uses_forwarded_ip() {
-    let strict = app(cfg(&[("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8")]));
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
     let xff = [
         ("authorization", "Bearer k1"),
         ("x-forwarded-for", "10.1.1.1"),
     ];
-    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+    let strict = serve(app(cfg(&[("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8")])).await).await;
     assert_eq!(
-        send(
-            &strict,
-            "POST",
-            "/mcp",
-            &xff,
-            Some(ping.clone()),
-            "127.0.0.1:1"
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
+        code(&call_raw(&strict, &xff, ping.as_bytes()).await),
+        Code::PermissionDenied
     );
-    let trusting = app(cfg(&[
-        ("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8"),
-        ("RAMEN_TRUST_PROXY", "1"),
-    ]));
+    let trusting = serve(
+        app(cfg(&[
+            ("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8"),
+            ("RAMEN_TRUST_PROXY", "1"),
+        ]))
+        .await,
+    )
+    .await;
     assert_eq!(
-        send(&trusting, "POST", "/mcp", &xff, Some(ping), "127.0.0.1:1")
-            .await
-            .0,
-        StatusCode::OK
+        call_raw(&trusting, &xff, ping.as_bytes()).await.unwrap()["result"],
+        json!({})
     );
 }
 
 #[tokio::test]
-async fn py_spawn_missing_python_is_internal_error() {
-    let a = app(cfg(&[("RAMEN_PYTHON", "/nonexistent/python")]));
-    let (s, b) = rpc(&a, "k1", "tools/call", json!({"name": "x"})).await;
+async fn tls_serves_h2_and_rejects_plaintext() {
+    let dir = std::env::temp_dir().join(format!("ramen-tls-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
+    std::fs::write(&cert, ck.cert.pem()).unwrap();
+    std::fs::write(&key, ck.signing_key.serialize_pem()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let c = cfg(&[
+        ("RAMEN_TLS_CERT", cert.to_str().unwrap()),
+        ("RAMEN_TLS_KEY", key.to_str().unwrap()),
+        ("RAMEN_BUCKET", dir.to_str().unwrap()),
+    ]);
+    let (tx, rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(ramen_node::server::run(c, listener, async move {
+        let _ = rx.await;
+    }));
+    let tls = tonic::transport::ClientTlsConfig::new()
+        .ca_certificate(tonic::transport::Certificate::from_pem(ck.cert.pem()))
+        .domain_name("localhost");
+    let ch = Endpoint::from_shared(format!("https://{addr}"))
+        .unwrap()
+        .tls_config(tls)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut mc = McpClient::new(ch);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let out = mc
+        .call(with_md(
+            JsonRpc {
+                body: body.into_bytes(),
+            },
+            &[("authorization", "Bearer k1")],
+        ))
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(
-        (s, b["error"]["code"].as_i64()),
-        (StatusCode::OK, Some(-32603))
+        serde_json::from_slice::<Value>(&out.body).unwrap()["result"],
+        json!({})
     );
+    let plain = Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect_lazy();
+    assert!(
+        HealthClient::new(plain)
+            .check(HealthCheckRequest::default())
+            .await
+            .is_err()
+    );
+    tx.send(()).unwrap();
+    server.await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn py_spawn_missing_python_is_internal_error() {
+    let n = serve(app(cfg(&[("RAMEN_PYTHON", "/nonexistent/python")])).await).await;
+    let b = rpc(&n, "k1", "tools/call", json!({"name": "x"}))
+        .await
+        .unwrap();
+    assert_eq!(b["error"]["code"], -32603);
     assert!(b["error"]["message"].as_str().unwrap().contains("spawn"));
 }
 
@@ -340,48 +407,48 @@ async fn py_end_to_end_with_demo_repo() {
     if !python_ok() {
         return;
     }
-    let a = app(cfg(&[("RAMEN_VERBOSE", "1")]));
-    a.sidecar.load().await.unwrap();
-    assert_eq!(
-        send(&a, "GET", "/readyz", &[], None, "127.0.0.1:1").await.0,
-        StatusCode::OK
-    );
-    let tools = rpc(&a, "k1", "tools/list", json!({})).await.1;
+    let n = serve(app(cfg(&[("RAMEN_VERBOSE", "1")])).await).await;
+    n.app.load().await.unwrap();
+    assert_eq!(health(&n, "").await, ServingStatus::Serving);
+    assert_eq!(health(&n, "ramen.v1.Mcp").await, ServingStatus::Serving);
+    let tools = rpc(&n, "k1", "tools/list", json!({})).await.unwrap();
     assert_eq!(tools["result"]["tools"][0]["name"], "demo_calculator_tool");
     assert_eq!(
         tools["result"]["tools"][0]["inputSchema"]["required"],
         json!(["var1", "var2", "func"])
     );
     let r = rpc(
-        &a,
+        &n,
         "k1",
         "tools/call",
         json!({"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 3, "func": "add"}}),
     )
     .await
-    .1;
+    .unwrap();
     assert_eq!(
         r["result"],
         json!({"content": [{"type": "text", "text": "5"}], "isError": false})
     );
-    let r = rpc(&a, "k1", "tools/call", json!({"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 0, "func": "divide"}})).await.1;
+    let r = rpc(&n, "k1", "tools/call", json!({"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 0, "func": "divide"}})).await.unwrap();
     assert_eq!(r["result"]["isError"], true);
     assert_eq!(
-        rpc(&a, "k1", "tools/call", json!({"name": "nope"})).await.1["error"]["code"],
+        rpc(&n, "k1", "tools/call", json!({"name": "nope"}))
+            .await
+            .unwrap()["error"]["code"],
         -32004
     );
     assert_eq!(
-        rpc(&a, "k1", "resources/list", json!({})).await.1["result"]["resources"][0]["uri"],
+        rpc(&n, "k1", "resources/list", json!({})).await.unwrap()["result"]["resources"][0]["uri"],
         "ramen://demo/readme"
     );
     let r = rpc(
-        &a,
+        &n,
         "k1",
         "resources/read",
         json!({"uri": "ramen://demo/readme"}),
     )
     .await
-    .1;
+    .unwrap();
     assert!(
         r["result"]["contents"][0]["text"]
             .as_str()
@@ -389,17 +456,18 @@ async fn py_end_to_end_with_demo_repo() {
             .starts_with("# ramen-demo-mcp-group")
     );
     assert_eq!(
-        rpc(&a, "k1", "prompts/list", json!({})).await.1["result"]["prompts"][0]["arguments"][0]["name"],
+        rpc(&n, "k1", "prompts/list", json!({})).await.unwrap()["result"]["prompts"][0]["arguments"]
+            [0]["name"],
         "request"
     );
     let r = rpc(
-        &a,
+        &n,
         "k1",
         "prompts/get",
         json!({"name": "get_calculation_prompt", "arguments": {"request": "9*9"}}),
     )
     .await
-    .1;
+    .unwrap();
     assert!(
         r["result"]["messages"][0]["content"]["text"]
             .as_str()
@@ -408,18 +476,16 @@ async fn py_end_to_end_with_demo_repo() {
     );
     assert_eq!(
         rpc(
-            &a,
+            &n,
             "k1",
             "prompts/get",
             json!({"name": "get_calculation_prompt"})
         )
         .await
-        .1["error"]["code"],
+        .unwrap()["error"]["code"],
         -32602
     );
-    let m = send(&a, "GET", "/metrics", &[], None, "127.0.0.1:1")
-        .await
-        .1;
+    let m = metrics(&n).await;
     assert_eq!(
         (
             m["sidecar_alive"].as_bool(),
@@ -430,29 +496,21 @@ async fn py_end_to_end_with_demo_repo() {
     );
     assert!(m["loaded_at"].is_string());
     // respawn after a kill re-runs runtime.load transparently
-    a.sidecar.kill("test").await;
-    assert!(!a.sidecar.alive().await);
-    let r = rpc(&a, "k1", "tools/call", json!({"name": "demo_calculator_tool", "arguments": {"var1": 6, "var2": 7, "func": "multiply"}})).await.1;
+    n.app.sidecar.kill("test").await;
+    assert!(!n.app.sidecar.alive().await);
+    let r = rpc(&n, "k1", "tools/call", json!({"name": "demo_calculator_tool", "arguments": {"var1": 6, "var2": 7, "func": "multiply"}})).await.unwrap();
     assert_eq!(r["result"]["content"][0]["text"], "42");
     // admin reload: re-reads config (k2 becomes valid) and reloads packages
     assert_eq!(
-        rpc(&a, "k2", "ping", json!({})).await.0,
-        StatusCode::UNAUTHORIZED
+        code(&rpc(&n, "k2", "ping", json!({})).await),
+        Code::Unauthenticated
     );
-    let (s, b) = send(
-        &a,
-        "POST",
-        "/admin/reload",
-        &[("x-ramen-admin-key", "adm")],
-        None,
-        "127.0.0.1:1",
-    )
-    .await;
+    let b = reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
+    assert_eq!(b["tools"][0]["name"], "demo_calculator_tool");
     assert_eq!(
-        (s, b["tools"][0]["name"].as_str()),
-        (StatusCode::OK, Some("demo_calculator_tool"))
+        rpc(&n, "k2", "ping", json!({})).await.unwrap()["result"],
+        json!({})
     );
-    assert_eq!(rpc(&a, "k2", "ping", json!({})).await.0, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -460,28 +518,28 @@ async fn py_idle_reaper_kills_and_call_respawns() {
     if !python_ok() {
         return;
     }
-    let a = app(cfg(&[("RAMEN_SIDECAR_IDLE_SECS", "1")]));
-    a.sidecar.start_reaper();
-    a.sidecar.load().await.unwrap();
-    assert!(a.sidecar.alive().await);
+    let n = serve(app(cfg(&[("RAMEN_SIDECAR_IDLE_SECS", "1")])).await).await;
+    n.app.sidecar.start_reaper();
+    n.app.load().await.unwrap();
+    assert!(n.app.sidecar.alive().await);
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        if !a.sidecar.alive().await {
+        if !n.app.sidecar.alive().await {
             break;
         }
     }
     assert!(
-        !a.sidecar.alive().await,
+        !n.app.sidecar.alive().await,
         "reaper should have killed the idle sidecar"
     );
     let r = rpc(
-        &a,
+        &n,
         "k1",
         "tools/call",
         json!({"name": "demo_calculator_tool", "arguments": {"var1": 1, "var2": 1, "func": "add"}}),
     )
     .await
-    .1;
+    .unwrap();
     assert_eq!(r["result"]["content"][0]["text"], "2");
 }
 
@@ -499,31 +557,35 @@ async fn py_call_timeout_kills_sidecar() {
         "import time\ndef f():\n    time.sleep(5)\n    return 'late'\n",
     )
     .unwrap();
-    let a = app(cfg(&[
-        ("RAMEN_CALL_TIMEOUT_SECS", "1"),
-        ("RAMEN_BUCKET", dir.to_str().unwrap()),
-    ]));
-    a.sidecar.load().await.unwrap();
+    let n = serve(
+        app(cfg(&[
+            ("RAMEN_CALL_TIMEOUT_SECS", "1"),
+            ("RAMEN_BUCKET", dir.to_str().unwrap()),
+        ]))
+        .await,
+    )
+    .await;
+    n.app.load().await.unwrap();
     let r = rpc(
-        &a,
+        &n,
         "k1",
         "tools/call",
         json!({"name": "slow", "arguments": {}}),
     )
     .await
-    .1;
+    .unwrap();
     assert!(
         r["error"]["message"]
             .as_str()
             .unwrap()
             .contains("timed out")
     );
-    assert!(!a.sidecar.alive().await);
+    assert!(!n.app.sidecar.alive().await);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A fake `ramen_runtime` that echoes `RAMEN_BUCKET_URI` in a `sync` summary: proves the node passes
-/// the URI to the sidecar env and that `/admin/reload` returns whatever the runtime reports.
+/// the URI to the sidecar env and that `Admin/Reload` returns whatever the runtime reports (and flips health).
 #[tokio::test]
 async fn admin_reload_returns_runtime_sync_summary() {
     let dir = std::env::temp_dir().join(format!("ramen-fake-rt-{}", std::process::id()));
@@ -539,27 +601,22 @@ for line in sys.stdin:
     )
     .unwrap();
     let pp = dir.display().to_string();
-    let a = app(cfg(&[
-        ("RAMEN_PYTHON", "python3"),
-        ("RAMEN_PYTHONPATH", &pp),
-        ("RAMEN_BUCKET_URI", "gs://groups/demo"),
-    ]));
-    let (st, v) = send(
-        &a,
-        "POST",
-        "/admin/reload",
-        &[("x-ramen-admin-key", "adm")],
-        None,
-        "127.0.0.1:1",
+    let n = serve(
+        app(cfg(&[
+            ("RAMEN_PYTHON", "python3"),
+            ("RAMEN_PYTHONPATH", &pp),
+            ("RAMEN_BUCKET_URI", "gs://groups/demo"),
+        ]))
+        .await,
     )
     .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(health(&n, "").await, ServingStatus::NotServing);
+    let v = reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
     assert_eq!(
         v["sync"],
         json!({"uri": "gs://groups/demo", "downloaded": 2})
     );
-    let (st, _) = send(&a, "GET", "/readyz", &[], None, "127.0.0.1:1").await;
-    assert_eq!(st, StatusCode::OK);
+    assert_eq!(health(&n, "").await, ServingStatus::Serving);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -589,23 +646,18 @@ for line in sys.stdin:
     .unwrap();
     let pp = dir.display().to_string();
     let bucket = dir.join("bucket").display().to_string();
-    let a = app(cfg(&[
-        ("RAMEN_PYTHON", "python3"),
-        ("RAMEN_PYTHONPATH", &pp),
-        ("RAMEN_BUCKET", &bucket),
-    ]));
-    // before reload: env process config has no blocked list; the deploy file is applied on /admin/reload
-    let (st, _) = send(
-        &a,
-        "POST",
-        "/admin/reload",
-        &[("x-ramen-admin-key", "adm")],
-        None,
-        "127.0.0.1:1",
+    let n = serve(
+        app(cfg(&[
+            ("RAMEN_PYTHON", "python3"),
+            ("RAMEN_PYTHONPATH", &pp),
+            ("RAMEN_BUCKET", &bucket),
+        ]))
+        .await,
     )
     .await;
-    assert_eq!(st, StatusCode::OK);
-    let (_, v) = rpc(&a, "k1", "tools/list", json!({})).await;
+    // before reload: env process config has no blocked list; the deploy file is applied on Admin/Reload
+    reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
+    let v = rpc(&n, "k1", "tools/list", json!({})).await.unwrap();
     assert_eq!(
         v["result"]["tools"],
         json!([{"name": "calc"}, {"name": "secret_tool"}])
@@ -621,68 +673,68 @@ for line in sys.stdin:
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect();
-    let a = app_with(
-        Config::from_vars(vars.clone().into_iter()).unwrap(),
-        Box::new(move || Config::from_vars(vars.clone().into_iter())),
-    );
-    let (st, _) = send(
-        &a,
-        "POST",
-        "/admin/reload",
-        &[("x-ramen-admin-key", "adm")],
-        None,
-        "127.0.0.1:1",
+    let n = serve(
+        app_with(
+            Config::from_vars(vars.clone().into_iter()).unwrap(),
+            Box::new(move || Config::from_vars(vars.clone().into_iter())),
+        )
+        .await,
     )
     .await;
-    assert_eq!(st, StatusCode::OK);
-    let (_, v) = rpc(&a, "k1", "tools/list", json!({})).await;
+    reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
+    let v = rpc(&n, "k1", "tools/list", json!({})).await.unwrap();
     assert_eq!(v["result"]["tools"], json!([{"name": "calc"}]));
-    let (_, v) = rpc(&a, "k1", "prompts/list", json!({})).await;
+    let v = rpc(&n, "k1", "prompts/list", json!({})).await.unwrap();
     assert_eq!(v["result"]["prompts"], json!([{"name": "p1"}]));
-    let (_, v) = rpc(&a, "k1", "resources/list", json!({})).await;
+    let v = rpc(&n, "k1", "resources/list", json!({})).await.unwrap();
     assert_eq!(
         v["result"]["resources"],
         json!([{"name": "other", "uri": "ramen://demo/other"}])
     );
-    let (st, v) = rpc(
-        &a,
+    let v = rpc(
+        &n,
         "k1",
         "tools/call",
         json!({"name": "secret_tool", "arguments": {}}),
     )
-    .await;
-    assert_eq!(st, StatusCode::OK);
+    .await
+    .unwrap();
     assert_eq!(v["error"]["code"], -32601, "{v}");
-    let (_, v) = rpc(
-        &a,
+    let v = rpc(
+        &n,
         "k1",
         "tools/call",
         json!({"name": "calc", "arguments": {"a": 1}}),
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(v["result"]["called"], "runtime.call_tool");
-    let (_, v) = rpc(&a, "k1", "prompts/get", json!({"name": "p2"})).await;
+    let v = rpc(&n, "k1", "prompts/get", json!({"name": "p2"}))
+        .await
+        .unwrap();
     assert_eq!(v["error"]["code"], -32601);
-    let (_, v) = rpc(
-        &a,
+    let v = rpc(
+        &n,
         "k1",
         "resources/read",
         json!({"uri": "ramen://demo/readme"}),
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(
         v["error"]["code"], -32601,
         "blocked by name, read by uri: {v}"
     );
-    let (_, v) = rpc(
-        &a,
+    let v = rpc(
+        &n,
         "k1",
         "resources/read",
         json!({"uri": "ramen://demo/other"}),
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(v["result"]["called"], "runtime.read_resource");
-    let (_, m) = send(&a, "GET", "/metrics", &[], None, "127.0.0.1:1").await;
+    let m = metrics(&n).await;
     assert_eq!(
         m["packages"]["tools"], 2,
         "metrics count what the runtime loaded, not what is exposed"

@@ -28,6 +28,12 @@ async def test_gcp_backend_roundtrip():
     assert sm.secrets[doc["ref"][5:]]["labels"] == {"ramen": "secret", "group": "demo", "env": "prod", "zone": "all"}
     doc2 = await b.put("demo", "prod", None, "TOKEN", "v2")  # idempotent create, new version
     assert doc2 == doc and sm.calls.count("create") == 2 and sm.calls.count("add_version") == 2
+    bound = []
+    b2 = GcpSecrets("p1", sm, on_create=lambda name, group: bound.append((name, group)))
+    await b2.put("demo", "prod", None, "TOKEN", "v2")  # exists: no binding call
+    await b2.put("demo", "dev", "a", "TOKEN", "v1")
+    assert bound == [("projects/p1/secrets/ramen-demo-dev-a-TOKEN", "demo")]
+    await b2.delete({"ref": "sm://projects/p1/secrets/ramen-demo-dev-a-TOKEN"})
     assert await b.resolve(doc["ref"]) == "v2"
     assert await b.resolve("plain") == "plain" and await b.resolve(None) is None
     assert await b.resolve_config({"RAMEN_MCP_KEYS": f"{doc['ref']},{doc['ref']}", "X": "1"}) == {

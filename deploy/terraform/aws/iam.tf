@@ -1,7 +1,38 @@
-# IAM roles for service accounts (IRSA). The console role is scoped so it can only manage `/ramen/` roles,
-# `ramen/*` secrets, the groups bucket, the state table and the regional WAF resources.
+# IAM roles for service accounts (IRSA). The console role is scoped so it can only manage `/ramen/` roles (and only
+# with the worker permissions boundary attached), `ramen/*` secrets, the groups bucket, the state table and the
+# `ramen` web ACL / `ramen-*` IP sets (SEC-10, CONTRACTS §11).
 locals {
   console_ksa = "system:serviceaccount:ramen-system:console"
+  waf_web_acl = "arn:aws:wafv2:${var.region}:${local.account}:regional/webacl/${var.alb_group}/*"
+  waf_ip_sets = "arn:aws:wafv2:${var.region}:${local.account}:regional/ipset/ramen-*/*"
+  alb_arns    = "arn:aws:elasticloadbalancing:${var.region}:${local.account}:loadbalancer/app/k8s-${var.alb_group}*/*"
+}
+
+# Permissions boundary for every worker role the console creates: whatever the SA policy engine (policy/permissions.py)
+# grants, a worker can never exceed this. The console must pass it on iam:CreateRole (see the console policy below).
+data "aws_iam_policy_document" "worker_boundary" {
+  statement {
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [aws_s3_bucket.groups.arn, "${aws_s3_bucket.groups.arn}/*"]
+  }
+  statement {
+    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*"]
+  }
+  statement {
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents", "cloudwatch:PutMetricData", "sns:Publish",
+      "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes",
+      "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
+    "kms:Decrypt", "bedrock:InvokeModel"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "worker_boundary" {
+  name   = "ramen-worker-boundary"
+  path   = "/ramen/"
+  policy = data.aws_iam_policy_document.worker_boundary.json
+  tags   = local.tags
 }
 
 data "aws_iam_policy_document" "irsa_trust" {
@@ -67,22 +98,36 @@ data "aws_iam_policy_document" "console" {
     actions   = ["eks:DescribeCluster"]
     resources = [aws_eks_cluster.ramen.arn]
   }
-  statement { # create_service_account / detach_group: roles under /ramen/ only
-    actions = ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:PutRolePolicy",
+  statement { # create_service_account / detach_group: roles under /ramen/ only ...
+    actions = ["iam:DeleteRole", "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole",
     "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:DetachRolePolicy"]
     resources = ["arn:aws:iam::${local.account}:role/ramen/*"]
+  }
+  statement { # ... and only with the worker permissions boundary, so a compromised console cannot self-escalate
+    actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy"]
+    resources = ["arn:aws:iam::${local.account}:role/ramen/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [aws_iam_policy.worker_boundary.arn]
+    }
   }
   statement {
     actions   = ["iam:ListRoles"]
     resources = ["*"]
   }
-  statement { # set_ip_rules: regional IP sets + web ACL, associated to the ALB
-    actions   = ["wafv2:*"]
-    resources = ["arn:aws:wafv2:${var.region}:${local.account}:regional/*"]
+  statement { # set_ip_rules: the `ramen` web ACL and `ramen-*` IP sets only
+    actions = ["wafv2:CreateIPSet", "wafv2:GetIPSet", "wafv2:UpdateIPSet", "wafv2:DeleteIPSet",
+    "wafv2:CreateWebACL", "wafv2:GetWebACL", "wafv2:UpdateWebACL", "wafv2:DeleteWebACL", "wafv2:TagResource"]
+    resources = [local.waf_web_acl, local.waf_ip_sets]
   }
   statement {
-    actions   = ["wafv2:ListWebACLs", "wafv2:ListIPSets", "wafv2:GetWebACLForResource", "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL"]
+    actions   = ["wafv2:ListWebACLs", "wafv2:ListIPSets"]
     resources = ["*"]
+  }
+  statement {
+    actions   = ["wafv2:GetWebACLForResource", "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL"]
+    resources = [local.waf_web_acl, local.alb_arns]
   }
   statement { # rebalance / ip-rules discover the IngressGroup ALB by tag
     actions   = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeTags", "elasticloadbalancing:SetWebAcl"]

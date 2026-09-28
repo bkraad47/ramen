@@ -4,26 +4,22 @@ import base64
 import hashlib
 import json
 import re
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 from ..errors import ApiError
 from .gcp_clients import fresh_http, http_status
-from .local import LocalCloud
+from .local import redact, run_git
 
 DEFAULT_PRIORITY = 2147483647
 
 
 def sync_repo_to_gcs(storage, bucket_name, group, repo_url, ref, token) -> str:
-    url = LocalCloud.auth_url(repo_url, token)
     with tempfile.TemporaryDirectory() as tmp:
-        r = subprocess.run(
-            ["git", "clone", "-q", "--depth", "1", "--branch", ref, url, tmp], capture_output=True, text=True
-        )
+        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
         if r.returncode != 0:
-            raise ApiError(502, "git failed: " + (r.stderr.replace(token, "***") if token else r.stderr).strip()[:500])
+            raise ApiError(502, "git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
         local = {}
         for p in root.rglob("*"):
@@ -272,7 +268,7 @@ class Iam:
             ):
                 if member in b["members"]:
                     return False
-                b["members"].append(member)
+                b["members"] = [*b["members"], member]  # google-cloud-storage policies use sets
                 return True
         b = {"role": role, "members": [member]}
         if condition:
@@ -280,7 +276,63 @@ class Iam:
         policy["bindings"].append(b)
         return True
 
+    # resource-level bindings (SEC-08): the console holds no project-level setIamPolicy -------------------------
+    def grant_bucket_roles(self, storage, bucket_name, email, bindings: list[tuple[str, dict | None]]) -> list[str]:
+        """Bind roles on the groups bucket itself (conditions keep them to the group's prefix)."""
+        bucket = storage.bucket(bucket_name)
+        pol = bucket.get_iam_policy(requested_policy_version=3)
+        doc = {"bindings": [dict(b) for b in pol.bindings]}
+        if [role for role, cond in bindings if self._add(doc, role, f"serviceAccount:{email}", cond)]:
+            pol.version = 3
+            pol.bindings = doc["bindings"]
+            bucket.set_iam_policy(pol)
+        return [r for r, _ in bindings]
+
+    def group_secrets(self, sm, group) -> list[str]:
+        prefix = f"ramen-{group}-"
+        it = sm.list_secrets(request={"parent": f"projects/{self.project}", "filter": f"name:{prefix}"})
+        return [s.name for s in it if s.name.rsplit("/", 1)[1].startswith(prefix)]
+
+    @staticmethod
+    def bind_secret(sm, name, roles: list[str], members: list[str]) -> bool:
+        """Add `members` to `roles` on one secret; False when nothing changed (or the secret does not exist yet)."""
+        try:
+            pol = sm.get_iam_policy(request={"resource": name})
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) == 404:
+                return False
+            raise
+        get = lambda b, k: b[k] if isinstance(b, dict) else getattr(b, k)  # noqa: E731 - proto message or dict
+        doc = [{"role": get(b, "role"), "members": list(get(b, "members"))} for b in pol.bindings]
+        changed = False
+        for role in roles:
+            b = next((b for b in doc if b["role"] == role), None)
+            if b is None:
+                doc.append({"role": role, "members": list(members)})
+                changed = True
+                continue
+            for m in members:
+                if m not in b["members"]:
+                    b["members"].append(m)
+                    changed = True
+        if changed:
+            del pol.bindings[:]
+            pol.bindings.extend(doc)
+            sm.set_iam_policy(request={"resource": name, "policy": pol})
+        return changed
+
+    def grant_secret_roles(self, sm, group, email, roles: list[str]) -> list[str]:
+        """Bind roles on every existing `ramen-<group>-*` secret (new secrets are bound at creation, secrets/gcp.py)."""
+        for name in self.group_secrets(sm, group):
+            self.bind_secret(sm, name, roles, [f"serviceAccount:{email}"])
+        return list(roles)
+
+    def group_members(self, group) -> list[str]:
+        return [f"serviceAccount:{e}" for e in self.list_service_accounts(f"ramen-{group}-")]
+
     def grant_project_roles(self, email, bindings: list[tuple[str, dict]]) -> list[str]:
+        """Project-wide roles (logging, monitoring, ...). Needs `roles/resourcemanager.projectIamAdmin`, which the
+        Terraform module only grants with `console_project_iam = true`."""
         pol = (
             self.crm.projects()
             .getIamPolicy(resource=self.project, body={"options": {"requestedPolicyVersion": 3}})

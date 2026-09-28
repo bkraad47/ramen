@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -32,13 +31,22 @@ def strip(url: str) -> str:
     return url.rstrip("/")
 
 
-def mcp_url(base: str) -> str:
-    """Full MCP endpoint. A node URL whose path already contains /mcp (e.g. an LB route
-    https://<ip>/mcp/<group>/<zone>) is the endpoint itself; a bare node URL gets /mcp appended."""
-    base = strip(base)
-    return base if "/mcp" in urlsplit(base).path else base + "/mcp"
+def node_target(url: str) -> tuple[str, bool]:
+    """RAMEN_NODE_URL → (host:port, tls). CONTRACTS §11: the node/LB is a gRPC target, not a URL. Accepted spellings:
+    `host:port`, `grpc://host:port` (plaintext), `grpcs://`/`https://` (TLS); RAMEN_NODE_TLS=1 forces TLS.
+    Any path is dropped (routing is by metadata, not by path)."""
+    u = strip(url).strip()
+    tls = env("RAMEN_NODE_TLS", "0") == "1"
+    for scheme, is_tls in (("grpcs://", True), ("https://", True), ("grpc://", False), ("http://", False)):
+        if u.startswith(scheme):
+            u, tls = u[len(scheme) :], tls or is_tls
+            break
+    host = u.split("/", 1)[0]
+    if ":" not in host.rsplit("]", 1)[-1]:
+        host += ":443" if tls else ":8080"
+    return host, tls
 
 
-def node_admin(base: str) -> bool:
-    """True when RAMEN_NODE_URL is a bare node (health/metrics/admin reachable); False for an MCP-only LB route."""
-    return urlsplit(strip(base)).path in ("", "/")
+def routing_metadata() -> list[tuple[str, str]]:
+    """`ramen-group` / `ramen-zone` sent on every call so an LB can route by headers (§11)."""
+    return [("ramen-group", env("RAMEN_E2E_GROUP", "demo")), ("ramen-zone", env("RAMEN_E2E_ZONE", "local"))]

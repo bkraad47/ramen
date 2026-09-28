@@ -27,7 +27,10 @@ class OAuthRegistry:
         }
         self._oauth = OAuth()
         for name, p in self._cfg.items():
-            kw = {"scope": p.get("scopes", "openid email profile")}
+            scope = p.get("scopes", "openid email profile").split()
+            if "openid" not in scope:  # always OIDC: authlib then sends and verifies `nonce`
+                scope.insert(0, "openid")
+            kw = {"scope": " ".join(scope), "code_challenge_method": "S256"}  # PKCE (SEC-06)
             if transport is not None:
                 kw["transport"] = transport
             self._oauth.register(

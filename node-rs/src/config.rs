@@ -1,6 +1,6 @@
 //! Config precedence: `RAMEN_CONFIG` yaml < process env < bucket deploy file
 //! (`<bucket>/.ramen/env-<zone>` or `.ramen/env`, written by the console on deploy; whitelisted keys only,
-//! `RAMEN_MCP_KEYS` is the union of all sources). Re-read on `/admin/reload`.
+//! `RAMEN_MCP_KEYS` is the union of all sources). Re-read on `Admin/Reload`.
 use ipnet::IpNet;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,13 +24,13 @@ pub struct Config {
     pub bucket: PathBuf,
     /// `gs://bucket/prefix` or `s3://bucket/prefix` synced into `bucket` by the runtime on every load (CONTRACTS §7/§8).
     pub bucket_uri: Option<String>,
-    /// Extra path served exactly like `/mcp` (e.g. `/mcp/<group>/<zone>` behind an ALB, which cannot rewrite paths; §8).
-    pub mcp_path_prefix: Option<String>,
+    /// `RAMEN_TLS_CERT` + `RAMEN_TLS_KEY` (PEM files): serve TLS (h2) instead of h2c (CONTRACTS §11).
+    pub tls: Option<(PathBuf, PathBuf)>,
     pub python: String,
     pub pythonpath: Option<String>,
     pub mcp_keys: Vec<String>,
     pub allowed_cidrs: Vec<IpNet>,
-    /// CIDRs allowed to call `/admin/*` (key-protected). Default: any, so IP locks on `/mcp` never lock the console out.
+    /// CIDRs allowed to call `Admin/*` (key-protected). Default: any, so IP locks on `Mcp/*` never lock the console out.
     pub admin_cidrs: Vec<IpNet>,
     pub admin_key: Option<String>,
     pub verbose: bool,
@@ -135,10 +135,11 @@ impl Config {
             port: num("RAMEN_NODE_PORT", 8080)? as u16,
             bucket: PathBuf::from(get("RAMEN_BUCKET").unwrap_or_else(|| "/buckets/default".into())),
             bucket_uri: get("RAMEN_BUCKET_URI"),
-            mcp_path_prefix: get("RAMEN_MCP_PATH_PREFIX").and_then(|p| {
-                let p = format!("/{}", p.trim_matches('/'));
-                (p != "/" && p != "/mcp").then_some(p)
-            }),
+            tls: match (get("RAMEN_TLS_CERT"), get("RAMEN_TLS_KEY")) {
+                (Some(c), Some(k)) => Some((PathBuf::from(c), PathBuf::from(k))),
+                (None, None) => None,
+                _ => return Err("RAMEN_TLS_CERT and RAMEN_TLS_KEY must be set together".into()),
+            },
             python: get("RAMEN_PYTHON").unwrap_or_else(|| "python3".into()),
             pythonpath: get("RAMEN_PYTHONPATH"),
             mcp_keys: list("RAMEN_MCP_KEYS"),
@@ -220,7 +221,7 @@ mod tests {
         assert!(c.blocked.is_empty());
         let m: HashMap<_, _> = [("RAMEN_BLOCKED".to_string(), " a, b ,a,".to_string())].into();
         assert_eq!(Config::from_map(&m).unwrap().blocked, vec!["a", "b"]);
-        assert!(c.bucket_uri.is_none() && c.mcp_path_prefix.is_none());
+        assert!(c.bucket_uri.is_none() && c.tls.is_none());
         let m: HashMap<_, _> = [("RAMEN_BUCKET_URI".to_string(), " gs://b/g ".to_string())].into();
         assert_eq!(
             Config::from_map(&m).unwrap().bucket_uri.as_deref(),
@@ -229,14 +230,22 @@ mod tests {
     }
 
     #[test]
-    fn mcp_path_prefix_is_normalized_and_never_plain_mcp() {
-        let prefix = |v: &str| {
-            let m: HashMap<_, _> = [("RAMEN_MCP_PATH_PREFIX".to_string(), v.to_string())].into();
-            Config::from_map(&m).unwrap().mcp_path_prefix
-        };
-        assert_eq!(prefix("/mcp/demo/a").as_deref(), Some("/mcp/demo/a"));
-        assert_eq!(prefix("mcp/demo/a/").as_deref(), Some("/mcp/demo/a"));
-        assert!(prefix("/mcp").is_none() && prefix("/").is_none() && prefix("").is_none());
+    fn tls_needs_both_files() {
+        let one: HashMap<_, _> = [("RAMEN_TLS_CERT".to_string(), "/c.pem".to_string())].into();
+        assert!(
+            Config::from_map(&one)
+                .unwrap_err()
+                .contains("RAMEN_TLS_KEY")
+        );
+        let both: HashMap<_, _> = [
+            ("RAMEN_TLS_CERT".to_string(), "/c.pem".to_string()),
+            ("RAMEN_TLS_KEY".to_string(), "/k.pem".to_string()),
+        ]
+        .into();
+        assert_eq!(
+            Config::from_map(&both).unwrap().tls,
+            Some((PathBuf::from("/c.pem"), PathBuf::from("/k.pem")))
+        );
     }
 
     #[test]

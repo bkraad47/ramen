@@ -33,3 +33,18 @@ def _csrf_init(self, *a, **kw):
 
 
 _tc.TestClient.__init__ = _csrf_init
+
+
+@pytest.fixture
+def workers():
+    """Two in-process gRPC workers for the local adapter fixtures: `cold` (load low) and `hot` (load high)."""
+    from tests.fake_grpc import FakeWorker
+
+    cold, hot = FakeWorker(admin_key="adm").start(), FakeWorker(admin_key="adm").start()
+    cold.metrics = {"inflight": 1, "total": 5, "errors": 0, "load": "low"}
+    hot.metrics = {"inflight": 4, "total": 5, "errors": 0, "load": "high"}
+    for w in (cold, hot):
+        w.load_result = {"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []}
+    yield {"cold": cold, "hot": hot}
+    cold.stop()
+    hot.stop()

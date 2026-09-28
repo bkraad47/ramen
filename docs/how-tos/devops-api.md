@@ -2,6 +2,8 @@
 
 Everything the console does is a JSON route under `/api/v1` ([contract §4a](../CONTRACTS.md)). OpenAPI UI at
 `/api/docs`. Authenticate with a session cookie (`POST /login`) or an **`rmn_` API key** in `X-Ramen-Api-Key`.
+The console API stays HTTP in 0.3.1; what changed is how the console talks to **workers**: every worker call
+(`Admin/Reload`, `Admin/Metrics`, `Health/Check`, the `tools/list` smoke) is gRPC now ([§11](../CONTRACTS.md)).
 
 ## Mint an API key
 API Keys page → name, role, groups → **Create** (shown once), or:
@@ -30,10 +32,10 @@ MCP clients need `rmk_` keys (see [local quickstart](local-quickstart.md#rmk_-vs
 | Groups | `POST $U/groups {name,repo_url,ref}` · `PUT $U/groups/{g}` · `DELETE $U/groups/{g}` (destroys infra) |
 | Zones (super admin) | `POST $U/zones {name,provider,region}` |
 | Environments | `POST $U/groups/{g}/environments {name,ref,zones}` · `PUT/DELETE …/environments/{e}` |
-| Deploy | `POST $U/groups/{g}/environments/{e}/deploy {canary,zone?}` → 202 `{id}`; `GET $U/jobs/{id}` until `ok`/`error` |
+| Deploy | `POST $U/groups/{g}/environments/{e}/deploy {canary,zone?}` → 202 `{id}`; `GET $U/jobs/{id}` until `ok`/`error` (job log shows `health`, `reload`, `smoke` steps over gRPC) |
 | Verbose logging | `POST …/environments/{e}/verbose {verbose}` |
 | Block tools (v0.3.0) | `PUT …/environments/{e}/blocked {blocked:[names]}` then deploy |
-| Workers | `GET $U/groups/{g}/zones/{z}/workers` · `PUT … {count,size?,allowed_sizes?}` |
+| Workers | `GET $U/groups/{g}/zones/{z}/workers` (live rows from `Admin/Metrics` + `Health/Check`) · `PUT … {count,size?,allowed_sizes?}` |
 | Rebalance / IP rules | `POST …/zones/{z}/rebalance` · `PUT …/zones/{z}/ip-rules {cidrs}` |
 | Service account | `POST …/zones/{z}/service-account` (super admin) · `PUT $U/groups/{g}/sa-restrictions {rules}` |
 | Permission requests | `POST $U/requests {group,zone,permission}` · `GET $U/requests` · `POST $U/requests/{id}/approve` |
@@ -53,6 +55,21 @@ for i in $(seq 1 150); do
   [ "$S" = ok ] && echo PASS && exit 0; [ "$S" = error ] && { eval $C $U/jobs/$JOB; exit 1; }; sleep 2
 done; echo timeout; exit 1
 ```
+
+## Talking to a worker directly (gRPC)
+The console is the normal path, but the worker's admin surface is reachable with any gRPC client from inside
+`RAMEN_ADMIN_CIDRS` (locally `localhost:8080`; in a cluster `kubectl -n ramen-<g>-<z> port-forward svc/worker 8080`).
+Run from the repo root so `-proto` resolves:
+```sh
+grpcurl -plaintext -H "x-ramen-admin-key: $RAMEN_ADMIN_KEY" -import-path proto -proto ramen/v1/admin.proto \
+  localhost:8080 ramen.v1.Admin/Metrics | python3 -c 'import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)["json"]).decode())'
+# {"inflight":0,"total":12,"errors":0,"load":"low","sidecar_alive":true,"loaded_at":"…","packages":{…}}
+grpcurl -plaintext -H "x-ramen-admin-key: $RAMEN_ADMIN_KEY" -import-path proto -proto ramen/v1/admin.proto \
+  localhost:8080 ramen.v1.Admin/Reload                          # re-sync bucket, pip install if needed, runtime.load
+grpc_health_probe -addr localhost:8080                          # SERVING / NOT_SERVING, no key needed
+```
+Without the key: `Unauthenticated`; from outside the admin CIDRs: `PermissionDenied`. Tool calls need an `rmk_`
+key and go through `ramen.v1.Mcp/Call` — see the [local quickstart](local-quickstart.md#5-call-the-worker-raw-with-grpcurl).
 
 ## Backups
 `POST $U/backups {"target":"bucket"}` writes a JSON export tagged with the release version (zones, users without

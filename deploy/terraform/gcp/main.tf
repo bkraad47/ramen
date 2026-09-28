@@ -1,6 +1,9 @@
-# Ramen on GCP (CONTRACTS §7, v0.2.0): regional GKE Autopilot, Firestore Native, Artifact Registry,
-# global static IP for the console, one groups bucket, console master GSA + Workload Identity.
+# Ramen on GCP (CONTRACTS §7, v0.2.0; §11 security mediums, v0.3.1): regional GKE Autopilot, Firestore Native,
+# Artifact Registry, global static IP for the console, one groups bucket, console master GSA + Workload Identity.
 # Nothing per-group is created here (the console's gcp adapter does that at runtime).
+# SEC-08: the console GSA holds no project-level setIamPolicy. Bucket roles for worker GSAs are bound on the groups
+# bucket, secret roles on each `ramen-<group>-*` secret, Workload Identity on the worker GSA itself. Project-wide
+# roles from approved permission requests (logging, monitoring, ...) need `console_project_iam = true`.
 terraform {
   required_version = ">= 1.6"
   required_providers {
@@ -20,13 +23,32 @@ locals {
     "storage.googleapis.com", "compute.googleapis.com", "artifactregistry.googleapis.com",
     "iam.googleapis.com", "logging.googleapis.com",
   ]
-  console_roles = [
-    "roles/storage.admin", "roles/secretmanager.admin", "roles/container.developer",
-    "roles/logging.viewer", "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountUser",
+  console_roles = concat([
+    "roles/secretmanager.admin", # create ramen-<group>-* secrets and set their IAM (secret-level accessor bindings)
+    "roles/container.developer", "roles/logging.viewer",
+    "roles/iam.serviceAccountCreator", "roles/iam.serviceAccountDeleter", # per-group worker GSAs
+    "roles/iam.serviceAccountUser",
     "roles/compute.securityAdmin", "roles/compute.loadBalancerAdmin",
-    "roles/datastore.user",                  # Firestore state DB
-    "roles/resourcemanager.projectIamAdmin", # bind conditioned roles to per-group GSAs (create_service_account)
+    "roles/datastore.user", # Firestore state DB
+    ],
+    # only with console_project_iam: bind project-wide roles (roles/logging.logWriter, ...) to worker GSAs
+    var.console_project_iam ? ["roles/resourcemanager.projectIamAdmin"] : [],
+  )
+}
+
+# Custom role: IAM on service accounts (Workload Identity bindings) + project number lookup. IAM conditions cannot
+# match service accounts by name (resource names carry the unique id), so the limit to ramen-* accounts is enforced
+# by the console (it only ever addresses `ramen-<group>-<zone>@`), not by IAM.
+resource "google_project_iam_custom_role" "console_sa_iam" {
+  role_id     = "ramenConsoleSaIam"
+  title       = "Ramen console service-account IAM"
+  description = "getIamPolicy/setIamPolicy on service accounts + projects.get"
+  permissions = [
+    "iam.serviceAccounts.getIamPolicy", "iam.serviceAccounts.setIamPolicy",
+    "iam.serviceAccounts.get", "iam.serviceAccounts.list",
+    "resourcemanager.projects.get",
   ]
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_service" "apis" {
@@ -85,6 +107,19 @@ resource "google_project_iam_member" "console" {
   project  = var.project
   role     = each.value
   member   = "serviceAccount:${google_service_account.console.email}"
+}
+
+resource "google_project_iam_member" "console_sa_iam" {
+  project = var.project
+  role    = google_project_iam_custom_role.console_sa_iam.id
+  member  = "serviceAccount:${google_service_account.console.email}"
+}
+
+# storage.admin on the groups bucket only (objects + bucket-level setIamPolicy for prefix-conditioned worker grants)
+resource "google_storage_bucket_iam_member" "console_groups" {
+  bucket = google_storage_bucket.groups.name
+  role   = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.console.email}"
 }
 
 resource "google_service_account_iam_member" "console_wi" {

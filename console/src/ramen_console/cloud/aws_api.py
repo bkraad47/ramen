@@ -3,7 +3,6 @@ a real account: everything below is exercised against moto/fakes only). Sync fun
 
 import hashlib
 import json
-import subprocess
 import tempfile
 import threading
 import time
@@ -12,7 +11,7 @@ from pathlib import Path
 from ..errors import ApiError
 from .gcp_api import k8s_name
 from .gcp_clients import GcpClients
-from .local import LocalCloud
+from .local import redact, run_git
 
 ROLE_PATH = "/ramen/"
 WAF_SCOPE = "REGIONAL"
@@ -114,13 +113,10 @@ def list_prefix(s3, bucket, prefix) -> dict[str, str]:
 
 
 def sync_repo_to_s3(s3, bucket, group, repo_url, ref, token) -> str:
-    url = LocalCloud.auth_url(repo_url, token)
     with tempfile.TemporaryDirectory() as tmp:
-        r = subprocess.run(
-            ["git", "clone", "-q", "--depth", "1", "--branch", ref, url, tmp], capture_output=True, text=True
-        )
+        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
         if r.returncode != 0:
-            raise ApiError(502, "git failed: " + (r.stderr.replace(token, "***") if token else r.stderr).strip()[:500])
+            raise ApiError(502, "git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
         local = {
             prefix + p.relative_to(root).as_posix(): p
@@ -340,10 +336,20 @@ class Waf:
 
 
 # IAM (IRSA) ---------------------------------------------------------------------
+BOUNDARY_NAME = "ramen-worker-boundary"  # deploy/terraform/aws + cloudformation create it under /ramen/
+
+
 class Iam:
-    def __init__(self, iam, sts, eks, region, cluster):
+    def __init__(self, iam, sts, eks, region, cluster, boundary=None):
         self.iam, self.sts, self.eks, self.region, self.cluster = iam, sts, eks, region, cluster
         self._account = self._issuer = None
+        self._boundary = boundary  # None = default name in this account; "-" = no permissions boundary
+
+    def boundary(self) -> str | None:
+        """SEC-10: every worker role carries the permissions boundary the console policy requires on iam:CreateRole."""
+        if self._boundary == "-":
+            return None
+        return self._boundary or f"arn:aws:iam::{self.account()}:policy{ROLE_PATH}{BOUNDARY_NAME}"
 
     def account(self) -> str:
         if self._account is None:
@@ -403,6 +409,7 @@ class Iam:
     def ensure_role(self, name, ns, ksa, group, zone) -> tuple[str, bool]:
         trust = json.dumps(self.trust_policy(ns, ksa))
         tags = [{"Key": "ramen", "Value": "worker"}, {"Key": "group", "Value": group}, {"Key": "zone", "Value": zone}]
+        kw = {"PermissionsBoundary": b} if (b := self.boundary()) else {}
         try:
             r = self.iam.create_role(
                 RoleName=name,
@@ -410,6 +417,7 @@ class Iam:
                 AssumeRolePolicyDocument=trust,
                 Tags=tags,
                 Description=f"ramen worker {group}/{zone}",
+                **kw,
             )
             return r["Role"]["Arn"], True
         except Exception as e:  # noqa: BLE001

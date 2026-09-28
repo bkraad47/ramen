@@ -5,13 +5,14 @@ import json
 import subprocess
 from types import SimpleNamespace as NS
 
-import httpx
 import pytest
 
 from ramen_console.cloud import aws_api, make_cloud
 from ramen_console.cloud.aws import AwsCloud
-from ramen_console.cloud.aws_k8s import ACTION, manifests, parse_weights, split_weights, weights
+from ramen_console.cloud.aws_k8s import ACTION, CONDITIONS, manifests, parse_weights, split_weights, weights
 from ramen_console.errors import ApiError
+from ramen_console.grpcclient import Client
+from tests.fake_grpc import FakeWorker
 from tests.fakes_aws import ACCOUNT, BUCKET, FakeAwsClients, FakeLogsInsights, aws_env, ip_set, web_acl
 
 SPEC = {"region": "us-east-1a", "size": "s", "count": 2}
@@ -20,7 +21,10 @@ ADMIN = "adm-key"
 
 @pytest.fixture
 def http_state():
-    return {"smoke_ok": True, "reload_status": 200, "calls": []}
+    w = FakeWorker(admin_key=ADMIN, mcp_keys=("rmk_1",)).start()
+    w.load_fn = lambda n: "high" if n % 2 else "even"
+    yield w
+    w.stop()
 
 
 @pytest.fixture
@@ -32,31 +36,13 @@ def fk():
 @pytest.fixture
 def cloud(fk, http_state, monkeypatch):
     monkeypatch.setattr(aws_api.time, "sleep", lambda s: None)
-
-    def handler(req: httpx.Request):
-        http_state["calls"].append((req.url.host, req.url.path, req.method))
-        if req.url.path == "/metrics":
-            load = "high" if req.url.host.endswith(".2") else "even"
-            return httpx.Response(200, json={"inflight": 2, "total": 9, "errors": 0, "load": load})
-        if req.url.path == "/admin/reload":
-            if req.headers.get("X-Ramen-Admin-Key") != ADMIN:
-                return httpx.Response(401, json={"error": "unauthorized"})
-            return httpx.Response(http_state["reload_status"], json={"tools": [{"name": "calc"}], "errors": []})
-        if req.url.path == "/mcp":
-            if not http_state["smoke_ok"]:
-                return httpx.Response(500, text="boom")
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
-        if req.url.path == "/readyz":
-            return httpx.Response(200)
-        return httpx.Response(404)
-
     return AwsCloud(
         region="us-east-1",
         bucket=BUCKET,
         image="img/worker:0.3.0",
         admin_key=ADMIN,
         clients=fk,
-        transport=httpx.MockTransport(handler),
+        rpc=Client(deadline=2, resolve=http_state.resolve),
         wait_secs=1,
         poll=0,
     )
@@ -100,7 +86,8 @@ def test_manifests_shape():
     assert "cloud.google.com/neg" not in json.dumps(docs)
     dep = docs[5]
     env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert env["RAMEN_BUCKET_URI"] == "s3://b/demo" and env["RAMEN_MCP_PATH_PREFIX"] == "/mcp/demo/a"
+    assert env["RAMEN_BUCKET_URI"] == "s3://b/demo" and "RAMEN_MCP_PATH_PREFIX" not in env
+    assert docs[3]["spec"]["ports"][0]["appProtocol"] == "kubernetes.io/h2c"
     assert (
         dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-east-1a"}
         and dep["spec"]["replicas"] == 2
@@ -113,11 +100,18 @@ def test_manifests_shape():
         ann["alb.ingress.kubernetes.io/listen-ports"] == '[{"HTTPS":443}]'
         and ann["alb.ingress.kubernetes.io/scheme"] == "internet-facing"
     )
-    path = ing["spec"]["rules"][0]["http"]["paths"][0]
-    assert path["path"] == "/mcp/demo/a" and path["backend"]["service"] == {
+    path = ing["spec"]["rules"][0]["http"]["paths"][0]  # CONTRACTS §11: gRPC target groups, header conditions
+    assert path["path"] == "/ramen.v1.Mcp" and path["backend"]["service"] == {
         "name": "worker",
         "port": {"name": "use-annotation"},
     }
+    assert ann["alb.ingress.kubernetes.io/backend-protocol-version"] == "GRPC"
+    assert ann["alb.ingress.kubernetes.io/success-codes"] == "0"
+    assert ann["alb.ingress.kubernetes.io/healthcheck-path"] == "/grpc.health.v1.Health/Check"
+    assert json.loads(ann[CONDITIONS]) == [
+        {"field": "http-header", "httpHeaderConfig": {"httpHeaderName": "ramen-group", "values": ["demo"]}},
+        {"field": "http-header", "httpHeaderConfig": {"httpHeaderName": "ramen-zone", "values": ["a"]}},
+    ]
     assert parse_weights(ing) == {"worker": 100, "worker-canary": 0}
     assert "annotations" not in manifests("demo", "a", SPEC, "img", "s3://b/demo")[1]["metadata"]
 
@@ -144,8 +138,8 @@ async def test_deploy_canary_success_sets_split(cloud, fk, http_state):
         sec["RAMEN_SECRET_DEMO__TOKEN"] == "s3cret" and sec["RAMEN_ENV"] == "prod" and sec["RAMEN_ADMIN_KEY"] == ADMIN
     )
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 1
-    paths = [c[1] for c in http_state["calls"]]
-    assert paths.index("/admin/reload") < paths.index("/mcp")
+    paths = http_state.paths()
+    assert paths.index("Admin/Reload") < paths.index("Mcp/Call")
     assert res["weights"] == {"worker": 67, "worker-canary": 33, "ingress": "worker"}
     assert parse_weights(obj(fk, "Ingress", "ramen-demo-a", "worker")) == {"worker": 67, "worker-canary": 33}
     assert any("traffic split stable 67% / canary 33%" in x for x in lines)
@@ -155,7 +149,7 @@ async def test_deploy_canary_success_sets_split(cloud, fk, http_state):
 async def test_deploy_failure_scales_canary_and_zeroes_its_weight(cloud, fk, http_state):
     await cloud.attach_zone("demo", "a", SPEC)
     fk.k8s.objs[("Ingress", "ramen-demo-a", "worker")]["metadata"]["annotations"][ACTION] = weights(67, 33)
-    http_state["smoke_ok"] = False
+    http_state.smoke_ok = False
     res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC)
     assert res["ok"] is False and "smoke" in res["error"]
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
@@ -326,6 +320,10 @@ async def test_create_service_account_idempotent(cloud, fk):
     )
     assert r["workload_identity"].startswith("system:serviceaccount:ramen-demo-a:worker@oidc.eks.")
     role = fk.iam.get_role(RoleName="ramen-demo-a")["Role"]
+    # SEC-10: worker roles always carry the permissions boundary the console policy demands on iam:CreateRole
+    assert role["PermissionsBoundary"]["PermissionsBoundaryArn"] == (
+        f"arn:aws:iam::{ACCOUNT}:policy/ramen/ramen-worker-boundary"
+    )
     trust = role["AssumeRolePolicyDocument"]
     trust = json.loads(trust) if isinstance(trust, str) else trust
     cond = trust["Statement"][0]["Condition"]["StringEquals"]
@@ -474,10 +472,9 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
         ),
     )
     await cloud.attach_zone("demo", "a", SPEC)
-    assert parse_weights(obj(fk, "Ingress", "ramen-demo-a", "worker")) == {
-        "worker": 60,
-        "worker-canary": 40,
-    }  # chart output gets the live split
+    live = obj(fk, "Ingress", "ramen-demo-a", "worker")
+    assert parse_weights(live) == {"worker": 60, "worker-canary": 40}  # chart output gets the live split
+    assert "ramen-zone" in live["metadata"]["annotations"][CONDITIONS]
     monkeypatch.setattr(
         "ramen_console.cloud.aws_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart")
     )
@@ -493,14 +490,17 @@ def test_factory_and_env(monkeypatch):
         "RAMEN_IMAGE_WORKER": "img:1",
         "RAMEN_EKS_CLUSTER": "c1",
         "RAMEN_ALB_GROUP": "grp",
-        "RAMEN_AWS_POD_PROXY": "1",
     }.items():
         monkeypatch.setenv(k, v)
     c = make_cloud()
-    assert (
-        isinstance(c, AwsCloud) and c.region == "eu-west-1" and c.bucket == "bkt" and c.image == "img:1" and c.pod_proxy
-    )
+    assert isinstance(c, AwsCloud) and c.region == "eu-west-1" and c.bucket == "bkt" and c.image == "img:1"
+    assert c.rpc.deadline == 10.0
     assert c.cluster == "c1" and c.alb_group == "grp" and c.log_group == "/aws/containerinsights/c1/application"
+    assert c.boundary is None  # default: arn:aws:iam::<account>:policy/ramen/ramen-worker-boundary (resolved lazily)
+    monkeypatch.setenv("RAMEN_AWS_PERMISSIONS_BOUNDARY", "-")
+    assert make_cloud()._iam().boundary() is None
+    monkeypatch.setenv("RAMEN_AWS_PERMISSIONS_BOUNDARY", "arn:aws:iam::1:policy/x")
+    assert make_cloud()._iam().boundary() == "arn:aws:iam::1:policy/x"
     assert isinstance(c.c, aws_api.AwsClients) and c.c.region == "eu-west-1"
 
 
@@ -518,6 +518,7 @@ def test_real_clients_lazy(monkeypatch):
         AppsV1Api=lambda: "apps",
         AutoscalingV2Api=lambda: "hpa",
         CustomObjectsApi=lambda: "custom",
+        RbacAuthorizationV1Api=lambda: "rbac",
         ApiClient=lambda: None,
     )
     monkeypatch.setattr(
@@ -525,7 +526,7 @@ def test_real_clients_lazy(monkeypatch):
         "_kube_modules",
         lambda: (types.SimpleNamespace(load_incluster_config=lambda: None, load_kube_config=lambda: None), fake_client),
     )
-    assert a.networking == "net" and a.core == "core"
+    assert a.networking == "net" and a.core == "core" and a.rbac == "rbac"
     with aws_env():
         assert (
             a.s3.meta.region_name == "us-east-1"

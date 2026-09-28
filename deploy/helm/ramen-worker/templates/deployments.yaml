@@ -27,7 +27,7 @@ spec:
           image: {{ include "rw.image" $root | quote }}
           imagePullPolicy: {{ $root.Values.pullPolicy }}
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
-          ports: [{ name: http, containerPort: {{ $root.Values.port }} }]
+          ports: [{ name: grpc, containerPort: {{ $root.Values.port }} }]
           env:
             - { name: RAMEN_GROUP, value: {{ $root.Values.group | quote }} }
             - { name: RAMEN_ZONE, value: {{ $root.Values.zone | quote }} }
@@ -35,17 +35,14 @@ spec:
             - { name: RAMEN_BUCKET, value: {{ $root.Values.bucketPath | quote }} }
             - { name: RAMEN_BUCKET_URI, value: {{ include "rw.bucketUri" $root | quote }} }
             - { name: RAMEN_TRACK, value: {{ $t.track | quote }} }
-            {{- if eq $root.Values.provider "aws" }}
-            - { name: RAMEN_MCP_PATH_PREFIX, value: {{ printf "/mcp/%s/%s" $root.Values.group $root.Values.zone | quote }} }
-            {{- end }}
             {{- range $k, $v := $root.Values.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
           envFrom:
             - secretRef: { name: ramen-deploy, optional: true }
           resources: { requests: {{ toJson $size }} }
-          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
-          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, failureThreshold: 60 }
+          livenessProbe: { grpc: { port: {{ $root.Values.port }}, service: ramen.v1.Admin }, periodSeconds: 10 }   # grpc.health.v1: process alive (CONTRACTS §11)
+          readinessProbe: { grpc: { port: {{ $root.Values.port }} }, periodSeconds: 5, failureThreshold: 60 }  # SERVING once runtime.load succeeded
           volumeMounts: [{ name: bucket, mountPath: {{ $root.Values.bucketPath }} }]
       volumes:
         - name: bucket

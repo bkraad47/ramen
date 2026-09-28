@@ -2,7 +2,7 @@
 name = "ramen-node"
 version = "0.3.1"
 edition = "2024"
-description = "Ramen MCP server node: JSON-RPC 2.0 over MCP Streamable HTTP"
+description = "Ramen MCP server node: JSON-RPC 2.0 over gRPC (ramen.v1.Mcp)"
 license = "BSD-3-Clause"
 
 [lib]
@@ -14,12 +14,22 @@ name = "ramen-node"
 path = "src/main.rs"
 
 [dependencies]
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tonic = { version = "0.14", features = ["tls-ring"] }
+tonic-prost = "0.14"
+tonic-health = "0.14"
+tonic-reflection = "0.14"
+prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "net", "signal"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ipnet = "2"
+subtle = "2"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protox = "0.9"
+prost = "0.14"
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
+rcgen = "0.14"

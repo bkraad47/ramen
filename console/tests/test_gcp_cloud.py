@@ -3,13 +3,14 @@ import subprocess
 from datetime import UTC
 from types import SimpleNamespace as NS
 
-import httpx
 import pytest
 
 from ramen_console.cloud import make_cloud
 from ramen_console.cloud.gcp import GcpCloud
 from ramen_console.cloud.gcp_k8s import SIZES, manifests, normalize_size
 from ramen_console.errors import ApiError
+from ramen_console.grpcclient import Client
+from tests.fake_grpc import FakeWorker
 from tests.fakes_gcp import FakeApiError, FakeClients
 
 SPEC = {"region": "us-central1-a", "size": "s", "count": 2}
@@ -18,7 +19,11 @@ ADMIN = "adm-key"
 
 @pytest.fixture
 def http_state():
-    return {"smoke_ok": True, "reload_status": 200, "calls": []}
+    """The fake worker: `.calls` (rpc, metadata, body), `.smoke_ok`, `.reload_ok`, `.paths()`."""
+    w = FakeWorker(admin_key=ADMIN, mcp_keys=("rmk_1",)).start()
+    w.load_fn = lambda n: "high" if n % 2 else "even"  # every second metrics call reports a hot worker
+    yield w
+    w.stop()
 
 
 @pytest.fixture
@@ -28,25 +33,6 @@ def fk():
 
 @pytest.fixture
 def cloud(fk, http_state):
-    def handler(req: httpx.Request):
-        http_state["calls"].append((req.url.host, req.url.path, req.method))
-        if req.url.path == "/metrics":
-            load = "high" if req.url.host.endswith(".2") else "even"
-            return httpx.Response(200, json={"inflight": 2, "total": 9, "errors": 0, "load": load})
-        if req.url.path == "/admin/reload":
-            if req.headers.get("X-Ramen-Admin-Key") != ADMIN:
-                return httpx.Response(401, json={"error": "unauthorized"})
-            return httpx.Response(http_state["reload_status"], json={"tools": [{"name": "calc"}], "errors": []})
-        if req.url.path == "/mcp":
-            body = json.loads(req.content)
-            assert body["method"] == "tools/list" and req.headers["Authorization"] == "Bearer rmk_1"
-            if not http_state["smoke_ok"]:
-                return httpx.Response(500, text="boom")
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
-        if req.url.path == "/readyz":
-            return httpx.Response(200)
-        return httpx.Response(404)
-
     return GcpCloud(
         project="p1",
         region="us-central1",
@@ -54,7 +40,7 @@ def cloud(fk, http_state):
         image="img/worker:0.2.0",
         admin_key=ADMIN,
         clients=fk,
-        transport=httpx.MockTransport(handler),
+        rpc=Client(deadline=2, resolve=http_state.resolve),
         wait_secs=1,
         poll=0,
     )
@@ -81,6 +67,7 @@ def test_manifests_shape():
         "Deployment",
         "HorizontalPodAutoscaler",
         "HTTPRoute",
+        "HealthCheckPolicy",
     ]
     assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
     route = docs[7]
@@ -92,12 +79,26 @@ def test_manifests_shape():
     assert route["spec"]["parentRefs"] == [
         {"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ramen", "namespace": "ramen-system"}
     ]
-    rule = route["spec"]["rules"][0]
-    assert rule["matches"] == [{"path": {"type": "PathPrefix", "value": "/mcp/demo/a"}}]
-    assert rule["filters"] == [
-        {"type": "URLRewrite", "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/mcp"}}}
+    rule = route["spec"]["rules"][0]  # CONTRACTS §11: header routing, no rewrite, only the Mcp service via the LB
+    assert rule["matches"] == [
+        {
+            "path": {"type": "PathPrefix", "value": "/ramen.v1.Mcp"},
+            "headers": [{"name": "ramen-group", "value": "demo"}, {"name": "ramen-zone", "value": "a"}],
+        }
     ]
-    assert rule["backendRefs"] == [{"name": "worker", "port": 8080}]
+    assert "filters" not in rule and rule["backendRefs"] == [{"name": "worker", "port": 8080}]
+    hcp = docs[8]
+    assert hcp["apiVersion"] == "networking.gke.io/v1" and hcp["spec"]["targetRef"]["name"] == "worker"
+    assert hcp["spec"]["default"]["config"] == {"type": "GRPC", "grpcHealthCheck": {"port": 8080}}
+    svc = docs[3]
+    assert svc["spec"]["ports"] == [
+        {"name": "grpc", "port": 8080, "targetPort": "grpc", "appProtocol": "kubernetes.io/h2c"}
+    ]
+    c = docs[4]["spec"]["template"]["spec"]["containers"][0]
+    assert c["ports"] == [{"name": "grpc", "containerPort": 8080}]
+    assert c["readinessProbe"]["grpc"] == {"port": 8080}  # service "" = ready once runtime.load succeeded
+    assert c["livenessProbe"]["grpc"] == {"port": 8080, "service": "ramen.v1.Admin"}  # alive even while loading
+    assert "httpGet" not in json.dumps(docs)
     dep = docs[4]
     assert dep["metadata"]["name"] == "worker" and dep["spec"]["replicas"] == 2
     assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-central1-a"}
@@ -124,10 +125,23 @@ async def test_attach_zone_idempotent(cloud, fk):
         "ramen.io/zone": "a",
         "ramen.io/routes": "true",
     }
-    assert (
-        obj(fk, "HTTPRoute", "ramen-demo-a", "worker")["spec"]["rules"][0]["matches"][0]["path"]["value"]
-        == "/mcp/demo/a"
-    )
+    assert obj(fk, "HTTPRoute", "ramen-demo-a", "worker")["spec"]["rules"][0]["matches"][0]["headers"][0] == {
+        "name": "ramen-group",
+        "value": "demo",
+    }
+    rb = obj(fk, "RoleBinding", "ramen-demo-a", "ramen-console")  # SEC-09: zone-scoped console permissions
+    assert rb["roleRef"] == {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "ramen-console-zone",
+    }
+    assert rb["subjects"] == [{"kind": "ServiceAccount", "name": "console", "namespace": "ramen-system"}]
+    order = [c for c in fk.k8s.calls if c[0] == "create"][:2]
+    assert order == [
+        ("create", "Namespace", None, "ramen-demo-a"),
+        ("create", "RoleBinding", "ramen-demo-a", "ramen-console"),
+    ]
+    assert ("HealthCheckPolicy", "ramen-demo-a", "worker") in fk.k8s.objs
     assert ("create", "HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.calls and (
         "patch",
         "HTTPRoute",
@@ -152,8 +166,10 @@ async def test_deploy_canary_success(cloud, fk, http_state):
     assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["template"]["metadata"]["annotations"][
         "ramen.io/restartedAt"
     ]
-    paths = [c[1] for c in http_state["calls"]]
-    assert paths.index("/admin/reload") < paths.index("/mcp")
+    paths = http_state.paths()
+    assert paths.index("Admin/Reload") < paths.index("Mcp/Call")
+    call = next(c for c in http_state.calls if c[0] == "Mcp/Call")
+    assert call[1]["ramen-group"] == "demo" and call[1]["ramen-zone"] == "a" and call[2]["method"] == "tools/list"
     assert any("canary" in x for x in lines) and any("smoke" in x for x in lines)
     assert res["workers"][0]["result"]["tools"] == [{"name": "calc"}]
     assert "s3cret" not in json.dumps(res) and "s3cret" not in "\n".join(lines)
@@ -162,7 +178,7 @@ async def test_deploy_canary_success(cloud, fk, http_state):
 async def test_deploy_canary_bad_smoke_scales_canary_to_zero(cloud, fk, http_state):
     await cloud.attach_zone("demo", "a", SPEC)
     main_before = json.dumps(obj(fk, "Deployment", "ramen-demo-a", "worker"), sort_keys=True)
-    http_state["smoke_ok"] = False
+    http_state.smoke_ok = False
     lines = []
     res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC, log=lines.append)
     assert res["ok"] is False and "smoke" in res["error"]
@@ -173,9 +189,9 @@ async def test_deploy_canary_bad_smoke_scales_canary_to_zero(cloud, fk, http_sta
 
 
 async def test_deploy_canary_reload_failure(cloud, fk, http_state):
-    http_state["reload_status"] = 500
+    http_state.reload_ok = False
     res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC)
-    assert res["ok"] is False and "reload" in res["error"]
+    assert res["ok"] is False and "reload" in res["error"] and "INTERNAL" in res["error"]
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
 
 
@@ -186,15 +202,27 @@ async def test_deploy_canary_not_ready_times_out(cloud, fk):
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
 
 
-async def test_deploy_no_canary_and_readyz_smoke(cloud, fk, http_state):
+async def test_deploy_no_canary_and_health_smoke(cloud, fk, http_state):
     res = await cloud.deploy("demo", "prod", "a", canary=False, config={}, spec=SPEC)
     assert res["ok"] is True
     assert ("Deployment", "ramen-demo-a", "worker-canary") in fk.k8s.objs
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
-    assert not any(c[1] == "/mcp" for c in http_state["calls"])
-    # canary with no MCP keys smokes /readyz instead of tools/list
+    assert "Mcp/Call" not in http_state.paths()
+    # canary with no MCP keys smokes Health/Check (SERVING) instead of tools/list
     res = await cloud.deploy("demo", "prod", "a", canary=True, config={}, spec=SPEC)
-    assert res["ok"] and any(c[1] == "/readyz" for c in http_state["calls"])
+    assert res["ok"] and any("health SERVING" in x for x in res["log"]) and "Mcp/Call" not in http_state.paths()
+    http_state.set_serving(False)
+    res = await cloud.deploy("demo", "prod", "a", canary=True, config={}, spec=SPEC)
+    assert not res["ok"] and "health not SERVING" in res["error"]
+
+
+async def test_deploy_smoke_reports_jsonrpc_error(cloud, fk, http_state, monkeypatch):
+    async def bad(*a, **k):
+        return {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}
+
+    monkeypatch.setattr(cloud.rpc, "call", bad)
+    res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC)
+    assert not res["ok"] and "smoke" in res["error"] and "-32601" in res["error"]
 
 
 async def test_deploy_preserves_cidrs(cloud, fk):
@@ -205,31 +233,31 @@ async def test_deploy_preserves_cidrs(cloud, fk):
     assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"
 
 
-async def test_workers_and_proxy(cloud, fk, monkeypatch):
+async def test_workers(cloud, fk, http_state):
     assert await cloud.workers("demo", "a") == []
     await cloud.attach_zone("demo", "a", SPEC)
     ws = await cloud.workers("demo", "a")
     assert [w["id"] for w in ws] == ["worker-0", "worker-1"]
     assert ws[0]["load"] == "even" and ws[1]["load"] == "high" and ws[0]["track"] == "stable"
-    assert ws[0]["metrics"]["total"] == 9
+    assert ws[0]["metrics"]["total"] == 9 and ws[0]["ip"] == "10.2.0.1"
+    assert http_state.calls[-1][0] == "Admin/Metrics" and http_state.calls[-1][1]["x-ramen-admin-key"] == ADMIN
     fk.k8s.ready = False
     assert all(w["load"] == "down" for w in await cloud.workers("demo", "a"))
-    fk.k8s.ready = True
-    cloud.pod_proxy = True
-    ws = await cloud.workers("demo", "a")
-    assert ws[0]["metrics"]["via"] == "proxy"
 
 
 async def test_workers_metrics_error(fk):
-    def handler(req):
-        raise httpx.ConnectError("nope")
-
     c = GcpCloud(
-        project="p1", region="r", bucket="b", image="i", clients=fk, transport=httpx.MockTransport(handler), poll=0
+        project="p1",
+        region="r",
+        bucket="b",
+        image="i",
+        clients=fk,
+        rpc=Client(deadline=2, resolve=lambda t: "127.0.0.1:1"),
+        poll=0,
     )
     await c.attach_zone("demo", "a", SPEC)
     ws = await c.workers("demo", "a")
-    assert ws[0]["load"] == "down" and "ConnectError" in ws[0]["error"]
+    assert ws[0]["load"] == "down" and "UNAVAILABLE" in ws[0]["error"]
 
 
 async def test_logs(fk, cloud):
@@ -350,15 +378,29 @@ async def test_create_service_account_idempotent(cloud, fk):
     r = await cloud.create_service_account("demo", "a")
     assert r["name"] == "ramen-demo-a@p1.iam.gserviceaccount.com" and r["created"] is True
     assert r["ksa"] == "ramen-demo-a/worker"
+    fk.secretmanager.create_secret({"parent": "projects/p1", "secret_id": "ramen-demo-prod-all-TOKEN", "secret": {}})
+    fk.secretmanager.create_secret({"parent": "projects/p1", "secret_id": "ramen-other-prod-all-X", "secret": {}})
     r2 = await cloud.create_service_account("demo", "a")
     assert r2["created"] is False and r2["name"] == r["name"]
-    pol = fk.iam_state["project_policy"]["bindings"]
-    roles = sorted(b["role"] for b in pol)
-    assert roles == ["roles/secretmanager.secretAccessor", "roles/storage.objectViewer"]
-    assert (
-        "p1-groups/objects/demo/" in pol[0]["condition"]["expression"]
-        or "p1-groups/objects/demo/" in pol[1]["condition"]["expression"]
-    )
+    assert r2["roles"] == ["roles/storage.objectViewer", "roles/secretmanager.secretAccessor"]
+    # SEC-08: resource-level bindings only, nothing at project level (no projectIamAdmin needed)
+    assert "project_policy" not in fk.iam_state
+    bucket = fk.storage.buckets["p1-groups"].policy
+    assert bucket.version == 3 and [b["role"] for b in bucket.bindings] == ["roles/storage.objectViewer"]
+    assert "p1-groups/objects/demo/" in bucket.bindings[0]["condition"]["expression"]
+    assert bucket.bindings[0]["members"] == [f"serviceAccount:{r['name']}"]
+    sec = fk.secretmanager.secrets
+    assert sec["projects/p1/secrets/ramen-demo-prod-all-TOKEN"]["policy"] == [
+        {"role": "roles/secretmanager.secretAccessor", "members": [f"serviceAccount:{r['name']}"]}
+    ]
+    assert sec["projects/p1/secrets/ramen-other-prod-all-X"]["policy"] == []
+    # a secret created later gets the group's worker accounts bound at creation
+    cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")  # not created yet: no-op, no error
+    fk.secretmanager.create_secret({"parent": "projects/p1", "secret_id": "ramen-demo-dev-all-NEW", "secret": {}})
+    cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")
+    assert sec["projects/p1/secrets/ramen-demo-dev-all-NEW"]["policy"][0]["members"] == [f"serviceAccount:{r['name']}"]
+    cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-NEW", "demo")  # idempotent
+    assert fk.secretmanager.calls.count("set_iam_policy") == 2
     wi = fk.iam_state["sa_policy"][r["name"]]["bindings"]
     assert wi == [
         {"role": "roles/iam.workloadIdentityUser", "members": ["serviceAccount:p1.svc.id.goog[ramen-demo-a/worker]"]}
@@ -450,6 +492,8 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
     )
     assert ("Deployment", "ramen-demo-a", "worker") in fk.k8s.objs
     assert ("HTTPRoute", "ramen-demo-a", "worker") in fk.k8s.objs  # appended when the chart renders none
+    assert ("HealthCheckPolicy", "ramen-demo-a", "worker") in fk.k8s.objs
+    assert ("RoleBinding", "ramen-demo-a", "ramen-console") in fk.k8s.objs
     assert obj(fk, "Namespace", None, "ramen-demo-a")["metadata"]["labels"]["ramen.io/routes"] == "true"
     monkeypatch.setattr(
         "ramen_console.cloud.gcp_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart")
@@ -484,9 +528,10 @@ def test_factory_and_env(monkeypatch):
     monkeypatch.setenv("RAMEN_GCP_PROJECT", "p1")
     monkeypatch.setenv("RAMEN_GROUPS_BUCKET", "bkt")
     monkeypatch.setenv("RAMEN_IMAGE_WORKER", "img:1")
-    monkeypatch.setenv("RAMEN_GCP_POD_PROXY", "1")
+    monkeypatch.setenv("RAMEN_WORKER_DEADLINE", "3")
     c = make_cloud()
-    assert isinstance(c, GcpCloud) and c.project == "p1" and c.bucket == "bkt" and c.image == "img:1" and c.pod_proxy
+    assert isinstance(c, GcpCloud) and c.project == "p1" and c.bucket == "bkt" and c.image == "img:1"
+    assert c.rpc.deadline == 3.0 and c.rpc.tls is None
     monkeypatch.delenv("RAMEN_GCP_PROJECT")
     with pytest.raises(ValueError, match="RAMEN_GCP_PROJECT"):
         make_cloud()
@@ -517,6 +562,7 @@ def test_real_clients_lazy(monkeypatch):
         AppsV1Api=lambda: "apps",
         AutoscalingV2Api=lambda: "hpa",
         CustomObjectsApi=lambda: "custom",
+        RbacAuthorizationV1Api=lambda: "rbac",
         ApiClient=lambda: NS(sanitize_for_serialization=lambda o: {"x": o}),
     )
     monkeypatch.setattr(g, "_kube_modules", lambda: (fake_cfg, fake_client))
@@ -525,6 +571,7 @@ def test_real_clients_lazy(monkeypatch):
         and g.apps == "apps"
         and g.autoscaling == "hpa"
         and g.custom == "custom"
+        and g.rbac == "rbac"
         and loaded["mode"] == "incluster"
     )
     assert g.to_dict({"a": 1}) == {"a": 1} and g.to_dict("o") == {"x": "o"}
@@ -705,16 +752,32 @@ async def test_apply_sa_permissions_binds_mapped_roles(cloud, fk):
         and r["service_account"] == "ramen-demo-a@p1.iam.gserviceaccount.com"
         and r["ksa"] == "ramen-demo-a/worker"
     )
-    assert r["applied"] == [
+    assert r["applied"] == [  # resource-level grants first, project-wide ones last
         "roles/storage.objectViewer",
-        "roles/logging.logWriter",
         "roles/secretmanager.secretAccessor",
+        "roles/logging.logWriter",
     ]
+    # bucket/secret roles are bound on the resources; only project-wide roles (logging) touch the project policy
     pol = {b["role"]: b for b in fk.iam_state["project_policy"]["bindings"]}
-    assert "p1-groups/objects/demo/" in pol["roles/storage.objectViewer"]["condition"]["expression"]
-    assert "secrets/ramen-demo-" in pol["roles/secretmanager.secretAccessor"]["condition"]["expression"]
-    assert "condition" not in pol["roles/logging.logWriter"]
+    assert list(pol) == ["roles/logging.logWriter"] and "condition" not in pol["roles/logging.logWriter"]
     assert pol["roles/logging.logWriter"]["members"] == ["serviceAccount:ramen-demo-a@p1.iam.gserviceaccount.com"]
+    bucket = fk.storage.buckets["p1-groups"].policy.bindings
+    assert [b["role"] for b in bucket] == ["roles/storage.objectViewer"]
+    assert "p1-groups/objects/demo/" in bucket[0]["condition"]["expression"]
     again = await cloud.apply_sa_permissions("demo", "a", ["bucket.read"])
-    assert again["applied"] == ["roles/storage.objectViewer"] and len(fk.iam_state["project_policy"]["bindings"]) == 3
+    assert again["applied"] == ["roles/storage.objectViewer"] and len(fk.iam_state["project_policy"]["bindings"]) == 1
     assert (await cloud.apply_sa_permissions("demo", "a", []))["applied"] == []
+
+
+async def test_apply_sa_permissions_without_project_iam_admin(cloud, fk, monkeypatch):
+    """Project-wide roles need the optional projectIamAdmin grant (terraform var console_project_iam): a 403 is
+    reported, not raised, and the resource-level roles are still applied."""
+    import ramen_console.cloud.gcp_api as api
+
+    def deny(self, email, bindings):
+        raise FakeApiError(403, "setIamPolicy denied")
+
+    monkeypatch.setattr(api.Iam, "grant_project_roles", deny)
+    r = await cloud.apply_sa_permissions("demo", "a", ["bucket.read", "logs.write"])
+    assert r["ok"] and r["applied"] == ["roles/storage.objectViewer"]
+    assert r["skipped"] == ["roles/logging.logWriter"] and "console_project_iam" in r["note"]

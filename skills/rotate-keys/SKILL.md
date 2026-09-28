@@ -19,7 +19,7 @@ Zero-downtime because workers accept the union of all minted keys.
 1. `POST $U/api-keys {name,role,groups}` with the same or narrower scope → new key, hand over once.
 2. Update the consumer (CI secret). 3. `DELETE $U/api-keys/<old id>`. Keys have no rotation grace period beyond this ordering.
 
-## C. Worker admin key (`RAMEN_ADMIN_KEY`, console → `/admin/reload`)
+## C. Worker admin key (`RAMEN_ADMIN_KEY`, console → `ramen.v1.Admin/Reload` + `Admin/Metrics`, gRPC metadata `x-ramen-admin-key`)
 - Local: edit `deploy/local/.env`, `make up` (recreates console + worker).
 - GCP/AWS: `helm upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set console.secrets.RAMEN_ADMIN_KEY=<new>`; then deploy each environment once (the deploy writes the new key into every zone's `ramen-deploy` Secret and rolls the workers). Until a zone is redeployed, its workers still hold the old key and the console's reload would fail — so deploy all zones right after the upgrade.
 
@@ -36,7 +36,7 @@ Prefer `gcp`/`aws` secret backends in production precisely so that E is cheap.
 
 ## Validate
 (read-only sub-agent; needs the **new** `rmk_` and a viewer `rmn_` key, plus the old `rmk_` if step A was run)
-- V1 `curl -sk $CONSOLE/mcp/<g>/<z>` (or `http://localhost:8080/mcp` locally) with the new `rmk_` → `tools/list` 200 with tools.
+- V1 `tools/list` with the new `rmk_` through the bridge (`ramen-mcp-bridge --target <lb>:443 --tls --ca lb.pem --key $RMK_NEW --group <g> --zone <z>`; locally `--target localhost:8080 --insecure`) or `grpcurl … ramen.v1.Mcp/Call` (see deploy-gcp V3) → OK with tools; the old key → `Unauthenticated`.
 - V2 Same call with the old revoked `rmk_` → 401 (only after A.4).
 - V3 `curl -sk -H "X-Ramen-Api-Key: $RMN_NEW" $CONSOLE/api/v1/me` → 200; with the old `rmn_` → 401.
 - V4 `curl -sk -H "X-Ramen-Api-Key: $RMN_NEW" $CONSOLE/api/v1/audit` shows entries `mcp-keys.create`/`delete` (or `api-keys.*`) with `ok:true`.

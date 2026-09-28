@@ -3,7 +3,6 @@
 import base64
 import copy
 import hashlib
-import json
 from types import SimpleNamespace as NS
 
 
@@ -95,6 +94,27 @@ class FakeK8s:
     def custom(self):
         return _Custom(self)
 
+    @property
+    def rbac(self):
+        return _Rbac(self)
+
+
+class _Rbac:
+    def __init__(self, s):
+        self.s = s
+
+    def create_namespaced_role_binding(self, ns, body):
+        return self.s._create("RoleBinding", ns, body)
+
+    def patch_namespaced_role_binding(self, name, ns, body):
+        return self.s._patch("RoleBinding", ns, name, body)
+
+    def read_namespaced_role_binding(self, name, ns):
+        return self.s._read("RoleBinding", ns, name)
+
+
+PLURAL_KIND = {"httproutes": "HTTPRoute", "healthcheckpolicies": "HealthCheckPolicy"}
+
 
 class _Custom:
     def __init__(self, s):
@@ -107,7 +127,7 @@ class _Custom:
         return self.s._patch(body["kind"], ns, name, body)
 
     def get_namespaced_custom_object(self, group, version, ns, plural, name):
-        return self.s._read("HTTPRoute", ns, name)
+        return self.s._read(PLURAL_KIND[plural], ns, name)
 
 
 def _merge(dst, src):
@@ -186,10 +206,6 @@ class _Core:
     def list_namespaced_pod(self, ns, label_selector=""):
         return {"items": self.s.pods(ns, label_selector)}
 
-    def connect_get_namespaced_pod_proxy_with_path(self, name, ns, path, **kw):
-        self.s.calls.append(("proxy", ns, name, path))
-        return json.dumps({"inflight": 0, "total": 1, "errors": 0, "load": "low", "via": "proxy"})
-
 
 class _Apps:
     def __init__(self, s):
@@ -245,6 +261,14 @@ class FakeBlob:
 class FakeBucket:
     def __init__(self):
         self.data: dict[str, bytes] = {}
+        self.policy = NS(version=1, bindings=[])
+
+    def get_iam_policy(self, requested_policy_version=1):
+        return NS(version=self.policy.version, bindings=copy.deepcopy(self.policy.bindings))
+
+    def set_iam_policy(self, policy):
+        self.policy = NS(version=policy.version, bindings=copy.deepcopy(list(policy.bindings)))
+        return self.policy
 
     def list_blobs(self, prefix=""):
         return [FakeBlob(self, n) for n in sorted(self.data) if n.startswith(prefix)]
@@ -272,8 +296,22 @@ class FakeSM:
         self.calls.append("create")
         if name in self.secrets:
             raise FakeApiError(409, "already exists")
-        self.secrets[name] = {"labels": dict(request["secret"].get("labels", {})), "versions": []}
+        self.secrets[name] = {"labels": dict(request["secret"].get("labels", {})), "versions": [], "policy": []}
         return NS(name=name)
+
+    def list_secrets(self, request):
+        want = request.get("filter", "").removeprefix("name:")
+        return [NS(name=n) for n in sorted(self.secrets) if want in n.rsplit("/", 1)[1]]
+
+    def get_iam_policy(self, request):
+        if request["resource"] not in self.secrets:
+            raise FakeApiError(404, "not found")
+        return NS(bindings=copy.deepcopy(self.secrets[request["resource"]]["policy"]))
+
+    def set_iam_policy(self, request):
+        self.calls.append("set_iam_policy")
+        self.secrets[request["resource"]]["policy"] = copy.deepcopy(list(request["policy"].bindings))
+        return request["policy"]
 
     def add_secret_version(self, request):
         self.calls.append("add_version")
@@ -470,6 +508,10 @@ class FakeClients:
     @property
     def custom(self):
         return self.k8s.custom
+
+    @property
+    def rbac(self):
+        return self.k8s.rbac
 
     def to_dict(self, obj):
         return obj

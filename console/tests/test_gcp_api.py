@@ -2,14 +2,15 @@
 
 import json
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console.app import create_app
 from ramen_console.cloud.gcp import GcpCloud
+from ramen_console.grpcclient import Client
 from ramen_console.secrets.gcp import GcpSecrets
 from ramen_console.storage import make_store
+from tests.fake_grpc import FakeWorker
 from tests.fakes_gcp import FakeClients
 
 VALUE = "sup3r-s3cret-gcp-value"
@@ -22,24 +23,16 @@ def fk():
 
 @pytest.fixture
 def state():
-    return {"smoke_ok": True}
+    w = FakeWorker(admin_key="adm", mcp_keys=None).start()
+    w.metrics = {"inflight": 1, "total": 3, "errors": 0, "load": "even"}
+    w.load_result = {"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []}
+    w.forbid = [VALUE]
+    yield w
+    w.stop()
 
 
 @pytest.fixture
 def app(monkeypatch, fk, state):
-    def handler(req: httpx.Request):
-        if req.url.path == "/metrics":
-            return httpx.Response(200, json={"inflight": 1, "total": 3, "errors": 0, "load": "even"})
-        if req.url.path == "/admin/reload":
-            assert req.headers["X-Ramen-Admin-Key"] == "adm"
-            return httpx.Response(200, json={"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []})
-        if req.url.path == "/mcp":
-            assert VALUE not in req.headers["Authorization"]
-            return httpx.Response(
-                200 if state["smoke_ok"] else 500, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
-            )
-        return httpx.Response(404)
-
     for k, v in {
         "RAMEN_STORE": "memory",
         "RAMEN_ADMIN_EMAIL": "root@ramen.local",
@@ -57,7 +50,7 @@ def app(monkeypatch, fk, state):
         image="img:0.2.0",
         admin_key="adm",
         clients=fk,
-        transport=httpx.MockTransport(handler),
+        rpc=Client(deadline=2, resolve=state.resolve),
         wait_secs=1,
         poll=0,
     )
@@ -149,7 +142,7 @@ def test_deploy_resolves_secrets_and_streams_log(demo, fk, monkeypatch, tmp_path
 def test_deploy_canary_failure_in_job(demo, fk, monkeypatch, state):
     monkeypatch.setattr("ramen_console.cloud.gcp_api.sync_repo_to_gcs", lambda *a: "gs://p1-groups/demo")
     demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "ci"})
-    state["smoke_ok"] = False
+    state.smoke_ok = False
     job = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": True}).json()
     j = demo.get(f"/api/v1/jobs/{job['id']}").json()
     assert j["status"] == "error" and "smoke" in j["error"]
@@ -226,10 +219,11 @@ def test_rebalance_ip_rules_config(demo, fk):
     }
     r = demo.post("/api/v1/groups/demo/zones/a/rebalance").json()
     assert r["ok"] and r["backend_service"] == "gkegw1-ramen-demo-a" and r["capacity_scaler"] == 1.0
-    assert (
-        fk.k8s.objs[("HTTPRoute", "ramen-demo-a", "worker")]["spec"]["rules"][0]["matches"][0]["path"]["value"]
-        == "/mcp/demo/a"
-    )
+    match = fk.k8s.objs[("HTTPRoute", "ramen-demo-a", "worker")]["spec"]["rules"][0]["matches"][0]
+    assert match["path"]["value"] == "/ramen.v1.Mcp" and {h["name"] for h in match["headers"]} == {
+        "ramen-group",
+        "ramen-zone",
+    }
     r = demo.put("/api/v1/groups/demo/zones/a/ip-rules", json={"cidrs": ["10.0.0.0/8"]}).json()
     assert r["policy"] == "ramen-demo" and r["attached"] is True
     assert fk.k8s.objs[("Secret", "ramen-demo-a", "ramen-deploy")]["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"

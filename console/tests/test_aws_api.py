@@ -2,14 +2,15 @@
 
 import json
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console.app import create_app
 from ramen_console.cloud.aws import AwsCloud
+from ramen_console.grpcclient import Client
 from ramen_console.secrets.aws import AwsSecrets
 from ramen_console.storage import make_store
+from tests.fake_grpc import FakeWorker
 from tests.fakes_aws import BUCKET, FakeAwsClients, aws_env
 
 VALUE = "sup3r-s3cret-aws-value"
@@ -23,24 +24,16 @@ def fk():
 
 @pytest.fixture
 def state():
-    return {"smoke_ok": True}
+    w = FakeWorker(admin_key="adm", mcp_keys=None).start()
+    w.metrics = {"inflight": 1, "total": 3, "errors": 0, "load": "even"}
+    w.load_result = {"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []}
+    w.forbid = [VALUE]
+    yield w
+    w.stop()
 
 
 @pytest.fixture
 def app(monkeypatch, fk, state):
-    def handler(req: httpx.Request):
-        if req.url.path == "/metrics":
-            return httpx.Response(200, json={"inflight": 1, "total": 3, "errors": 0, "load": "even"})
-        if req.url.path == "/admin/reload":
-            assert req.headers["X-Ramen-Admin-Key"] == "adm"
-            return httpx.Response(200, json={"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []})
-        if req.url.path == "/mcp":
-            assert VALUE not in req.headers["Authorization"]
-            return httpx.Response(
-                200 if state["smoke_ok"] else 500, json={"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
-            )
-        return httpx.Response(404)
-
     for k, v in {
         "RAMEN_STORE": "memory",
         "RAMEN_ADMIN_EMAIL": "root@ramen.local",
@@ -58,7 +51,7 @@ def app(monkeypatch, fk, state):
         image="img:0.3.0",
         admin_key="adm",
         clients=fk,
-        transport=httpx.MockTransport(handler),
+        rpc=Client(deadline=2, resolve=state.resolve),
         wait_secs=1,
         poll=0,
     )
@@ -89,7 +82,8 @@ def test_env_attach_creates_namespace_with_ingress(demo, fk):
     dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
     assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-east-1a"}
     ing = fk.k8s.objs[("Ingress", "ramen-demo-a", "worker")]
-    assert ing["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/mcp/demo/a"
+    assert ing["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/ramen.v1.Mcp"
+    assert "ramen-group" in ing["metadata"]["annotations"]["alb.ingress.kubernetes.io/conditions.worker"]
     assert ("HTTPRoute", "ramen-demo-a", "worker") not in fk.k8s.objs
 
 

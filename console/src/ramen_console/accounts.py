@@ -1,3 +1,5 @@
+import hmac
+
 from .auth import apikeys
 from .auth.passwords import hash_password, verify_password
 from .errors import conflict, forbidden, invalid, not_found
@@ -84,7 +86,7 @@ class Accounts:
 
     async def redeem_token(self, uid_, kind, nonce, password=None) -> dict | None:
         u = await self.store.get("users", uid_)
-        if not u or not nonce or u.get(f"{kind}_nonce") != nonce:
+        if not u or not nonce or not hmac.compare_digest(str(u.get(f"{kind}_nonce") or ""), str(nonce)):
             return None
         u.pop(f"{kind}_nonce", None)
         if password is not None:

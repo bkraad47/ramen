@@ -27,8 +27,8 @@ Takes ~25 min wall clock; most of it is GKE and load-balancer provisioning. Neve
 (hand this section to a read-only sub-agent with `CONSOLE=https://<console_ip>`, the `rmk_` key and a viewer `rmn_` key)
 - V1 `curl -sk $CONSOLE/readyz` → HTTP 200 and body contains `"ok":true`.
 - V2 `curl -sk -H "X-Ramen-Api-Key: $RMN" $CONSOLE/api/v1/groups/<g>/zones/a/workers` → HTTP 200, `live` has ≥1 item with `track:"stable"` and `load` in {low,even,high}.
-- V3 `curl -sk $CONSOLE/mcp/<g>/a -H "Authorization: Bearer $RMK" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` → HTTP 200 and `result.tools` non-empty.
-- V4 Same call without the `Authorization` header → HTTP 401.
+- V3 (gRPC through the LB; export the LB cert first: `kubectl -n ramen-system get secret ramen-console-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > lb.pem`) `REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64); grpcurl -cacert lb.pem -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: a' -d "{\"body\":\"$REQ\"}" <console_ip>:443 ramen.v1.Mcp/Call` → status OK and the base64-decoded `body` has `result.tools` non-empty.
+- V4 Same call without the `authorization` header → gRPC status `Unauthenticated` (code 16).
 - V5 `kubectl -n ramen-<g>-a get deploy worker-canary -o jsonpath='{.spec.replicas}'` → `0` or `1` (never more), and `kubectl -n ramen-<g>-a get deploy worker` READY ≥ 1/1.
 - V6 `curl -sk -H "X-Ramen-Api-Key: $RMN" "$CONSOLE/api/v1/audit"` → contains an entry with `action` `deploy` and `ok:true`.
 

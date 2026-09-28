@@ -1,4 +1,7 @@
 {{- if .Values.rbac.create }}
+# SEC-09: cluster-wide the console may only manage namespaces, network policies, routes/ingresses and bind the zone
+# ClusterRole below. Everything inside a zone namespace (secrets, service accounts, deployments, pods, ...) comes from a
+# RoleBinding to `ramen-console-zone` that the console creates in each ramen-<group>-<zone> namespace it attaches.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -6,26 +9,24 @@ metadata:
   labels: {{- include "ramen.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [namespaces, serviceaccounts, secrets, services]
+    resources: [namespaces]
     verbs: [get, list, watch, create, patch, update, delete]
-  - apiGroups: [apps]
-    resources: [deployments, deployments/scale]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
     verbs: [get, list, watch, create, patch, update, delete]
-  - apiGroups: [autoscaling]
-    resources: [horizontalpodautoscalers]
-    verbs: [get, list, watch, create, patch, update, delete]
-  - apiGroups: [""]
-    resources: [pods, pods/log]
-    verbs: [get, list, watch]
-  - apiGroups: [""]
-    resources: [pods/proxy]
-    verbs: [get, create]
   - apiGroups: [gateway.networking.k8s.io]
     resources: [httproutes]
     verbs: [get, list, watch, create, patch, update, delete]
   - apiGroups: [networking.gke.io]
     resources: [healthcheckpolicies, gcpbackendpolicies]
     verbs: [get, list, create, patch, update, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, create, patch, update, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [ramen-console-zone]
+    verbs: [bind]
   {{- if eq .Values.provider "aws" }}
   - apiGroups: [networking.k8s.io]
     resources: [ingresses]
@@ -39,4 +40,24 @@ metadata:
   labels: {{- include "ramen.labels" . | nindent 4 }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: ramen-console }
 subjects: [{ kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }} }]
+---
+# Not bound cluster-wide: the console binds it per zone namespace (RoleBinding ramen-console in ramen-<group>-<zone>).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ramen-console-zone
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts, secrets, services]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
 {{- end }}

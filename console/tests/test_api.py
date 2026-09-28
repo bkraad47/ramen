@@ -1,33 +1,25 @@
 import json
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console.app import create_app
 from ramen_console.cloud.local import LocalCloud
+from ramen_console.grpcclient import Client
 from ramen_console.storage import make_store
 
 SECRET_VALUE = "sup3r-s3cret-value-XYZ"
 
 
 @pytest.fixture
-def cloud(tmp_path):
-    def handler(req: httpx.Request):
-        if req.url.path == "/metrics":
-            load = "high" if req.url.host == "hot" else "low"
-            return httpx.Response(200, json={"inflight": 1, "total": 5, "errors": 0, "load": load})
-        if req.url.path == "/admin/reload":
-            return httpx.Response(200, json={"tools": [{"name": "calc"}], "resources": [], "prompts": [], "errors": []})
-        return httpx.Response(404)
-
+def cloud(tmp_path, workers):
     return LocalCloud(
         tmp_path / "buckets",
         tmp_path / "logs",
-        {"demo/zone-a": ["http://w1:8080"], "demo/zone-b": ["http://hot:8080"]},
-        "http://default:8080",
+        {"demo/zone-a": [workers["cold"].target], "demo/zone-b": [workers["hot"].target]},
+        workers["cold"].target,
         "adm",
-        httpx.MockTransport(handler),
+        Client(deadline=2),
     )
 
 

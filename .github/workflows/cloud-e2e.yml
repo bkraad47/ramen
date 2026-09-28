@@ -1,12 +1,14 @@
 # Manual cloud run: e2e + conformance + cloud suites and the smoke script against a deployed console/worker.
-# Never part of the push pipeline. Repo secrets: RAMEN_ADMIN_EMAIL, RAMEN_ADMIN_PASSWORD, RAMEN_ADMIN_KEY,
+# Never part of the push pipeline. node_url is a gRPC host:port (v0.3.1, CONTRACTS §11). Repo secrets: RAMEN_ADMIN_EMAIL, RAMEN_ADMIN_PASSWORD, RAMEN_ADMIN_KEY,
 # optional GCP_SA_KEY (JSON key with viewer roles; enables the RAMEN_GCP_PROJECT assertions via gcloud).
 name: cloud-e2e
 on:
   workflow_dispatch:
     inputs:
       console_url: { description: "Console base URL (https://<ip-or-host>)", required: true, type: string }
-      node_url: { description: "Worker/LB base URL for /mcp", required: true, type: string }
+      node_url: { description: "Worker/LB gRPC target host:port (CONTRACTS §11; routing by ramen-group/ramen-zone metadata)", required: true, type: string }
+      node_tls: { description: "Node target is behind a TLS LB (h2); off = plaintext h2c", required: false, type: boolean, default: true }
+      group: { description: "Group name to deploy (sent as ramen-group metadata)", required: false, type: string, default: "demo" }
       gcp_project: { description: "GCP project for gcloud assertions (empty = skip)", required: false, type: string, default: "" }
       zone: { description: "Zone name to deploy into", required: false, type: string, default: "a" }
       zone_region: { description: "Cloud zone for the zone record", required: false, type: string, default: "us-central1-a" }
@@ -23,6 +25,8 @@ jobs:
     env:
       RAMEN_CONSOLE_URL: ${{ inputs.console_url }}
       RAMEN_NODE_URL: ${{ inputs.node_url }}
+      RAMEN_NODE_TLS: ${{ inputs.node_tls && '1' || '0' }}
+      RAMEN_E2E_GROUP: ${{ inputs.group }}
       RAMEN_GCP_PROJECT: ${{ inputs.gcp_project }}
       RAMEN_E2E_ZONE: ${{ inputs.zone }}
       RAMEN_ZONE_PROVIDER: gcp
@@ -43,12 +47,15 @@ jobs:
       - name: gcloud sdk (optional)
         if: inputs.gcp_project != ''
         uses: google-github-actions/setup-gcloud@v2
+      - name: grpcurl
+        run: |
+          curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin grpcurl
       - name: Wait ready
         run: |
           scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/healthz" 300 || scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/login" 300
-      - name: Smoke (console → deploy → MCP through the LB)
+      - name: Smoke (console → deploy → MCP over gRPC through the LB)
         run: |
-          RAMEN_SMOKE_ZONE="$RAMEN_E2E_ZONE" scripts/cloud_smoke.sh "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_EMAIL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_ADMIN_KEY" "$RAMEN_NODE_URL"
+          RAMEN_SMOKE_ZONE="$RAMEN_E2E_ZONE" RAMEN_SMOKE_GROUP="$RAMEN_E2E_GROUP" scripts/cloud_smoke.sh "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_EMAIL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_ADMIN_KEY" "$RAMEN_NODE_URL"
       - name: e2e + conformance + cloud
         working-directory: tests
         run: uv sync && uv run pytest -q -rs e2e conformance cloud --junitxml=cloud-junit.xml

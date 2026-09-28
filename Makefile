@@ -6,7 +6,7 @@ PROJECT ?=
 REGION ?= us-central1
 PLATFORM ?= linux/amd64
 REGISTRY = $(REGION)-docker.pkg.dev/$(PROJECT)/ramen
-.PHONY: test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean
+.PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean
 
 test: test-runtime test-node test-console
 
@@ -68,7 +68,7 @@ logs:
 
 # Full path: stack up → console API creates group demo → deploy → MCP call (needs the console).
 demo: up
-	@for i in $$(seq 1 90); do curl -sk -o /dev/null https://localhost:8443/login && curl -sf -o /dev/null http://localhost:8080/healthz && break; sleep 2; done
+	@for i in $$(seq 1 90); do curl -sk -o /dev/null https://localhost:8443/login && [ "$$($(COMPOSE) ps --format '{{.Health}}' worker)" = healthy ] && break; sleep 2; done
 	deploy/local/demo.sh
 
 # Worker-only path: local ramen-node + runtime-py against a clone of the demo repo, no console/docker.
@@ -77,3 +77,10 @@ demo-worker:
 
 clean:
 	rm -rf node-rs/target runtime-py/.venv console/.venv tests/.venv deploy/local/.cookies
+
+# Regenerate the vendored Python gRPC stubs from proto/ for every component (Rust stubs build via tonic-build/protox).
+proto:
+	./runtime-py/gen_proto.sh
+	TMP=$$(mktemp -d) && mkdir -p $$TMP/ramen_console/proto/ramen_proto/ramen/v1 && cp proto/ramen/v1/*.proto $$TMP/ramen_console/proto/ramen_proto/ramen/v1/ && \
+	  (cd console && uv run python -m grpc_tools.protoc -I $$TMP --python_out=src --grpc_python_out=src --pyi_out=src $$TMP/ramen_console/proto/ramen_proto/ramen/v1/*.proto)
+	./tests/gen_proto.sh

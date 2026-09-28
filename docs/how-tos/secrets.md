@@ -48,5 +48,5 @@ from exception messages and never logged.
   group's *fallback GitHub token* field (stored encrypted, never shown).
 
 ## Rotation
-Add the new value under the same name (delete + add), deploy. Workers pick it up on `/admin/reload` during the
+Add the new value under the same name (delete + add), deploy. Workers pick it up on `Admin/Reload` during the
 canary step. The [rotate-keys skill](../wiki/skills.md) covers keys and the Fernet key.

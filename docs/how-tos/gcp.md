@@ -24,8 +24,10 @@ terraform init && terraform apply
 cd ../../..
 ```
 Creates: regional GKE Autopilot cluster `ramen`, Firestore Native `(default)`, Artifact Registry repo `ramen`,
-static IP `ramen-console`, groups bucket `ramen-<project>-groups`, console GSA `ramen-console@<project>` with the
-roles listed in §7, Workload Identity binding to `ramen-system/console`. Outputs: `cluster_name`, `region`,
+static IP `ramen-console`, groups bucket `ramen-<project>-groups`, console GSA `ramen-console@<project>` with
+`roles/iam.serviceAccountCreator` + `serviceAccountDeleter` + `serviceAccountUser`, a custom role `ramenConsoleSaIam` (get/list/getIamPolicy/setIamPolicy on `ramen-*` service accounts) and
+resource-level bindings on the bucket and secrets (no `projectIamAdmin` since 0.3.1, §11), Workload Identity binding
+to `ramen-system/console`. Outputs: `cluster_name`, `region`,
 `console_ip`, `artifact_repo`, `console_gsa`, `groups_bucket`. Nothing per-group is created by Terraform.
 
 ## 3. Images (~5 min)
@@ -47,12 +49,13 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespac
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
 kubectl -n ramen-system get gateway ramen -w            # PROGRAMMED=True after ~5 min; ADDRESS = static IP
-curl -k https://$IP/readyz                              # {"ok":true,"store":"firestore","version":"0.3.0"}
+curl -k https://$IP/readyz                              # {"ok":true,"store":"firestore","version":"0.3.1"}  (console is still HTTP)
 ```
 Keep the three generated secrets somewhere safe (a password manager, not the shell history). The chart installs:
 console Deployment (KSA `console`, Workload Identity), Service (NEG), Gateway `ramen`
-(`gke-l7-global-external-managed`, static IP, TLS Secret), HTTPRoute `/`, HealthCheckPolicy, ClusterRole for
-namespaces/deployments/secrets/services/HPAs/HTTPRoutes/pods, and a `GCPBackendPolicy` with a 300 s timeout.
+(`gke-l7-global-external-managed`, static IP, TLS Secret), HTTPRoute `/`, HealthCheckPolicy, a ClusterRole for
+namespaces, networkpolicies, HTTPRoutes and read verbs (per-zone Roles cover deployments/secrets/services/HPAs/pods,
+§11), and a `GCPBackendPolicy` with a 300 s timeout.
 
 Console env set by the chart: `RAMEN_STORE=firestore RAMEN_CLOUD=gcp RAMEN_SECRETS_BACKEND=gcp RAMEN_GCP_PROJECT
 RAMEN_GCP_REGION RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER`.
@@ -64,7 +67,9 @@ Open `https://<console_ip>/` (accept the self-signed warning), login `admin@rame
 2. **Groups → Add group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
 3. **Groups → demo → Add environment**: name `default`, zones `a`. The console creates namespace `ramen-demo-a`,
    GSA `ramen-demo-a@<project>` (objectViewer on the group prefix, secretAccessor on `ramen-demo-*`) with
-   Workload Identity, Service + NEG, HTTPRoute `/mcp/demo/a`, Secret `ramen-deploy`.
+   Workload Identity, a Role + RoleBinding for the console KSA, Service (`appProtocol: kubernetes.io/h2c`) + NEG,
+   HTTPRoute matching headers `ramen-group: demo` + `ramen-zone: a` (no path, no rewrite), `HealthCheckPolicy`
+   type `GRPC`, Secret `ramen-deploy`.
 4. **Mint MCP key** on the group page (shown once) — this is what MCP clients send.
 5. **Deploy (canary)**. Watch the job log: sync → canary → reload (first run: bucket sync + pip install, 1–3 min)
    → smoke → stable.
@@ -81,14 +86,27 @@ eval $C -X POST https://$IP/api/v1/groups/demo/environments/default/deploy -d "'
 Or run the whole thing with `scripts/cloud_smoke.sh https://$IP admin@ramen.local '<password>' '<admin key>'`
 which prints PASS/FAIL.
 
-## 6. Call it through the load balancer
+## 6. Call it through the load balancer (gRPC, routed by metadata)
+The same static IP serves the console (`/`, HTTP) and every zone's workers (gRPC). The Gateway picks the zone from
+the `ramen-group` / `ramen-zone` metadata; there is no path. Export the self-signed cert once (D17) so clients can
+verify it, then use the bridge or `grpcurl`:
 ```sh
-curl -sk https://$IP/mcp/demo/a -H "Authorization: Bearer rmk_…" -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
+kubectl -n ramen-system get secret ramen-console-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > ramen-lb.pem
+
+# MCP clients (Claude Desktop, Cursor, mcp SDK): the bridge as a stdio server
+ramen-mcp-bridge --target $IP:443 --tls --ca ramen-lb.pem --key rmk_… --group demo --zone a
+
+# raw call
+REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64)
+grpcurl -cacert ramen-lb.pem -import-path proto -proto ramen/v1/mcp.proto \
+  -H "authorization: Bearer rmk_…" -H 'ramen-group: demo' -H 'ramen-zone: a' \
+  -d "{\"body\":\"$REQ\"}" $IP:443 ramen.v1.Mcp/Call | python3 -c 'import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)["body"]).decode())'
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
+grpc_health_probe -addr $IP:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'   # SERVING
 ```
-MCP clients use `https://<console_ip>/mcp/<group>/<zone>`. The Gateway rewrites the prefix to the worker's `/mcp`.
-The route appears ~2 min after the namespace is created.
+The route appears ~2 min after the namespace is created; until then the Gateway answers 404 / `UNIMPLEMENTED`.
+A call with the wrong group/zone headers reaches no backend (404 from the Gateway); a call with the right headers
+and a wrong key gets `UNAUTHENTICATED` from the node. Drop `--ca` / `-cacert` once a managed certificate is in place.
 
 ## 7. Day-2 from the console
 - **Scale**: group page → zone row → count (admins) / size `s|m|l` + allowed sizes (super admin). HPA min = count.
@@ -112,7 +130,9 @@ helm template ramen-worker deploy/helm/ramen-worker --set project=$PROJECT,group
   --set secret.data.RAMEN_MCP_KEYS=rmk_$(openssl rand -hex 16),secret.data.RAMEN_ADMIN_KEY=$(openssl rand -hex 16) | kubectl apply -f -
 kubectl -n ramen-demo-a rollout status deploy/worker
 kubectl -n ramen-demo-a port-forward svc/worker 8080 &
-curl -s localhost:8080/mcp -H "Authorization: Bearer <RAMEN_MCP_KEYS>" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+grpc_health_probe -addr localhost:8080                                                     # SERVING after the first load
+REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)
+grpcurl -plaintext -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer <RAMEN_MCP_KEYS>" -d "{\"body\":\"$REQ\"}" localhost:8080 ramen.v1.Mcp/Call
 ```
 
 ## Upgrade the console
@@ -132,3 +152,9 @@ scripts/gcp_cost_check.sh $PROJECT --expect-empty
 - The LB drains old pods for ~5 s after a rollout; MCP clients should retry once.
 - The console GSA needs `roles/datastore.user` (Firestore) and the WI binding must depend on the cluster.
 - `gcloud auth application-default login` is needed by Terraform even when `gcloud` is logged in.
+- gRPC to the backends needs HTTP/2: the worker Service carries `appProtocol: kubernetes.io/h2c`. If your GKE
+  version rejects h2c on a Gateway backend, set `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY` on the workers and switch the
+  Service to `appProtocol: HTTP2` (§11 fallback). The `HealthCheckPolicy` must be type `GRPC` on the same port,
+  or the backend never turns healthy.
+- Header-matched HTTPRoutes are per zone; a client that omits `ramen-group`/`ramen-zone` gets a Gateway 404, not a
+  worker error.

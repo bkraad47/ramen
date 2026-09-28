@@ -1,18 +1,21 @@
-"""Cloud suite fixtures. Needs RAMEN_CONSOLE_URL (else everything skips); RAMEN_NODE_URL enables worker-side
-checks; RAMEN_GCP_PROJECT (+ gcloud on PATH) enables the GCP resource assertions."""
+"""Cloud suite fixtures. Needs RAMEN_CONSOLE_URL (else everything skips); RAMEN_NODE_URL (gRPC host:port) enables
+worker-side checks; RAMEN_GCP_PROJECT (+ gcloud on PATH) enables the GCP resource assertions."""
 
 import time
 
-import httpx
+import grpc
 import pytest
 
 from ramen_tests import env as E
 from ramen_tests import state
 from ramen_tests.console import items
+from ramen_tests.mcp_client import Node
 
 GROUP = E.env("RAMEN_E2E_GROUP", "demo")
 ENV = E.env("RAMEN_E2E_ENV", "dev")
 ZONE = E.env("RAMEN_E2E_ZONE", "local")
+PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+S = grpc.StatusCode
 
 
 def ok(r, *codes):
@@ -38,36 +41,30 @@ def gcp_project() -> str:
 
 
 @pytest.fixture(scope="session")
-def node_opt() -> str | None:
-    return E.strip(E.env("RAMEN_NODE_URL")) if E.env("RAMEN_NODE_URL") else None
-
-
-@pytest.fixture(scope="session")
-def node_http(node_opt):
-    if not node_opt:
-        pytest.skip("RAMEN_NODE_URL not set")
-    with httpx.Client(base_url=node_opt, verify=E.tls_verify(), timeout=30) as c:
-        yield c
-
-
-@pytest.fixture(scope="session")
-def node_admin_http(node_http, node_opt):
-    """Bare node only (health/metrics/admin). Skips for an MCP-only LB route."""
-    if not E.node_admin(node_opt):
-        pytest.skip(f"{node_opt} is an MCP-only route (LB); health/metrics/admin are not exposed there")
-    return node_http
-
-
-def mcp_post(node_http: httpx.Client, body: dict, key: str | None) -> httpx.Response:
-    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-    return node_http.post(E.mcp_url(str(node_http.base_url)), json=body, headers=headers)
-
-
-@pytest.fixture(scope="session")
 def mcp_key_opt() -> str | None:
     return state.MCP_KEY or E.env("RAMEN_MCP_KEY")
+
+
+@pytest.fixture(scope="session")
+def node_opt(mcp_key_opt) -> Node | None:
+    """gRPC client for RAMEN_NODE_URL (None when unset). Uses the e2e-minted key / RAMEN_MCP_KEY when present."""
+    if not E.env("RAMEN_NODE_URL"):
+        yield None
+        return
+    with Node.from_env(mcp_key_opt, group=GROUP, zone=ZONE) as n:
+        yield n
+
+
+@pytest.fixture(scope="session")
+def node_grpc(node_opt) -> Node:
+    if node_opt is None:
+        pytest.skip("RAMEN_NODE_URL not set")
+    return node_opt
+
+
+def mcp_status(node: Node, key) -> S:
+    """gRPC status of an authenticated-as-`key` ping (OK / UNAUTHENTICATED / PERMISSION_DENIED / ...)."""
+    return node.status(PING, key=key)
 
 
 @pytest.fixture(scope="package")
@@ -81,28 +78,6 @@ def world(admin, demo_repo, node_opt):
     if (e.get("last_deploy") or {}).get("status") != "ok":
         job = admin.wait_job(ok(admin.deploy(GROUP, ENV, canary=True), 202).json()["id"])
         assert job["status"] == "ok", job
-    if node_opt and E.node_admin(node_opt):
-        poll(
-            lambda: httpx.get(f"{node_opt}/readyz", verify=E.tls_verify(), timeout=5).status_code == 200,
-            timeout=180,
-            what=f"{node_opt}/readyz",
-        )
-    elif node_opt:
-        poll(
-            lambda: (
-                httpx.post(
-                    E.mcp_url(node_opt),
-                    json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
-                    verify=E.tls_verify(),
-                    timeout=15,
-                ).status_code
-                in (200, 401)
-            ),
-            timeout=180,
-            what=f"{E.mcp_url(node_opt)} answering",
-        )
+    if node_opt:
+        poll(lambda: node_opt.health_code() == S.OK and node_opt.health() == "SERVING", timeout=180, what="SERVING")
     return {"group": GROUP, "env": ENV, "zone": ZONE}
-
-
-def metrics(node_http) -> dict:
-    return node_http.get("/metrics").json()

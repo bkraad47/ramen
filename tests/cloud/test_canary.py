@@ -5,9 +5,8 @@ import pytest
 
 from ramen_tests import env as E
 from ramen_tests.console import items
-from ramen_tests.mcp_client import INIT_BODY
 
-from .conftest import GROUP, ZONE, mcp_post, metrics, ok
+from .conftest import GROUP, ZONE, S, mcp_status, ok
 
 pytestmark = pytest.mark.cloud
 BAD_REF = "ramen-no-such-ref-0badc0de"
@@ -26,11 +25,8 @@ def _canary_workers(admin):
     return [w for w in live if w.get("track") == "canary" or "canary" in str(w.get("id", "")).lower()]
 
 
-def _serving(node_http, key):
-    if E.node_admin(str(node_http.base_url)):
-        m = metrics(node_http)
-        return m["packages"]["tools"] >= 1 and node_http.get("/readyz").status_code == 200
-    return mcp_post(node_http, INIT_BODY, key).status_code == (200 if key else 401)
+def _serving(node, key) -> bool:
+    return node.health() == "SERVING" and mcp_status(node, key) == (S.OK if key else S.UNAUTHENTICATED)
 
 
 def test_bad_ref_fails_job_and_records_error(admin, canary_env):
@@ -52,13 +48,12 @@ def test_failed_canary_is_scaled_to_zero(admin, canary_env, gcp_project):
     assert all(w.get("load") == "down" for w in live), live
 
 
-def test_main_worker_still_serves_after_failed_canary(node_http, canary_env, world, mcp_key_opt):
-    assert _serving(node_http, mcp_key_opt)
-    r = mcp_post(node_http, {"jsonrpc": "2.0", "id": 1, "method": "ping"}, "definitely-not-a-key")
-    assert r.status_code == 401, "worker must still answer (auth layer alive)"
+def test_main_worker_still_serves_after_failed_canary(node_grpc, canary_env, world, mcp_key_opt):
+    assert _serving(node_grpc, mcp_key_opt)
+    assert mcp_status(node_grpc, "definitely-not-a-key") == S.UNAUTHENTICATED, "auth layer alive"
 
 
-def test_good_ref_then_succeeds(admin, canary_env, node_opt):
+def test_good_ref_then_succeeds(admin, canary_env):
     ok(admin.put("environment", {"ref": "main"}, group=GROUP, env=canary_env))
     job = admin.wait_job(ok(admin.deploy(GROUP, canary_env, canary=True), 202).json()["id"])
     assert job["status"] == "ok", job

@@ -52,37 +52,42 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Fixed-window per-IP limit on credential endpoints (login, reset, magic link). Default 20/minute."""
+    """Fixed-window per-IP limit on *failed* credential attempts (login, reset, magic link). Default 20/minute;
+    successful requests are never counted, so automation and test harnesses are unaffected. 0 disables."""
 
     PATHS = ("/login", "/auth/reset", "/auth/magic")
 
     def __init__(self, app, limit: int | None = None, window: float = 60.0):
         super().__init__(app)
-        self.limit = limit or int(os.environ.get("RAMEN_LOGIN_RATE_LIMIT", "20"))
+        self.limit = int(os.environ.get("RAMEN_LOGIN_RATE_LIMIT", "20")) if limit is None else limit
         self.window = window
         self._hits: dict[str, tuple[float, int]] = {}
         self._lock = threading.Lock()
 
-    def _limited(self, key: str) -> bool:
+    def _count(self, key: str, add: int) -> int:
         now = time.monotonic()
         with self._lock:
             start, n = self._hits.get(key, (now, 0))
             if now - start > self.window:
                 start, n = now, 0
-            n += 1
+            n += add
             self._hits[key] = (start, n)
             if len(self._hits) > 10000:  # bound memory under a flood
                 self._hits = {k: v for k, v in self._hits.items() if now - v[0] <= self.window}
-            return n > self.limit
+            return n
 
     async def dispatch(self, request: Request, call_next):
-        if request.method == "POST" and request.url.path.startswith(self.PATHS):
-            ip = request.client.host if request.client else "-"
-            if self._limited(f"{ip}:{request.url.path.split('/')[1]}"):
-                return JSONResponse(
-                    {"detail": "too many attempts, slow down"}, status_code=429, headers={"Retry-After": "60"}
-                )
-        return await call_next(request)
+        if self.limit <= 0 or request.method != "POST" or not request.url.path.startswith(self.PATHS):
+            return await call_next(request)
+        key = f"{request.client.host if request.client else '-'}:{request.url.path.split('/')[1]}"
+        if self._count(key, 0) >= self.limit:
+            return JSONResponse(
+                {"detail": "too many attempts, slow down"}, status_code=429, headers={"Retry-After": "60"}
+            )
+        resp = await call_next(request)
+        if resp.status_code >= 400:  # only failures count toward the limit
+            self._count(key, 1)
+        return resp
 
 
 _TOKEN_PATH = re.compile(r"(/auth/(?:reset|magic)/)[^ \"?]+")

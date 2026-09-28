@@ -40,13 +40,24 @@ def test_security_headers_present(monkeypatch):
         assert "max-age=" in c.get("/login").headers["Strict-Transport-Security"]
 
 
-def test_login_rate_limited(monkeypatch):
+def test_login_rate_limited_on_failures_only(monkeypatch):
     with _app(monkeypatch, RAMEN_LOGIN_RATE_LIMIT="3") as c:
+        good = {"email": "root@ramen.test", "password": "pw-root-1"}
+
+        def login_ok():
+            c.cookies.clear()  # a cookie-less POST /login needs no CSRF token (scripted clients)
+            return c.post("/login", data=good, follow_redirects=False).status_code == 303
+
+        assert all(login_ok() for _ in range(10))
         codes = [
             c.post("/login", data={"email": "x@y", "password": "bad"}, follow_redirects=False).status_code
             for _ in range(5)
         ]
         assert codes[:3] == [401, 401, 401] and codes[3:] == [429, 429]
+        c.cookies.clear()
+        assert c.post("/login", data=good, follow_redirects=False).status_code == 429  # locked for the window
+    with _app(monkeypatch, RAMEN_LOGIN_RATE_LIMIT="0") as c:
+        assert all(c.post("/login", data={"email": "x@y", "password": "bad"}).status_code == 401 for _ in range(30))
 
 
 @pytest.mark.parametrize("bad", ["//evil.example.com", "/\\evil", "http://evil", "", None, "/a\r\nb"])

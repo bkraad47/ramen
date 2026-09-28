@@ -2,6 +2,8 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.4.0] — console polish, docs, and proof
+- (in progress) Console: naming and sentence case, sidebar identity, per-zone action sections, two-pane logs, per-zone package toggles, 12-character password and key policy, enforced API key client types (agent vs devops), colour-free health wording, session revocation. Docs: dark-only site, aligned badges, real architecture diagram, transport and security write-up, repository topics. Verification: multi-zone and autoscaling on kind then GKE, per-zone tool isolation, independent LLM clients, a role and group security matrix, and an independent review of the claims.
 ## [0.3.2] — verified on GKE
 - gRPC header routing verified on a live GKE Gateway over cleartext HTTP/2 (h2c); no TLS fallback needed. Live harness: 126 passed, 0 failed.
 - Fixes from the live run: zone identity (GSA + Workload Identity + baseline grants) is ensured when a zone is attached, not only by an explicit service-account call; IAM bindings on new service accounts wait for propagation; all worker services (Mcp, Health, reflection) are routed through the Gateway; the node retries its initial load instead of waiting for an admin reload; the bridge pins the server certificate in insecure-TLS mode.

@@ -1,6 +1,6 @@
 # Architecture (current: v0.4.0)
 
-Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **JSON-RPC 2.0 over gRPC** (D19).
+Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
 
 ```
                          ┌──────────────────────────── console (FastAPI, 1 node) ────────────────────────────┐
@@ -14,7 +14,8 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
                                                        │ NEG/target groups, Cloud Armor / WAF, IAM
                                                        │ gRPC to pods: Admin/Reload, Admin/Metrics, Health/Check
                                                        ▼
-   MCP client ─▶ ramen-mcp-bridge ─▶ LB (GKE Gateway | ALB) ─ metadata ramen-group, ramen-zone ─▶ namespace ramen-<group>-<zone>
+   MCP client ─▶ POST /mcp (Streamable HTTP, bearer key or OAuth token) ──────────────────────────────▶ namespace ramen-<group>-<zone>
+   stdio client ─▶ ramen-mcp-bridge ─▶ LB (GKE Gateway | ALB) ─ headers ramen-group, ramen-zone ─▶ (same pods, same guards)
    (stdio)       (gRPC, TLS)         gRPC health check                                              ├─ worker (stable)   ─┐ ramen-node (Rust, tonic) :8080
    grpcurl / any gRPC client ────────────────────────────────────────────────────────────────────▶  └─ worker-canary     ─┘  └─ ramen_runtime (Python 3.14)
                                                                                                                                  ▲ sync on load

@@ -33,6 +33,11 @@ def redact(text: str, token: str | None) -> str:
     return text.replace(token, "***") if token else text
 
 
+# Never written into the bucket's `.ramen/env*`: the runtime reads the bucket, and these are the node's alone. The
+# local worker takes them from its own environment instead (docker-compose.yml). Security review 0.5.0 L6.
+NODE_ONLY = ("RAMEN_SESSION_SECRET", "RAMEN_OAUTH_ISSUER", "RAMEN_PUBLIC_URL")
+
+
 class LocalCloud(Cloud):
     def __init__(
         self,
@@ -113,7 +118,7 @@ class LocalCloud(Cloud):
             vars_["RAMEN_ALLOWED_CIDRS"] = ",".join(json.loads(rp.read_text()))
         d = self._bucket(group) / ".ramen"
         d.mkdir(parents=True, exist_ok=True)
-        text = "".join(f"{k}={v}\n" for k, v in vars_.items())
+        text = "".join(f"{k}={v}\n" for k, v in vars_.items() if k not in NODE_ONLY)
         (d / "env").write_text(text)
         (d / f"env-{zone}").write_text(text)
         results = []

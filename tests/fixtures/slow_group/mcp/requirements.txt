@@ -1,0 +1,1 @@
+# Conformance-only group: one tool that sleeps on request, so the inflight cap can be probed deterministically.

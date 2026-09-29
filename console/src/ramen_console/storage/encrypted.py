@@ -8,7 +8,7 @@ SENSITIVE: dict[str, set[str]] = {
     "users": {"password_hash"},
     "secrets": {"value"},
     "api_keys": {"secret_hash"},
-    "groups": {"github_token"},
+    "groups": {"github_token", "session_secret"},
     "environments": {"github_token"},
 }
 PREFIX = "enc:"

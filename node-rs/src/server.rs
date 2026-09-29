@@ -1,5 +1,6 @@
-//! Startup: initial `runtime.load` (when mcp/ exists or `RAMEN_BUCKET_URI` is set), serve gRPC (h2c, or TLS with
-//! `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`) until `shutdown` resolves, then stop the sidecar.
+//! Startup: initial `runtime.load` (when mcp/ exists or `RAMEN_BUCKET_URI` is set), serve gRPC AND Streamable HTTP
+//! (§16.1) on one listener (h2c + HTTP/1.1, or TLS with `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`) until `shutdown`
+//! resolves, then stop the sidecar.
 use crate::config::Config;
 use crate::grpc::{self, Shared};
 use crate::log::emit;
@@ -39,10 +40,16 @@ pub async fn run(
         Ok(None) => Ok(Server::builder()),
         Err(e) => Err(e),
     };
+    // §16.1: the HTTP handler joins the gRPC services on the same router; HTTP/1.1 must be accepted because
+    // Streamable HTTP clients speak it (gRPC stays h2/h2c).
+    let mut routes = grpc::routes(&app);
+    let merged = std::mem::take(routes.axum_router_mut()).merge(crate::http::router(app.clone()));
+    *routes.axum_router_mut() = merged;
     match builder {
-        Ok(mut b) => {
+        Ok(b) => {
             if let Err(e) = b
-                .add_routes(grpc::routes(&app))
+                .accept_http1(true)
+                .add_routes(routes)
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
                 .await
             {

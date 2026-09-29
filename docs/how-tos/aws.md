@@ -22,7 +22,10 @@ Mirror of the GCP path with AWS primitives:
 | Rebalance | weighted target groups (stable/canary) via the Ingress `actions` annotation |
 
 Since 0.3.1 there is no path to rewrite: the ALB routes on the two gRPC metadata headers and forwards HTTP/2 to
-the worker port. gRPC target groups require an **HTTPS** listener on the ALB (the self-signed ACM cert satisfies
+the worker port. **Unverified for 0.5.0:** the target group is `backend-protocol-version: GRPC`, and whether an ALB
+forwards a plain `POST /mcp` (HTTP/1.1 from most MCP clients) to a gRPC target group has not been tested — the AWS
+renderer has never run against a real account (F10.3). If it does not, the fix is a second target group with
+`HTTP1` for `/mcp`; that is the first thing an AWS run should establish. gRPC target groups require an **HTTPS** listener on the ALB (the self-signed ACM cert satisfies
 that) and the target group health check is a gRPC status (`0` = OK) against `grpc.health.v1.Health/Check`, so a
 worker is out of rotation until its first successful load.
 

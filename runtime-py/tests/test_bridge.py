@@ -112,6 +112,14 @@ def test_parse_args_flags_and_env(monkeypatch):
     assert bridge.parse_args(["--health"]).health == ""
     assert bridge.parse_args(["--health", "ramen.v1.Admin"]).health == "ramen.v1.Admin"
     monkeypatch.delenv("RAMEN_BRIDGE_KEY")
+    # §16.4: RAMEN_MCP_KEY is the generic spelling every client config can rely on; the bridge-specific one wins
+    monkeypatch.setenv("RAMEN_MCP_KEY", "mk")
+    assert bridge.parse_args([]).key == "mk"
+    monkeypatch.setenv("RAMEN_BRIDGE_KEY", "bk")
+    assert bridge.parse_args([]).key == "bk"
+    assert bridge.parse_args(["--key", "ck"]).key == "ck"
+    monkeypatch.delenv("RAMEN_BRIDGE_KEY")
+    monkeypatch.delenv("RAMEN_MCP_KEY")
     assert bridge.parse_args(["--health"]).key is None
     with pytest.raises(SystemExit):
         bridge.parse_args([])  # key missing for the bridge mode

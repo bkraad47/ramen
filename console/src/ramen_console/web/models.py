@@ -130,6 +130,11 @@ class ImageRecall(BaseModel):
     id: str
 
 
+class OAuthClientIn(ListFields):
+    name: str
+    redirect_uris: list[str]
+
+
 class BackupIn(BaseModel):
     target: str = "local"
     path: str | None = None

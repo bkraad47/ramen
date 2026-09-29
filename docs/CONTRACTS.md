@@ -301,3 +301,115 @@ replaced. Nothing in the repo noticed. From 0.4.3:
   or when any `captured_for` is older than `ui_contract`. **A round that changes the console raises `ui_contract`,
   and the gate then demands fresh captures before the release can go out.**
 - `make shots OUT=reports/ui-<version>` writes a set elsewhere, which is how a before-and-after review set is made.
+
+## 16. v0.5.0 — Streamable HTTP at the edge, gRPC inside (binding; supersedes §11 where they differ)
+Source: `instructions/v0.5.0.md`. Decision D31: **Streamable HTTP is the front door; gRPC stays internal and as a
+documented option.** gRPC needs a locally installed bridge, which rules out phones, browsers and hosted agent
+platforms; Streamable HTTP is a URL and a header and is what the MCP spec defines. D19's removal of the HTTP MCP
+endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
+
+### 16.1 Transport (X1, X3) — D32: the handler lives in the node, on the same port
+- `ramen-node` serves `POST /mcp`, `GET /mcp` and `DELETE /mcp` on `RAMEN_NODE_PORT` **alongside** the gRPC
+  services, on one listener (hyper speaks HTTP/1.1 and h2/h2c; the LB routes `/mcp` by path, gRPC by service path).
+- **Shared guards, not reimplemented.** The HTTP handler builds a `MetadataMap` from the request headers and calls
+  the same `auth::check_key`, `auth::client_ip` + CIDR check, the same inflight semaphore and the same JSON-RPC
+  dispatch (`mcp::*`) that `ramen.v1.Mcp/Call` calls. There is one code path per check; the transports differ only
+  in how a denial is spelled: gRPC `UNAUTHENTICATED` ↔ HTTP `401` (+ `WWW-Authenticate: Bearer`), `PERMISSION_DENIED`
+  ↔ `403`, `RESOURCE_EXHAUSTED` ↔ `429`, `OUT_OF_RANGE` (4 MiB) ↔ `413`, `UNAVAILABLE` (not loaded) ↔ `503`.
+- **Streamable HTTP semantics** (MCP spec 2025-06-18): `POST /mcp` with `Content-Type: application/json` carries one
+  JSON-RPC message; a request gets `200 application/json` with the JSON-RPC response; a notification gets `202` with
+  no body; `Accept` must include `application/json` (`406` otherwise). `GET /mcp` answers `405` — the node has no
+  server-initiated messages, and saying so is spec-legal. Header `MCP-Protocol-Version` is echoed; an unsupported
+  value is `400`.
+- **Origin validation (DNS rebinding).** When the request carries `Origin`, it must match `RAMEN_ALLOWED_ORIGINS`
+  (comma list of origins, `*` allowed for local dev only; default empty = **every browser origin refused with 403**)
+  or, when the list is empty, be absent. Non-browser clients send no `Origin` and are unaffected. The chart and both
+  renderers leave it empty on deployed workers unless the group sets it; it is a `DEPLOY_KEYS` entry so a group can
+  allow its own web client.
+- **Routing metadata** stays `ramen-group` / `ramen-zone`, as HTTP headers. The LB rules already match on them.
+- **Access log**: the same one-line JSON per call, `transport: "http"|"grpc"` added, `http_status` beside `grpc_code`.
+
+### 16.2 Sessions (X3) — D33: stateless, signed, bound to the credential
+- `initialize` returns `Mcp-Session-Id: <nonce>.<expiry>.<mac>` where `mac = HMAC-SHA256(RAMEN_SESSION_SECRET,
+  nonce ‖ expiry ‖ key_id)`; nonce 128 bits random, expiry = now + `RAMEN_SESSION_TTL_SECS` (default 1800).
+- Any pod in the zone verifies it without state, so no affinity, no store, and a rollout keeps sessions alive.
+- A session id presented with a different credential, past expiry, or with a bad MAC is `404` — the spec's signal to
+  re-initialize — never `401`, so a stolen id alone reveals nothing and cannot be replayed under another key.
+- `DELETE /mcp` with a valid session is `204`; ids are not stored, so "ending" a session is the client forgetting
+  it; the TTL bounds the window. Requests without a session header are still served (sessions are optional in the
+  spec); a session header on ANY request, `initialize` included, must validate or the call is `404` — the spec's
+  instruction to the client is then to start over with a new `initialize` that carries no id, and the node never
+  lets an unverifiable id ride along on the request that would mint its replacement.
+- `RAMEN_SESSION_SECRET` is written into the deploy Secret by the console per zone (32 random bytes, base64,
+  generated once per group and kept in the store like the MCP keys); absent → the node generates one at startup and
+  logs that sessions will not survive a rollout. Not a `DEPLOY_KEYS` entry — a group cannot set its own.
+
+### 16.3 OAuth for end users (X5) — D34: the console is the authorization server; pre-registered clients; PKCE
+- Discovery: the **worker** answers `GET /.well-known/oauth-protected-resource` (RFC 9728) naming the console as
+  its authorization server; the **console** answers `GET /.well-known/oauth-authorization-server` (RFC 8414) with
+  `authorization_endpoint`, `token_endpoint`, `code_challenge_methods_supported: ["S256"]` — and no
+  `scopes_supported`, which would list every group and zone to anyone who asks (review 0.5.0 L7). The worker's
+  `WWW-Authenticate` names `resource_metadata` as an absolute URL when the deploy set `RAMEN_PUBLIC_URL` on it,
+  relative otherwise (a pod cannot know its public address on its own).
+- `GET /oauth/authorize?response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256
+  &resource`: the user signs in to the console (existing password/OIDC/magic link; the login redirect carries the
+  whole query, so the request survives sign-in) and sees a consent page naming the client, the group and the zone
+  (`scope = mcp:<group>:<zone>`, exactly one, for a zone the group has deployed to, and the user must have at least
+  viewer access to the group); on approval a single-use code (10 min) is bound to the client, redirect URI, PKCE
+  challenge, user, scope and the user's session epoch. Every validation failure is an error page — never a
+  redirect, because the redirect URI is only trusted once it has matched the registered client (exactly, except
+  that a registered plain-http loopback URI matches any port, RFC 8252 §7.3). A denied consent redirects with
+  `error=access_denied`, appended to whatever query the URI already carries. Only a signed-in user may authorize:
+  an `rmn_` API key on this endpoint is `403`.
+- `POST /oauth/token` (`grant_type=authorization_code` + `code_verifier`, or `refresh_token`): returns a JWT access
+  token (HS256; key = `HMAC-SHA256(RAMEN_SESSION_SECRET, "oauth")`, the derivation `node-rs/src/session.rs` and
+  `console/oauth_server.py` share; claims `iss` console URL, `sub` user id, `email`, `aud` = **`mcp:<group>:<zone>`**
+  — the resource identifier the worker publishes, not a URL, because a pod behind a load balancer cannot know its
+  public address — `scope` (the same string), `group`, `zone`, `iat`, `exp` = `iat` + 1 h, `jti`, `client_id`), and
+  an opaque refresh token (30 days, stored under its SHA-256, rotated on use, bound to its client, revoked with the
+  user's session epoch). A rotated-out refresh token presented again is reuse: every refresh token of that grant
+  is revoked (RFC 9700 §4.14.2). At every mint — code exchange and refresh alike — the console re-checks that the
+  user exists, may log in, still has viewer access to the group and has the epoch the grant was made under; the code
+  or token is burned in the same store transaction as it is read. The issuer is `RAMEN_PUBLIC_URL`; a deploy without it leaves `RAMEN_OAUTH_ISSUER` unset on the worker, so
+  tokens are simply not accepted there and the job log says so.
+- Clients are **pre-registered** by a super admin: `POST /api/v1/oauth/clients {name, redirect_uris}` → `client_id`
+  (public client, no secret; PKCE is the proof). Listed and deleted on the API keys page. No dynamic registration
+  (RFC 7591) in this release — it is an unauthenticated write endpoint and is deferred with that reason stated.
+- The node accepts **either** an `rmk_` key **or** a JWT in `Authorization: Bearer`: a token is verified (signature,
+  `exp`, `aud` matches this worker's group/zone, `scope` names this group/zone); a valid token's `sub` is what the
+  access log records as the consumer (`key_id` stays for keys). A token for another group/zone is `401` — it is
+  not a credential for this worker at all, and the challenge tells the client where to get one that is.
+- Revocation: the console's session epoch (V1.4) is embedded in refresh tokens; bumping it (password/role change,
+  delete, restore) invalidates refresh. Access tokens live ≤ 1 h and are not revocable individually — stated in the
+  security how-to.
+
+### 16.4 Defaults and clients (X2, X6, X7)
+- Quickstart, `make demo`, `deploy/local/mcp-client-config.example.json`, the README and the how-tos land a new user
+  on `http://localhost:8080/mcp` with `Authorization: Bearer <rmk_>` — no bridge to install. The bridge is documented
+  once, under "stdio-only clients", as the compatibility path; it keeps working unchanged.
+- `RAMEN_MCP_KEY` is read by the bridge (`--key` wins) and by every example config, so a key never has to sit in a
+  config file. The docs say so on the first page a new user reads.
+- Windows: the client flow (bridge over stdio with the key from the environment, and a Streamable HTTP call with the
+  `mcp` SDK) runs in CI on `windows-latest` against an in-process fake worker; path handling in the bridge and the
+  runtime is checked there.
+
+### 16.5 Verification (X4, X8)
+- `tests/conformance/test_mcp_node_local.py` and the harness `mcp_client` are parametrised over `grpc` and `http`:
+  every guard case (no key, wrong key, CIDR, size, blocked names, inflight, health/readiness) runs on both, plus the
+  HTTP-only cases (Origin, session id reuse under another key, expired session, 405 on GET, 202 on notification,
+  406 on a bad Accept). `mcp>=2`'s Streamable HTTP client drives the SDK-level case end to end.
+- CI: `node-conformance` runs both transports; a `client-windows` job runs the Windows client flow.
+- GKE: both transports through the same Gateway (`/mcp` added to `route.paths` for both providers; the ALB rule gains
+  the path), the security matrix over HTTP, and the OAuth flow against a real console URL. Reported in
+  `reports/cloud-v0.5.0.md`. The AWS path stays untested: no account (F10.3).
+
+### 16.6 Security (X9) and positioning — D35
+- An independent subagent audits the new surface (HTTP handler, sessions, Origin, OAuth endpoints, token
+  verification, the Windows path) against the code and files `reports/security-v0.5.0.md`; the coordinator fixes
+  what it finds before the release is tagged.
+- `docs/threat-model.md` is published: what Ramen defends against, what it does not, and what is unverified.
+- README leads with what is verified today. CHEAPER carries a number (one shared runtime per zone versus a
+  container per MCP server, with the pod count for a thirty-tool team). EASIER ("git push to a fleet") is claimed
+  only once HTTP is the front door — which this release makes true, so it may be claimed for HTTP clients and no
+  further. SECURE is one sentence: user code never runs in the process that holds keys and auth. The unverified
+  list stays in the README as a feature of the pitch, not a footnote.

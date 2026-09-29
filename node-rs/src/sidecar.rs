@@ -160,6 +160,15 @@ impl Sidecar {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Security review 0.5.0 H1: the runtime executes tenant code, so it must never inherit what makes the
+        // NODE trusted — the keys it checks, the secret it signs sessions and verifies tokens with, the admin
+        // key, TLS material, the allowlists. Cloud identity, `RAMEN_SECRET_*` and the bucket settings stay.
+        for name in std::env::vars_os()
+            .map(|(k, _)| k)
+            .filter(|k| k.to_str().is_some_and(hidden_from_runtime))
+        {
+            cmd.env_remove(name);
+        }
         if let Some(pp) = &cfg.pythonpath {
             cmd.env("PYTHONPATH", pp);
         }
@@ -250,4 +259,51 @@ async fn read_stdout(
     alive.store(false, Relaxed);
     pending.lock().await.clear();
     emit("warn", "sidecar exited", json!({}));
+}
+
+/// The node's own credentials and trust settings, which the runtime (tenant code) must not inherit (H1).
+pub fn hidden_from_runtime(name: &str) -> bool {
+    matches!(
+        name,
+        "RAMEN_MCP_KEYS"
+            | "RAMEN_SESSION_SECRET"
+            | "RAMEN_ADMIN_KEY"
+            | "RAMEN_TLS_KEY"
+            | "RAMEN_TLS_CERT"
+            | "RAMEN_ALLOWED_CIDRS"
+            | "RAMEN_ADMIN_CIDRS"
+            | "RAMEN_ALLOWED_ORIGINS"
+            | "RAMEN_OAUTH_ISSUER"
+            | "RAMEN_TRUST_PROXY_HOPS"
+            | "RAMEN_TRUST_PROXY"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_runtime_never_inherits_the_nodes_credentials() {
+        for hidden in [
+            "RAMEN_MCP_KEYS",
+            "RAMEN_SESSION_SECRET",
+            "RAMEN_ADMIN_KEY",
+            "RAMEN_TLS_KEY",
+        ] {
+            assert!(hidden_from_runtime(hidden), "{hidden}");
+        }
+        // what tool code legitimately needs stays: its secrets, the bucket, cloud identity, the interpreter
+        for kept in [
+            "RAMEN_SECRET_DEMO__TOKEN",
+            "RAMEN_BUCKET",
+            "RAMEN_BUCKET_URI",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "AWS_REGION",
+            "PATH",
+            "HOME",
+        ] {
+            assert!(!hidden_from_runtime(kept), "{kept}");
+        }
+    }
 }

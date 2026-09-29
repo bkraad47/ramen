@@ -27,6 +27,8 @@ LB_PATHS = (
     "/grpc.health.v1.Health",
     "/grpc.reflection.v1.ServerReflection",
     "/grpc.reflection.v1alpha.ServerReflection",
+    "/mcp",  # §16.1: Streamable HTTP on the same port
+    "/.well-known/oauth-protected-resource",  # §16.3: RFC 9728, unauthenticated by design
 )
 CANARY_KEEP = ("replicas",)  # never reset canary replicas on re-apply
 GW_GROUP, GW_VERSION, GW_PLURAL = "gateway.networking.k8s.io", "v1", "httproutes"

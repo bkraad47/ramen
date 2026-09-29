@@ -117,7 +117,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Fixed-window per-IP limit on *failed* credential attempts (login, reset, magic link). Default 20/minute;
     successful requests are never counted, so automation and test harnesses are unaffected. 0 disables."""
 
-    PATHS = ("/login", "/auth/reset", "/auth/magic")
+    PATHS = ("/login", "/auth/reset", "/auth/magic", "/oauth/token")  # token: code and refresh guessing (L5)
 
     def __init__(self, app, limit: int | None = None, window: float = 60.0):
         super().__init__(app)
@@ -152,14 +152,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return resp
 
 
-_TOKEN_PATH = re.compile(r"(/auth/(?:reset|magic)/)[^ \"?]+")
+_TOKEN_PATH = re.compile(r"(/auth/(?:reset|magic)/)[^ \"?]+|(/oauth/authorize)\?[^ \"]+")
+
+
+def _redact(text: str) -> str:
+    # the authorize query carries the PKCE challenge and state; the reset/magic path carries the token itself (I1)
+    return _TOKEN_PATH.sub(lambda m: f"{m.group(1)}<redacted>" if m.group(1) else f"{m.group(2)}?<redacted>", text)
 
 
 class _RedactTokens(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args and isinstance(record.args, tuple):
-            record.args = tuple(_TOKEN_PATH.sub(r"\1<redacted>", a) if isinstance(a, str) else a for a in record.args)
-        record.msg = _TOKEN_PATH.sub(r"\1<redacted>", record.msg) if isinstance(record.msg, str) else record.msg
+            record.args = tuple(_redact(a) if isinstance(a, str) else a for a in record.args)
+        record.msg = _redact(record.msg) if isinstance(record.msg, str) else record.msg
         return True
 
 

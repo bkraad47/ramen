@@ -149,6 +149,27 @@ async def revoke(request: Request, rid: str, p: Principal = Depends(super_)):
     )
 
 
+# --- OAuth clients (§16.3): pre-registered by a super admin; no dynamic registration in this release ---------------
+@r.get("/oauth/clients")
+async def oauth_clients(request: Request, p: Principal = Depends(super_)):
+    return await request.app.state.oauth_server.clients()
+
+
+@r.post("/oauth/clients", status_code=201)
+async def oauth_client_create(request: Request, body: m.OAuthClientIn, p: Principal = Depends(super_)):
+    note(request, "oauth.client.create", body.name)
+    return respond(
+        request, await request.app.state.oauth_server.register_client(body.name, body.redirect_uris, p.name), 201
+    )
+
+
+@r.delete("/oauth/clients/{client_id}")
+async def oauth_client_delete(request: Request, client_id: str, p: Principal = Depends(super_)):
+    note(request, "oauth.client.delete", client_id)
+    await request.app.state.oauth_server.delete_client(client_id)
+    return respond(request, {"ok": True})
+
+
 @r.get("/audit")
 async def audit(request: Request, limit: int = 200, format: str | None = None, p: Principal = Depends(viewer)):
     rows = await svc(request).store.list("audit")

@@ -30,7 +30,8 @@ class Req:
         self.state = type("S", (), {})()
         self.state.principal = principal
         self.path_params = {"group": group} if group else {}
-        self.url = type("U", (), {"path": "/page" if hx else "/api/v1/x"})()
+        # a starlette URL has both; the login redirect now carries the query so an OAuth authorize survives sign-in
+        self.url = type("U", (), {"path": "/page" if hx else "/api/v1/x", "query": "a=1"})()
 
 
 async def test_require():
@@ -44,7 +45,7 @@ async def test_require():
     assert e.value.status_code == 401
     with pytest.raises(HTTPException) as e:
         await dep(Req(None, hx=True))
-    assert e.value.status_code == 303 and e.value.headers["Location"].startswith("/login")
+    assert e.value.status_code == 303 and e.value.headers["Location"] == "/login?next=%2Fpage%3Fa%3D1"
 
 
 def test_check_clash():

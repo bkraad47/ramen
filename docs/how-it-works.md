@@ -8,36 +8,39 @@ what, and a network edge that only trusted ranges can reach. Ramen is that place
 ## The shape
 
 <figure class="ramen-diagram" markdown>
-![One MCP call, end to end: a stdio MCP client talks to ramen-mcp-bridge, which sends each JSON-RPC message as one ramen.v1.Mcp/Call over gRPC to the load balancer; the load balancer matches the ramen-group and ramen-zone metadata and forwards to that zone's worker pod, where the Rust node checks the key and source range and hands the message to the Python runtime, which loads the group's code from the group bucket; alongside, the console clones the group git repo, uploads it on deploy and calls the node directly on its pod IP](img/architecture.svg)
+![One MCP call, end to end: an MCP client posts each JSON-RPC message to /mcp over HTTPS (or a stdio client through ramen-mcp-bridge over gRPC) to the load balancer; the load balancer matches the ramen-group and ramen-zone metadata and forwards to that zone's worker pod, where the Rust node checks the key and source range and hands the message to the Python runtime, which loads the group's code from the group bucket; alongside, the console clones the group git repo, uploads it on deploy and calls the node directly on its pod IP](img/architecture.svg)
 </figure>
 
 A **group** is a tenant: it owns one git repo, one bucket prefix, its secrets, keys and users. An **environment** binds
 a group to a git ref and to one or more **zones**; a zone is a Kubernetes namespace pinned to a cloud zone with a
 `worker` and a `worker-canary` Deployment. Each worker pod runs the Rust node and, on demand, the Python runtime.
 
-## Why JSON-RPC 2.0 over gRPC (v0.3.1)
-The MCP messages did not change; the envelope did. Every JSON-RPC request or notification travels as the `body`
-bytes of one `ramen.v1.Mcp/Call` ([contract §11](CONTRACTS.md), [`mcp.proto`](https://github.com/bkraad47/ramen/blob/main/proto/ramen/v1/mcp.proto)).
-What that buys, compared with the HTTP endpoint 0.1.0–0.3.0 exposed:
+## Why Streamable HTTP at the edge, and gRPC inside (v0.5.0)
+0.3.1 moved the worker to JSON-RPC 2.0 over gRPC and took the HTTP endpoint away; every standard client then needed
+a locally installed stdio bridge. That ruled out phones, browsers and hosted agent platforms — anything that cannot
+run a child process. 0.5.0 keeps what gRPC bought and puts Streamable HTTP back as the front door
+([contract §16](CONTRACTS.md)):
 
-- **Binary framing and HTTP/2 multiplexing**: many in-flight calls per connection, no per-request handshake, and
-  a hard 4 MiB message limit enforced by the framework rather than by hand.
-- **First-class health and deadlines**: `grpc.health.v1.Health` reports `SERVING` only once the runtime has
-  loaded code, so the LB, Kubernetes and the console all read the same signal; every call carries a deadline
-  the node honours instead of an ad-hoc timeout header.
-- **Typed status for the transport, JSON-RPC for the protocol**: a bad key is `UNAUTHENTICATED`, a blocked
-  source range is `PERMISSION_DENIED`, too many calls is `RESOURCE_EXHAUSTED`; a blocked tool is still JSON-RPC
-  `-32601` in the body. Clients can tell "the edge rejected me" from "the tool said no".
-- **Routing by metadata, not path**: the load balancer matches `ramen-group` and `ramen-zone` headers, so there
-  is no path rewrite on GCP and no path alias on AWS, and the same client config works locally and in the cloud
-  by changing only `--target`.
+- **Streamable HTTP is a URL and a header.** `POST /mcp` with `Authorization: Bearer`, one JSON-RPC message per
+  request, is what the MCP specification defines, so every standard client speaks it natively and nothing has to be
+  installed beside the client. Browsers are admitted only from an allow-listed `Origin`; sessions are signed ids
+  bound to the credential; a person can hold a token of their own through OAuth instead of a shared key.
+- **gRPC stays for what it is good at inside.** `ramen.v1.Mcp/Call` keeps binary framing, HTTP/2 multiplexing,
+  first-class health and deadlines, and typed transport status. Teams that want it internally use it directly; the
+  stdio bridge speaks it for clients that only speak stdio.
+- **One implementation of every guard.** The HTTP handler has no checks of its own. It turns the request headers
+  into the same metadata map and calls the same guard and dispatch functions the gRPC service calls; the
+  transports differ only in how a refusal is spelled — `401 / 403 / 429 / 413` against
+  `UNAUTHENTICATED / PERMISSION_DENIED / RESOURCE_EXHAUSTED / OUT_OF_RANGE`. A JSON-RPC error stays a `200` with an
+  error body on both, so a client can still tell "the edge rejected me" from "the tool said no". The conformance
+  suite runs the whole guard table on both transports, which is what stops the two paths from drifting.
+- **Routing by headers, not path**, exactly as before: the load balancer matches `ramen-group` and `ramen-zone`,
+  so the same client config works locally and in the cloud by changing only the URL.
 
-The cost is that browsers and plain MCP-over-HTTP clients cannot connect directly. `ramen-mcp-bridge` (a Python
-console script, also in the worker image) is a stdio MCP server that forwards each message to `Mcp/Call`, so
-Claude Desktop, Cursor and the `mcp` SDK see an ordinary stdio server. See the
-[migration note](how-tos/migrate-0.3.1.md), and
-[Transport and what secures each hop](wiki/transport.md) for what protects each leg of that path — including the
-legs that are plaintext unless you configure TLS.
+The cost is one port that speaks two protocols. hyper handles that: HTTP/1.1 for Streamable HTTP clients, HTTP/2
+for gRPC, on the same listener, with TLS at the load balancer (or at the node, when configured). See
+[Transport and what secures each hop](wiki/transport.md) for what protects each leg — including the legs that are
+plaintext unless you configure TLS — and the [threat model](threat-model.md) for what is and is not defended.
 
 ## Why a Rust node *and* a Python runtime
 - The node owns everything that must not be slowed down or broken by user code: the gRPC surface, bearer-key

@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "env_probe",
+  "description": "Names of the runtime's environment variables that start with `prefix`. Exists so tests can prove what tool code can and cannot see.",
+  "callable": "probe",
+  "input": {
+    "prefix": {"type": "string", "description": "variable-name prefix, e.g. RAMEN_"}
+  },
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

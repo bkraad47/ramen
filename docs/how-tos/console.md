@@ -110,3 +110,9 @@ The config file in use and a hot reload, the authentication toggles, the service
 effective `RAMEN_*` environment (secrets masked), and the **super-admin service-account rules**: pick `Allow` or
 `Deny` and a permission from the catalogue — or type a pattern such as `kms.*` — then `Add rule`. Each rule has
 `Remove`. Group admins cannot add restrictions that clash with these; a clash is an error, not a silent merge.
+
+**OAuth clients** (super admin). When one person rather than a team should hold the access, register the client
+they use — its name and the exact redirect URIs it will send — and hand them nothing: the client signs them in
+through this console and receives a token scoped to that user, group and zone, renewable for thirty days and cut
+off when the user is revoked. There is no client secret; PKCE is the proof. Removing a client ends its refresh
+tokens.

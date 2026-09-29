@@ -71,7 +71,7 @@ grpcurl -plaintext -H "x-ramen-admin-key: $RAMEN_ADMIN_KEY" -import-path proto -
 grpc_health_probe -addr localhost:8080                          # SERVING / NOT_SERVING, no key needed
 ```
 Without the key: `Unauthenticated`; from outside the admin CIDRs: `PermissionDenied`. Tool calls need an `rmk_`
-key and go through `ramen.v1.Mcp/Call` — see the [local quickstart](local-quickstart.md#5-call-the-worker-raw-with-grpcurl).
+key and go through `ramen.v1.Mcp/Call` — see the [local quickstart](local-quickstart.md#5-call-the-worker-raw-over-grpc-with-grpcurl).
 
 ## Backups
 `POST $U/backups {"target":"bucket"}` writes a JSON export tagged with the release version (zones, users without

@@ -2,6 +2,39 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.0] — Streamable HTTP at the edge, gRPC inside
+Contract §16, decisions D31–D35. The user's decision: gRPC needs a locally installed bridge, which rules out phones,
+browsers and hosted agent platforms; Streamable HTTP is a URL and a header and is what the MCP spec defines.
+
+**Transport (breaking for nothing: every 0.3.1–0.4.x client keeps working)**
+- Every worker now serves `POST /mcp` (Streamable HTTP, MCP 2025-06-18) on the same port as `ramen.v1.Mcp/Call`, through the same guard functions — key, source range, blocked names, 4 MiB and in-flight caps are one implementation, spelled `401 / 403 / 413 / 429` on HTTP and `UNAUTHENTICATED / PERMISSION_DENIED / OUT_OF_RANGE / RESOURCE_EXHAUSTED` on gRPC. JSON-RPC errors stay `200` with an error body on both. `GET /mcp` is `405`; `DELETE /mcp` ends a session. The access log names the transport.
+- Origin validation: a browser `Origin` is refused unless it is on `RAMEN_ALLOWED_ORIGINS` — empty by default — so a foreign page cannot reach a worker through a victim's browser. A group may allow its own web origins from its deploy file.
+- Stateless sessions: `initialize` returns an `Mcp-Session-Id` that is an HMAC over a nonce, an expiry and the credential, keyed with the zone's `RAMEN_SESSION_SECRET`; any pod verifies it, no affinity or store, and under another credential it is `404`, never `401`. The console generates one secret per group and hands it to every zone's deploy Secret.
+- HTTP/1.1 is now accepted on the node port (Streamable HTTP clients speak it); gRPC stays HTTP/2.
+
+**Per-user access (OAuth 2.1)**
+- The console is an authorization server: `/.well-known/oauth-authorization-server`, `/oauth/authorize` with a consent page, `/oauth/token` with PKCE S256 and refresh rotation. Clients are pre-registered by a super admin on the API keys page (name and exact redirect URIs; no secret). Access tokens are HS256 JWTs a worker verifies with a key derived from the zone secret; `aud` and `scope` are `mcp:<group>:<zone>`; one hour of life. Refresh tokens live 30 days, rotate on use, and die with the user's session epoch. Workers publish `/.well-known/oauth-protected-resource` and challenge with `WWW-Authenticate: Bearer resource_metadata=…`. Dynamic client registration is deliberately left out.
+- The login redirect keeps the query string, so an authorize request survives sign-in.
+
+**Defaults and clients**
+- The quickstart, `make demo`, the client config example, the README and the how-tos land a new user on `http://localhost:8080/mcp` with `Authorization: Bearer`. The stdio bridge is documented once, as the path for clients that only speak stdio. `RAMEN_MCP_KEY` is read by the bridge and used by every example, so a key never has to sit in a config file.
+- `deploy/local/mcp_call.py` speaks Streamable HTTP when given a URL and the bridge when given `host:port`.
+
+**Verification**
+- `tests/conformance/test_transports_local.py`: the whole guard table on both transports on real node processes, the HTTP-only cases, and the official `mcp` SDK's Streamable HTTP client end to end. CI runs it on Linux and, new, on `windows-latest` with the node built natively there — the client flow on the platform where fresh-machine setups break.
+- `scripts/cloud_smoke.sh` gains the HTTP steps; `tests/kind/test_http.py` proves the path through the cluster's ports.
+- Found on the way: a stale release binary from 0.4.x hid that the node was h2c-only; the harness now finds `ramen-node.exe` and `Scripts/` venvs on Windows.
+
+**Security review (reports/security-v0.5.0.md in the private workspace) — every finding fixed or documented**
+- High: the Python runtime that executes a group's tool code inherited the node's whole environment. The sidecar now strips the node's credentials (`RAMEN_MCP_KEYS`, `RAMEN_ADMIN_KEY`, `RAMEN_SESSION_SECRET`, TLS key, CIDR lists, origins, issuer, proxy trust) before spawning it; a conformance tool that lists its own environment on a real node proves it.
+- OAuth: authorization is re-checked at every mint (user exists, may log in, still has the group, epoch unchanged); codes and refresh tokens are burned in the same store transaction they are read in and stored under their SHA-256; a rotated-out refresh token presented again revokes the whole grant; `/oauth/token` is rate-limited like `/login`; the authorize query is redacted from the access log; API keys cannot authorize a client; loopback clients may use any port (RFC 8252); redirect URIs keep their own query; `scopes_supported` no longer lists every tenant.
+- HTTP: an unparsable `Origin` is refused, not ignored; address and Origin are checked before the credential; sessions are bound to a full hash of the key; CORS headers and an `OPTIONS /mcp` preflight for a listed origin; a token for another zone is `401`, and the challenge names an absolute `resource_metadata` when the worker knows its public URL (`RAMEN_PUBLIC_URL`).
+- The local stack keeps the zone secret out of the group's bucket (the worker gets it from compose, the console the same value as `RAMEN_LOCAL_SESSION_SECRET`); `cloud_smoke.sh` verifies TLS against `RAMEN_SMOKE_CA` and skips verification only on `RAMEN_SMOKE_INSECURE=1`; `mcp_call.py` reads `RAMEN_MCP_KEY`.
+- Deferred to 0.5.1 with the reason stated: session-secret rotation (needs a two-key overlap on the node) and a per-zone admin key.
+
+**Docs**
+- `docs/threat-model.md`: assets, adversaries, what is defended, what is not, and what is unverified. The README leads with what is verified today, gives the cheaper claim a number (one Deployment per zone for a thirty-tool team, not thirty), claims the git-push story for HTTP clients only, and states security in one sentence: user code never runs in the process that holds the keys.
+
 ## [0.4.3] — screenshots that cannot go stale
 Contract §15. The 0.4.0 screenshots had survived two UI releases in `docs/img/`: `api-keys.png` still advertised the group list box that 0.4.2 replaced, and nothing in the repo noticed.
 

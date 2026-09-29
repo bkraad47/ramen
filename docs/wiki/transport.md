@@ -1,9 +1,20 @@
 # Transport and what secures each hop
 
-The transport is **JSON-RPC 2.0 over gRPC**. Nothing about MCP changed — the messages your client and your tools
-see are the standard ones — but since 0.3.1 each message travels as the `bytes body` of one `ramen.v1.Mcp/Call`
-instead of an HTTP request ([contract §11](../CONTRACTS.md), [`mcp.proto`](https://github.com/bkraad47/ramen/blob/main/proto/ramen/v1/mcp.proto)).
-The HTTP `/mcp` endpoint that 0.1.0–0.3.0 exposed is gone.
+Since 0.5.0 a worker speaks two transports on one port, through one set of guards ([contract §16](../CONTRACTS.md)):
+
+- **Streamable HTTP** — the front door. `POST /mcp` carries one JSON-RPC 2.0 message (MCP spec 2025-06-18); the
+  credential is `Authorization: Bearer`, an `rmk_` key or a console-issued OAuth token. A URL and a header, so
+  phones, browsers and hosted agent platforms are clients without installing anything.
+- **gRPC** — `ramen.v1.Mcp/Call`, one message as `bytes body` ([§11](../CONTRACTS.md),
+  [`mcp.proto`](https://github.com/bkraad47/ramen/blob/main/proto/ramen/v1/mcp.proto)). Kept for teams that want
+  it internally, and what the stdio bridge speaks.
+
+Nothing about MCP changed: the messages your client and your tools see are the standard ones. What matters for
+security is that the HTTP handler does not have its own checks: it turns the request headers into the same metadata
+map and calls the same guard and dispatch functions the gRPC service calls
+([`node-rs/src/http.rs`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/http.rs) →
+[`grpc.rs::guard`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/grpc.rs)). The conformance suite runs the
+whole guard table on both transports so a check that drifts fails there first.
 
 <figure class="ramen-diagram" markdown>
 ![One MCP call, end to end: stdio client to bridge to load balancer to Rust node to Python runtime to bucket, with the console alongside](../img/architecture.svg)
@@ -28,8 +39,8 @@ so a crash, a hang or a leak in tool code costs one respawn rather than the pod 
 
 | Hop | What it is | What protects it |
 |---|---|---|
-| Client → bridge | stdin/stdout of a child process on the client's own machine | process boundary only; no network |
-| Bridge (or any gRPC client) → edge | gRPC over HTTP/2 | **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. Auth travels as metadata `authorization: Bearer rmk_…` |
+| Client → edge (HTTP) | `POST https://<edge>/mcp` | TLS at the load balancer; the credential in `Authorization: Bearer`; a browser `Origin` must be on the zone's allowlist (see [Origin](#origin)); a session id is signed and bound to the credential (see [Sessions](#sessions)). The local compose worker is plain `http://` on the laptop only |
+| Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. The key comes from `RAMEN_MCP_KEY` |
 | Edge → node | GKE Gateway, or an AWS ALB (**written, never applied — see below**) → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone (the AWS WAF equivalent has never been applied) |
 | Edge → node, without a key | `grpc.health.v1.Health`, and gRPC reflection where it is enabled | neither is key-checked or source-range-checked, so health answers anyone who reaches the edge — by design. Reflection would let them enumerate the services too, so it is switched off on deployed workers (`RAMEN_REFLECTION=0` in the chart and both renderers) and answers `UNIMPLEMENTED` there; it stays on locally |
 | Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` (on by default): ingress to the node port only from the console's namespace and the load-balancer / health-check ranges. This — with the hardened container context — is what actually bounds direct access, and what makes the unauthenticated surface above tolerable |
@@ -126,10 +137,39 @@ JSON-RPC `-32601` when called — by name, and for resources by URI as well as b
 the console per environment and per zone, so a model connected to one zone cannot see or call what that zone has
 switched off.
 
+### Sessions
+`initialize` over HTTP returns an `Mcp-Session-Id` of the form `<nonce>.<expiry>.<mac>`, where the MAC is
+HMAC-SHA256 over the nonce, the expiry and the id of the credential that made the call, keyed with the zone's
+`RAMEN_SESSION_SECRET`. Nothing is stored: any pod in the zone verifies an id, so there is no affinity to configure
+and a rollout keeps sessions alive. Presented under another credential, past expiry (30 min by default) or altered,
+the id is `404` — the spec's signal to re-initialize — never `401`, so a stolen id reveals nothing and cannot be
+replayed with a different key. The console writes the secret into every zone's deploy Secret; a group cannot set it
+from its own deploy file. Without it the node generates one per process and says so in its log, and sessions then
+die with the pod.
+
+### Origin
+A request that carries a browser `Origin` header is refused with `403` unless the origin is on
+`RAMEN_ALLOWED_ORIGINS` — and that list is **empty by default**, so a page on another site cannot use a victim's
+browser to reach a worker through DNS rebinding. Non-browser clients send no `Origin` and are unaffected. A group may
+open its own web origins from its deploy file; `*` is for a laptop.
+
+### OAuth tokens
+When `RAMEN_OAUTH_ISSUER` names the console, a worker also accepts an HS256 access token the console minted for one
+signed-in user: signature (key derived from the same zone secret), `exp`, issuer, audience and scope
+(`mcp:<group>:<zone>`) must all check out, and the access log then names the user rather than a key id. Tokens live
+one hour and are not individually revocable; refresh tokens are, through the user's session epoch. The worker
+publishes `/.well-known/oauth-protected-resource` and answers a missing credential with
+`WWW-Authenticate: Bearer resource_metadata=…`, which is how an OAuth-capable client finds the console. Two
+practical notes: the metadata URL is absolute only when the deploy set `RAMEN_PUBLIC_URL` on the worker (the console
+does so for a cloud zone; a pod cannot know its public address on its own), and behind a load balancer that routes
+on `ramen-group`/`ramen-zone` a client must send those headers on the metadata request too, or the balancer has no
+zone to send it to. Details and what the console checks before minting: [Security](../how-tos/security.md).
+
 ### The unauthenticated surface
-Two services run ahead of every guard — no key, no source-range check: `grpc.health.v1.Health`, deliberately, so
-that load balancers and Kubernetes can probe it; and gRPC **server reflection** (`v1` and `v1alpha`), so that
-`grpcurl` works without a local copy of the proto.
+Three things run ahead of every guard — no key, no source-range check: `grpc.health.v1.Health`, deliberately, so
+that load balancers and Kubernetes can probe it; `GET /.well-known/oauth-protected-resource`, which is public
+metadata by design (RFC 9728) and names only the console's URL and the resource identifier; and gRPC **server
+reflection** (`v1` and `v1alpha`), so that `grpcurl` works without a local copy of the proto.
 
 Reflection is convenient on a laptop and a disclosure at an edge: anyone who could reach it could list the
 services and print their definitions, `ramen.v1.Admin` included, from a source range the MCP allowlist denies.
@@ -184,6 +224,13 @@ the runtime has actually loaded the group's code.
 
 ## What is verified, and what is not
 
+- **Verified in 0.5.0 on real node processes, not yet in a cloud:** the whole guard table on both transports (key,
+  source range, blocked names, 4 MiB and in-flight caps, protocol errors as JSON-RPC bodies, notifications), the
+  HTTP-only checks (Origin, sessions bound to the credential and refused under another key, content negotiation,
+  protocol version, the RFC 9728 metadata), a console-minted OAuth token accepted by the node, and the official
+  `mcp` SDK's Streamable HTTP client end to end — in CI on Linux and on a Windows runner that builds the node
+  natively (`tests/conformance/test_transports_local.py`). The HTTP path through a real load balancer, and the
+  OAuth flow against a deployed console, are what the next cloud run has to show.
 - **Verified live**, on one GKE Autopilot cluster in `us-central1` (0.3.2), with the whole harness green through
   the load balancer (126 passed, 0 failed):
     - header routing on `ramen-group` / `ramen-zone` over h2c, and gRPC health checks;
@@ -212,16 +259,26 @@ the runtime has actually loaded the group's code.
 
 ## Connecting
 
-Standard MCP clients do not see any of this. `ramen-mcp-bridge` is a stdio MCP server that forwards each message
-to `Mcp/Call`, so Claude Desktop, Cursor and the `mcp` SDK drop it into an ordinary `mcpServers` entry:
+Standard MCP clients do not see any of this. The front door is a URL and a header:
 
-```sh
-ramen-mcp-bridge --target <host:port> --key rmk_… --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]
+```json
+{"mcpServers": {"ramen": {"url": "https://<edge>/mcp",
+  "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "<g>", "ramen-zone": "<z>"}}}}
 ```
 
-Every flag has an environment variable behind it (`RAMEN_BRIDGE_TARGET`, `RAMEN_BRIDGE_KEY`,
-`RAMEN_BRIDGE_GROUP`, `RAMEN_BRIDGE_ZONE`, `RAMEN_BRIDGE_TLS`, `RAMEN_BRIDGE_CA`). On a shared machine prefer
-`RAMEN_BRIDGE_KEY` over `--key`: a command line is visible to every other user through `ps`.
+Keep the key in `RAMEN_MCP_KEY` rather than in the file. Leave `Authorization` out and an OAuth-capable client will
+follow the worker's `401` to the console and sign the user in for a token scoped to that person.
+
+Clients that only speak stdio use `ramen-mcp-bridge`, a stdio MCP server that forwards each message to `Mcp/Call`
+over gRPC — the compatibility path, unchanged since 0.3.1:
+
+```sh
+RAMEN_MCP_KEY=rmk_… ramen-mcp-bridge --target <host:port> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]
+```
+
+Every flag has an environment variable behind it (`RAMEN_BRIDGE_TARGET`, `RAMEN_BRIDGE_GROUP`, `RAMEN_BRIDGE_ZONE`,
+`RAMEN_BRIDGE_TLS`, `RAMEN_BRIDGE_CA`; the key from `RAMEN_MCP_KEY` or `RAMEN_BRIDGE_KEY`). Never pass `--key` on a
+shared machine: a command line is visible to every other user through `ps`.
 
 The local compose stack is the other place to be careful. It publishes the worker on host port 8080 as plaintext
 h2c with an open address allowlist, a committed MCP key and a committed admin key, and no `RAMEN_ADMIN_CIDRS` —

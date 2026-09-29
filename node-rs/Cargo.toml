@@ -1,6 +1,6 @@
 [package]
 name = "ramen-node"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2024"
 description = "Ramen MCP server node: JSON-RPC 2.0 over gRPC (ramen.v1.Mcp)"
 license = "BSD-3-Clause"
@@ -25,6 +25,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ipnet = "2"
 subtle = "2"
+# §16: Streamable HTTP on the same port (axum is what tonic 0.14 routes on), signed session ids and HS256 token
+# checks (ring is already here through tonic's TLS), base64url for both. Versions match the existing lockfile.
+axum = "0.8"
+http = "1"
+http-body-util = "0.1"
+ring = "0.17"
+base64 = "0.22"
 
 [build-dependencies]
 tonic-prost-build = "0.14"

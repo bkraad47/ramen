@@ -18,12 +18,20 @@ class SidecarError(Exception):
         self.error = error
 
 
+def venv_bin(venv: Path, name: str) -> Path | None:
+    """A console script or interpreter inside a venv, wherever this platform puts it (`bin/` or `Scripts/`)."""
+    for cand in (venv / "bin" / name, venv / "Scripts" / f"{name}.exe", venv / "Scripts" / name):
+        if cand.exists():
+            return cand
+    return None
+
+
 def runtime_python() -> str:
     p = env("RAMEN_RUNTIME_PYTHON")
     if p:
         return p
-    venv = RAMEN_DIR / "runtime-py" / ".venv" / "bin" / "python"
-    return str(venv) if venv.exists() else sys.executable
+    found = venv_bin(RAMEN_DIR / "runtime-py" / ".venv", "python")
+    return str(found) if found else sys.executable
 
 
 def runtime_importable() -> bool:

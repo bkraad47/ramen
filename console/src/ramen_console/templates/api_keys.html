@@ -9,4 +9,12 @@
 <p class="muted">A devops key goes in <code>X-Ramen-Api-Key: rmn_…</code> on <code>/api/v1/*</code>; see the <a href="/api/docs">API docs</a>. An agent key (<code>rmk_…</code>) is handed to a language model, reaches the named groups' workers on the next deploy, and is refused by this API. Add no group to use your own.</p></div>
 {% macro act(r) %}<button class="sm danger" hx-delete="/api/v1/api-keys/{{ r.id }}" hx-confirm="Revoke key {{ r.name }}?" hx-swap="none">Revoke</button>{% endmacro %}
 {{ table(keys, ['id', 'name', 'client_type', 'role', 'groups', 'created'], '/api/v1/api-keys', 'API keys', act) }}
+{% if oauth_clients is not none %}<h2>OAuth clients</h2>
+<div class="card"><p class="muted">An OAuth client lets a person sign in through this console and reach a group's workers with a token scoped to them, instead of a shared agent key. Register the client's name and the exact redirect URIs it will use; there is no client secret, the client proves itself with PKCE.</p>
+<form class="inline" hx-post="/api/v1/oauth/clients" hx-ext="json" hx-swap="none"><label>Name<input name="name" required placeholder="Claude Desktop"></label><label>Redirect URIs (comma)<input name="redirect_uris" required placeholder="http://127.0.0.1:9999/callback"></label><button>Register client</button></form>
+<table><tr><th>Client id</th><th>Name</th><th>Redirect URIs</th><th>Created</th><th>Actions</th></tr>
+{% for c in oauth_clients %}<tr><td><code>{{ c.client_id }}</code></td><td>{{ c.name }}</td><td>{{ c.redirect_uris|join(', ') }}</td><td>{{ c.created }}</td>
+<td><div class="row-actions"><button class="sm danger act" hx-delete="/api/v1/oauth/clients/{{ c.client_id }}" hx-confirm="Remove the client {{ c.name }}? Its refresh tokens stop working." hx-swap="none">Remove client</button></div></td></tr>
+{% else %}<tr><td colspan="5" class="muted">No OAuth clients registered</td></tr>{% endfor %}</table>
+<p class="muted">Clients discover the flow at <code>/.well-known/oauth-authorization-server</code>; a worker points them here from <code>/.well-known/oauth-protected-resource</code>.</p></div>{% endif %}
 {% endblock %}

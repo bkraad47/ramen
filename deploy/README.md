@@ -33,6 +33,7 @@ deploy/scripts/selfsigned.sh $IP                        # Secret ramen-system/ra
 kubectl label ns ramen-system ramen.io/routes=true      # Gateway only admits routes from labelled namespaces
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set project=$PROJECT,region=$REGION \
+  --set console.env.RAMEN_PUBLIC_URL=https://$IP \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)

@@ -91,8 +91,39 @@ jobs:
           (cd runtime-py && uv sync --all-extras)
           echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
           echo "RAMEN_BRIDGE_CMD=$PWD/runtime-py/.venv/bin/ramen-mcp-bridge" >> "$GITHUB_ENV"
-      - working-directory: tests
-        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_sidecar_protocol.py
+      - name: both transports on real nodes (§16.5)
+        working-directory: tests
+        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py
+
+  client-windows:
+    # §16.4 / X7: the client flow on the platform where fresh-machine setups break — the node built natively, the
+    # runtime and bridge installed from a wheel, RAMEN_MCP_KEY from the environment, both transports, the SDK client.
+    needs: [rust]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
+        with: { toolchain: "1.98.1" }
+      - uses: arduino/setup-protoc@v3
+        with: { version: "28.x", repo-token: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - name: build the node on Windows
+        working-directory: node-rs
+        run: cargo build --release
+      - name: runtime-py venv (sidecar + ramen-mcp-bridge) and its own tests, bridge env var included
+        working-directory: runtime-py
+        run: |
+          uv sync --all-extras
+          uv run pytest -q tests/test_bridge.py
+      - name: conformance on both transports, key from RAMEN_MCP_KEY
+        working-directory: tests
+        env:
+          RAMEN_NODE_BIN: ${{ github.workspace }}\node-rs\target\release\ramen-node.exe
+          RAMEN_MCP_KEY: test-key
+        run: uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py
 
   compose-check:
     # hashFiles() is empty at job level (no checkout yet), so the e2e guard is computed here.

@@ -1,11 +1,14 @@
 pub mod auth;
 pub mod config;
 pub mod grpc;
+pub mod http;
 pub mod log;
 pub mod mcp;
 pub mod metrics;
 pub mod server;
+pub mod session;
 pub mod sidecar;
+pub mod token;
 
 /// Generated from `proto/ramen/v1/*.proto` (see `build.rs`).
 pub mod pb {

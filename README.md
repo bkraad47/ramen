@@ -11,7 +11,7 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 <a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a>
 </p>
 
-**Docs: https://bkraad47.github.io/ramen/** · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
+**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
 > **0.5.0 puts Streamable HTTP back at the front door.** Every worker serves `POST /mcp` — a URL and a bearer
 > header, nothing to install — next to the gRPC service it has had since 0.3.1, on the same port, through the same
@@ -136,7 +136,7 @@ code costs one respawn, not the process holding the keys.
 `grpc.health.v1.Health` is deliberately unauthenticated so load balancers and Kubernetes can probe it, and reports
 `SERVING` only once the runtime has loaded the group's code.
 
-**Verified in 0.5.0, on real node processes but not in a cloud:** both transports through every guard (key, source
+**Verified in 0.5.0 on real node processes, and in 0.5.1 live on GKE through the load balancer** (Streamable HTTP with the key, the OAuth flow from consent to a tool call with the token, refresh rotation and reuse revocation, the RFC 9728 discovery; harness 218 passed, 0 failed, 15 skipped with stated reasons): both transports through every guard (key, source
 range, blocked names, size and in-flight caps, protocol errors as JSON-RPC bodies), the HTTP-only checks (Origin,
 sessions bound to the credential, content negotiation, protocol version, the RFC 9728 metadata), console-issued
 OAuth tokens accepted by the node, and the official `mcp` SDK's Streamable HTTP client end to end — in CI on Linux
@@ -160,7 +160,7 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 
 | Target | Status | Guide |
 |---|---|---|
-| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC, gRPC health checks), Cloud Armor | verified on a throwaway project: 0.3.0 infrastructure, then 0.3.2 gRPC header routing over h2c end to end through the Gateway (harness 126 passed, 0 failed), on one cluster in `us-central1` | [docs](https://bkraad47.github.io/ramen/how-tos/gcp/) · [`deploy/README.md`](deploy/README.md) |
+| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on throwaway projects: 0.3.0 infrastructure, 0.3.2 gRPC header routing over h2c end to end through the Gateway (harness 126 passed, 0 failed), 0.5.1 Streamable HTTP and OAuth through the same Gateway (harness 218 passed, 0 failed, 15 skipped with stated reasons), each on one cluster in `us-central1` | [docs](https://bkraad47.github.io/ramen/how-tos/gcp/) · [`deploy/README.md`](deploy/README.md) |
 | **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | **built + unit-tested only, never applied to a real account** | [docs](https://bkraad47.github.io/ramen/how-tos/aws/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 

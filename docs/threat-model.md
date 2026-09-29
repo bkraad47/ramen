@@ -57,9 +57,9 @@ management plane. Verification status is the section at the end, and it is the p
 
 ## What is verified, and what is not
 Kept current in [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not) and the
-`reports/` directory of the private workspace. In short, as of 0.5.0: both transports and every guard above are
+`reports/` directory of the private workspace. In short, as of 0.5.1: both transports and every guard above are
 proven on real node processes in CI on Linux and Windows; the gRPC path was proven live on one GKE cluster in 0.3.2
-and 0.4.0; the HTTP path, sessions and OAuth have **not yet run in a cloud**; the AWS path has **never** been applied
+and 0.4.0, and the HTTP path, sessions and OAuth on one GKE cluster in 0.5.1; the AWS path has **never** been applied
 to a real account; there has been no third-party penetration test. An independent agent reviews each release's new
 surface against the code (`reports/security-v<version>.md`), which is the closest thing to an audit this project
 has had.

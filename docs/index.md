@@ -110,9 +110,9 @@ client written against 0.3.0's `/mcp` works again, and one written for the bridg
 
 | Target | Status | Guide |
 |---|---|---|
-| GCP (GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB with gRPC header routing, Cloud Armor) | verified on a throwaway project: 0.3.0 infrastructure, then 0.3.2 gRPC header routing over h2c end to end through the Gateway | [GCP how-to](how-tos/gcp.md) |
+| GCP (GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB with header routing for gRPC and Streamable HTTP, Cloud Armor) | verified on throwaway projects: 0.3.0 infrastructure, 0.3.2 gRPC header routing over h2c through the Gateway, 0.5.1 Streamable HTTP and the OAuth flow through the same Gateway | [GCP how-to](how-tos/gcp.md) · [End to end](how-tos/end-to-end.md) |
 | AWS (EKS, DynamoDB, S3, Secrets Manager, ALB gRPC target groups, WAF) | **built and unit-tested only; never applied to a real account** | [AWS how-to](how-tos/aws.md) |
-| Local (docker compose) | CI e2e on every push | [Local quickstart](how-tos/local-quickstart.md) |
+| Local (docker compose) | CI e2e on every push | [Local quickstart](how-tos/local-quickstart.md) · [End to end, console → AI client](how-tos/end-to-end.md) |
 
 ## Where next
 

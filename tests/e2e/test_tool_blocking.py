@@ -49,7 +49,9 @@ def fresh_calls(node, n: int = 8) -> list[str]:
 
     out = []
     for _ in range(n):
-        with Node(node.target, node.key, group=node.group, zone=node.zone, tls=node.tls, timeout=node.timeout) as c:
+        with Node(
+            node.target, node.key, group=node.group, zone=node.zone, tls=node.tls, ca=node._ca, timeout=node.timeout
+        ) as c:  # ca: a fresh channel through a self-signed LB failed CERTIFICATE_VERIFY on the 0.5.1 GKE run
             out.append(call_blocked(c))
     return out
 

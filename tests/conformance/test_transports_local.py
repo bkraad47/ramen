@@ -248,7 +248,7 @@ def test_http_over_node_tls():
         h = n.http_client()
         assert h.url.startswith("https://")
         assert h.initialize()["protocolVersion"] == PROTOCOL
-        assert n.node.ping()  # and gRPC on the same TLS port
+        assert n.node.ping() == {}  # and gRPC on the same TLS port
 
 
 # --- security review 0.5.0: what the audit asked to see proven on a real node ---------------------------------------

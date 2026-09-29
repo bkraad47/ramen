@@ -181,7 +181,9 @@ jobs:
         run: uv sync && uv run pytest -q -rs e2e conformance --cov --cov-report=xml --cov-report=term
       - name: Smoke script (grpcurl path)
         run: scripts/cloud_smoke.sh "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_EMAIL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_ADMIN_KEY" "$RAMEN_NODE_URL"
-        env: { RAMEN_SMOKE_ZONE: local, RAMEN_ZONE_PROVIDER: local, RAMEN_ZONE_REGION: local, RAMEN_SMOKE_ADMIN: "1" }
+        # the compose console's certificate is self-signed inside the container (no CA file to hand curl), so this is
+        # the one place RAMEN_SMOKE_INSECURE is set; a cloud run passes RAMEN_SMOKE_CA instead (review 0.5.0 M6)
+        env: { RAMEN_SMOKE_ZONE: local, RAMEN_ZONE_PROVIDER: local, RAMEN_ZONE_REGION: local, RAMEN_SMOKE_ADMIN: "1", RAMEN_SMOKE_INSECURE: "1" }
       - name: Compose logs
         if: failure()
         run: docker compose -f deploy/local/docker-compose.yml logs --no-color --tail=300

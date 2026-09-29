@@ -104,7 +104,7 @@ grpcurl -cacert ramen-lb.pem -import-path proto -proto ramen/v1/mcp.proto \
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
 grpc_health_probe -addr $IP:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'   # SERVING
 ```
-The route appears ~2 min after the namespace is created; until then the Gateway answers 404 / `UNIMPLEMENTED`.
+The route appears minutes after the namespace is created — two on a good day, seven on the 0.5.1 run — and until then the Gateway answers 404 / `UNIMPLEMENTED` (a `POST /mcp` lands on the console and gets its `404 {"detail":"Not Found"}`).
 A call with the wrong group/zone headers reaches no backend (404 from the Gateway); a call with the right headers
 and a wrong key gets `UNAUTHENTICATED` from the node. Drop `--ca` / `-cacert` once a managed certificate is in place.
 
@@ -115,7 +115,7 @@ and a wrong key gets `UNAUTHENTICATED` from the node. Drop `--ca` / `-cacert` on
   attach is retried in the background.
 - **Rebalance**: capacity scaler per zone. See [Rebalance](../wiki/rebalance.md).
 - **Logs**: Cloud Logging for the namespace (and one pod), downloadable.
-- **Service account**: super admin creates/repairs the group+zone GSA; extra roles only through SA rules.
+- **Service account**: super admin creates/repairs the group+zone GSA; extra roles only through SA rules. Bucket and secret roles are bound on the resource; a **project-wide** role (`logs.write` → `roles/logging.logWriter`, metrics, …) needs the console to hold `roles/resourcemanager.projectIamAdmin`, which Terraform grants only with `console_project_iam = true` (off by default, SEC-08). Without it an approved request is recorded, the zone's `sa_permissions` list it, and the answer carries a `note` saying the role was not bound.
 - **Refresh**: super admin re-discovers namespaces, deployments and GSAs into the store.
 - **Secrets backend** is Secret Manager (`ramen-<group>-<env|all>-<zone|all>-<NAME>`).
 

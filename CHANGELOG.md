@@ -2,6 +2,15 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.1] — the end-to-end guide, and 0.5.0 proven on GKE
+Contract §17. No protocol or API change.
+
+- **`docs/how-tos/end-to-end.md`**: console → worker → AI client, the same eight steps on the local compose stack and on GKE — sign in, zone, group and environment, agent key, deploy, connect a Streamable HTTP client (Claude Desktop, Cursor, curl, the `mcp` SDK), per-user access with OAuth, and what the audit and access logs then show. Every console step has a screenshot.
+- **Screenshots**: the rig (`make shots`) gained the one-time key display and the OAuth consent page, and a live mode (`scripts/shots.py --base https://… --email … --password …`) that captures the same set from a real console; the GKE pictures in the guide come from it. Seeded set re-captured; `ui_contract` 0.5.1.
+- **GKE run of 0.5.0** on a throwaway Autopilot cluster: the console journey, `cloud_smoke.sh` (TLS verified against the balancer's certificate), Streamable HTTP through the Gateway, the OAuth flow end to end with the token calling a tool, and the harness — `e2e conformance cloud`, **218 passed, 0 failed, 15 skipped** with reasons — including 0.4.1's permissions (IAM bind and unbind against Google's APIs) and backup-restore cases. Found and fixed: the deploy did not hand workers `RAMEN_PUBLIC_URL` (challenge was relative); Terraform did not enable the Resource Manager API, so project-wide role bindings failed as a bare `403` (the console reported it as a missing role; the permissions suite now skips with the console's note instead of failing when `console_project_iam` is off); a harness helper opened fresh gRPC channels without the CA. Learned: the Gateway takes up to seven minutes to program a new zone's route, and a console rollout answers `503` through the balancer for about a minute.
+- **Fixed, found by CI after the 0.5.0 push:** Streamable HTTP over node TLS (`RAMEN_TLS_CERT/KEY`) failed at the handshake — tonic's acceptor offers only `h2` on ALPN and every Streamable HTTP client speaks HTTP/1.1. The node now terminates TLS with its own acceptor offering `h2` and `http/1.1`, one handshake task per connection with a 10 s bound. The TLS conformance case had been skipped on the laptop (no `openssl` on PATH); it runs in CI and now passes. Also: the CI compose smoke step sets `RAMEN_SMOKE_INSECURE=1` for the container's self-signed certificate, the one place that flag is used.
+- `scripts/oauth_roundtrip.py`: the OAuth flow as a client does it, against a live console and worker — register, authorize, consent, PKCE exchange, call `/mcp` with the token, refresh rotation and reuse detection, a token for another zone refused.
+
 ## [0.5.0] — Streamable HTTP at the edge, gRPC inside
 Contract §16, decisions D31–D35. The user's decision: gRPC needs a locally installed bridge, which rules out phones,
 browsers and hosted agent platforms; Streamable HTTP is a URL and a header and is what the MCP spec defines.

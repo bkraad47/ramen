@@ -1,53 +1,82 @@
 {
+  "live": {
+    "gke": {
+      "captured_for": "0.5.1",
+      "date": "2026-09-29",
+      "screenshots": {
+        "api-keys.png": "API keys: client type, the group dropdown, the listing",
+        "audit.png": "Audit: newest 100, search and outcome filter",
+        "backups.png": "Backups: preview, restore, restore and prune",
+        "config.png": "Config: authentication, the permission catalogue, service-account rules",
+        "dashboard.png": "Dashboard: load per zone and group",
+        "deploy-job.png": "A deploy job with its log",
+        "environments.png": "Environments with the last deploy flattened",
+        "group.png": "A group: environments, zones, packages, permissions, worker image",
+        "key-shown.png": "The one-time display of a new agent key",
+        "logs.png": "Logs: entries on the left, the selected body on the right",
+        "oauth-consent.png": "OAuth: the consent page a person sees when a client asks",
+        "secrets.png": "Secrets: names only, never values",
+        "users.png": "Users, permission requests and the password rule"
+      }
+    }
+  },
   "screenshots": {
     "api-keys.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "API keys: client type, the group dropdown, the listing"
     },
     "audit.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Audit: newest 100, search and outcome filter"
     },
     "backups.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Backups: preview, restore, restore and prune"
     },
     "config.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Config: authentication, the permission catalogue, service-account rules"
     },
     "dashboard.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Dashboard: load per zone and group"
     },
     "deploy-job.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "A deploy job with its log"
     },
     "environments.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Environments with the last deploy flattened"
     },
     "group.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "A group: environments, zones, packages, permissions, worker image"
     },
+    "key-shown.png": {
+      "captured_for": "0.5.1",
+      "page": "The one-time display of a new agent key"
+    },
     "login.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Sign-in page"
     },
     "logs.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Logs: entries on the left, the selected body on the right"
     },
+    "oauth-consent.png": {
+      "captured_for": "0.5.1",
+      "page": "OAuth: the consent page a person sees when a client asks"
+    },
     "secrets.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Secrets: names only, never values"
     },
     "users.png": {
-      "captured_for": "0.4.3",
+      "captured_for": "0.5.1",
       "page": "Users, permission requests and the password rule"
     }
   },
-  "ui_contract": "0.4.3"
+  "ui_contract": "0.5.1"
 }

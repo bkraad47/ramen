@@ -67,6 +67,9 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
             issuer = (os.environ.get("RAMEN_PUBLIC_URL") or "").strip().rstrip("/")
             if issuer:
                 cfg["RAMEN_OAUTH_ISSUER"] = issuer
+                # the workers sit behind the same address: with it the 401 challenge names an absolute
+                # resource_metadata URL (RFC 9728); found relative on the 0.5.0 GKE run
+                cfg["RAMEN_PUBLIC_URL"] = issuer
             else:
                 job["log"].append(f"{now()} zone {z}: RAMEN_PUBLIC_URL unset, OAuth tokens are off for this worker")
             cfg = await svc.secrets_backend.resolve_config(cfg)

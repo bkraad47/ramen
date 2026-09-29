@@ -99,8 +99,14 @@ mod tests {
         set_file(None);
         emit("info", "not mirrored", Value::Null);
         let text = std::fs::read_to_string(&p).unwrap();
-        assert_eq!(text.lines().count(), 2);
-        assert!(text.contains("\"msg\":\"hello\"") && text.contains("sidecar"));
+        // the log file is process-global and other tests emit concurrently, so count only this test's own lines
+        // (an exact line count flaked in CI on 0.5.3 and once on a laptop)
+        let mine = text
+            .lines()
+            .filter(|l| l.contains("\"msg\":\"hello\"") || l.contains("sidecar"))
+            .count();
+        assert_eq!(mine, 2, "{text}");
+        assert!(!text.contains("not mirrored"));
         let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 }

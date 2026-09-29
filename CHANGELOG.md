@@ -2,6 +2,8 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+- Test-only: `log::tests::mirrors_to_file` counted every line of the process-global log file and flaked when another test emitted concurrently (it failed CI on the 0.5.3 commit and took the pipeline with it); it now counts only its own lines.
+
 ## [0.5.3] — how to add and deploy a tool
 - `docs/how-tos/add-a-tool.md`: from an empty folder to a tool an AI client can call, with the demo group as the worked example — the layout, the calculator read line by line, a new `word_count` tool in two files, a local check by driving the worker's own runtime over stdio (`runtime.load`, `runtime.call_tool`; real transcript), push, deploy from the console (canary, per-package errors, disable), the call, and resources and prompts in brief. Linked from the README header, the docs home, the nav and the quickstart. A test keeps every guide the README promises present, in the nav and linked.
 

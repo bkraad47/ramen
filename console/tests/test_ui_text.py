@@ -49,14 +49,14 @@ def test_the_sidebar_has_no_wordmark(demo):
     html = demo.get("/").text
     assert 'class="brand"' not in html
     assert ">RAMEN<" not in html
-    assert 'alt="Ramen logo"' in html or "logo.png" in html  # the logo itself still says it
+    assert "logo-mark.png" in html  # the mark says it; the wordmark is for the docs and the README
 
 
 def test_the_login_heading_drops_the_product_name(client):
     html = client.get("/login").text
     assert "Ramen console" not in html
     assert "<title>Sign in</title>" in html
-    assert "logo.png" in html
+    assert "logo-mark.png" in html
 
 
 def test_the_reset_page_drops_it_too(client):
@@ -214,3 +214,24 @@ def test_the_legend_names_the_loads(demo):
     legend = text_of(re.search(r'<div class="legend">(.*?)</div>', demo.get("/").text, re.S).group(1))
     for word in ("Low", "Even", "High", "Down"):
         assert word in legend
+
+
+# --- the favicon's mark is the UI logo (0.5.2) ---------------------------------
+def test_every_branded_page_shows_the_mark_not_the_wordmark(demo):
+    """The sidebar and the sign-in, reset and consent cards show the square mark the favicon is made of, never the
+    wide wordmark that turned into a blurry rectangle at 56 px."""
+    from tests.test_oauth_server import authorize, pkce, register
+
+    r = demo.get("/static/logo-mark.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    w, h = int.from_bytes(r.content[16:20], "big"), int.from_bytes(r.content[20:24], "big")
+    assert w == h >= 128, (w, h)  # a square, large enough for a 2x sidebar
+    pages = {
+        "/": demo.get("/").text,
+        "/login": demo.get("/login").text,
+        "/auth/reset/<token>": demo.get("/auth/reset/not-a-token").text,
+        "consent": authorize(demo, register(demo), pkce()[1]).text,
+    }
+    for name, html in pages.items():
+        assert 'src="/static/logo-mark.png"' in html, name
+        assert "/static/logo.png" not in html, name

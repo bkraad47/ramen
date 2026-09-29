@@ -1,6 +1,6 @@
 [project]
 name = "ramen-tests"
-version = "0.5.1"
+version = "0.5.2"
 description = "Ramen cross-component conformance + e2e tests (run locally or against a cloud URL)"
 requires-python = ">=3.14"
 license = "BSD-3-Clause"

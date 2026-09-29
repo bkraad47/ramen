@@ -2,6 +2,16 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.4.3] — screenshots that cannot go stale
+Contract §15. The 0.4.0 screenshots had survived two UI releases in `docs/img/`: `api-keys.png` still advertised the group list box that 0.4.2 replaced, and nothing in the repo noticed.
+
+- `make shots` (`scripts/shots.py`) captures every console page from a throwaway instance — memory store, local adapter, two in-process fake workers, fictional groups, users, keys, secrets, an image pin, a backup, a deploy and a worker log — with Playwright. It seeds and tears down everything it uses and never touches a cloud or a real key.
+- `docs/img/shots.json` records what each screenshot shows and which release it was captured for, plus the release whose UI it must match. `console/tests/test_docs_images.py` fails on a missing image, an unrecorded screenshot, or a capture older than that contract — so a UI change now forces fresh captures before release.
+- All twelve shots re-captured for 0.4.3, including five pages the docs had never shown (audit, backups, users, environments, config), and the console how-to illustrates the pages it describes.
+
+**Fixed**
+- The `Auto refresh` and `Refresh discovery` buttons 0.4.2 added were floated into the dashboard legend and overflowed the card: the label wrapped onto three lines and `Refresh discovery` ran off the edge. The legend is a flex bar now, and a test rejects `float:right` on that page. The screenshot round is what found it — the tests only saw the markup.
+
 ## [0.4.2] — console usability and docs
 Contract §14, from the user's own list of ten things that were awkward to use.
 

@@ -1,6 +1,6 @@
 [package]
 name = "ramen-node"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 description = "Ramen MCP server node: JSON-RPC 2.0 over gRPC (ramen.v1.Mcp)"
 license = "BSD-3-Clause"

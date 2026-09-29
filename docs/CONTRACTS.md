@@ -286,3 +286,18 @@ Source: the user's `v0.4.2` instructions, normalised as W1–W10 in `manifests/i
   checks both packages, so drift fails the gate instead of reaching the sidebar.
 - **W10 docs**: the site builds `--strict` with no dead links, `version_current` tracks `VERSION`, the console page
   documents the behaviour above, and the release notes carry 0.4.1 and 0.4.2.
+
+## 15. v0.4.3 — screenshots that cannot go stale (binding)
+The 0.4.0 screenshots survived two UI releases in `docs/img/`, so `api-keys.png` advertised a control that had been
+replaced. Nothing in the repo noticed. From 0.4.3:
+
+- `scripts/shots.py` (`make shots`) captures every page of a throwaway console — memory store, local adapter, two
+  in-process fake gRPC workers, fictional groups, users, keys, secrets, an image pin, a backup, a deploy and a
+  worker log — with Playwright at 1440x900, device scale 2. It seeds and tears down everything it uses; it never
+  touches a cloud, a real key or a real repository.
+- `docs/img/shots.json` records, for every screenshot, which page it shows and which release it was captured for
+  (`captured_for`), plus `ui_contract`: the release whose console UI the shots must match.
+- `console/tests/test_docs_images.py` fails when a docs-referenced image is missing, when a screenshot has no entry,
+  or when any `captured_for` is older than `ui_contract`. **A round that changes the console raises `ui_contract`,
+  and the gate then demands fresh captures before the release can go out.**
+- `make shots OUT=reports/ui-<version>` writes a set elsewhere, which is how a before-and-after review set is made.

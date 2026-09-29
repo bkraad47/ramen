@@ -10,7 +10,7 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.4.2
+  tag: 0.4.3
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:

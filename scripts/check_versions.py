@@ -22,6 +22,9 @@ TEXT = {
     "deploy/helm/ramen/values.yaml": r"^\s*tag:\s*\"?([^\s\"#]+)",
     "deploy/helm/ramen-worker/values.yaml": r"^\s*tag:\s*\"?([^\s\"#]+)",
     "mkdocs.yml": r"^\s*version_current:\s*\"?([^\s\"]+)",
+    # the kind console's image tag and the worker image it hands zones: a 0.5.1 bump missed it and every kind
+    # deploy then pulled a tag that no longer existed (ImagePullBackOff, CI kind job red)
+    "deploy/kind/values.yaml": r"(?:^\s*tag:\s*|ramen-worker-kind:)\"?([^\s\"#]+)",
     "node-rs/Dockerfile": r"^ARG VERSION=(\S+)",
     "console/Dockerfile": r"^ARG RAMEN_VERSION=(\S+)",
     "deploy/local/.env.example": r"^VERSION=(\S+)",

@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "slow_tool",
+  "description": "Sleep for `ms` milliseconds, then answer. Exists so tests can hold an inflight permit.",
+  "callable": "slow",
+  "input": {
+    "ms": {"type": "integer", "description": "milliseconds to sleep (capped at 10000)"}
+  },
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

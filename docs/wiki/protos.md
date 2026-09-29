@@ -84,7 +84,7 @@ Transport failures are gRPC statuses; protocol failures stay JSON-RPC errors in 
 unknown tool, `-32602` for bad arguments, `isError: true` for an exception in your code). Messages are capped at
 4 MiB; `RAMEN_MAX_INFLIGHT` overflows answer `RESOURCE_EXHAUSTED`. `grpc.health.v1.Health/Check` on the same port
 is `SERVING` once your packages loaded. Standard MCP clients do not see any of this: `ramen-mcp-bridge` turns the
-worker into an ordinary stdio server ([local quickstart](../how-tos/local-quickstart.md#4-call-the-worker-with-the-bridge-claude-desktop-cursor-the-mcp-sdk)).
+worker into an ordinary stdio server ([local quickstart](../how-tos/local-quickstart.md#4-connect-a-client-claude-desktop-cursor-the-mcp-sdk)).
 
 ## Validate before you push
 `tests/fixtures/proto.schema.json` in the Ramen repo is the JSON Schema for `<name>.json`; the runtime's tests

@@ -10,7 +10,7 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.4.3
+  tag: 0.5.0
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:
@@ -27,6 +27,8 @@ console:
     RAMEN_CLOUD: gcp
     RAMEN_SECRETS_BACKEND: gcp
     RAMEN_ADMIN_EMAIL: admin@ramen.local
+    # RAMEN_PUBLIC_URL: https://<console static ip>   # CONTRACTS §16.3: the OAuth issuer; without it deployed workers
+    #                                                 # accept rmk_ keys only and the deploy job log says so
   secrets:                   # rendered into Secret ramen-console; set via --set or a values file kept out of git
     RAMEN_ADMIN_PASSWORD: ""
     RAMEN_FERNET_KEY: ""

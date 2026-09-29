@@ -47,7 +47,7 @@ uv tool install './runtime-py[grpc]'     # from a checkout; or run it inside the
     self-signed certificate (D17); drop it once a managed certificate is in place.
 
 `curl` scripts become `grpcurl` calls or an `mcp` SDK snippet; both are in the
-[local quickstart](local-quickstart.md#5-call-the-worker-raw-with-grpcurl). Anything that polled `/readyz` on a
+[local quickstart](local-quickstart.md#5-call-the-worker-raw-over-grpc-with-grpcurl). Anything that polled `/readyz` on a
 worker should use `grpc_health_probe -addr <host:port>` or the `Health/Check` RPC.
 
 ## 2. Operators: roll the edge and the console together

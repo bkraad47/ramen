@@ -2,6 +2,10 @@
 //! `grpc.health.v1.Health` (NOT_SERVING until the first successful `runtime.load`). Guards run inside the
 //! handlers so they see the peer address and metadata: CIDR → PERMISSION_DENIED, key → UNAUTHENTICATED,
 //! inflight → RESOURCE_EXHAUSTED; the 4 MiB message limit is enforced by the codec (OUT_OF_RANGE).
+//!
+//! §16.1: `guard` and `dispatch_body` are the ONE implementation of those checks. The Streamable HTTP handler in
+//! `http.rs` calls the same two functions with the request headers as a `MetadataMap`; the transports differ only in
+//! how a `Status` is spelled on the wire (`http::status_of`). Never add a check here without it applying there.
 use crate::auth;
 use crate::config::Config;
 use crate::log::emit;
@@ -10,9 +14,11 @@ use crate::metrics::Metrics;
 use crate::pb::admin_server::{Admin, AdminServer};
 use crate::pb::mcp_server::{Mcp, McpServer};
 use crate::pb::{JsonRpc, LoadResult, MetricsReply, MetricsRequest, ReloadRequest};
+use crate::session::{self, Sessions};
 use crate::sidecar::{RpcErr, Sidecar};
+use crate::token;
 use serde_json::{Value, json};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,6 +51,10 @@ pub struct App {
     /// Re-read on `Admin/Reload` (env + yaml in production; injectable for tests).
     pub config_source: ConfigSource,
     pub health: HealthReporter,
+    /// §16.2: signs and verifies `Mcp-Session-Id`s; startup-fixed like the semaphore.
+    pub sessions: Sessions,
+    /// §16.3: HS256 key for console-issued access tokens, derived from the same secret.
+    pub token_key: ring::hmac::Key,
 }
 
 pub type Shared = Arc<App>;
@@ -63,6 +73,15 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         health.set_service_status(name, st).await;
     }
     let sidecar = Sidecar::new(cfg.clone());
+    let sessions = Sessions::new(cfg.session_secret.as_deref(), cfg.session_ttl_secs);
+    if sessions.generated {
+        emit(
+            "warn",
+            "RAMEN_SESSION_SECRET unset: session ids and OAuth tokens are per pod and die with it",
+            json!({}),
+        );
+    }
+    let token_key = sessions.derived_key("oauth");
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),
         sem_max: cfg.max_inflight,
@@ -72,6 +91,8 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         metrics: Metrics::default(),
         config_source,
         health,
+        sessions,
+        token_key,
     })
 }
 
@@ -143,31 +164,173 @@ fn code_name(c: Code) -> String {
     format!("{c:?}").to_ascii_uppercase()
 }
 
-/// One access-log line per call (denied ones included) with `grpc_code`.
-struct CallLog {
-    ip: IpAddr,
-    method: Option<String>,
-    name: Option<String>,
-    key_id: Option<String>,
+/// One access-log line per call (denied ones included) with `grpc_code`, on either transport.
+pub struct CallLog {
+    pub ip: IpAddr,
+    pub method: Option<String>,
+    pub name: Option<String>,
+    /// The key id for an `rmk_` key, `user:<sub>` for a console-issued token — never the credential itself.
+    pub key_id: Option<String>,
+    pub transport: &'static str,
     t0: Instant,
 }
 
 impl CallLog {
-    fn emit(&self, cfg: &Config, status: &str, code: Code, extra: Value) {
+    pub fn new(ip: IpAddr, transport: &'static str) -> Self {
+        Self {
+            ip,
+            method: None,
+            name: None,
+            key_id: None,
+            transport,
+            t0: Instant::now(),
+        }
+    }
+    pub fn emit(&self, cfg: &Config, status: &str, code: Code, extra: Value) {
         let mut line = json!({"ip": self.ip, "group": cfg.group, "zone": cfg.zone, "env": cfg.env, "method": self.method, "name": self.name,
-                              "status": status, "grpc_code": code_name(code), "ms": self.t0.elapsed().as_millis() as u64, "key_id": self.key_id});
+                              "status": status, "grpc_code": code_name(code), "ms": self.t0.elapsed().as_millis() as u64, "key_id": self.key_id,
+                              "transport": self.transport});
         if let Value::Object(m) = extra {
             line.as_object_mut().unwrap().extend(m);
         }
         emit("info", "mcp", line);
     }
-    fn deny(&self, cfg: &Config, st: Status) -> Status {
+    pub fn deny(&self, cfg: &Config, st: Status) -> Status {
         self.emit(cfg, "denied", st.code(), Value::Null);
         st
     }
 }
 
-fn rpc_error(id: Value, code: i64, msg: &str) -> Value {
+/// Who a call is from, once the credential checked out.
+#[derive(Debug, Clone)]
+pub struct Caller {
+    /// What the access log names: the short key id, or `user:<sub>` for a token.
+    pub id: String,
+    /// What a session id is bound to (§16.2): a full SHA-256 of the key — the log id is a 32-bit hash and two
+    /// keys could share one (security review 0.5.0 L3) — or `user:<sub>` for a token.
+    pub binding: String,
+    /// Present for a console-issued token (§16.3).
+    pub principal: Option<token::Principal>,
+}
+
+/// The credential check shared by both transports: an `rmk_` key (constant-time, §11) or, when `RAMEN_OAUTH_ISSUER`
+/// is set, a console-issued HS256 token for this group and zone (§16.3). A token is only tried when the bearer has
+/// the three-part JWT shape, so key comparison stays the first and constant-time path.
+pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Option<Caller> {
+    if let Some(id) = auth::check_key(cfg, md) {
+        let raw = auth::bearer(md).unwrap_or("");
+        let digest = ring::digest::digest(&ring::digest::SHA256, raw.as_bytes());
+        let binding = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        return Some(Caller {
+            id,
+            binding,
+            principal: None,
+        });
+    }
+    let bearer = auth::bearer(md)?;
+    let issuer = cfg.oauth_issuer.as_deref()?;
+    if bearer.matches('.').count() != 2 {
+        return None;
+    }
+    let p = token::verify(
+        bearer,
+        &app.token_key,
+        issuer,
+        &cfg.group,
+        &cfg.zone,
+        session::now(),
+    )
+    .ok()?;
+    let id = format!("user:{}", p.sub);
+    Some(Caller {
+        binding: id.clone(),
+        id,
+        principal: Some(p),
+    })
+}
+
+/// Address allowlist, then credential — the order every call goes through on either transport.
+pub fn guard(
+    app: &App,
+    cfg: &Config,
+    peer: Option<SocketAddr>,
+    md: &MetadataMap,
+    transport: &'static str,
+) -> Result<(CallLog, Caller), Status> {
+    let mut log = CallLog {
+        ip: auth::client_ip(cfg, peer, md),
+        method: None,
+        name: None,
+        key_id: None,
+        transport,
+        t0: Instant::now(),
+    };
+    if !auth::ip_allowed(cfg, log.ip) {
+        return Err(log.deny(cfg, Status::permission_denied("ip not allowed")));
+    }
+    let Some(caller) = credential(app, cfg, md) else {
+        return Err(log.deny(cfg, Status::unauthenticated("unauthorized")));
+    };
+    log.key_id = Some(caller.id.clone());
+    Ok((log, caller))
+}
+
+/// Parse one JSON-RPC message, take an inflight permit, dispatch, and log. `Ok(None)` is a notification.
+/// JSON-RPC protocol errors come back as `Ok(Some(error body))`, never as a transport error (§11).
+pub async fn dispatch_body(
+    app: &App,
+    cfg: &Config,
+    log: &mut CallLog,
+    body: &[u8],
+) -> Result<Option<Value>, Status> {
+    let Ok(rpc) = serde_json::from_slice::<Value>(body) else {
+        log.emit(cfg, "error", Code::Ok, json!({"parse": "invalid json"}));
+        return Ok(Some(rpc_error(Value::Null, -32700, "parse error")));
+    };
+    let id = rpc.get("id").cloned().unwrap_or(Value::Null);
+    let method = rpc["method"].as_str().unwrap_or("").to_string();
+    if method.is_empty() {
+        log.emit(cfg, "error", Code::Ok, Value::Null);
+        return Ok(Some(rpc_error(
+            id,
+            -32600,
+            "invalid request: method missing",
+        )));
+    }
+    let params = rpc.get("params").cloned().unwrap_or(json!({}));
+    log.method = Some(method.clone());
+    log.name = mcp::target_name(&method, &params);
+    let Ok(_permit) = app.sem.try_acquire() else {
+        app.metrics.record(false);
+        return Err(log.deny(
+            cfg,
+            Status::resource_exhausted("busy: max inflight reached"),
+        ));
+    };
+    let out = mcp::dispatch(&app.sidecar, &cfg.blocked, &method, &params).await;
+    let ok = match &out {
+        Ok(Some(r)) => !r.get("isError").and_then(Value::as_bool).unwrap_or(false),
+        Ok(None) => true,
+        Err(_) => false,
+    };
+    app.metrics.record(ok);
+    let extra = if cfg.verbose {
+        json!({"request": rpc, "response": match &out {
+            Ok(v) => v.clone().unwrap_or(Value::Null),
+            Err(e) => json!({"code": e.code, "message": e.message}),
+        }})
+    } else {
+        Value::Null
+    };
+    log.emit(cfg, if ok { "ok" } else { "error" }, Code::Ok, extra);
+    Ok(match out {
+        Ok(Some(result)) => Some(json!({"jsonrpc": "2.0", "id": id, "result": result})),
+        Ok(None) => None,
+        Err(RpcErr { code, message }) => Some(rpc_error(id, code, &message)),
+    })
+}
+
+pub fn rpc_error(id: Value, code: i64, msg: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}})
 }
 
@@ -186,66 +349,11 @@ impl Mcp for McpSvc {
     async fn call(&self, req: Request<JsonRpc>) -> Result<Response<JsonRpc>, Status> {
         let app = &self.0;
         let cfg = app.cfg.read().await.clone();
-        let md: &MetadataMap = req.metadata();
-        let mut log = CallLog {
-            ip: auth::client_ip(&cfg, req.remote_addr(), md),
-            method: None,
-            name: None,
-            key_id: None,
-            t0: Instant::now(),
-        };
-        if !auth::ip_allowed(&cfg, log.ip) {
-            return Err(log.deny(&cfg, Status::permission_denied("ip not allowed")));
-        }
-        let Some(key_id) = auth::check_key(&cfg, md) else {
-            return Err(log.deny(&cfg, Status::unauthenticated("unauthorized")));
-        };
-        log.key_id = Some(key_id);
+        let (mut log, _caller) = guard(app, &cfg, req.remote_addr(), req.metadata(), "grpc")?;
         let body = req.into_inner().body;
-        let Ok(rpc) = serde_json::from_slice::<Value>(&body) else {
-            log.emit(&cfg, "error", Code::Ok, json!({"parse": "invalid json"}));
-            return Ok(reply(rpc_error(Value::Null, -32700, "parse error")));
-        };
-        let id = rpc.get("id").cloned().unwrap_or(Value::Null);
-        let method = rpc["method"].as_str().unwrap_or("").to_string();
-        if method.is_empty() {
-            log.emit(&cfg, "error", Code::Ok, Value::Null);
-            return Ok(reply(rpc_error(
-                id,
-                -32600,
-                "invalid request: method missing",
-            )));
-        }
-        let params = rpc.get("params").cloned().unwrap_or(json!({}));
-        log.method = Some(method.clone());
-        log.name = mcp::target_name(&method, &params);
-        let Ok(_permit) = app.sem.try_acquire() else {
-            app.metrics.record(false);
-            return Err(log.deny(
-                &cfg,
-                Status::resource_exhausted("busy: max inflight reached"),
-            ));
-        };
-        let out = mcp::dispatch(&app.sidecar, &cfg.blocked, &method, &params).await;
-        let ok = match &out {
-            Ok(Some(r)) => !r.get("isError").and_then(Value::as_bool).unwrap_or(false),
-            Ok(None) => true,
-            Err(_) => false,
-        };
-        app.metrics.record(ok);
-        let extra = if cfg.verbose {
-            json!({"request": rpc, "response": match &out {
-                Ok(v) => v.clone().unwrap_or(Value::Null),
-                Err(e) => json!({"code": e.code, "message": e.message}),
-            }})
-        } else {
-            Value::Null
-        };
-        log.emit(&cfg, if ok { "ok" } else { "error" }, Code::Ok, extra);
-        Ok(match out {
-            Ok(Some(result)) => reply(json!({"jsonrpc": "2.0", "id": id, "result": result})),
-            Ok(None) => Response::new(JsonRpc::default()),
-            Err(RpcErr { code, message }) => reply(rpc_error(id, code, &message)),
+        Ok(match dispatch_body(app, &cfg, &mut log, &body).await? {
+            Some(v) => reply(v),
+            None => Response::new(JsonRpc::default()),
         })
     }
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Full demo against the compose stack: create group `demo` → deploy → call demo_calculator_tool over MCP (gRPC via the stdio bridge, CONTRACTS §11).
+# Full demo against the compose stack: create group `demo` → deploy → call demo_calculator_tool over MCP, Streamable
+# HTTP straight at the worker (CONTRACTS §16: a URL and a bearer header, nothing to install). RAMEN_DEMO_TRANSPORT=bridge
+# runs the same call through the stdio bridge over gRPC instead (the compatibility path).
 # Console API paths follow CONTRACTS §4a (mirrored by tests/src/ramen_tests/console.py ROUTES).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,11 +21,20 @@ api POST /groups/demo/environments '{"name":"dev","ref":"main","zones":["local"]
 KEY=$(api POST /groups/demo/mcp-keys "{\"name\":\"demo-$(date +%s)\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
 JOB=$(api POST /groups/demo/environments/dev/deploy '{"canary":true}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 for _ in $(seq 1 60); do S=$(api GET "/jobs/$JOB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))'); [ "$S" = ok ] && break; [ "$S" = error ] && { echo "deploy failed"; exit 1; }; sleep 2; done
+MCP_URL=${RAMEN_MCP_URL:-http://$NODE/mcp}
+# ready = the worker lists the demo tool over HTTP (a POST /mcp answers 200 as soon as the node is up; the tool
+# appears once the runtime has loaded the group's code)
+LIST='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+for _ in $(seq 1 60); do
+  curl -s -X POST "$MCP_URL" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+    -H 'ramen-group: demo' -H 'ramen-zone: local' -d "$LIST" 2>/dev/null | grep -q demo_calculator_tool && break
+  sleep 2
+done
+echo "ready: $MCP_URL lists demo_calculator_tool"
 (cd "$ROOT/runtime-py" && uv sync -q --all-extras)
-BRIDGE="$ROOT/runtime-py/.venv/bin/ramen-mcp-bridge"
-for _ in $(seq 1 60); do "$BRIDGE" --target "$NODE" --health --timeout 2 >/dev/null 2>&1 && break; sleep 2; done   # SERVING once loaded
-echo "health: SERVING $NODE"
-OUT=$(cd "$ROOT/runtime-py" && RAMEN_BRIDGE_GROUP=demo RAMEN_BRIDGE_ZONE=local uv run -q --all-extras python "$HERE/mcp_call.py" "$NODE" "$KEY" demo_calculator_tool '{"var1": 2, "var2": 3, "func": "add"}')
+TARGET=$MCP_URL
+[ "${RAMEN_DEMO_TRANSPORT:-http}" = bridge ] && TARGET=$NODE   # host:port → mcp_call.py uses the stdio bridge over gRPC
+OUT=$(cd "$ROOT/runtime-py" && RAMEN_MCP_GROUP=demo RAMEN_MCP_ZONE=local uv run -q --all-extras python "$HERE/mcp_call.py" "$TARGET" "$KEY" demo_calculator_tool '{"var1": 2, "var2": 3, "func": "add"}')
 echo "$OUT"
 rm -f "$HERE/.cookies"
 RES=$(printf '%s\n' "$OUT" | sed -n 's/.*-> \([^ ]*\).*/\1/p' | tail -1)

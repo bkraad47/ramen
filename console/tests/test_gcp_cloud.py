@@ -88,6 +88,8 @@ def test_manifests_shape():
             "/grpc.health.v1.Health",
             "/grpc.reflection.v1.ServerReflection",
             "/grpc.reflection.v1alpha.ServerReflection",
+            "/mcp",
+            "/.well-known/oauth-protected-resource",
         )
     ]
     assert not any("/ramen.v1.Admin" in json.dumps(m) for m in rule["matches"])

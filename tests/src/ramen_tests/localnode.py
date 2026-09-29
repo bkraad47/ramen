@@ -14,7 +14,7 @@ import grpc
 import pytest
 
 from . import env as E
-from .mcp_client import Node
+from .mcp_client import HttpNode, Node
 from .sidecar import runtime_importable, runtime_python
 
 
@@ -23,9 +23,10 @@ def node_binary() -> Path | None:
     if p:
         return Path(p)
     for kind in ("release", "debug"):
-        c = E.RAMEN_DIR / "node-rs" / "target" / kind / "ramen-node"
-        if c.exists():
-            return c
+        for name in ("ramen-node", "ramen-node.exe"):  # cargo names the Windows binary with the suffix
+            c = E.RAMEN_DIR / "node-rs" / "target" / kind / name
+            if c.exists():
+                return c
     return None
 
 
@@ -115,19 +116,33 @@ class LocalNode:
     def target(self) -> str:
         return f"127.0.0.1:{self.port}"
 
+    @property
+    def url(self) -> str:
+        return f"{'https' if self.tls else 'http'}://{self.target}/mcp"
+
     def client(self, key=None, **kw) -> Node:
         kw = {"tls": self.tls, "ca": self.ca, "admin_key": self.admin_key, "group": "demo", "zone": "local", **kw}
         return Node(self.target, self.key if key is None else key, **kw)
+
+    def http_client(self, key=None, **kw) -> HttpNode:
+        """§16: the same port, over Streamable HTTP. A self-signed node cert is pinned when TLS is on."""
+        kw = {"ca": self.ca, "group": "demo", "zone": "local", **kw}
+        return HttpNode(self.url, self.key if key is None else key, **kw)
+
+    def for_transport(self, transport: str, key=None, **kw):
+        return self.http_client(key, **kw) if transport == "http" else self.client(key, **kw)
 
     def __enter__(self):
         self.proc = subprocess.Popen(  # noqa: S603
             [str(self.binary)], env=self.env, stdout=open(self.stdout, "ab"), stderr=subprocess.STDOUT, cwd=self.dir
         )
         self.node = self.client()
+        self.http = self.http_client()
         return self
 
     def __exit__(self, *_):
         self.node.close()
+        self.http.close()
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:

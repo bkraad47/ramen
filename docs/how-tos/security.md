@@ -148,3 +148,41 @@ reuse those values anywhere real.
 
 ## Reporting
 Open a private security advisory on GitHub (Security → Advisories) rather than a public issue.
+
+## Streamable HTTP, sessions and OAuth (v0.5.0)
+`POST /mcp` runs the same key, source-range, blocked-name and in-flight checks as `ramen.v1.Mcp/Call` — literally
+the same functions, with the HTTP headers turned into the metadata map the gRPC path reads
+([contract §16.1](../CONTRACTS.md)). Three things exist only on HTTP:
+
+- **Sessions.** `initialize` returns an `Mcp-Session-Id` that is an HMAC over a nonce, an expiry and the credential
+  that made the call, keyed with the zone's `RAMEN_SESSION_SECRET`. Any pod verifies it without state; under another
+  credential, expired or altered it is `404`, never `401`. Nothing is stored, so "revoking" a session is the TTL
+  (30 min by default) — a stolen id is useless without the key that minted it. The console generates the secret
+  per group and writes it into every zone's deploy Secret; it is encrypted at rest and never returned by the API.
+- **Origin.** A browser `Origin` must be on `RAMEN_ALLOWED_ORIGINS`, which is empty by default — every browser
+  origin refused — so a page on a foreign site cannot use a victim's browser to reach a worker (DNS rebinding). A
+  group may allow its own web origins from its deploy file.
+- **Per-user access through OAuth.** The console is the authorization server: a super admin registers a *client*
+  (name and exact redirect URIs; no secret, PKCE S256 is the proof) on the API keys page, the client sends the user
+  to `/oauth/authorize`, the user signs in as usual and approves *this client* for *this group and zone*, and
+  `/oauth/token` mints an HS256 access token the worker verifies with a key derived from the same zone secret.
+  Claims: issuer (the console's `RAMEN_PUBLIC_URL`), the user id and email, audience and scope
+  `mcp:<group>:<zone>`, one hour of life, a `jti`. The worker's access log then names the user, not a key id.
+  Refresh tokens live 30 days, rotate on every use, belong to one client, and die when the user's session epoch
+  moves (password or role change, delete, restore). **An access token is a bearer with a one-hour life and no
+  revocation list**; that is the trade-off for a node that needs no callback to the console per call.
+  Every authorize-time failure is an error page, never a redirect — a redirect URI is only trusted once it has
+  matched the registered client. Dynamic client registration (RFC 7591) is deliberately not in this release: it is
+  an unauthenticated write endpoint, and it waits for a security review of its own.
+- **What a viewer can delegate.** The token a viewer approves runs every tool of the group in that zone — the same
+  access as an `rmk_` key of that group. That is deliberate: OAuth is how a *person* gets what a key holder gets,
+  with their name on every call. The consent page says so. A viewer who should not be able to run tools should not
+  be in the group. Codes and refresh tokens are stored under their SHA-256; a rotated-out refresh token presented a
+  second time revokes every refresh token of that grant; and each mint re-checks that the user still exists, may
+  still log in and still has the group.
+- **Restore and the zone secret.** A backup carries no `session_secret`, so a group restored into a fresh console
+  gets a new one on its next deploy — and the workers keep the old one until then. Redeploy each restored
+  environment before expecting sessions or console-minted tokens to verify.
+
+What none of this changes: `Admin/*` stays gRPC-only and cluster-internal; the NetworkPolicy still bounds direct
+access to a pod; and the runtime still executes a group's code with that group's secrets in its environment.

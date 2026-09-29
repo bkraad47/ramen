@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from .services import Services
 from .util import now, uid
@@ -60,6 +61,14 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
             }
             if mcp:
                 cfg["RAMEN_MCP_KEYS"] = ",".join(mcp)
+            # §16.2 / §16.3: stateless session ids and console-issued tokens need the group's secret on every pod;
+            # the issuer is the console's public URL, which only RAMEN_PUBLIC_URL can state from a background job.
+            cfg["RAMEN_SESSION_SECRET"] = await svc.session_secret(group)
+            issuer = (os.environ.get("RAMEN_PUBLIC_URL") or "").strip().rstrip("/")
+            if issuer:
+                cfg["RAMEN_OAUTH_ISSUER"] = issuer
+            else:
+                job["log"].append(f"{now()} zone {z}: RAMEN_PUBLIC_URL unset, OAuth tokens are off for this worker")
             cfg = await svc.secrets_backend.resolve_config(cfg)
             job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
             results[z] = await svc.cloud.deploy(

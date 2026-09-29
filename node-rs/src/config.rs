@@ -18,6 +18,7 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_CALL_TIMEOUT_SECS",
     "RAMEN_LOG_FILE",
     "RAMEN_BLOCKED",
+    "RAMEN_ALLOWED_ORIGINS",
 ];
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,19 @@ pub struct Config {
     pub log_file: Option<PathBuf>,
     /// Tool/resource/prompt names (or resource URIs) hidden from `*/list` and answered with `-32601` (CONTRACTS §9).
     pub blocked: Vec<String>,
+    /// §16.1: browser `Origin` values allowed on `/mcp` (`RAMEN_ALLOWED_ORIGINS`, comma list; `*` = any).
+    /// Empty = every request that carries an `Origin` header is refused (DNS-rebinding defence).
+    pub allowed_origins: Vec<String>,
+    /// §16.2: HMAC key for stateless `Mcp-Session-Id`s and the HKDF root of the OAuth token key
+    /// (`RAMEN_SESSION_SECRET`). `None` = generated at startup; sessions then die with the pod.
+    pub session_secret: Option<String>,
+    /// §16.2: session lifetime (`RAMEN_SESSION_TTL_SECS`, default 1800).
+    pub session_ttl_secs: u64,
+    /// §16.3: the console URL that issues OAuth tokens (`RAMEN_OAUTH_ISSUER`); tokens are refused without it.
+    pub oauth_issuer: Option<String>,
+    /// The public base this worker is reached at through the load balancer (`RAMEN_PUBLIC_URL`), for the
+    /// absolute `resource_metadata` URL RFC 9728 asks for. Unset → a relative path is advertised.
+    pub public_url: Option<String>,
 }
 
 impl Config {
@@ -175,6 +189,15 @@ impl Config {
             call_timeout_secs: num("RAMEN_CALL_TIMEOUT_SECS", 120)?,
             log_file: get("RAMEN_LOG_FILE").map(PathBuf::from),
             blocked: list("RAMEN_BLOCKED"),
+            allowed_origins: list("RAMEN_ALLOWED_ORIGINS"),
+            session_secret: get("RAMEN_SESSION_SECRET").filter(|s| !s.is_empty()),
+            session_ttl_secs: num("RAMEN_SESSION_TTL_SECS", 1800)?.max(1),
+            oauth_issuer: get("RAMEN_OAUTH_ISSUER")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            public_url: get("RAMEN_PUBLIC_URL")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
         })
     }
 }
@@ -252,6 +275,49 @@ mod tests {
             Config::from_map(&m).unwrap().bucket_uri.as_deref(),
             Some("gs://b/g")
         );
+    }
+
+    #[test]
+    fn transport_keys_parse_and_only_origins_is_group_settable() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert!(
+            c.allowed_origins.is_empty() && c.session_secret.is_none() && c.oauth_issuer.is_none()
+        );
+        assert_eq!(c.session_ttl_secs, 1800);
+        let m: HashMap<_, _> = [
+            (
+                "RAMEN_ALLOWED_ORIGINS".to_string(),
+                "https://a.example, https://b.example".to_string(),
+            ),
+            ("RAMEN_SESSION_SECRET".to_string(), "s3cret".to_string()),
+            ("RAMEN_SESSION_TTL_SECS".to_string(), "0".to_string()),
+            (
+                "RAMEN_OAUTH_ISSUER".to_string(),
+                "https://console.example/".to_string(),
+            ),
+        ]
+        .into();
+        let c = Config::from_map(&m).unwrap();
+        assert_eq!(
+            c.allowed_origins,
+            vec!["https://a.example", "https://b.example"]
+        );
+        assert_eq!(c.session_secret.as_deref(), Some("s3cret"));
+        assert_eq!(c.session_ttl_secs, 1); // never zero: an id that expires as it is minted is a bug, not a setting
+        assert_eq!(c.oauth_issuer.as_deref(), Some("https://console.example")); // trailing slash normalised
+        // a group's deploy file may open its own web origins, but must never rotate the session secret,
+        // point the node at another issuer, or stretch session lifetime (§16.2)
+        assert!(DEPLOY_KEYS.contains(&"RAMEN_ALLOWED_ORIGINS"));
+        for k in [
+            "RAMEN_SESSION_SECRET",
+            "RAMEN_OAUTH_ISSUER",
+            "RAMEN_SESSION_TTL_SECS",
+        ] {
+            assert!(
+                !DEPLOY_KEYS.contains(&k),
+                "{k} must not be settable from the bucket"
+            );
+        }
     }
 
     #[test]

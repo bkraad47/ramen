@@ -133,6 +133,7 @@ async def api_keys(request: Request, p: Principal = Depends(admin)):
         request,
         "api_keys.html",
         keys=await accounts(request).list_keys(p),
+        oauth_clients=(await request.app.state.oauth_server.clients()) if p.role == "super_admin" else None,
         groups=await svc(request).visible_groups(p),
     )
 

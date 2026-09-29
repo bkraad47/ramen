@@ -13,7 +13,7 @@ make down      # stop + delete volumes
 | Service | URL | Login / key |
 |---|---|---|
 | Console | **https://localhost:8443** (self-signed → `curl -k`, accept the browser warning) | `admin@ramen.local` / `changeme-ramen` (`.env`) |
-| Worker MCP (gRPC h2c) | **localhost:8080** (`ramen.v1.Mcp/Call`; standard clients go through `ramen-mcp-bridge`) | metadata `authorization: Bearer rmk_…` minted on the group page (or the `.env` dev fallback `RAMEN_MCP_KEYS=local-mcp-key`) |
+| Worker MCP | **http://localhost:8080/mcp** (Streamable HTTP, the front door) and **localhost:8080** (`ramen.v1.Mcp/Call` over gRPC, for the stdio bridge and gRPC clients) | `Authorization: Bearer rmk_…` minted on the group page (or the `.env` dev fallback `RAMEN_MCP_KEYS=local-mcp-key`) |
 | Firestore emulator | http://localhost:8081 | — |
 
 Locally you do **not** need to add a zone or a group by hand: `make demo` creates zone `local`, group `demo`
@@ -28,16 +28,20 @@ CSRF="X-Ramen-CSRF: $(awk '$6=="ramen_csrf"{print $7}' c.txt)"   # cookie sessio
 KEY=$(curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://localhost:8443/api/v1/groups/demo/mcp-keys -d '{"name":"laptop"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
 curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://localhost:8443/api/v1/groups/demo/environments/dev/deploy -d '{"canary":true}'
 sleep 5
-# Through the stdio bridge (CONTRACTS §11; `pip install 'ramen-runtime[grpc]'` or use runtime-py/.venv):
+# Streamable HTTP (CONTRACTS §16): a URL and a header
+curl -s http://localhost:8080/mcp -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -H 'ramen-group: demo' -H 'ramen-zone: local' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
+# {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
+# Stdio-only clients: the bridge over gRPC (`pip install 'ramen-runtime[grpc]'` or use runtime-py/.venv), key from the environment
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' \
-  | ramen-mcp-bridge --target localhost:8080 --key "$KEY" --group demo --zone local
-# {"id":1,"jsonrpc":"2.0","result":{"content":[{"text":"5","type":"text"}],"isError":false}}
-# Or raw gRPC with grpcurl (bytes are base64 in its JSON; the node serves reflection):
+  | RAMEN_MCP_KEY="$KEY" ramen-mcp-bridge --target localhost:8080 --group demo --zone local
+# Or raw gRPC with grpcurl (bytes are base64 in its JSON; the node serves reflection locally):
 BODY=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)
 grpcurl -plaintext -H "authorization: Bearer $KEY" -d "{\"body\":\"$BODY\"}" localhost:8080 ramen.v1.Mcp/Call
 ```
-No key → gRPC `UNAUTHENTICATED` (the bridge relays it as JSON-RPC `-32001`). `mcp-client-config.example.json` is a
-ready stdio `mcpServers` entry for Claude Desktop / Cursor (needs `ramen-mcp-bridge` on PATH).
+No key → HTTP `401` / gRPC `UNAUTHENTICATED` (the bridge relays it as JSON-RPC `-32001`).
+`mcp-client-config.example.json` is a ready `mcpServers` entry for Claude Desktop / Cursor: the HTTP form with the
+key from `RAMEN_MCP_KEY`, plus the deployed and stdio forms spelled out.
 
 **That example is local-only.** Its `args` end in `--insecure`, which forces a plaintext h2c channel and overrides
 `--tls`/`--ca`, so a copy of it pointed at a deployment would keep talking plaintext without saying so. For a real
@@ -55,14 +59,15 @@ a group MCP key minted on the group page rather than the `.env` dev fallback.
 | `.env.example` → `.env` | `VERSION` (image tags), admin email/password, `RAMEN_FERNET_KEY`, `RAMEN_MCP_KEYS`, `RAMEN_ADMIN_KEY`, `RAMEN_ALLOWED_CIDRS`, `RAMEN_VERBOSE`, auth: `RAMEN_PUBLIC_URL`, `RAMEN_SMTP_*` (default `file:///mail` → invite/reset/magic-link mails land as `.eml` in `deploy/local/.mail/`), `RAMEN_AUTH_MAGIC_LINK`, `RAMEN_ADMIN_FORCE_PASSWORD`. Rotate everything before exposing the stack |
 | `demo.sh` | the `make demo` flow against the console API (`docs/CONTRACTS.md` §4a) |
 | `demo-worker.sh` | `make demo-worker`: node + runtime on the host, no Docker |
-| `mcp_call.py` | tiny client on the official `mcp` SDK (stdio) that spawns `ramen-mcp-bridge`; used by the demos |
-| `mcp-client-config.example.json` | stdio `mcpServers` entry (bridge command) for desktop clients |
+| `mcp_call.py` | tiny client on the official `mcp` SDK: Streamable HTTP when given a URL, the stdio bridge when given `host:port`; used by the demos |
+| `mcp-client-config.example.json` | `mcpServers` entry for desktop clients: HTTP first, the stdio bridge form under `_STDIO` |
 
 ## Troubleshooting
 | Symptom | Fix |
 |---|---|
 | `curl: (60) SSL certificate problem` | `-k` (self-signed) |
-| MCP call → `UNAUTHENTICATED` / `-32001` | key not minted for `demo`, or minted but not deployed yet — run a deploy |
+| MCP call → HTTP `401` / gRPC `UNAUTHENTICATED` / bridge `-32001` | key not minted for `demo`, or minted but not deployed yet — run a deploy |
+| `POST /mcp` → `403` from a browser | the page's `Origin` is not on `RAMEN_ALLOWED_ORIGINS` (empty by default); add it to the deploy file or `.env` |
 | console API → 403 `csrf token missing` | cookie session without `X-Ramen-CSRF` (value of the `ramen_csrf` cookie); or use an `rmn_` API key |
 | tool missing from `tools/list` / `-32601` | blocked on the group page (Loaded packages → block/unblock), applied on deploy |
 | "forgot password?" mail | `deploy/local/.mail/*.eml` (file backend); set `RAMEN_SMTP_HOST` to a real server to send |

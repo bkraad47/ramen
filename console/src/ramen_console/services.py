@@ -113,6 +113,22 @@ class Services:
         await self.store.put("workers", w["id"], w)
         return result
 
+    async def session_secret(self, group) -> str:
+        """§16.2: one secret per group, generated on first use, handed to every zone's deploy Secret so any pod
+        verifies any session id and any console-issued token. Encrypted at rest, never returned by the API."""
+        import os
+        import secrets
+
+        if local := os.environ.get("RAMEN_LOCAL_SESSION_SECRET"):
+            # the local stack: the compose file gives the one worker its secret directly, and the console the same
+            # value, because the bucket file the local adapter writes is readable by the runtime (review 0.5.0 L6)
+            return local
+        g = await self.get_group(group)
+        if not g.get("session_secret"):
+            g["session_secret"] = secrets.token_urlsafe(32)
+            await self.store.put("groups", group, g)
+        return g["session_secret"]
+
     async def revoke_sa_permission(self, group, zone, permission) -> dict:
         """§13.2: drop one granted permission and re-apply the remaining set, so the cloud roles shrink with it."""
         w = await self.worker_config(group, zone)

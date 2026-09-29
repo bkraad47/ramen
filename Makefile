@@ -1,4 +1,4 @@
-# Ramen v0.4.3 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
+# Ramen v0.5.0 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
 export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
 VERSION := $(shell cat VERSION)
 COMPOSE := docker compose -f deploy/local/docker-compose.yml

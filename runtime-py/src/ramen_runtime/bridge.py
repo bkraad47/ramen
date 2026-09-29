@@ -36,7 +36,12 @@ def _env(name: str, default: str | None = None) -> str | None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="ramen-mcp-bridge", description=__doc__.split("\n")[0])
     ap.add_argument("--target", default=_env("TARGET"), help="host:port of a worker or its LB (RAMEN_BRIDGE_TARGET)")
-    ap.add_argument("--key", default=_env("KEY"), help="rmk_ MCP key (RAMEN_BRIDGE_KEY)")
+    # §16.4: the key may live in the environment so it never has to sit in a client's config file.
+    ap.add_argument(
+        "--key",
+        default=_env("KEY") or os.environ.get("RAMEN_MCP_KEY"),
+        help="rmk_ MCP key (RAMEN_BRIDGE_KEY, else RAMEN_MCP_KEY)",
+    )
     ap.add_argument("--group", default=_env("GROUP", ""), help="ramen-group metadata (RAMEN_BRIDGE_GROUP)")
     ap.add_argument("--zone", default=_env("ZONE", ""), help="ramen-zone metadata (RAMEN_BRIDGE_ZONE)")
     ap.add_argument("--tls", action="store_true", default=_env("TLS") in ("1", "true"), help="TLS (RAMEN_BRIDGE_TLS=1)")
@@ -48,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not a.target:
         ap.error("--target (or RAMEN_BRIDGE_TARGET) is required")
     if a.health is None and not a.key:
-        ap.error("--key (or RAMEN_BRIDGE_KEY) is required")
+        ap.error("--key (or RAMEN_BRIDGE_KEY / RAMEN_MCP_KEY) is required")
     a.use_tls = bool(a.tls or a.ca) and not a.insecure
     return a
 

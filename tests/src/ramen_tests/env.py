@@ -47,6 +47,21 @@ def node_target(url: str) -> tuple[str, bool]:
     return host, tls
 
 
+def node_http_url(url: str) -> str:
+    """RAMEN_NODE_URL → the Streamable HTTP endpoint (§16.1): scheme from the spelling (grpcs/https → https), the
+    same host:port, path `/mcp` (an explicit path in the URL is kept)."""
+    host, tls = node_target(url)
+    u = strip(url).strip()
+    path = "/mcp"
+    for scheme in ("grpcs://", "https://", "grpc://", "http://"):
+        if u.startswith(scheme):
+            rest = u[len(scheme) :]
+            if "/" in rest and rest.split("/", 1)[1]:
+                path = "/" + rest.split("/", 1)[1]
+            break
+    return f"{'https' if tls else 'http'}://{host}{path}"
+
+
 def routing_metadata() -> list[tuple[str, str]]:
     """`ramen-group` / `ramen-zone` sent on every call so an LB can route by headers (§11)."""
     return [("ramen-group", env("RAMEN_E2E_GROUP", "demo")), ("ramen-zone", env("RAMEN_E2E_ZONE", "local"))]

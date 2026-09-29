@@ -17,8 +17,8 @@ services:
   console:
     build:
       context: ../../console
-      args: { RAMEN_VERSION: "${VERSION:-0.4.3}" }
-    image: ramen-console:${VERSION:-0.4.3}
+      args: { RAMEN_VERSION: "${VERSION:-0.5.0}" }
+    image: ramen-console:${VERSION:-0.5.0}
     depends_on:
       firestore: { condition: service_healthy }
     environment:
@@ -35,7 +35,8 @@ services:
       RAMEN_LOG_ROOT: /buckets/_logs
       RAMEN_WORKER_URL: worker:8080               # zone `local` → this worker (gRPC h2c target host:port)
       RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}   # sent as metadata x-ramen-admin-key on Admin/Reload
-      RAMEN_PUBLIC_URL: ${RAMEN_PUBLIC_URL:-https://localhost:8443}   # base for links in invite/reset/magic-link mails
+      RAMEN_PUBLIC_URL: ${RAMEN_PUBLIC_URL:-https://localhost:8443}   # base for links in mails, and the OAuth issuer (§16.3)
+      RAMEN_LOCAL_SESSION_SECRET: ${RAMEN_SESSION_SECRET:-local-session-secret}   # the worker's RAMEN_SESSION_SECRET, so console-minted tokens verify; not written to the bucket
       RAMEN_SMTP_HOST: ${RAMEN_SMTP_HOST:-file:///mail}   # dev mail backend: .eml files in ./.mail (CONTRACTS §9); set a real SMTP host to send
       RAMEN_SMTP_FROM: ${RAMEN_SMTP_FROM:-ramen@localhost}
       RAMEN_AUTH_MAGIC_LINK: ${RAMEN_AUTH_MAGIC_LINK:-0}
@@ -49,8 +50,8 @@ services:
     build:
       context: ../..
       dockerfile: node-rs/Dockerfile
-      args: { VERSION: "${VERSION:-0.4.3}" }
-    image: ramen-worker:${VERSION:-0.4.3}
+      args: { VERSION: "${VERSION:-0.5.0}" }
+    image: ramen-worker:${VERSION:-0.5.0}
     environment:
       RAMEN_NODE_PORT: "8080"
       RAMEN_BUCKET: /buckets/demo
@@ -60,11 +61,14 @@ services:
       RAMEN_MCP_KEYS: ${RAMEN_MCP_KEYS:-local-mcp-key}
       RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}
       RAMEN_ALLOWED_CIDRS: ${RAMEN_ALLOWED_CIDRS:-0.0.0.0/0,::/0}
+      RAMEN_SESSION_SECRET: ${RAMEN_SESSION_SECRET:-local-session-secret}   # §16.2 session ids and §16.3 tokens; same value as the console's
+      RAMEN_OAUTH_ISSUER: ${RAMEN_PUBLIC_URL:-https://localhost:8443}       # the console is the authorization server
+      RAMEN_ALLOWED_ORIGINS: ${RAMEN_ALLOWED_ORIGINS:-}                     # empty: every browser Origin refused (§16.1)
       RAMEN_SIDECAR_IDLE_SECS: "300"
       RAMEN_MAX_INFLIGHT: "32"
       RAMEN_VERBOSE: ${RAMEN_VERBOSE:-0}
       RAMEN_LOG_FILE: /buckets/_logs/demo/local/worker.log   # read back by the console Logs page
-    ports: ["8080:8080"]                            # gRPC h2c: ramen.v1.Mcp / ramen.v1.Admin / grpc.health.v1.Health
+    ports: ["8080:8080"]                            # Streamable HTTP /mcp and gRPC h2c (ramen.v1.Mcp / Admin / Health) on one port
     healthcheck:                                    # liveness (ramen.v1.Admin is SERVING before the first deploy); "" = readiness
       test: ["CMD", "/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--health", "ramen.v1.Admin", "--timeout", "3"]
       interval: 10s

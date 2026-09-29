@@ -51,7 +51,10 @@ def require(role: str, group_param: str | None = None):
         p = getattr(request.state, "principal", None)
         if p is None:
             if not request.url.path.startswith("/api/"):
-                raise HTTPException(303, headers={"Location": f"/login?next={request.url.path}"})
+                from urllib.parse import quote
+
+                target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+                raise HTTPException(303, headers={"Location": f"/login?next={quote(target, safe='')}"})
             raise HTTPException(401, "Authentication required")
         if p.kind == "apikey" and p.client_type == "agent":  # D21: agent keys belong to workers, not the console
             raise HTTPException(403, AGENT_KEY_REFUSED)

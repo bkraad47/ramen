@@ -2,7 +2,9 @@
 # cloud_smoke.sh <console_url> <admin_email> <admin_pw> <admin_key> [node_target]
 # Console → group demo → zone → env → MCP key → deploy → wait → tools/call over gRPC (CONTRACTS §11). Prints PASS/FAIL.
 # node_target is `host:port` of the worker or the LB (routing by metadata ramen-group/ramen-zone, no path).
-# Env: RAMEN_NODE_URL (if no 5th arg), RAMEN_NODE_TLS (1 through a TLS LB; self-signed accepted), RAMEN_SMOKE_GROUP (demo),
+# Env: RAMEN_NODE_URL (if no 5th arg), RAMEN_NODE_TLS (1 through a TLS LB), RAMEN_SMOKE_CA (PEM to verify the console
+#      and the LB against; the self-signed cert the deploy made), RAMEN_SMOKE_INSECURE (1: skip TLS verification — a
+#      laptop against a fresh cluster whose cert is not yet at hand; never in CI), RAMEN_SMOKE_GROUP (demo),
 #      RAMEN_SMOKE_ZONE (a), RAMEN_ZONE_PROVIDER (gcp), RAMEN_ZONE_REGION (us-central1-a), RAMEN_SMOKE_ENV (dev),
 #      RAMEN_DEMO_REPO, RAMEN_DEPLOY_TIMEOUT (600), RAMEN_SMOKE_ADMIN (1: also assert Admin/Reload; needs the worker's
 #      RAMEN_ADMIN_CIDRS to include this host — through an LB it usually does not).
@@ -18,9 +20,11 @@ PROVIDER=${RAMEN_ZONE_PROVIDER:-gcp}; REGION=${RAMEN_ZONE_REGION:-us-central1-a}
 REPO=${RAMEN_DEMO_REPO:-https://github.com/bkraad47/ramen-demo-mcp-group}
 TIMEOUT=${RAMEN_DEPLOY_TIMEOUT:-600}
 CONSOLE=${CONSOLE%/}; NODE=${NODE#grpc://}; NODE=${NODE#grpcs://}; NODE=${NODE#http://}; NODE=${NODE#https://}; NODE=${NODE%%/*}
-JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
+JAR=$(mktemp); BODY=$(mktemp); trap 'rm -f "$JAR" "$BODY"' EXIT
 STEP=""; fail() { echo "FAIL: ${STEP}${1:+ — $1}" >&2; exit 1; }
-C() { curl -sk -c "$JAR" -b "$JAR" --max-time 60 "$@"; }
+# TLS: verified against RAMEN_SMOKE_CA when given, the system store otherwise; -k only on explicit request (review 0.5.0 M6)
+CURL_TLS=(); [ -n "${RAMEN_SMOKE_CA:-}" ] && CURL_TLS=(--cacert "$RAMEN_SMOKE_CA"); [ "${RAMEN_SMOKE_INSECURE:-0}" = 1 ] && CURL_TLS=(-k)
+C() { curl -s "${CURL_TLS[@]}" -c "$JAR" -b "$JAR" --max-time 60 "$@"; }
 csrf() { awk '$6=="ramen_csrf"{print $7}' "$JAR" | tail -1; }   # cookie sessions must echo the CSRF cookie (CONTRACTS §9)
 api() { C -H 'Content-Type: application/json' -H "X-Ramen-CSRF: $(csrf)" -X "$1" "$CONSOLE/api/v1$2" ${3:+-d "$3"}; }
 jget() { python3 -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')' 2>/dev/null; }
@@ -42,7 +46,10 @@ done
 STEP="workers";     W=$(api GET "/groups/$GROUP/zones/$ZONE/workers"); echo "$W" | jget '["live"][0]["load"]' >/dev/null || fail "no live worker: $W"
 [ -n "$NODE" ] || { echo "PASS (console only; pass node_target for the MCP call)"; exit 0; }
 command -v grpcurl >/dev/null || fail "grpcurl not installed"
-TLS=(-plaintext); [ "${RAMEN_NODE_TLS:-0}" = 1 ] && TLS=(-insecure)
+TLS=(-plaintext)
+if [ "${RAMEN_NODE_TLS:-0}" = 1 ]; then
+  TLS=(); [ -n "${RAMEN_SMOKE_CA:-}" ] && TLS=(-cacert "$RAMEN_SMOKE_CA"); [ "${RAMEN_SMOKE_INSECURE:-0}" = 1 ] && TLS=(-insecure)
+fi
 G=(grpcurl "${TLS[@]}" -max-time 60 -import-path "$ROOT/proto" -import-path "$ROOT/tests/proto" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE")
 health() { "${G[@]}" -proto grpc/health/v1/health.proto "$NODE" grpc.health.v1.Health/Check 2>/dev/null | jget '.get("status","")'; }
 mcp() {  # mcp <key> <json> → response body; gRPC status text on stderr when non-OK (exit code of grpcurl kept)
@@ -58,6 +65,21 @@ STEP="tools/call";  R=$(mcp "$KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/call
 OUT=$(echo "$R" | jget '["result"]["content"][0]["text"]'); [ "${OUT%.0}" = 5 ] || fail "$R"
 STEP="unauth";      ERR=$(mcp "" '{"jsonrpc":"2.0","id":3,"method":"ping"}' 2>&1 >/dev/null); echo "$ERR" | grep -q Unauthenticated || fail "no-key call → ${ERR:-OK}"
 STEP="bad key";     ERR=$(mcp "not-a-key" '{"jsonrpc":"2.0","id":4,"method":"ping"}' 2>&1 >/dev/null); echo "$ERR" | grep -q Unauthenticated || fail "bad-key call → ${ERR:-OK}"
+# CONTRACTS §16: the same worker, the same guards, over Streamable HTTP — a URL and a bearer header through the LB
+HTTP_URL=${RAMEN_MCP_URL:-$([ "${RAMEN_NODE_TLS:-0}" = 1 ] && echo "https://$NODE/mcp" || echo "http://$NODE/mcp")}
+http_mcp() {  # http_mcp <key> <json> → "<status> <body>"
+  local key=$1
+  curl -s "${CURL_TLS[@]}" -o "$BODY" -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+    -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" ${key:+-H "Authorization: Bearer $key"} -d "$2"; echo " $(cat "$BODY")"
+}
+STEP="http tools/call"; R=$(http_mcp "$KEY" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}')
+[ "${R%% *}" = 200 ] || fail "POST $HTTP_URL → $R"
+OUT=$(echo "${R#* }" | jget '["result"]["content"][0]["text"]'); [ "${OUT%.0}" = 5 ] || fail "http result: $R"
+STEP="http unauth";    R=$(http_mcp "" '{"jsonrpc":"2.0","id":6,"method":"ping"}'); [ "${R%% *}" = 401 ] || fail "no-key POST → ${R%% *}"
+STEP="http bad key";   R=$(http_mcp "not-a-key" '{"jsonrpc":"2.0","id":7,"method":"ping"}'); [ "${R%% *}" = 401 ] || fail "bad-key POST → ${R%% *}"
+STEP="http origin";    R=$(curl -s "${CURL_TLS[@]}" -o /dev/null -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H 'Origin: https://evil.example' -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":8,"method":"ping"}'); [ "$R" = 403 ] || fail "foreign Origin → $R"
+STEP="http session";   SID=$(curl -s "${CURL_TLS[@]}" -D - -o /dev/null -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.5.0"}}}' | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{print $2}')
+[ -n "$SID" ] || fail "initialize over HTTP returned no Mcp-Session-Id"
 # Admin/Reload without a key: UNAUTHENTICATED (direct), PERMISSION_DENIED (outside RAMEN_ADMIN_CIDRS) or UNIMPLEMENTED/404
 # through an LB that does not route ramen.v1.Admin at all (CONTRACTS §11: Admin stays cluster-internal) — all three mean "gated".
 STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented' || fail "Admin/Reload without key → ${ERR:-OK}"

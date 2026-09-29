@@ -26,6 +26,7 @@ from .cloud import make_cloud
 from .config import apply_config
 from .deploy import Jobs
 from .mail import Mailer
+from .oauth_server import OAuthError, OAuthServer
 from .rbac import role_label
 from .secrets import make_secrets_backend
 from .security import (
@@ -37,7 +38,7 @@ from .security import (
 )
 from .services import Services
 from .storage import make_store
-from .web import api, api_admin, auth_routes, pages
+from .web import api, api_admin, auth_routes, oauth_routes, pages
 
 HERE = Path(__file__).parent
 
@@ -87,8 +88,16 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
     redact_tokens_in_access_log()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
-    for router in (auth_routes.r, pages.r, api.r, api_admin.r):
+    st.oauth_server = OAuthServer(st.services, st.accounts)
+    for router in (auth_routes.r, pages.r, api.r, api_admin.r, oauth_routes.r):
         app.include_router(router)
+
+    @app.exception_handler(OAuthError)
+    async def oauth_error(request: Request, exc: OAuthError):
+        """RFC 6749 §5.2 shape on the token endpoint; a plain page on the consent flow (never a redirect: §16.3)."""
+        if request.url.path == "/oauth/token" or not _wants_html(request):
+            return JSONResponse(exc.body(), exc.status_code, headers={"Cache-Control": "no-store"})
+        return PlainTextResponse(f"{exc.error}: {exc.detail}", exc.status_code)
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):

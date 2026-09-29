@@ -32,22 +32,28 @@ hide: [toc]
 
 # Multizone MCP server for GCP and AWS Kubernetes
 
-<p class="tag">Rust MCP node + Python 3.14 runtime workers · JSON-RPC 2.0 over gRPC · one FastAPI console</p>
+<p class="tag">Rust MCP node + Python 3.14 runtime workers · Streamable HTTP at the edge, gRPC inside · one FastAPI console</p>
 
 <div class="ramen-badges" markdown>
 [![release](https://img.shields.io/github/v/release/bkraad47/ramen?color=F26B3A&label=release&style=flat)](https://github.com/bkraad47/ramen/releases)
 [![ci](https://img.shields.io/github/actions/workflow/status/bkraad47/ramen/ci.yml?branch=main&label=ci&style=flat)](https://github.com/bkraad47/ramen/actions/workflows/ci.yml)
 [![docs](https://img.shields.io/github/actions/workflow/status/bkraad47/ramen/pages.yml?branch=main&label=docs&style=flat)](https://github.com/bkraad47/ramen/actions/workflows/pages.yml)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-F26B3A?style=flat)](https://github.com/bkraad47/ramen/blob/main/LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0%20over%20gRPC-2B2622?style=flat)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat)](https://modelcontextprotocol.io)
 </div>
 </div>
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
-Each worker is a **Rust MCP node** (JSON-RPC 2.0 over gRPC, auth, IP allow-lists, metrics) paired 1:1 with a
-**Python 3.14 runtime** that runs your code. Standard MCP clients (Claude Desktop, Cursor, the `mcp` SDK) connect
-through the **`ramen-mcp-bridge`** stdio bridge. A single **FastAPI console** manages groups, environments, zones,
-secrets, canary deploys, rebalancing, logs and audit, and every action is also available through an API key.
+Each worker is a **Rust MCP node** (Streamable HTTP and gRPC, auth, IP allow-lists, metrics) paired 1:1 with a
+**Python 3.14 runtime** that runs your code. Standard MCP clients — Claude Desktop, Cursor, the `mcp` SDK, anything
+that can make an HTTP request — connect straight to `https://<edge>/mcp`; clients that only speak stdio use the
+**`ramen-mcp-bridge`**. A single **FastAPI console** manages groups, environments, zones, secrets, canary deploys,
+rebalancing, logs and audit, is the OAuth authorization server for per-user access, and every action is also
+available through an API key.
+
+**Before the pitch, what is verified today:** both transports on real node processes in CI (Linux and Windows); the
+gRPC path live on one GKE cluster (0.3.2, 0.4.0); the HTTP path and OAuth not yet in a cloud; the AWS path never
+applied to a real account. [The full list, kept current →](wiki/transport.md#what-is-verified-and-what-is-not)
 
 <div class="ramen-grid" markdown>
 <div markdown>
@@ -55,8 +61,8 @@ secrets, canary deploys, rebalancing, logs and audit, and every action is also a
 Push `mcp/tools/<name>/<name>.py` + `<name>.json` to a repo. Deploy syncs it to a bucket; workers pip-install and load it. [Protos →](wiki/protos.md)
 </div>
 <div markdown>
-### gRPC transport (v0.3.1)
-One `ramen.v1.Mcp/Call` per JSON-RPC message: binary framing, HTTP/2 multiplexing, first-class health and deadlines. The LB routes on `ramen-group` / `ramen-zone` metadata. [Transport and security →](wiki/transport.md)
+### Streamable HTTP front door (v0.5.0)
+`POST /mcp` — a URL and a bearer header, nothing to install — next to `ramen.v1.Mcp/Call` for gRPC inside, on one port, through one set of guards. The LB routes on `ramen-group` / `ramen-zone` headers. [Transport and security →](wiki/transport.md)
 </div>
 <div markdown>
 ### Canary by default
@@ -74,24 +80,26 @@ Needs Docker (compose v2), `uv`, `git`. About 3–5 minutes on the first run (im
 
 ```sh
 git clone https://github.com/bkraad47/ramen && cd ramen
-make up          # Firestore emulator + console (https://localhost:8443) + one worker (gRPC localhost:8080, h2c)
-make demo        # creates group `demo` from the demo repo, generates an rmk_ key, deploys, calls the tool via the bridge
+make up          # Firestore emulator + console (https://localhost:8443) + one worker (localhost:8080, HTTP + gRPC)
+make demo        # creates group `demo` from the demo repo, generates an rmk_ key, deploys, calls the tool over http://localhost:8080/mcp
 # → demo_calculator_tool({"var1": 2, "var2": 3, "func": "add"}) -> 5
 open https://localhost:8443   # self-signed cert; login admin@ramen.local / changeme-ramen
 make down        # stop and remove volumes
 ```
 
 The console is `https://localhost:8443` (accept the self-signed certificate), login **admin@ramen.local** /
-**changeme-ramen** (from `deploy/local/.env`). The worker is a **gRPC** endpoint on `localhost:8080` that takes a
-**`rmk_` MCP key** generated on the group page. Point Claude Desktop, Cursor or the `mcp` SDK at it with the bridge:
+**changeme-ramen** (from `deploy/local/.env`). The worker serves `http://localhost:8080/mcp` and takes a
+**`rmk_` MCP key** generated on the group page. Put the key in `RAMEN_MCP_KEY` and point Claude Desktop, Cursor or
+the `mcp` SDK at it:
 
-```sh
-ramen-mcp-bridge --target localhost:8080 --insecure --key rmk_… --group demo --zone local
+```json
+{"mcpServers": {"ramen-demo": {"url": "http://localhost:8080/mcp",
+  "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "local"}}}}
 ```
 
-Full walkthrough with a Claude Desktop config, an `mcp` SDK snippet and a raw `grpcurl` call:
-[Local quickstart](how-tos/local-quickstart.md). Coming from 0.3.0? The HTTP `/mcp` endpoint is gone:
-[migration note](how-tos/migrate-0.3.1.md).
+Full walkthrough with a `curl` call, an `mcp` SDK snippet, the stdio bridge for clients that need it, and a raw
+`grpcurl` call: [Local quickstart](how-tos/local-quickstart.md). The 0.3.1 → 0.4.x gRPC-only period is over; a
+client written against 0.3.0's `/mcp` works again, and one written for the bridge keeps working.
 
 <figure markdown>
 ![Ramen console dashboard](img/dashboard.png){ .ramen-shot }

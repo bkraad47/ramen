@@ -1,6 +1,10 @@
-"""gRPC client for a Ramen node (CONTRACTS §11): `ramen.v1.Mcp/Call` carrying one JSON-RPC 2.0 message per call,
-`ramen.v1.Admin` (Reload/Metrics, metadata `x-ramen-admin-key`) and `grpc.health.v1.Health`. Plus `bridge_session()`:
-the official `mcp` SDK stdio client talking to `ramen-mcp-bridge`, the way Claude Desktop / Cursor connect."""
+"""Clients for a Ramen node on both transports (CONTRACTS §11 gRPC, §16 Streamable HTTP).
+
+`Node`: gRPC — `ramen.v1.Mcp/Call` carrying one JSON-RPC 2.0 message per call, `ramen.v1.Admin` (Reload/Metrics,
+metadata `x-ramen-admin-key`) and `grpc.health.v1.Health`. `HttpNode`: the same surface over `POST /mcp`. Both
+answer `outcome()` with the transport-neutral denial names (`OK`, `UNAUTHENTICATED`, `PERMISSION_DENIED`, ...), which
+is what lets one conformance module run against both. Plus `bridge_session()` (the `mcp` SDK stdio client through
+`ramen-mcp-bridge`) and `http_session()` (the `mcp` SDK Streamable HTTP client straight at the node)."""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import grpc
+import httpx
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -154,6 +159,12 @@ class Node:
     def status(self, body: bytes | dict, key=UNSET, extra=None) -> grpc.StatusCode:
         return code_of(self.call_raw, body, key, extra)
 
+    def outcome(self, body: bytes | dict, key=UNSET, extra=None) -> str:
+        """Transport-neutral result name (§16.1 table): `OK` or the gRPC code name, e.g. `UNAUTHENTICATED`."""
+        return self.status(body, key, extra).name
+
+    transport = "grpc"
+
     def request(self, method: str, params: dict | None = None, key=UNSET, timeout: float | None = None) -> dict:
         """JSON-RPC request → `result`. Raises JsonRpcError for an error object, grpc.RpcError for transport errors."""
         rid = next(_ids)
@@ -261,6 +272,191 @@ def text_of(result: dict) -> str:
     return "".join(c.get("text", "") for c in result.get("content", []))
 
 
+# -- Streamable HTTP (§16) --------------------------------------------------------------------------------------------
+HTTP_OUTCOMES = {
+    200: "OK",
+    202: "OK",
+    401: "UNAUTHENTICATED",
+    403: "PERMISSION_DENIED",
+    404: "NOT_FOUND",
+    413: "OUT_OF_RANGE",
+    429: "RESOURCE_EXHAUSTED",
+    503: "UNAVAILABLE",
+}
+
+
+class HttpError(Exception):
+    """A non-2xx answer from `POST /mcp`."""
+
+    def __init__(self, response: httpx.Response):
+        self.response, self.status_code = response, response.status_code
+        super().__init__(f"HTTP {response.status_code}: {response.text[:200]}")
+
+
+class HttpNode:
+    """Blocking Streamable HTTP client with the `Node` surface. `url` is the `/mcp` endpoint; `key` the bearer."""
+
+    transport = "http"
+
+    def __init__(
+        self,
+        url: str,
+        key: str | None = None,
+        *,
+        group: str | None = None,
+        zone: str | None = None,
+        ca: str | bytes | None = None,
+        verify: bool | None = None,
+        timeout: float = 30,
+    ):
+        self.url, self.key, self.group, self.zone, self.timeout = url, key, group, zone, timeout
+        self.session_id: str | None = None
+        self.protocol_version: str | None = None
+        v: bool | str = E.tls_verify() if verify is None else verify
+        if isinstance(ca, (str, bytes)):
+            v = ca if isinstance(ca, str) else _ca_file(ca)
+        self._client = httpx.Client(timeout=timeout, verify=v)
+
+    @classmethod
+    def from_env(cls, key: str | None = None, **kw) -> HttpNode:
+        meta = dict(E.routing_metadata())
+        return cls(
+            E.node_http_url(E.require("RAMEN_NODE_URL")),
+            key,
+            group=kw.pop("group", meta["ramen-group"]),
+            zone=kw.pop("zone", meta["ramen-zone"]),
+            ca=E.env("RAMEN_NODE_CA"),
+            **kw,
+        )
+
+    def close(self):
+        self._client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def headers(self, key=UNSET, extra: list[tuple[str, str]] | None = None, session: bool = True) -> dict:
+        k = self.key if key is UNSET else key
+        h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        if k:
+            h["Authorization"] = f"Bearer {k}"
+        if self.group:
+            h["ramen-group"] = self.group
+        if self.zone:
+            h["ramen-zone"] = self.zone
+        if session and self.session_id:
+            h["Mcp-Session-Id"] = self.session_id
+        if self.protocol_version:
+            h["MCP-Protocol-Version"] = self.protocol_version
+        for name, value in extra or []:
+            h[name] = value
+        return h
+
+    def post(
+        self, body: bytes | dict, key=UNSET, extra=None, timeout: float | None = None, session=True
+    ) -> httpx.Response:
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        return self._client.post(
+            self.url, content=raw, headers=self.headers(key, extra, session), timeout=timeout or self.timeout
+        )
+
+    def call_raw(self, body: bytes | dict, key=UNSET, extra=None, timeout: float | None = None) -> bytes:
+        """One POST → response bytes (b"" for a notification). Raises HttpError on a non-2xx status."""
+        r = self.post(body, key, extra, timeout)
+        if r.status_code >= 300:
+            raise HttpError(r)
+        return r.content
+
+    def status(self, body: bytes | dict, key=UNSET, extra=None) -> int:
+        return self.post(body, key, extra).status_code
+
+    def outcome(self, body: bytes | dict, key=UNSET, extra=None) -> str:
+        return HTTP_OUTCOMES.get(self.status(body, key, extra), "UNKNOWN")
+
+    def request(self, method: str, params: dict | None = None, key=UNSET, timeout: float | None = None) -> dict:
+        rid = next(_ids)
+        body = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            body["params"] = params
+        r = self.post(body, key, timeout=timeout)
+        if r.status_code >= 300:
+            raise HttpError(r)
+        out = r.json()
+        assert isinstance(out, dict) and out.get("jsonrpc") == "2.0" and out.get("id") == rid, out
+        if "error" in out:
+            raise JsonRpcError(out["error"])
+        if method == "initialize":  # §16.2: the id the server minted for this credential
+            self.session_id = r.headers.get("Mcp-Session-Id")
+            self.protocol_version = r.headers.get("MCP-Protocol-Version") or out["result"].get("protocolVersion")
+        return out["result"]
+
+    def notify(self, method: str, params: dict | None = None, key=UNSET) -> bytes:
+        body = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            body["params"] = params
+        return self.call_raw(body, key)
+
+    def initialize(self, key=UNSET) -> dict:
+        r = self.request(
+            "initialize", {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": CLIENT_INFO}, key
+        )
+        self.notify("notifications/initialized", key=key)
+        return r
+
+    def end_session(self, key=UNSET) -> int:
+        """`DELETE /mcp` with the current session → HTTP status (204 when it was ours)."""
+        h = self.headers(key)
+        h.pop("Content-Type", None)
+        return self._client.delete(self.url, headers=h, timeout=self.timeout).status_code
+
+    def ping(self, key=UNSET) -> dict:
+        return self.request("ping", key=key)
+
+    def list_tools(self, key=UNSET) -> list[dict]:
+        return self.request("tools/list", key=key)["tools"]
+
+    def list_resources(self, key=UNSET) -> list[dict]:
+        return self.request("resources/list", key=key)["resources"]
+
+    def list_prompts(self, key=UNSET) -> list[dict]:
+        return self.request("prompts/list", key=key)["prompts"]
+
+    def call_tool(self, name: str, arguments: dict | None = None, key=UNSET) -> dict:
+        return self.request("tools/call", {"name": name, "arguments": arguments or {}}, key)
+
+    def read_resource(self, uri: str, key=UNSET) -> dict:
+        return self.request("resources/read", {"uri": uri}, key)
+
+    def get_prompt(self, name: str, arguments: dict | None = None, key=UNSET) -> dict:
+        return self.request("prompts/get", {"name": name, "arguments": arguments or {}}, key)
+
+    def get(self, path: str | None = None, headers: dict | None = None) -> httpx.Response:
+        """A GET on `/mcp` (405 by contract) or on a sibling path such as the RFC 9728 metadata."""
+        url = self.url if path is None else self.url.rsplit("/mcp", 1)[0] + path
+        return self._client.get(url, headers=headers or {}, timeout=self.timeout)
+
+
+@asynccontextmanager
+async def http_session(node: HttpNode, key: str | None = None, timeout: float = 60):
+    """Official mcp SDK Streamable HTTP ClientSession straight at the node's `/mcp` (§16.4: no bridge to install)."""
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+
+    k = node.key if key is None else key
+    headers = {
+        name: value for name, value in node.headers(k, session=False).items() if name not in ("Content-Type", "Accept")
+    }
+    verify: bool | str = E.tls_verify()
+    async with httpx2.AsyncClient(headers=headers, verify=verify, timeout=timeout) as client:
+        async with streamable_http_client(node.url, http_client=client) as streams:
+            async with ClientSession(streams[0], streams[1], read_timeout_seconds=timeout) as s:
+                await s.initialize()
+                yield s
+
+
 # -- bridge (stdio) ---------------------------------------------------------------------------------------------------
 def bridge_command() -> list[str] | None:
     """RAMEN_BRIDGE_CMD (shell words) > `ramen-mcp-bridge` on PATH > ../runtime-py/.venv/bin/ramen-mcp-bridge."""
@@ -269,11 +465,14 @@ def bridge_command() -> list[str] | None:
     exe = shutil.which("ramen-mcp-bridge")
     if exe:
         return [exe]
-    venv = E.RAMEN_DIR / "runtime-py" / ".venv" / "bin" / "ramen-mcp-bridge"
-    if venv.exists():
-        return [str(venv)]
-    py = E.RAMEN_DIR / "runtime-py" / ".venv" / "bin" / "python"
-    if py.exists():
+    from .sidecar import venv_bin  # noqa: PLC0415 - avoids an import cycle at module load
+
+    venv = E.RAMEN_DIR / "runtime-py" / ".venv"
+    exe = venv_bin(venv, "ramen-mcp-bridge")
+    if exe:
+        return [str(exe)]
+    py = venv_bin(venv, "python")
+    if py:
         return [str(py), "-m", "ramen_runtime.bridge"]
     return None
 

@@ -123,3 +123,18 @@ def test_oidc_requires_verified_email(monkeypatch):
         assert c.get("/auth/oidc/callback?code=x&state=y", follow_redirects=False).status_code == 403
         monkeypatch.setenv("RAMEN_OAUTH_OIDC_ALLOW_UNVERIFIED", "1")
         assert c.get("/auth/oidc/callback?code=x&state=y", follow_redirects=False).status_code == 303
+
+
+def test_oauth_token_endpoint_is_rate_limited_and_authorize_queries_are_redacted():
+    """Security review 0.5.0 L5 and I1."""
+    assert "/oauth/token" in security.RateLimitMiddleware.PATHS
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        20,
+        "",
+        0,
+        '%s - "%s %s HTTP/1.1" %d',
+        ("1.2.3.4", "GET", "/oauth/authorize?client_id=c&code_challenge=SECRET&state=S", 200),
+        None,
+    )
+    assert security._RedactTokens().filter(rec) and rec.args[2] == "/oauth/authorize?<redacted>"

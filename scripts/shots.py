@@ -79,7 +79,27 @@ def free(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
-def seed(client) -> dict:
+def local_demo_repo() -> str:
+    """A git repository of the demo group on disk, so the seeded deploy clones and succeeds without GitHub (a laptop
+    with a stale keychain token made the docs show "Authentication failed" on every deploy picture, 0.5.4)."""
+    import shutil
+
+    repo = Path("/tmp/ramen-shots/ramen-demo-mcp-group")
+    shutil.rmtree(repo, ignore_errors=True)
+    shutil.copytree(ROOT / "tests/fixtures/demo_group", repo, ignore=shutil.ignore_patterns("__pycache__"))
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "shots",
+        "GIT_AUTHOR_EMAIL": "shots@ramen.local",
+        "GIT_COMMITTER_NAME": "shots",
+        "GIT_COMMITTER_EMAIL": "shots@ramen.local",
+    }
+    for cmd in (["git", "init", "-q", "-b", "main"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "demo"]):
+        subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True)
+    return f"file://{repo}"
+
+
+def seed(client, repo: str | None = None) -> dict:
     """Fictional material: two groups over two zones, users, keys, secrets, an image pin, a backup, a deploy.
     Returns the dynamic values page paths need (the OAuth client id for the consent page)."""
 
@@ -90,7 +110,7 @@ def seed(client) -> dict:
     client.post("/login", data={"email": EMAIL, "password": PASSWORD})
     for zone, region in (("a", "us-central1-a"), ("b", "us-central1-b")):
         client.post("/api/v1/zones", json={"name": zone, "provider": "gcp", "region": region}, headers=h())
-    repo = "https://github.com/bkraad47/ramen-demo-mcp-group"
+    repo = repo or "https://github.com/bkraad47/ramen-demo-mcp-group"
     client.post("/api/v1/groups", json={"name": "demo", "repo_url": repo, "ref": "main"}, headers=h())
     client.post("/api/v1/groups", json={"name": "analytics", "repo_url": repo, "ref": "main"}, headers=h())
     envs = "/api/v1/groups/{}/environments"
@@ -361,7 +381,7 @@ def main() -> int:
             print("console did not start", file=sys.stderr)
             return 1
         with httpx.Client(base_url=BASE, timeout=30, follow_redirects=False) as client:
-            values = seed(client)
+            values = seed(client, repo=local_demo_repo())
         taken = capture(ROOT / a.out, a.only, values=values)
         if not a.no_record and a.out == "docs/img":
             record(taken, a.contract)

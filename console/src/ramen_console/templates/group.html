@@ -10,10 +10,10 @@
 <label>Name<input name="name" required></label><label>Ref<input name="ref" placeholder="{{ group.ref }}"></label><label>Zones (comma)<input name="zones" placeholder="{{ zones|map(attribute='id')|join(',') }}"></label><button>Add environment</button></form>{% endif %}
 <div class="card"><table><tr><th>Environment</th><th>Ref</th><th>Zones</th><th>Verbose</th><th>Last deploy</th><th></th></tr>
 {% for e in envs %}<tr><td>{{ e.name }}</td><td>{{ e.ref }}</td><td>{{ e.zones|join(', ') }}</td>
-<td>{% if can_admin %}<button class="sm ghost" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'Turn off' if e.verbose else 'Turn on' }}</button>{% else %}{{ 'On' if e.verbose else 'Off' }}{% endif %}</td>
+<td>{% if can_admin %}<div class="row-actions"><button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'Verbose: off' if e.verbose else 'Verbose: on' }}</button></div>{% else %}{{ 'On' if e.verbose else 'Off' }}{% endif %}</td>
 <td>{% if e.last_deploy %}<span class="badge {{ e.last_deploy.status }}">{{ e.last_deploy.status }}</span> {{ e.last_deploy.at }}{% if e.last_deploy.error %}<div class="err">{{ e.last_deploy.error }}</div>{% endif %}{% endif %}</td>
-<td>{% if can_admin %}<button class="sm" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/deploy" hx-ext="json" hx-vals='{"canary": true}' hx-target="#jobs" hx-swap="afterbegin">Deploy (canary)</button>
-<button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}" hx-confirm="Delete environment?" hx-swap="none">Delete</button>{% endif %}</td></tr>
+<td>{% if can_admin %}<div class="row-actions"><button class="act" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/deploy" hx-ext="json" hx-vals='{"canary": true}' hx-target="#jobs" hx-swap="afterbegin">Deploy (canary)</button>
+<button class="act danger" hx-delete="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}" hx-confirm="Delete environment?" hx-swap="none">Delete</button></div>{% endif %}</td></tr>
 {% else %}<tr><td colspan="6" class="muted">No environments</td></tr>{% endfor %}</table></div>
 
 <h2>Deploy jobs</h2><div id="jobs">{% for job in jobs %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">No jobs yet</p>{% endif %}</div>

@@ -1,4 +1,4 @@
-# Architecture (current: v0.4.0)
+# Architecture (current: v0.5.4)
 
 Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
 
@@ -49,11 +49,12 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 | `config`, `backups` | auth toggles, SA rules; backup metadata | backups exclude secrets |
 
 ## Request paths
-- **MCP call**: client (bridge or gRPC) → LB matches `ramen-group` + `ramen-zone` metadata → node checks CIDR +
-  `rmk_` key (constant-time) → runtime (spawned on demand) → tool → JSON-RPC result in the reply body. Transport
-  failures are gRPC statuses (`UNAUTHENTICATED`, `PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`); protocol failures
-  stay JSON-RPC errors. One log line per call (`ts, ip, group, method, name, status, grpc_code, ms, key_id`);
-  `RAMEN_VERBOSE=1` logs bodies.
+- **MCP call**: client (`POST /mcp` over Streamable HTTP, a gRPC client, or the stdio bridge) → LB matches
+  `ramen-group` + `ramen-zone` headers → node checks CIDR, Origin (HTTP), then the `rmk_` key or an OAuth token
+  (constant-time) → runtime (spawned on demand) → tool → JSON-RPC result in the reply body. Transport failures are
+  gRPC statuses (`UNAUTHENTICATED`, `PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`) or their HTTP twins (401, 403,
+  429); protocol failures stay JSON-RPC errors. One log line per call (`ts, ip, transport, group, method, name,
+  status, grpc_code, ms, key_id`); `RAMEN_VERBOSE=1` logs bodies.
 - **Deploy**: console job → clone repo (token via git header) → upload bucket → write zone Secret/env file
   (`RAMEN_MCP_KEYS`, `RAMEN_SECRET_*`, `RAMEN_BLOCKED`, `RAMEN_ALLOWED_CIDRS`) → canary restart → `Health/Check`
   `SERVING` → `Admin/Reload` → `tools/list` smoke → stable restart. See [Canary](../wiki/canary.md).
@@ -77,9 +78,15 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 | D21 | v0.4.0: API keys carry an enforced client type — an `agent` key is accepted only by workers over gRPC, a `devops` key only by the console API. |
 | D22 | v0.4.0: the autoscale and rebalance stress test runs on a local kind cluster first, then once on a throwaway GKE project. |
 | D23 | v0.4.0: independent-client evidence is a real MCP client driven against the bridge, plus an editor configuration the user captures. |
+| D31 | v0.5.0: Streamable HTTP at the edge, gRPC inside — every worker serves `POST /mcp` on the gRPC port through the same guards; the bridge is the stdio-only compatibility path. |
+| D32 | v0.5.0: the HTTP handler lives in the node on the same port; never a separate edge service. |
+| D33 | v0.5.0: sessions are stateless signed ids (HMAC over nonce, expiry and the credential; per-group secret handed to every zone). |
+| D34 | v0.5.0: the console is the OAuth 2.1 authorization server — PKCE S256, pre-registered clients, no dynamic registration. |
+| D35 | v0.5.1: cloud runs get their permissions from a rule the human adds; the agent never writes its own permission file. |
 
 ## Version history
 [v0.1.0](v0.1.0.md) local core → [v0.2.0](v0.2.0.md) GCP → [v0.3.0](v0.3.0.md) AWS, auth & policy, docs →
-[v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish, docs, and proof.
+[v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish, docs, and proof → 0.5.x Streamable HTTP
+at the edge, OAuth, the GKE proof, the end-to-end and add-a-tool guides (this page; the changelog has each release).
 Tracker: [Versions](../versions.md). A drawing of one call end to end, and what protects every hop, is in
 [Transport and what secures each hop](../wiki/transport.md).

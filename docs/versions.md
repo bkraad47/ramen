@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.3` **(current)** | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
+| `0.5.4` **(current)** | — | honest deploy pictures, aligned environment buttons, docs brought current | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.4) |
+| `0.5.3` | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
 | `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
 | `0.5.1` | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
 | `0.5.0` | 2026-09-29 | Streamable HTTP at the edge, gRPC inside | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.0) |
@@ -18,8 +19,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## Unreleased
+## 0.5.4 — honest deploy pictures, aligned environment buttons, docs brought current
 
+- The docs' group and deploy-job screenshots showed a deploy that had **failed** ("Authentication failed for https://github.com/…"): the screenshot rig deployed the demo group from GitHub through a laptop with a stale keychain token. The rig now clones a local git copy of the demo group, so the seeded deploy succeeds and the pictures show a job that ends in `ok` with packages per zone.
+- Group page → Environments: the verbose toggle, **Deploy (canary)** and **Delete** were three sizes on two baselines; all three now use the equal-width `row-actions` pattern (the toggle reads `Verbose: on/off`). A test pins it.
+- Architecture page brought to 0.5.x (Streamable HTTP and OAuth in the call path, decisions D31–D35, version history); every README relative path, every external link and every docs link checked; screenshots re-captured (`ui_contract` 0.5.4).
 - Test-only: `log::tests::mirrors_to_file` counted every line of the process-global log file and flaked when another test emitted concurrently (it failed CI on the 0.5.3 commit and took the pipeline with it); it now counts only its own lines.
 
 ## 0.5.3 — how to add and deploy a tool

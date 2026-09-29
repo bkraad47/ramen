@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.1` **(current)** | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
+| `0.5.2` **(current)** | — | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
+| `0.5.1` | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
 | `0.5.0` | 2026-09-29 | Streamable HTTP at the edge, gRPC inside | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.0) |
 | `0.4.3` | — | screenshots that cannot go stale | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.3) |
 | `0.4.2` | — | console usability and docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.2) |
@@ -15,6 +16,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.5.2 — the mark is the logo
+
+- The console's sidebar and its sign-in, password-reset and OAuth consent cards now show the square bowl mark the favicon is made of (`/static/logo-mark.png`, 256 px), not the wide "PROJECT RAMEN" wordmark that rendered as a blurry 56 px rectangle. Square sizes and rounded corners in the CSS; the wordmark stays in the README and the docs. A test pins every branded page to the mark; screenshots re-captured (`ui_contract` 0.5.2).
 
 ## 0.5.1 — the end-to-end guide, and 0.5.0 proven on GKE
 

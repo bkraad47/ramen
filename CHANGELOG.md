@@ -2,6 +2,9 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.2] — the mark is the logo
+- The console's sidebar and its sign-in, password-reset and OAuth consent cards now show the square bowl mark the favicon is made of (`/static/logo-mark.png`, 256 px), not the wide "PROJECT RAMEN" wordmark that rendered as a blurry 56 px rectangle. Square sizes and rounded corners in the CSS; the wordmark stays in the README and the docs. A test pins every branded page to the mark; screenshots re-captured (`ui_contract` 0.5.2).
+
 ## [0.5.1] — the end-to-end guide, and 0.5.0 proven on GKE
 Contract §17. No protocol or API change.
 

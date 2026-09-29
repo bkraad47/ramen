@@ -2,6 +2,8 @@
 
 Full version on the docs site: https://bkraad47.github.io/ramen/architecture/ (with per-version pages).
 Binding interface contracts: [docs/CONTRACTS.md](docs/CONTRACTS.md) — §11 is the gRPC transport.
+Diagram of one call end to end, and what protects every hop:
+[Transport and what secures each hop](https://bkraad47.github.io/ramen/wiki/transport/).
 
 Hierarchy: **Group → Environment → Zone → Worker** (D5). One zone first, every layer multi-zone capable (D6).
 Transport: **JSON-RPC 2.0 over gRPC** (D19, supersedes D4).
@@ -27,8 +29,10 @@ grpcurl / gRPC client ───────────────────�
 - **node-rs/** Rust MCP node: one h2c port (`RAMEN_NODE_PORT`, TLS with `RAMEN_TLS_CERT`/`KEY`) serving
   `ramen.v1.Mcp`, `ramen.v1.Admin`, `grpc.health.v1.Health` (`SERVING` after `runtime.load`). Bearer auth on
   metadata `authorization` (`RAMEN_MCP_KEYS`, union of env + config + deploy file; none = deny all; constant-time
-  compare) → `UNAUTHENTICATED`; CIDR allow-lists (`RAMEN_ALLOWED_CIDRS` for `Mcp`, `RAMEN_ADMIN_CIDRS` +
-  `x-ramen-admin-key` for `Admin`) → `PERMISSION_DENIED`; `RAMEN_MAX_INFLIGHT` → `RESOURCE_EXHAUSTED`; 4 MiB
+  byte compare folded over every key, though the length check in front of it is not constant time) → `UNAUTHENTICATED`; CIDR allow-lists (`RAMEN_ALLOWED_CIDRS` for `Mcp`, `RAMEN_ADMIN_CIDRS` +
+  `x-ramen-admin-key` for `Admin`) matched against the client address — the `RAMEN_TRUST_PROXY_HOPS`-th
+  `x-forwarded-for` entry counted from the right (2 on GCP, 1 on AWS, 0 = the peer address) → `PERMISSION_DENIED`;
+  server reflection behind `RAMEN_REFLECTION` (on by default, off on deployed workers); `RAMEN_MAX_INFLIGHT` → `RESOURCE_EXHAUSTED`; 4 MiB
   messages; blocked names (`-32601`); one JSON access-log line per call with `grpc_code`. Spawns the Python
   runtime on demand over stdio JSON-RPC, 1:1, idle-terminated (D3).
 - **runtime-py/** Loads `mcp/{tools,resources,prompts}` from the bucket (`gs://`/`s3://` sync on load), validates

@@ -1,9 +1,30 @@
 {% extends "base.html" %}{% block title %}Logs{% endblock %}
+{% macro row(e) %}<button class="log-row{{ ' selected' if e.selected }}" type="button" onclick="showEntry({{ e.i }})">
+<span class="outcome {{ e.outcome }}">{{ 'Success' if e.outcome == 'success' else ('Failure' if e.outcome == 'failure' else '—') }}</span>
+<span class="who">{{ e.consumer or '—' }}</span><br><span class="meta">{{ e.ts or '—' }}{% if e.method %} · {{ e.method }}{% if e.name %} · {{ e.name }}{% endif %}{% endif %}</span></button>
+{% endmacro %}
 {% block body %}
 <div class="card"><form class="inline" method="get">
 <label>Group<select name="group">{% for g in groups %}<option {{ 'selected' if g.id == group }}>{{ g.id }}</option>{% endfor %}</select></label>
 <label>Zone<select name="zone">{% for z in zones %}<option {{ 'selected' if z.id == zone }}>{{ z.id }}</option>{% endfor %}</select></label>
-<label>Worker (optional)<input name="worker" value="{{ worker or '' }}"></label><label>Tail<input name="tail" type="number" value="{{ tail }}" style="min-width:80px"></label><button>Show</button>
+<label>Worker<select name="worker"><option value="">All workers</option>{% for w in live_workers %}<option value="{{ w }}" {{ 'selected' if w == worker }}>{{ w }}</option>{% endfor %}</select></label>
+<label>Tail<input name="tail" type="number" value="{{ tail }}" style="min-width:80px"></label><button>Show</button>
 {% if group and zone %}<a class="btn ghost" href="/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
-<pre>{{ text or '(no log lines)' }}</pre>
+{% if entries %}
+<div class="log-panes">
+<div class="card log-list"><h2 style="margin-top:0">Entries ({{ entries|length }}, newest first)</h2>
+<div class="log-eager">{% for e in eager %}{{ row(e) }}{% endfor %}</div>
+{% if rest %}<div class="log-rest">{% for e in rest %}{{ row(e) }}{% endfor %}</div>{% endif %}</div>
+<div class="card"><h2 style="margin-top:0">Entry</h2><div class="log-body"><pre id="log-body">{{ entries[0].body }}</pre></div></div>
+</div>
+<script id="log-data" type="application/json">{{ tojson(entries|map(attribute='body')|list) }}</script>
+<script>
+const bodies = JSON.parse(document.getElementById('log-data').textContent);
+function showEntry(i){
+  document.getElementById('log-body').textContent = bodies[i];
+  document.querySelectorAll('.log-row').forEach(el => el.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+}
+</script>
+{% else %}<div class="card"><p class="muted">No log entries{% if group and zone %} for {{ group }} in {{ zone }}{% endif %}.</p></div>{% endif %}
 {% endblock %}

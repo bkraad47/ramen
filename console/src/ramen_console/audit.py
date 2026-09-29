@@ -29,10 +29,9 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
         request.state.audit = None
         if request.headers.get(HEADER):
             request.state.principal = await st.accounts.principal_for_key(request.headers[HEADER])
-        else:
+        else:  # V1.4: the session carries the user's epoch and dies when the stored one moves on
             sess = st.signer.load(request.cookies.get(COOKIE))
-            if sess:
-                request.state.principal = await st.accounts.principal_for_user(sess.get("uid"))
+            request.state.principal = await st.accounts.principal_for_session(sess)
         response = await call_next(request)
         if request.state.audit or (request.method in MUTATING and request.url.path.startswith("/api/")):
             p = request.state.principal

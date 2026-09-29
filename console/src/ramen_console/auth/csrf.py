@@ -35,7 +35,7 @@ async def csrf_form(request: Request, csrf_token: str = Form("")) -> None:
     if request.headers.get(API_KEY_HEADER) or COOKIE not in request.cookies:
         return
     if not _ok(request.cookies.get(COOKIE), csrf_token or request.headers.get(HEADER)):
-        raise HTTPException(403, "csrf token missing or invalid")
+        raise HTTPException(403, "CSRF token missing or invalid")
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):
@@ -49,7 +49,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         ):
             from fastapi.responses import JSONResponse
 
-            return JSONResponse({"detail": "csrf token missing or invalid"}, 403)
+            return JSONResponse({"detail": "CSRF token missing or invalid"}, 403)
         response = await call_next(request)
         issue = getattr(request.state, "csrf_issue", None)
         if issue and COOKIE not in request.cookies:

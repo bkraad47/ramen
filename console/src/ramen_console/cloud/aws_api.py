@@ -116,7 +116,7 @@ def sync_repo_to_s3(s3, bucket, group, repo_url, ref, token) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
         if r.returncode != 0:
-            raise ApiError(502, "git failed: " + redact(r.stderr, token).strip()[:500])
+            raise ApiError(502, "Git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
         local = {
             prefix + p.relative_to(root).as_posix(): p
@@ -166,10 +166,10 @@ def fetch_logs(logs, log_group, ns, worker, tail, poll=1.0, timeout=60.0, days=7
             break
         if time.monotonic() > deadline:
             logs.stop_query(queryId=qid)
-            raise ApiError(504, f"logs insights query still {r.get('status')} after {timeout:.0f}s")
+            raise ApiError(504, f"Logs Insights query still {r.get('status')} after {timeout:.0f}s")
         time.sleep(poll)
     if r["status"] != "Complete":
-        raise ApiError(502, f"logs insights query {r['status']}")
+        raise ApiError(502, f"Logs Insights query {r['status']}")
     lines = []
     for row in reversed(r.get("results", [])):
         f = {c["field"]: c["value"] for c in row}

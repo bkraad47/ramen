@@ -1,11 +1,11 @@
-import secrets as pysecrets
-
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
+from .keyid import key_id
 from .policy import permissions as perm
 from .rbac import Principal, RuleClash, check_clash
 from .secrets.base import SecretsBackend, StoreBackend
+from .security import generate_key_secret
 from .storage.base import Store
 from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, public, uid
 
@@ -15,7 +15,7 @@ def clean_blocked(names) -> list[str]:
     for n in names:
         n = str(n).strip()
         if "," in n or "\n" in n:
-            raise invalid("blocked names must not contain commas")
+            raise invalid("Blocked names must not contain commas")
         if n and n not in out:
             out.append(n)
     return out
@@ -40,9 +40,9 @@ class Services:
 
     async def create_group(self, name, repo_url="", ref="main", by="") -> dict:
         if not NAME_RE.match(name or ""):
-            raise invalid("group name must match ^[a-z][a-z0-9-]{0,39}$")
+            raise invalid("Group name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("groups", name):
-            raise conflict(f"group {name} exists")
+            raise conflict(f"Group {name} exists")
         doc = {
             "name": name,
             "repo_url": repo_url,
@@ -87,18 +87,18 @@ class Services:
     async def check_permission_request(self, p: Principal, group, zone, permission) -> None:
         """422 unknown, 403 not an admin of the group, 409 denied by super-admin or group rules (CONTRACTS §9)."""
         if not perm.known(permission or ""):
-            raise invalid(f"unknown permission {permission!r}; see /api/v1/policy/permissions")
+            raise invalid(f"Unknown permission {permission!r}; see /api/v1/policy/permissions")
         if not group or not zone:
-            raise invalid("permission requests need group and zone")
+            raise invalid("Permission requests need a group and a zone")
         g = await self.get_group(group)
         if not await self.store.get("zones", zone):
             raise not_found("zone")
         if p.role != "super_admin" and (p.role != "group_admin" or group not in p.groups):
-            raise forbidden(f"requires group_admin on group {group}")
+            raise forbidden(f"Requires Group Admin on group {group}")
         rules = (await self.store.get("config", "sa_rules") or {}).get("rules", [])
         why = perm.evaluate(permission, rules, g.get("sa_restrictions", []))
         if why:
-            raise conflict(f"permission {permission!r} denied: {why}")
+            raise conflict(f"Permission {permission!r} denied: {why}")
 
     async def apply_sa_permissions(self, group, zone, permission) -> dict:
         """Approved request → union with what the zone SA already has → Cloud.apply_sa_permissions."""
@@ -118,9 +118,9 @@ class Services:
 
     async def create_zone(self, name, provider="local", region="") -> dict:
         if not NAME_RE.match(name or ""):
-            raise invalid("zone name must match ^[a-z][a-z0-9-]{0,39}$")
+            raise invalid("Zone name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("zones", name):
-            raise conflict(f"zone {name} exists")
+            raise conflict(f"Zone {name} exists")
         return await self.store.put(
             "zones", name, {"name": name, "provider": provider, "region": region, "created": now()}
         )
@@ -138,7 +138,7 @@ class Services:
         known = {z["id"] for z in await self.store.list("zones")}
         bad = [z for z in zones if z not in known]
         if bad:
-            raise invalid(f"unknown zones: {', '.join(bad)}")
+            raise invalid(f"Unknown zones: {', '.join(bad)}")
 
     async def environments(self, group=None) -> list[dict]:
         envs = await self.store.list("environments", {"group": group} if group else None)
@@ -153,9 +153,9 @@ class Services:
     async def create_env(self, group, name, ref=None, zones=()) -> dict:
         g = await self.get_group(group)
         if not NAME_RE.match(name or ""):
-            raise invalid("environment name must match ^[a-z][a-z0-9-]{0,39}$")
+            raise invalid("Environment name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("environments", f"{group}:{name}"):
-            raise conflict(f"environment {name} exists in {group}")
+            raise conflict(f"Environment {name} exists in {group}")
         await self._check_zones(zones)
         doc = {
             "group": group,
@@ -164,6 +164,7 @@ class Services:
             "zones": list(zones),
             "verbose": False,
             "blocked": [],
+            "blocked_zones": {},
             "created": now(),
             "last_deploy": None,
         }
@@ -196,6 +197,29 @@ class Services:
         e.update({k: v for k, v in fields.items() if v is not None})
         return await self.store.put("environments", e["id"], e)
 
+    async def set_zone_blocked(self, group, env, zone, names) -> dict:
+        """U5: `environments[].blocked_zones[zone]` adds to the environment-wide `blocked` list (§9)."""
+        e = await self.get_env(group, env)
+        if zone not in e.get("zones", []):
+            raise invalid(f"Zone {zone} is not attached to {env}")
+        by_zone = dict(e.get("blocked_zones") or {})
+        cleaned = clean_blocked(names)
+        if cleaned:
+            by_zone[zone] = cleaned
+        else:
+            by_zone.pop(zone, None)
+        e["blocked_zones"] = by_zone
+        return await self.store.put("environments", e["id"], e)
+
+    @staticmethod
+    def blocked_for_zone(env: dict, zone: str) -> list[str]:
+        """What the next deploy writes into that zone's `RAMEN_BLOCKED`: the environment list plus the zone's."""
+        out = list(env.get("blocked") or [])
+        for n in (env.get("blocked_zones") or {}).get(zone, []):
+            if n not in out:
+                out.append(n)
+        return out
+
     async def delete_env(self, group, name) -> None:
         e = await self.get_env(group, name)
         await self.store.delete("environments", e["id"])
@@ -223,20 +247,20 @@ class Services:
         w = await self.worker_config(group, zone)
         if allowed_sizes is not None:
             if p.role != "super_admin":
-                raise forbidden("only super admins set allowed sizes")
+                raise forbidden("Only super admins set allowed sizes")
             bad = [s for s in allowed_sizes if not normalize_size(s)]
             if bad:
-                raise invalid(f"unknown sizes: {', '.join(bad)} (use s|m|l)")
+                raise invalid(f"Unknown sizes: {', '.join(bad)} (use s|m|l)")
             w["allowed_sizes"] = [normalize_size(s) for s in allowed_sizes]
         if size is not None:
             if p.role != "super_admin" and normalize_size(size) not in w.get("allowed_sizes", []):
-                raise forbidden("only super admins change worker sizes (or sizes outside the allowed list)")
+                raise forbidden("Only super admins change worker sizes, or sizes outside the allowed list")
             if not normalize_size(size):
-                raise invalid("size must be one of s|m|l")
+                raise invalid("Size must be one of s|m|l")
             w["size"] = size
         if count is not None:
             if count < 1:
-                raise invalid("count must be >= 1")
+                raise invalid("Count must be 1 or more")
             w["count"] = count
         doc = await self.store.put("workers", w["id"], w)
         doc["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
@@ -266,7 +290,7 @@ class Services:
     async def set_ip_rules(self, group, zone, cidrs: list[str]) -> dict:
         bad = [c for c in cidrs if not is_cidr(c)]
         if bad:
-            raise invalid(f"invalid CIDRs: {', '.join(bad)}")
+            raise invalid(f"Invalid CIDRs: {', '.join(bad)}")
         w = await self.worker_config(group, zone)
         w["cidrs"] = cidrs
         await self.store.put("workers", w["id"], w)
@@ -280,16 +304,16 @@ class Services:
             f["zone"] = zone
         return sorted((public(s) for s in await self.store.list("secrets", f)), key=lambda s: s["name"])
 
-    async def add_secret(self, group, name, value, env=None, zone=None, by="", kind="secret") -> dict:
+    async def add_secret(self, group, name, value, env=None, zone=None, by="", kind="secret", extra=None) -> dict:
         await self.get_group(group)
         if kind == "secret" and not SECRET_RE.match(name or ""):
-            raise invalid("secret name must match ^[A-Z][A-Z0-9_]{0,63}$")
+            raise invalid("Secret name must match ^[A-Z][A-Z0-9_]{0,63}$")
         if kind != "secret" and not KEYNAME_RE.match(name or ""):
-            raise invalid("key name must match ^[A-Za-z0-9_-]{1,64}$")
+            raise invalid("Key name must match ^[A-Za-z0-9_-]{1,64}$")
         env, zone = env or None, zone or None
         for s in await self.store.list("secrets", {"group": group, "name": name, "kind": kind}):
             if s.get("env") == env and s.get("zone") == zone:
-                raise conflict(f"secret {name} exists for that scope")
+                raise conflict(f"Secret {name} exists for that scope")
         stored = await self.secrets_backend.put(group, env, zone, name, value, kind)
         doc = {
             "group": group,
@@ -300,8 +324,11 @@ class Services:
             "created": now(),
             "created_by": by,
             "backend": self.secrets_backend.kind,
+            **(extra or {}),
             **stored,
         }
+        if kind == "mcp_key":  # so the Logs page can name the consumer behind a worker log line (U4)
+            doc["key_id"] = key_id(value)
         return public(await self.store.put("secrets", uid(), doc))
 
     async def delete_secret(self, group, sid, kind="secret") -> None:
@@ -312,9 +339,37 @@ class Services:
         await self.store.delete("secrets", sid)
 
     async def mint_mcp_key(self, group, name, by="") -> dict:
-        key = "rmk_" + pysecrets.token_urlsafe(24)
-        doc = await self.add_secret(group, name, key, by=by, kind="mcp_key")
+        """A group MCP key is the group page's agent key (D21): `rmk_`, workers only, never the console API."""
+        key = "rmk_" + generate_key_secret(32)
+        doc = await self.add_secret(group, name, key, by=by, kind="mcp_key", extra={"client_type": "agent"})
         return {**doc, "key": key}
+
+    # --- agent API keys reaching workers (U9 / D21) ---------------------------
+    async def mirror_agent_key(self, groups, name, raw, kid, by="") -> list[dict]:
+        """An `agent` key has to reach the workers of every group it names, so it is recorded as that group's MCP
+        key — the same record the group page's key form writes — and deploy unions it into `RAMEN_MCP_KEYS`."""
+        safe = "".join(c if KEYNAME_RE.match(c) else "-" for c in (name or "agent"))[:48]
+        return [
+            await self.add_secret(g, f"{safe}-{kid[:6]}", raw, by=by, kind="mcp_key", extra={"api_key": kid})
+            for g in groups
+        ]
+
+    async def revoke_agent_key(self, kid) -> int:
+        """Revoking the API key must also stop it reaching workers on the next deploy."""
+        docs = await self.store.list("secrets", {"kind": "mcp_key", "api_key": kid})
+        for s in docs:
+            await self.secrets_backend.delete(s)
+            await self.store.delete("secrets", s["id"])
+        return len(docs)
+
+    async def mcp_key_names(self, group) -> dict[str, str]:
+        """`key_id` -> key name, for resolving the consumer on the Logs page (U4)."""
+        out = {}
+        for s in await self.store.list("secrets", {"group": group, "kind": "mcp_key"}):
+            kid = s.get("key_id") or (key_id(s["value"]) if s.get("value") else None)
+            if kid:
+                out[kid] = s["name"]
+        return out
 
     async def secrets_for(self, group, env, zone) -> tuple[dict[str, str], str | None, list[str]]:
         vars_, token, mcp = {}, None, []

@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from .env import env, strip, tls_verify
+from .env import env, no_cloud, strip, tls_verify
 
 ROUTES = {
     "login": "/login",  # form POST {email,password} → 303 (401 on bad password)
@@ -12,6 +12,7 @@ ROUTES = {
     "me": "/api/v1/me",
     "users": "/api/v1/users",  # POST {email,password,role,groups} → 201 {id,...}
     "user": "/api/v1/users/{id}",
+    "user_password": "/api/v1/users/{id}/password",  # POST {password} ("me" = self)
     "groups": "/api/v1/groups",  # POST {name,repo_url,ref} → 201
     "group": "/api/v1/groups/{group}",
     "zones": "/api/v1/zones",  # POST {name,provider,region} → 201 (super admin)
@@ -48,6 +49,8 @@ ROUTES = {
     "request_approve": "/api/v1/requests/{id}/approve",  # POST → applied SA permissions / role granted
     "policy_permissions": "/api/v1/policy/permissions",  # GET catalogue [{permission,desc,gcp,aws}]
     "env_blocked": "/api/v1/groups/{group}/environments/{env}/blocked",  # PUT {blocked:[names]}
+    # v0.4.0 (CONTRACTS §12.1)
+    "env_zone_blocked": "/api/v1/groups/{group}/environments/{env}/zones/{zone}/blocked",  # PUT {blocked:[names]}
     "config_auth": "/api/v1/config/auth",  # GET|PUT {password_login?, magic_link?} (super admin)
     "auth_reset": "/auth/reset",  # form POST {email} → 200 always
     "auth_reset_token": "/auth/reset/{token}",  # form POST {password} → 303 /login
@@ -58,6 +61,7 @@ ROUTES = {
 }
 API_KEY_HEADER = "X-Ramen-Api-Key"
 CSRF_COOKIE, CSRF_HEADER = "ramen_csrf", "X-Ramen-CSRF"
+SESSION_COOKIE = "ramen_session"  # console/src/ramen_console/auth/sessions.py::COOKIE
 
 
 class Console:
@@ -141,7 +145,14 @@ class Console:
         return self.post("zones", {"name": name, "provider": provider, "region": region})
 
     def create_environment(self, group, name, zones, ref="main"):
-        return self.post("environments", {"name": name, "ref": ref, "zones": list(zones)}, group=group)
+        r = self.post("environments", {"name": name, "ref": ref, "zones": list(zones)}, group=group)
+        # Attaching a zone to a *new* group creates that group's cloud identity (CONTRACTS §7). With RAMEN_NO_CLOUD=iam
+        # (kind) there is none to create, and only the zones pre-annotated in deploy/kind/zones.yaml can be attached.
+        if r.status_code == 502 and no_cloud("iam") and "credential" in r.text.lower():
+            import pytest
+
+            pytest.skip(f"no cloud IAM here: attaching a zone to a new group needs one ({r.text[:120]})")
+        return r
 
     def deploy(self, group, env, canary=True, zone=None):
         body = {"canary": canary}
@@ -177,12 +188,14 @@ class Console:
     def create_mcp_key(self, group, name="tests"):
         return self.post("mcp_keys", {"name": name}, group=group)
 
-    def create_api_key(self, name, groups=None, role=None):
+    def create_api_key(self, name, groups=None, role=None, client_type=None):
         body = {"name": name}
         if groups is not None:
             body["groups"] = groups
         if role:
             body["role"] = role
+        if client_type:
+            body["client_type"] = client_type  # devops | agent (CONTRACTS §12.1, D21)
         return self.post("api_keys", body)
 
     def audit(self):

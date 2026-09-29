@@ -166,3 +166,45 @@ jobs:
       - name: Compose down
         if: always()
         run: docker compose -f deploy/local/docker-compose.yml down -v
+
+  kind:
+    # CONTRACTS §12.3: the multi-zone proofs on a real Kubernetes cluster — two zones serving independently, an HPA
+    # scaling a zone under generated gRPC load and back, rebalance changing the split, per-zone package lists.
+    # Slow (cluster + two image builds + several deploys), so it is kept off the pull-request path and out of the
+    # release pipeline; `main` and manual runs only. Everything it needs lives in deploy/kind.
+    needs: [lint, versions, python, rust, tests]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      KIND_VERSION: v0.33.0
+      HELM_VERSION: v3.16.4
+      RAMEN_KIND_SUITES: kind          # e2e + conformance run against compose in the `e2e` job
+      RAMEN_KIND_LOAD_THREADS: "8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14
+      - name: kind + helm
+        run: |
+          curl -sSLo /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind && kind version
+          curl -sSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm && helm version --short
+      - name: Build the console and worker images
+        run: make build
+      - name: Bring the cluster up
+        run: deploy/kind/up.sh
+      - name: Run the proofs
+        run: deploy/kind/test.sh
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl --context kind-ramen get pods,deploy,hpa -A || true
+          kubectl --context kind-ramen -n ramen-system logs deploy/console --tail=200 || true
+          for ns in ramen-demo-a ramen-demo-b; do
+            kubectl --context kind-ramen -n "$ns" logs -l app=worker --tail=100 --max-log-requests=6 || true
+          done
+      - name: Tear the cluster down
+        if: always()
+        run: deploy/kind/down.sh

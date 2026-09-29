@@ -178,7 +178,7 @@ async def test_workers_and_error_prefix(cloud, fk, monkeypatch):
     )
     with pytest.raises(ApiError) as e:
         await cloud.workers("demo", "a")
-    assert e.value.status_code == 502 and e.value.detail.startswith("aws workers:")
+    assert e.value.status_code == 502 and e.value.detail.startswith("AWS workers:")
 
 
 async def test_logs(cloud, fk):
@@ -480,7 +480,7 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "ramen_console.cloud.aws_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart")
     )
-    with pytest.raises(ApiError, match="helm"):
+    with pytest.raises(ApiError, match="Helm"):
         await cloud.attach_zone("demo", "a", SPEC)
 
 
@@ -616,3 +616,19 @@ async def test_apply_sa_permissions_puts_scoped_inline_policy(cloud, fk):
         f"arn:aws:s3:::{BUCKET}",
         f"arn:aws:s3:::{BUCKET}/demo/*",
     ]
+
+
+async def test_set_ip_rules_enforces_at_the_node_when_waf_is_unreachable(cloud, fk):
+    """The node list is the control that gates a call; a WAF failure must not leave the zone unlocked
+    (found on kind as D1, same shape as the GCP adapter)."""
+    await cloud.attach_zone("demo", "a", SPEC)
+
+    def boom(*a, **k):
+        raise RuntimeError("Unable to locate credentials")
+
+    fk.wafv2.create_ip_set = boom
+    fk.wafv2.update_ip_set = boom
+    out = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    assert out["ok"] and out["attached"] is False and "enforced at the node" in out["note"]
+    sec = fk.k8s.objs[("Secret", "ramen-demo-a", "ramen-deploy")]["stringData"]
+    assert sec["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"

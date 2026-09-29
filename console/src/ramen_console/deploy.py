@@ -5,7 +5,9 @@ from .services import Services
 from .util import now, uid
 
 log = logging.getLogger("ramen.deploy")
-COLOR = {"high": "red", "low": "blue", "even": "green"}
+# The dashboard names the load, never the colour (U11); the colour is only the visual signal.
+LOADS = ("low", "even", "high", "down")
+COLOR = {"low": "blue", "even": "green", "high": "red", "down": "grey"}
 
 
 class Jobs:
@@ -53,7 +55,7 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
             vars_, _, mcp = await svc.secrets_for(group, env_name, z)
             cfg = {
                 "RAMEN_VERBOSE": "1" if env.get("verbose") else "0",
-                "RAMEN_BLOCKED": ",".join(env.get("blocked") or []),
+                "RAMEN_BLOCKED": ",".join(Services.blocked_for_zone(env, z)),  # U5: env-wide plus this zone's
                 **vars_,
             }
             if mcp:
@@ -114,17 +116,19 @@ def _packages(result: dict) -> dict:
     return out
 
 
-def cell_color(workers: list[dict]) -> str:
+def cell_load(workers: list[dict]) -> str:
+    """How loaded a zone x group cell is: `low`, `even`, `high` or `down`."""
     loads = [w.get("load") for w in workers]
-    if not loads:
-        return "grey"
+    if not loads or all(x == "down" for x in loads):
+        return "down"
     if "high" in loads:
-        return "red"
-    if all(x == "down" for x in loads):
-        return "grey"
-    if all(x in ("low", "down") for x in loads):
-        return "blue"
-    return "green"
+        return "high"
+    return "low" if all(x in ("low", "down") for x in loads) else "even"
+
+
+def cell_color(workers: list[dict]) -> str:
+    """Kept for API clients that read `cells[zone][group].color`; the UI reads `load`."""
+    return COLOR[cell_load(workers)]
 
 
 async def dashboard(svc: Services, groups: list[dict]) -> dict:
@@ -139,7 +143,8 @@ async def dashboard(svc: Services, groups: list[dict]) -> dict:
             ws = await svc.cloud.workers(g, z)
         except Exception as e:  # noqa: BLE001
             ws = [{"id": "?", "load": "down", "metrics": {}, "error": str(e)}]
-        cells[z][g] = {"color": cell_color(ws), "workers": ws}
+        load = cell_load(ws)
+        cells[z][g] = {"load": load, "color": COLOR[load], "workers": ws}
 
     await asyncio.gather(*(one(g, z) for g, z in pairs))
     return {"zones": [z["id"] for z in zones], "groups": [g["id"] for g in groups], "cells": cells, "at": now()}

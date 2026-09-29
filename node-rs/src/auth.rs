@@ -42,19 +42,30 @@ pub fn check_admin(cfg: &Config, md: &MetadataMap) -> bool {
     }
 }
 
-/// Peer address, or the first `x-forwarded-for` hop when `RAMEN_TRUST_PROXY=1`. An unknown peer is
-/// `0.0.0.0`, which only the default any-CIDR allows.
+/// The peer address, or the client hop of `x-forwarded-for` when proxy trust is on.
+///
+/// Proxies **append** to `x-forwarded-for`, so only its right-hand end is trustworthy: everything to the
+/// left of what the trusted proxies added is supplied by the caller. With `RAMEN_TRUST_PROXY_HOPS = n`
+/// (`RAMEN_TRUST_PROXY=1` = 1) the client address is the n-th entry counted from the right — `n - 1`
+/// right-hand entries are skipped as the trusted proxies' own hops — and the left-hand entries are ignored.
+/// Anything else falls back to the peer address: proxy trust off, no header, fewer than `n` entries, or an
+/// entry at that position that is not an address. So a caller can never choose the address that is checked,
+/// and a wrong `n` fails closed (a too-large `n` on a short header lands on the peer, which for a
+/// behind-the-LB deployment is the proxy, not a client range). An unknown peer is `0.0.0.0`, which only the
+/// default any-CIDR allows.
 pub fn client_ip(cfg: &Config, peer: Option<SocketAddr>, md: &MetadataMap) -> IpAddr {
-    if cfg.trust_proxy
-        && let Some(xff) = meta(md, "x-forwarded-for")
-        && let Some(ip) = xff
-            .split(',')
-            .next()
-            .and_then(|s| s.trim().parse::<IpAddr>().ok())
-    {
-        return ip;
+    let peer_ip = || peer.map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |p| p.ip());
+    if cfg.trust_proxy_hops == 0 {
+        return peer_ip();
     }
-    peer.map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |p| p.ip())
+    let Some(xff) = meta(md, "x-forwarded-for") else {
+        return peer_ip();
+    };
+    let hops: Vec<&str> = xff.split(',').collect();
+    hops.len()
+        .checked_sub(cfg.trust_proxy_hops)
+        .and_then(|i| hops[i].trim().parse::<IpAddr>().ok())
+        .unwrap_or_else(peer_ip)
 }
 
 fn normalize(ip: IpAddr) -> IpAddr {
@@ -152,9 +163,10 @@ mod tests {
         let peer: SocketAddr = "10.1.2.3:5".parse().unwrap();
         let xff = h(&[("x-forwarded-for", "203.0.113.9, 10.0.0.1")]);
         assert_eq!(client_ip(&cfg(&[]), Some(peer), &xff), peer.ip());
+        // one hop = the right-most entry, the one the trusted proxy appended
         assert_eq!(
             client_ip(&cfg(&[("RAMEN_TRUST_PROXY", "1")]), Some(peer), &xff).to_string(),
-            "203.0.113.9"
+            "10.0.0.1"
         );
         assert_eq!(
             client_ip(
@@ -175,5 +187,66 @@ mod tests {
         assert!(!ip_allowed(&c, "::1".parse().unwrap()));
         assert!(!ip_allowed(&c, IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
         assert!(ip_allowed(&cfg(&[]), "::1".parse().unwrap()));
+    }
+
+    /// `x-forwarded-for` is counted from the right, because that is the end a proxy appends to: a caller
+    /// can prepend anything it likes and never move the entry the node reads (claims review rows 14/36).
+    #[test]
+    fn forwarded_for_is_counted_from_the_right() {
+        let peer: SocketAddr = "35.191.0.7:5".parse().unwrap(); // a GCP front end, not a client range
+        let client = "203.0.113.9";
+        // GCP external ALB appends "<client>, <lb>"; AWS ALB appends "<client>".
+        let gcp = cfg(&[("RAMEN_TRUST_PROXY_HOPS", "2")]);
+        let aws = cfg(&[("RAMEN_TRUST_PROXY_HOPS", "1")]);
+        let spoofed = format!("10.0.0.1, 192.0.2.1, {client}");
+        assert_eq!(
+            client_ip(&aws, Some(peer), &h(&[("x-forwarded-for", &spoofed)])).to_string(),
+            client
+        );
+        assert_eq!(
+            client_ip(
+                &gcp,
+                Some(peer),
+                &h(&[("x-forwarded-for", &format!("{spoofed}, 130.211.0.5"))])
+            )
+            .to_string(),
+            client
+        );
+        // A caller-chosen left-most value is never what gets checked.
+        for c in [&gcp, &aws] {
+            assert_ne!(
+                client_ip(c, Some(peer), &h(&[("x-forwarded-for", &spoofed)])).to_string(),
+                "10.0.0.1"
+            );
+        }
+        // Too short, empty or malformed at the counted position → the peer address, never a caller value.
+        for bad in ["203.0.113.9", "", " , 203.0.113.9", "junk, 203.0.113.9"] {
+            assert_eq!(
+                client_ip(&gcp, Some(peer), &h(&[("x-forwarded-for", bad)])),
+                peer.ip(),
+                "gcp hop count unsatisfied by {bad:?}"
+            );
+        }
+        assert_eq!(client_ip(&gcp, Some(peer), &h(&[])), peer.ip());
+        // Proxy trust off (the default) ignores the header entirely.
+        let off = cfg(&[("RAMEN_TRUST_PROXY_HOPS", "0")]);
+        assert_eq!(off.trust_proxy_hops, 0);
+        assert_eq!(cfg(&[]).trust_proxy_hops, 0);
+        for c in [&off, &cfg(&[])] {
+            assert_eq!(
+                client_ip(c, Some(peer), &h(&[("x-forwarded-for", &spoofed)])),
+                peer.ip()
+            );
+        }
+        // An explicit hop count wins over the legacy switch, in both directions.
+        assert_eq!(
+            cfg(&[("RAMEN_TRUST_PROXY", "1"), ("RAMEN_TRUST_PROXY_HOPS", "0")]).trust_proxy_hops,
+            0
+        );
+        assert_eq!(
+            cfg(&[("RAMEN_TRUST_PROXY", "0"), ("RAMEN_TRUST_PROXY_HOPS", "2")]).trust_proxy_hops,
+            2
+        );
+        assert_eq!(cfg(&[("RAMEN_TRUST_PROXY", "true")]).trust_proxy_hops, 1);
     }
 }

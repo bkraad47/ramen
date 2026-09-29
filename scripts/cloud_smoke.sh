@@ -51,7 +51,7 @@ mcp() {  # mcp <key> <json> → response body; gRPC status text on stderr when n
 }
 STEP="node ready (health SERVING)"; ok=0; for _ in $(seq 1 60); do [ "$(health)" = SERVING ] && { ok=1; break; }; sleep 3; done; [ $ok = 1 ] || fail "$NODE health → $(health)"
 STEP="mcp initialize"; for _ in $(seq 1 20); do  # a draining old pod may still answer UNAUTHENTICATED for a few seconds after deploy
-  R=$(mcp "$KEY" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.3.1"}}}' 2>/dev/null | unb64)
+  R=$(mcp "$KEY" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.4.0"}}}' 2>/dev/null | unb64)
   [ "$(echo "$R" | jget '["result"]["protocolVersion"]')" = "2025-06-18" ] && break; sleep 3; done
 [ "$(echo "$R" | jget '["result"]["protocolVersion"]')" = "2025-06-18" ] || fail "$R"
 STEP="tools/call";  R=$(mcp "$KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' 2>/dev/null | unb64)

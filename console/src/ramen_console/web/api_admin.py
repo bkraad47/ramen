@@ -59,10 +59,11 @@ async def set_password(request: Request, uid: str, body: m.Password, p: Principa
     if uid == "me":
         uid = p.id
     if uid != p.id and p.role != "super_admin":
-        raise forbidden("only super admins reset other passwords")
+        raise forbidden("Only super admins reset other passwords")
     note(request, "user.password", uid)
     await accounts(request).set_password(uid, body.password)
-    return respond(request, {"ok": True})
+    resp = respond(request, {"ok": True})
+    return await _reissue_session(request, resp, p) if uid == p.id else resp
 
 
 @r.get("/api-keys")
@@ -72,8 +73,17 @@ async def keys(request: Request, format: str | None = None, p: Principal = Depen
 
 @r.post("/api-keys", status_code=201)
 async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(admin)):
-    note(request, "api_key.create", body.name)
-    doc = await accounts(request).mint_key(p, body.name, body.role, body.groups)
+    """`devops` keys drive this API; `agent` keys are mirrored as the named groups' MCP keys so the next deploy
+    hands them to the workers, exactly as the group page's key form does (D21)."""
+    note(request, "api_key.create", body.name, [f"client_type:{body.client_type}"])
+    a = accounts(request)
+    doc = await a.mint_key(p, body.name, body.role, body.groups, body.client_type)
+    if doc["client_type"] == "agent":
+        try:
+            await svc(request).mirror_agent_key(doc["groups"], doc["name"], doc["key"], doc["id"], p.name)
+        except Exception:
+            await a.store.delete("api_keys", doc["id"])  # never leave a key that can never reach a worker
+            raise
     return respond(request, doc, 201, hx_html=_once("API key", doc["key"]))
 
 
@@ -81,6 +91,7 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(admin
 async def delete_key(request: Request, kid: str, p: Principal = Depends(admin)):
     note(request, "api_key.delete", kid)
     await accounts(request).delete_key(p, kid)
+    await svc(request).revoke_agent_key(kid)  # an agent key must stop reaching workers on the next deploy
     return respond(request, {"ok": True})
 
 
@@ -99,7 +110,7 @@ async def request_permission(request: Request, body: m.RequestIn, p: Principal =
     elif body.role:
         note(request, "permission.request", f"{body.role}:{body.group}", tags)
     else:
-        raise invalid("request needs role or permission")
+        raise invalid("A request needs a role or a permission")
     return respond(
         request, await accounts(request).request_permission(p, body.role, body.group, body.zone, body.permission), 201
     )
@@ -213,14 +224,37 @@ async def set_auth_config(request: Request, body: m.AuthConfig, p: Principal = D
         and not st.auth_env.force_password
     ):
         raise invalid(
-            "refusing to disable password login: no OAuth provider, no magic link "
+            "Refusing to disable password login: no OAuth provider, no magic link "
             "and no RAMEN_ADMIN_FORCE_PASSWORD break-glass"
         )
     await st.store.put("config", "auth", doc)
-    return respond(
+    await st.accounts.bump_all_epochs()  # V1.4: nobody keeps a session minted under the old auth rules
+    resp = respond(
         request,
         {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
     )
+    return await _reissue_session(request, resp, p)
+
+
+async def _reissue_session(request: Request, resp, p: Principal):
+    """Bumping every epoch would sign the acting super admin out of the request they just authenticated; hand
+    them a session on the new epoch instead, so only *other* sessions die."""
+    from ..auth.sessions import COOKIE
+
+    st = request.app.state
+    if p.kind != "user" or COOKIE not in request.cookies:
+        return resp
+    user = await st.store.get("users", p.id)
+    if user:
+        resp.set_cookie(
+            COOKIE,
+            st.signer.sign({"uid": p.id, "ep": st.accounts.epoch_of(user)}),
+            httponly=True,
+            samesite="lax",
+            secure=st.cookie_secure,
+            max_age=12 * 3600,
+        )
+    return resp
 
 
 @r.get("/config/sa-rules")

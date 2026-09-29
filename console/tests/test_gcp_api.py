@@ -12,6 +12,7 @@ from ramen_console.secrets.gcp import GcpSecrets
 from ramen_console.storage import make_store
 from tests.fake_grpc import FakeWorker
 from tests.fakes_gcp import FakeClients
+from tests.test_api import PW
 
 VALUE = "sup3r-s3cret-gcp-value"
 
@@ -164,9 +165,9 @@ def test_workers_sizes_and_ui(demo, fk):
     )
     assert demo.put("/api/v1/groups/demo/zones/a/workers", json={"size": "xl"}).status_code == 422
     assert demo.put("/api/v1/groups/demo/zones/a/workers", json={"allowed_sizes": ["huge"]}).status_code == 422
-    demo.post("/api/v1/users", json={"email": "ga@x", "password": "pw", "role": "group_admin", "groups": ["demo"]})
+    demo.post("/api/v1/users", json={"email": "ga@x", "password": PW, "role": "group_admin", "groups": ["demo"]})
     with TestClient(demo.app) as ga:
-        ga.post("/login", data={"email": "ga@x", "password": "pw"}, follow_redirects=False)
+        ga.post("/login", data={"email": "ga@x", "password": PW}, follow_redirects=False)
         assert ga.put("/api/v1/groups/demo/zones/a/workers", json={"size": "s"}).status_code == 200
         assert ga.put("/api/v1/groups/demo/zones/a/workers", json={"size": "l"}).status_code == 403
         assert ga.put("/api/v1/groups/demo/zones/a/workers", json={"allowed_sizes": ["l"]}).status_code == 403
@@ -207,7 +208,7 @@ def test_refresh_reconciles_store_and_dashboard(demo, fk):
     part = demo.get("/ui/groups/demo/zones/a/workers").text
     assert "<code>ramen-demo-a</code>" in part
     dash = demo.get("/ui/dashboard").text
-    assert "[canary]" in dash and "green" in dash
+    assert "[canary]" in dash and "load-even" in dash and ">Even<" in dash
 
 
 def test_rebalance_ip_rules_config(demo, fk):

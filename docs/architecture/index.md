@@ -1,4 +1,4 @@
-# Architecture (current: v0.3.1)
+# Architecture (current: v0.4.0)
 
 Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **JSON-RPC 2.0 over gRPC** (D19).
 
@@ -73,7 +73,12 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 | D17 | Console on GCP: static IP + self-signed cert on the global HTTPS LB; managed cert later. |
 | D18 | v0.3.0 scope: AWS (untested), OAuth polish, SA policy engine, tool blocking, email auth, docs, launch. |
 | D19 | v0.3.1: MCP transport is JSON-RPC 2.0 over gRPC (`ramen.v1.Mcp/Call`); HTTP MCP endpoint removed; `ramen-mcp-bridge` (stdio) serves standard clients; full security parity on gRPC; LB routes on `ramen-group`/`ramen-zone` metadata; carried security mediums fixed; logo v2. |
+| D21 | v0.4.0: API keys carry an enforced client type — an `agent` key is accepted only by workers over gRPC, a `devops` key only by the console API. |
+| D22 | v0.4.0: the autoscale and rebalance stress test runs on a local kind cluster first, then once on a throwaway GKE project. |
+| D23 | v0.4.0: independent-client evidence is a real MCP client driven against the bridge, plus an editor configuration the user captures. |
 
 ## Version history
 [v0.1.0](v0.1.0.md) local core → [v0.2.0](v0.2.0.md) GCP → [v0.3.0](v0.3.0.md) AWS, auth & policy, docs →
-[v0.3.1](v0.3.1.md) gRPC transport. Tracker: [Versions](../versions.md).
+[v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish, docs, and proof.
+Tracker: [Versions](../versions.md). A drawing of one call end to end, and what protects every hop, is in
+[Transport and what secures each hop](../wiki/transport.md).

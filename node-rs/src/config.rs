@@ -5,7 +5,8 @@ use ipnet::IpNet;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Keys the console may set per deploy. Never bucket/port/python/admin-key/group/zone/proxy trust.
+/// Keys the console may set per deploy. Never bucket/port/python/admin-key/group/zone, and never the
+/// proxy-trust (`RAMEN_TRUST_PROXY`, `RAMEN_TRUST_PROXY_HOPS`) or reflection (`RAMEN_REFLECTION`) knobs.
 const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_MCP_KEYS",
     "RAMEN_ALLOWED_CIDRS",
@@ -35,7 +36,13 @@ pub struct Config {
     pub admin_cidrs: Vec<IpNet>,
     pub admin_key: Option<String>,
     pub verbose: bool,
-    pub trust_proxy: bool,
+    /// Trusted proxy hops in `x-forwarded-for`: the client address is the `trust_proxy_hops`-th entry counted
+    /// from the **right** (the end proxies append to). `0` = never read the header, always use the peer address.
+    /// Set by `RAMEN_TRUST_PROXY_HOPS`; legacy `RAMEN_TRUST_PROXY=1` means one hop.
+    pub trust_proxy_hops: usize,
+    /// Register `grpc.reflection.v1[alpha].ServerReflection` (`RAMEN_REFLECTION`, default on). Read once at
+    /// startup by `grpc::routes`, so `Admin/Reload` does not change it.
+    pub reflection: bool,
     pub group: String,
     pub zone: String,
     pub env: String,
@@ -150,7 +157,15 @@ impl Config {
             admin_cidrs,
             admin_key: get("RAMEN_ADMIN_KEY"),
             verbose: matches!(get("RAMEN_VERBOSE").as_deref(), Some("1" | "true")),
-            trust_proxy: matches!(get("RAMEN_TRUST_PROXY").as_deref(), Some("1" | "true")),
+            trust_proxy_hops: match get("RAMEN_TRUST_PROXY_HOPS") {
+                Some(_) => num("RAMEN_TRUST_PROXY_HOPS", 0)? as usize,
+                // Legacy switch: one hop, i.e. the last (right-most) `x-forwarded-for` entry.
+                None => usize::from(matches!(
+                    get("RAMEN_TRUST_PROXY").as_deref(),
+                    Some("1" | "true")
+                )),
+            },
+            reflection: !matches!(get("RAMEN_REFLECTION").as_deref(), Some("0" | "false")),
             group: get("RAMEN_GROUP").unwrap_or_else(|| "default".into()),
             zone: get("RAMEN_ZONE").unwrap_or_else(|| "local".into()),
             env: get("RAMEN_ENV").unwrap_or_else(|| "default".into()),
@@ -226,6 +241,12 @@ mod tests {
         let m: HashMap<_, _> = [("RAMEN_BLOCKED".to_string(), " a, b ,a,".to_string())].into();
         assert_eq!(Config::from_map(&m).unwrap().blocked, vec!["a", "b"]);
         assert!(c.bucket_uri.is_none() && c.tls.is_none());
+        // proxy trust off and reflection on unless asked otherwise
+        assert!(c.trust_proxy_hops == 0 && c.reflection);
+        let m: HashMap<_, _> = [("RAMEN_REFLECTION".to_string(), "0".to_string())].into();
+        assert!(!Config::from_map(&m).unwrap().reflection);
+        let m: HashMap<_, _> = [("RAMEN_REFLECTION".to_string(), "1".to_string())].into();
+        assert!(Config::from_map(&m).unwrap().reflection);
         let m: HashMap<_, _> = [("RAMEN_BUCKET_URI".to_string(), " gs://b/g ".to_string())].into();
         assert_eq!(
             Config::from_map(&m).unwrap().bucket_uri.as_deref(),
@@ -335,5 +356,11 @@ mod tests {
         );
         let m: HashMap<_, _> = [("RAMEN_MAX_INFLIGHT".to_string(), "0".to_string())].into();
         assert_eq!(Config::from_map(&m).unwrap().max_inflight, 1);
+        let m: HashMap<_, _> = [("RAMEN_TRUST_PROXY_HOPS".to_string(), "many".to_string())].into();
+        assert!(
+            Config::from_map(&m)
+                .unwrap_err()
+                .contains("RAMEN_TRUST_PROXY_HOPS")
+        );
     }
 }

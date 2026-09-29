@@ -28,7 +28,7 @@ class Backups:
             return Path(os.environ.get("RAMEN_BACKUP_ROOT", "./backups"))
         if target == "bucket":
             return Path(os.environ.get("RAMEN_BUCKET_ROOT", "./buckets")) / "_backups"
-        raise invalid("target must be local or bucket")
+        raise invalid("Target must be local or bucket")
 
     async def snapshot(self) -> dict:
         data = {"release_version": release_version(), "created": now()}

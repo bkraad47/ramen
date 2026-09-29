@@ -25,9 +25,14 @@ def _guard(fn):
         except ApiError:
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
-            raise ApiError(502, f"gcp {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
+            raise ApiError(502, f"GCP {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
 
     return wrapper
+
+
+def detail_of(e: Exception) -> str:
+    """Short, safe description of a cloud failure for a degraded-path note."""
+    return e.detail if isinstance(e, ApiError) else f"{type(e).__name__}: {str(e)[:200]}"
 
 
 class GcpCloud(Cloud):
@@ -183,6 +188,14 @@ class GcpCloud(Cloud):
             await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
             note(f"{ns}: secret ramen-deploy written ({len(data)} keys)")
             mcp_key = (config.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
+            if not canary:
+                # A canary left running by an earlier deploy still holds the OLD deploy config, and the
+                # zone Service selects both tracks — so a blocked tool, a revoked key or a tightened
+                # allowlist would still be served by it. Remove it before the stable roll.
+                if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary"):
+                    await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
+                    gone = await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
+                    note("canary: scaled to 0" + ("" if gone else " (a canary pod is still terminating)"))
             if canary:
                 await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 1)
                 await asyncio.to_thread(self.kube.restart, ns, "worker-canary")
@@ -248,27 +261,34 @@ class GcpCloud(Cloud):
     # traffic ------------------------------------------------------------
     @_guard
     async def rebalance(self, group, zone):
-        ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
+        ns = ns_name(group, zone)
         ws = await self.workers(group, zone)
         loads = [w["load"] for w in ws]
         load = "high" if "high" in loads else ("low" if loads and all(x in ("low", "down") for x in loads) else "even")
         scaler = 0.5 if load == "high" else 1.0
         out = {"ok": True, "load": load, "capacity_scaler": scaler, "backend_service": None, "applied": False}
         try:
+            # Built here, not above: `self.c.compute` is a lazy discovery client, so absent credentials
+            # raise on first use and must land inside the degrading path, not outside it.
+            comp = gcp_api.Compute(self.c.compute, self.project)
             bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
-        except ApiError as e:
-            out["note"] = f"capacity not applied: {e.detail}"
+        except Exception as e:  # noqa: BLE001 - §7: the load-balancer leg degrades, it never fails the call.
+            # Not just ApiError: absent credentials, 401/403 and transient 5xx all reach here, and the HPA
+            # re-scale below needs no cloud API, so losing it to a compute-API problem would be wrong.
+            out["note"] = f"capacity not applied: {detail_of(e)}"
         else:
             try:
                 await asyncio.to_thread(comp.set_capacity, bs, ns, scaler, 6)  # ~30s; the Gateway may be reconciling
-            except Exception as e:  # noqa: BLE001 - keep applying in the background
+            except Exception as e:  # noqa: BLE001 - retry in the background, or degrade
                 if "not ready" not in str(e):
-                    raise
-                self._background(comp.set_capacity, bs, ns, scaler, 120)
-                out.update(
-                    backend_service=bs["name"],
-                    note="capacity change pending: backend service busy, retrying in background",
-                )
+                    out.update(backend_service=bs["name"], note=f"capacity not applied: {detail_of(e)}")
+                    bs = None
+                else:
+                    self._background(comp.set_capacity, bs, ns, scaler, 120)
+                    out.update(
+                        backend_service=bs["name"],
+                        note="capacity change pending: backend service busy, retrying in background",
+                    )
             else:
                 out.update(backend_service=bs["name"], applied=True)
         hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
@@ -280,8 +300,9 @@ class GcpCloud(Cloud):
 
     @_guard
     async def set_ip_rules(self, group, zone, cidrs):
-        ns, comp = ns_name(group, zone), gcp_api.Compute(self.c.compute, self.project)
-        ref = await asyncio.to_thread(comp.set_armor, f"ramen-{group}", list(cidrs))
+        ns = ns_name(group, zone)
+        # Node enforcement first: it is the control that actually gates a call and it needs no cloud API.
+        # Cloud Armor at the edge is defence in depth and is attempted afterwards, best effort.
         await asyncio.to_thread(
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
@@ -293,9 +314,17 @@ class GcpCloud(Cloud):
                 await asyncio.to_thread(self.kube.wait_ready, ns, dep)
         out = {"ok": True, "policy": f"ramen-{group}", "cidrs": list(cidrs), "backend_service": None, "attached": False}
         try:
+            # Built here, not above: `self.c.compute` is a lazy discovery client, so absent credentials
+            # raise on first use and must land inside the degrading path, not outside it.
+            comp = gcp_api.Compute(self.c.compute, self.project)
+            ref = await asyncio.to_thread(comp.set_armor, f"ramen-{group}", list(cidrs))
+        except Exception as e:  # noqa: BLE001 - §7: the node already enforces; the edge policy is best effort.
+            out["note"] = f"enforced at the node; Cloud Armor not updated: {detail_of(e)}"
+            return out
+        try:
             bs = await asyncio.to_thread(comp.find_backend_service, ns, f"ramen-{group}")
-        except ApiError as e:
-            out["note"] = f"policy written to Secret and Cloud Armor but not attached: {e.detail}"
+        except Exception as e:  # noqa: BLE001 - the policy exists, only the attachment is missing.
+            out["note"] = f"enforced at the node and Cloud Armor updated, but not attached: {detail_of(e)}"
             return out
         try:
             await asyncio.to_thread(comp.attach_armor, bs["name"], ref, 6)  # ~30s; the LB reconciles after the restart
@@ -448,11 +477,22 @@ class GcpCloud(Cloud):
     async def refresh(self):
         def run():
             zones = []
+            skipped = []
             for n in self.c.to_dict(self.c.core.list_namespace(label_selector="ramen.io/group")).get("items", []):
                 labels, ns = n["metadata"].get("labels", {}), n["metadata"]["name"]
-                main = self.kube.read("Deployment", ns, "worker") or {}
-                can = self.kube.read("Deployment", ns, "worker-canary") or {}
-                ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
+                # A namespace deleted with its group sits in Terminating for minutes, and its RoleBinding
+                # is collected first, so reads inside it answer 403. Reconcile is a survey of what exists:
+                # one unreadable namespace must not fail the whole call (D4, found on GKE).
+                if (n.get("status") or {}).get("phase") == "Terminating":
+                    skipped.append({"namespace": ns, "reason": "terminating"})
+                    continue
+                try:
+                    main = self.kube.read("Deployment", ns, "worker") or {}
+                    can = self.kube.read("Deployment", ns, "worker-canary") or {}
+                    ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
+                except Exception as e:  # noqa: BLE001 - report the namespace as unreadable, keep surveying
+                    skipped.append({"namespace": ns, "reason": detail_of(e)})
+                    continue
                 zones.append(
                     {
                         "group": labels.get("ramen.io/group"),
@@ -470,6 +510,7 @@ class GcpCloud(Cloud):
             return {
                 "groups": sorted({z["group"] for z in zones if z.get("group")}),
                 "zones": zones,
+                "skipped": skipped,
                 "service_accounts": self._iam().list_accounts(),
                 "at": now(),
             }

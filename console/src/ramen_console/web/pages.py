@@ -3,6 +3,7 @@ import os
 from fastapi import APIRouter, Depends, Request
 
 from .. import deploy as dep
+from ..logview import EAGER, parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
 from .api_admin import masked_env
@@ -126,7 +127,13 @@ async def users(request: Request, p: Principal = Depends(admin)):
 
 @r.get("/api-keys")
 async def api_keys(request: Request, p: Principal = Depends(admin)):
-    return render(request, "api_keys.html", keys=await accounts(request).list_keys(p))
+    """Groups are picked from the ones the caller may grant, never typed (U8)."""
+    return render(
+        request,
+        "api_keys.html",
+        keys=await accounts(request).list_keys(p),
+        groups=await svc(request).visible_groups(p),
+    )
 
 
 @r.get("/logs")
@@ -138,10 +145,16 @@ async def logs(
     tail: int = 200,
     p: Principal = Depends(viewer),
 ):
+    """Two panes (U4): entries newest first on the left, the selected entry's body on the right."""
     s = svc(request)
-    text = ""
+    text, entries, live = "", [], []
     if group and zone and can(p, "viewer", group):
         text = await s.cloud.logs(group, zone, worker or None, tail)
+        entries = parse_log(text, await s.mcp_key_names(group))
+        try:
+            live = [w["id"] for w in await s.cloud.workers(group, zone) if w.get("id") and w["id"] != "?"]
+        except Exception:  # noqa: BLE001 - the selector is a convenience, never a reason to fail the page
+            live = []
     return render(
         request,
         "logs.html",
@@ -152,6 +165,10 @@ async def logs(
         worker=worker,
         tail=tail,
         text=text,
+        entries=entries,
+        eager=entries[:EAGER],
+        rest=entries[EAGER:],
+        live_workers=sorted({*live, *([worker] if worker else [])}),
     )
 
 

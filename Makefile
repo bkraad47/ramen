@@ -6,7 +6,7 @@ PROJECT ?=
 REGION ?= us-central1
 PLATFORM ?= linux/amd64
 REGISTRY = $(REGION)-docker.pkg.dev/$(PROJECT)/ramen
-.PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean
+.PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean kind-up kind-test kind-down
 
 test: test-runtime test-node test-console
 
@@ -85,3 +85,14 @@ proto:
 	TMP=$$(mktemp -d) && mkdir -p $$TMP/ramen_console/proto/ramen_proto/ramen/v1 && cp proto/ramen/v1/*.proto $$TMP/ramen_console/proto/ramen_proto/ramen/v1/ && \
 	  (cd console && uv run python -m grpc_tools.protoc -I $$TMP --python_out=src --grpc_python_out=src --pyi_out=src $$TMP/ramen_console/proto/ramen_proto/ramen/v1/*.proto)
 	./tests/gen_proto.sh
+
+# Local kind cluster for the v0.4.0 multi-zone proofs (CONTRACTS §12.3): two zones demo/a and demo/b, metrics-server
+# for the HPA, the console chart with the GCP adapter's Kubernetes paths. See deploy/kind/README.md.
+kind-up: build
+	deploy/kind/up.sh
+
+kind-test:
+	deploy/kind/test.sh
+
+kind-down:
+	deploy/kind/down.sh

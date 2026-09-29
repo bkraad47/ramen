@@ -29,7 +29,7 @@ build-backend = "hatchling.build"
 packages = ["src/ramen_tests", "src/ramen_proto"]
 
 [tool.pytest.ini_options]
-testpaths = ["conformance", "e2e", "cloud"]
+testpaths = ["conformance", "e2e", "cloud", "kind"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -37,6 +37,7 @@ markers = [
   "conformance: contract conformance suites (need RAMEN_*_URL)",
   "e2e: full console -> deploy -> MCP flow",
   "cloud: canary/rebalance/ip-rules/logs/SA/secrets (console URL; GCP asserts need RAMEN_GCP_PROJECT)",
+  "kind: local multi-zone proofs on a kind cluster (need RAMEN_KIND_ZONES; deploy/kind)",
 ]
 
 [tool.coverage.run]

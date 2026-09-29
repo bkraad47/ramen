@@ -43,7 +43,9 @@ def ns_name(group, zone) -> str:
     return f"ramen-{group}-{zone}"
 
 
-def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
+def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_proxy_hops=2):
+    """`trust_proxy_hops`: which `x-forwarded-for` entry, counted from the right, is the client address
+    (CONTRACTS §11). 2 on GCP — the external load balancer appends `<client>, <lb>`; AWS passes 1."""
     labels = {"app": "worker", "ramen.io/track": track, "ramen.io/group": group, "ramen.io/zone": zone}
     res = SIZES[normalize_size(spec.get("size")) or "s"]
     pod = {
@@ -68,7 +70,9 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri):
                         "RAMEN_ZONE": zone,
                         "RAMEN_TRACK": track,
                         "RAMEN_NODE_PORT": str(PORT),
-                        "RAMEN_TRUST_PROXY": "1",
+                        "RAMEN_TRUST_PROXY_HOPS": str(trust_proxy_hops),
+                        # reflection is unauthenticated and reachable through the load balancer (CONTRACTS §11)
+                        "RAMEN_REFLECTION": "0",
                     }.items()
                 ],
                 "envFrom": [{"secretRef": {"name": "ramen-deploy", "optional": True}}],
@@ -242,7 +246,7 @@ def helm_manifests(chart, project, group, zone, spec, image, bucket_uri, gsa=Non
         cmd += ["--set", f"{k}={v}"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise ApiError(502, f"helm template failed: {r.stderr.strip()[:500]}")
+        raise ApiError(502, f"Helm template failed: {r.stderr.strip()[:500]}")
     docs = [d for d in yaml.safe_load_all(r.stdout) if d]
     for d in docs:
         if d["kind"] != "Namespace":
@@ -324,7 +328,7 @@ class Kube:
             ),
         }
         if kind not in table:
-            raise ApiError(502, f"unsupported manifest kind {kind}")
+            raise ApiError(502, f"Unsupported manifest kind {kind}")
         return table[kind]
 
     def _custom(self, group, version, plural):
@@ -443,7 +447,7 @@ class Kube:
         while True:
             d = self.read("Deployment", ns, name)
             if d is None:
-                raise ApiError(502, f"deployment {ns}/{name} not found")
+                raise ApiError(502, f"Deployment {ns}/{name} not found")
             want = int(d["spec"].get("replicas", 1))
             st = d.get("status") or {}
             if want == 0 or (

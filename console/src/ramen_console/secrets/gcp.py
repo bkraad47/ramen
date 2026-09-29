@@ -45,7 +45,7 @@ class GcpSecrets(SecretsBackend):
         try:
             return await asyncio.to_thread(self._put, group, env, zone, name, value, kind)
         except Exception as e:  # noqa: BLE001
-            raise ApiError(502, f"secret manager: {type(e).__name__}: {str(e)[:200]}") from e
+            raise ApiError(502, f"Secret Manager: {type(e).__name__}: {str(e)[:200]}") from e
 
     def _resolve(self, ref):
         r = self.client.access_secret_version(request={"name": f"{ref[len(REF_PREFIX) :]}/versions/latest"})
@@ -57,7 +57,7 @@ class GcpSecrets(SecretsBackend):
         try:
             return await asyncio.to_thread(self._resolve, value)
         except Exception as e:  # noqa: BLE001
-            raise ApiError(502, f"secret manager: cannot read {value}: {type(e).__name__}") from e
+            raise ApiError(502, f"Secret Manager: cannot read {value}: {type(e).__name__}") from e
 
     async def delete(self, doc):
         ref = doc.get("ref")
@@ -67,4 +67,4 @@ class GcpSecrets(SecretsBackend):
             await asyncio.to_thread(self.client.delete_secret, request={"name": ref[len(REF_PREFIX) :]})
         except Exception as e:  # noqa: BLE001
             if http_status(e) != 404:
-                raise ApiError(502, f"secret manager: {type(e).__name__}: {str(e)[:200]}") from e
+                raise ApiError(502, f"Secret Manager: {type(e).__name__}: {str(e)[:200]}") from e

@@ -14,7 +14,7 @@ with protox (no `protoc` needed).
 | `ramen.v1.Admin/Reload` | metadata `x-ramen-admin-key` + `RAMEN_ADMIN_CIDRS` | re-read config, pip install `mcp/requirements.txt`, `runtime.load`; returns the load result as JSON bytes |
 | `ramen.v1.Admin/Metrics` | same | `{inflight,total,errors,load,sidecar_alive,loaded_at,packages}` as JSON bytes |
 | `grpc.health.v1.Health` | none | `""` and `ramen.v1.Mcp`: `NOT_SERVING` until the first successful `runtime.load`, then `SERVING` (readiness); `ramen.v1.Admin`: always `SERVING` (liveness) |
-| `grpc.reflection.v1[alpha].ServerReflection` | none | lets `grpcurl` work without `-proto` |
+| `grpc.reflection.v1[alpha].ServerReflection` | none | lets `grpcurl` work without `-proto`. Registered only when `RAMEN_REFLECTION` is on (default); like Health it runs ahead of every guard, so anyone who can reach the port can list the services (including `ramen.v1.Admin`) — deployments that publish the port through a load balancer set `RAMEN_REFLECTION=0` and get `UNIMPLEMENTED` instead (the worker chart and the console's renderers do) |
 
 gRPC status codes: `PERMISSION_DENIED` (CIDR), `UNAUTHENTICATED` (missing/wrong key), `RESOURCE_EXHAUSTED`
 (`RAMEN_MAX_INFLIGHT` reached), `OUT_OF_RANGE` (message over 4 MiB, enforced by the codec), `UNIMPLEMENTED`
@@ -32,15 +32,17 @@ Routing metadata `ramen-group` / `ramen-zone` is sent by clients and the bridge 
 | `RAMEN_BUCKET` | `/buckets/default` | group repo root containing `mcp/` |
 | `RAMEN_PYTHON` / `RAMEN_PYTHONPATH` | `python3` / unset | interpreter with `ramen_runtime` installed (image: `/opt/venv/bin/python`) |
 | `RAMEN_MCP_KEYS` | empty = deny all | comma list; union of env, `RAMEN_CONFIG` and the deploy file; compared in constant time |
-| `RAMEN_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` | `Mcp/*` allowlist (peer address) |
+| `RAMEN_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` | `Mcp/*` allowlist (peer address, or the client hop of `x-forwarded-for` — see below) |
 | `RAMEN_ADMIN_CIDRS` | `0.0.0.0/0,::/0` | `Admin/*` allowlist, independent of the MCP lock |
-| `RAMEN_TRUST_PROXY` | `0` | `1` → first `x-forwarded-for` hop is the client IP |
+| `RAMEN_TRUST_PROXY_HOPS` | `0` (off) | trusted proxy hops: the client address is the **Nth `x-forwarded-for` entry counted from the right**. `2` behind a GCP external load balancer, `1` behind an AWS ALB; `0` ignores the header |
+| `RAMEN_TRUST_PROXY` | `0` | legacy switch: `1` = `RAMEN_TRUST_PROXY_HOPS=1`. An explicit hop count wins |
+| `RAMEN_REFLECTION` | `1` | `0` leaves server reflection unregistered (`UNIMPLEMENTED`) |
 | `RAMEN_ADMIN_KEY` | unset = admin disabled | |
 | `RAMEN_GROUP` / `RAMEN_ZONE` / `RAMEN_ENV` | `default` / `local` / `default` | log fields |
 | `RAMEN_VERBOSE` | `0` | `1` logs full request/response bodies |
 | `RAMEN_BLOCKED` | – | comma list of tool/prompt names or resource names/URIs hidden from `*/list` and answered `-32601` on call (console block toggle, CONTRACTS §9) |
 | `RAMEN_SIDECAR_IDLE_SECS` | `300` | kill sidecar after idle; respawn (and re-load) on demand |
-| `RAMEN_MAX_INFLIGHT` | `32` | concurrency bound; `load` = low <30%, high >80% |
+| `RAMEN_MAX_INFLIGHT` | `32` | concurrency bound; `load` = low <30%, high >80%. The semaphore is sized at startup, so an `Admin/Reload` that changes this only moves the number `Admin/Metrics` reports as `max` until the pod restarts (`inflight` is always measured against the live semaphore) |
 | `RAMEN_CALL_TIMEOUT_SECS` | `120` | per sidecar call; timeout kills the sidecar |
 | `RAMEN_LOAD_RETRY_SECS` | `5` | retry the initial bucket load this often (backoff to 60s) until it succeeds; `0` waits for `Admin/Reload` instead |
 | `RAMEN_BUCKET_URI` | unset | `gs://bucket/prefix` or `s3://bucket/prefix`; passed to the sidecar, which syncs it into `RAMEN_BUCKET` on every load; `Admin/Reload` then carries a `sync` summary |
@@ -50,7 +52,28 @@ Routing metadata `ramen-group` / `ramen-zone` is sent by clients and the bridge 
 Precedence: `RAMEN_CONFIG` < process env < `<bucket>/.ramen/env-<zone>` (or `.ramen/env`), the file the
 console writes on deploy. Only deploy-scoped keys are read from that file (`RAMEN_MCP_KEYS`, `RAMEN_ALLOWED_CIDRS`,
 `RAMEN_ENV`, `RAMEN_VERBOSE`, `RAMEN_BLOCKED`, idle/inflight/timeout, `RAMEN_LOG_FILE`); MCP keys are unioned so console-minted
-`rmk_` keys work alongside static ones. The file can never change bucket, port, python, admin key, TLS or proxy trust.
+`rmk_` keys work alongside static ones. The file can never change bucket, port, python, admin key, TLS, proxy trust
+(`RAMEN_TRUST_PROXY`, `RAMEN_TRUST_PROXY_HOPS`) or reflection.
+
+### `x-forwarded-for` and the hop count
+Proxies **append** to `x-forwarded-for`, so only its right-hand end is trustworthy — the left-hand entries are
+whatever the caller sent. The node therefore counts from the right: with `RAMEN_TRUST_PROXY_HOPS=N` the client
+address is the Nth entry from the right (the trusted proxies' own `N-1` hops are skipped) and everything left of
+it is ignored, so a caller cannot choose the address `RAMEN_ALLOWED_CIDRS` is checked against.
+
+| deployment | header the node sees | hops |
+|---|---|---|
+| GCP external Application Load Balancer | `…, <client>, <lb>` | `2` |
+| AWS ALB | `…, <client>` | `1` |
+| one reverse proxy that appends the client | `…, <client>` | `1` |
+| no proxy (direct pod access, local) | – | `0` |
+
+If the count is wrong the node does not fall back to a caller-supplied value: a header with fewer than `N`
+entries, or an entry at that position that is not an address, uses the **peer address** instead — behind a load
+balancer that is the proxy's own address, so a client-range allowlist denies the call rather than admitting a
+spoofed one. Too small a count matches the wrong proxy hop (also not the caller's choice, but not the client
+either). Both failure modes are visible as the `ip` field of the access log. `RAMEN_TRUST_PROXY_HOPS` cannot be
+set from the bucket deploy file, so a group cannot widen its own trust.
 
 Log line per call (denied calls included): `ts, ip, group, zone, env, method, name, status, grpc_code, ms, key_id`
 (`key_id` is a non-secret hash; `status` is `ok`, `error` or `denied`).
@@ -62,7 +85,7 @@ RAMEN_PYTHON=../runtime-py/.venv/bin/python cargo run --release
 ```
 With `grpcurl` (bytes fields are base64 in its JSON):
 ```sh
-grpcurl -plaintext localhost:8080 list                                   # reflection
+grpcurl -plaintext localhost:8080 list                                   # reflection (RAMEN_REFLECTION=1, the default)
 grpcurl -plaintext localhost:8080 grpc.health.v1.Health/Check            # {"status":"SERVING"} once loaded
 BODY=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64)
 grpcurl -plaintext -H 'authorization: Bearer k1' -d "{\"body\":\"$BODY\"}" localhost:8080 ramen.v1.Mcp/Call \

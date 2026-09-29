@@ -5,7 +5,7 @@ Everything the console does is a JSON route under `/api/v1` ([contract §4a](../
 The console API stays HTTP in 0.3.1; what changed is how the console talks to **workers**: every worker call
 (`Admin/Reload`, `Admin/Metrics`, `Health/Check`, the `tools/list` smoke) is gRPC now ([§11](../CONTRACTS.md)).
 
-## Mint an API key
+## Generate an API key
 API Keys page → name, role, groups → **Create** (shown once), or:
 ```sh
 curl -sk -c c.txt -X POST https://<console>/login -d email=admin@ramen.local -d password='…' -o /dev/null

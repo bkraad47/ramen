@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 820" width="900" height="820"
+     role="img" aria-labelledby="ramen-arch-title ramen-arch-desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="ramen-arch-title">One MCP call, end to end</title>
+  <desc id="ramen-arch-desc">A stdio MCP client speaks to ramen-mcp-bridge, which sends each JSON-RPC message as one
+  ramen.v1.Mcp/Call over gRPC to the load balancer; a plain gRPC client can skip the bridge. That hop is plaintext
+  HTTP/2 unless the client is given --tls or --ca. TLS terminates at the load balancer, which matches the ramen-group
+  and ramen-zone metadata and forwards to that zone's worker pod over cleartext HTTP/2 unless the node itself runs TLS.
+  In the pod the Rust node checks the bearer key and the source range and hands the message to the Python runtime over
+  stdio; the runtime loads the group's packages from the group bucket. Alongside, the console clones the group git repo,
+  uploads it to the bucket on deploy, and calls the node directly on its pod IP for reload, metrics and health.
+  Health checks answer through the load balancer without a key or a source-range check; server reflection is
+  switched off on deployed workers.</desc>
+
+  <defs>
+    <marker id="a-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#F26B3A"/>
+    </marker>
+    <marker id="a-mute" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#B5ABA1"/>
+    </marker>
+    <style>
+      .bx  { fill:#272220; stroke:#5A504A; stroke-width:1.5; rx:10; }
+      .pod { fill:#221E1C; stroke:#F26B3A; stroke-width:1.5; rx:12; }
+      .h   { fill:#F4F1EC; font-size:14.5px; font-weight:700; }
+      .b   { fill:#D2CAC1; font-size:12px; }
+      .m   { fill:#B5ABA1; font-size:11.5px; }
+      .lbl { fill:#F58B62; font-size:11.5px; }
+      /* caution token: #F2C14E on #1F1B18 = 10.19:1, well past WCAG AA */
+      .warn{ fill:#F2C14E; font-size:11.5px; font-weight:600; }
+      .warnline { stroke:#F2C14E; stroke-width:1.2; fill:none; }
+      .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+      .flow{ stroke:#F26B3A; stroke-width:2; fill:none; }
+      .mgmt{ stroke:#B5ABA1; stroke-width:1.5; fill:none; stroke-dasharray:5 4; }
+    </style>
+  </defs>
+
+  <rect width="900" height="820" fill="#1F1B18"/>
+  <text x="24" y="36" class="h" font-size="20px">One MCP call, end to end</text>
+
+  <!-- a plain gRPC client skips the bridge -->
+  <path class="flow" d="M134,104 V78 H742 V104" marker-end="url(#a-coral)"/>
+  <text x="438" y="70" class="lbl" text-anchor="middle">any gRPC client (grpcurl, an agent) skips the bridge</text>
+
+  <!-- row 1: client, bridge, load balancer -->
+  <rect class="bx" x="24" y="104" width="220" height="82"/>
+  <text x="38" y="130" class="h">Stdio MCP client</text>
+  <text x="38" y="150" class="b">Claude Desktop, Cursor,</text>
+  <text x="38" y="168" class="b">the <tspan class="mono">mcp</tspan> SDK</text>
+
+  <path class="flow" d="M244,145 H310" marker-end="url(#a-coral)"/>
+  <text x="277" y="138" class="lbl" text-anchor="middle">stdio</text>
+
+  <rect class="bx" x="316" y="104" width="220" height="82"/>
+  <text x="330" y="130" class="h mono">ramen-mcp-bridge</text>
+  <text x="330" y="150" class="b">stdio ⇄ gRPC, runs beside</text>
+  <text x="330" y="168" class="b">the client (a local pipe)</text>
+
+  <path class="flow" d="M536,145 H602" marker-end="url(#a-coral)"/>
+  <text x="569" y="138" class="lbl" text-anchor="middle">gRPC</text>
+
+  <rect class="bx" x="608" y="104" width="268" height="82"/>
+  <text x="622" y="130" class="h">Load balancer</text>
+  <text x="622" y="150" class="b">GKE Gateway · AWS ALB</text>
+  <text x="622" y="168" class="b">TLS terminates here · gRPC health check</text>
+
+  <!-- what this hop actually is: plaintext unless the client asks for TLS -->
+  <path class="warnline" d="M569,152 V196 H330"/>
+  <text x="316" y="214" class="warn">plaintext h2c on this hop unless the client asks for TLS:</text>
+  <text x="316" y="231" class="warn"><tspan class="mono">ramen-mcp-bridge --tls</tspan>, or <tspan class="mono">--ca &lt;pem&gt;</tspan> to pin the certificate</text>
+
+  <!-- edge to worker pod: the metadata that selects the zone, and the second plaintext hop -->
+  <path class="flow" d="M742,186 V312" marker-end="url(#a-coral)"/>
+  <text x="726" y="258" class="m" text-anchor="end">one <tspan class="mono">ramen.v1.Mcp/Call</tspan> per JSON-RPC message · metadata</text>
+  <text x="726" y="275" class="m" text-anchor="end"><tspan class="mono">authorization: Bearer rmk_…</tspan> · <tspan class="mono">ramen-group</tspan> · <tspan class="mono">ramen-zone</tspan></text>
+  <text x="726" y="296" class="warn" text-anchor="end">TLS ends at the load balancer · this hop is h2c unless the node runs TLS</text>
+
+  <!-- row 2: worker pod -->
+  <rect class="pod" x="600" y="312" width="276" height="216"/>
+  <text x="614" y="334" class="m">worker pod · stable + canary tracks</text>
+
+  <rect class="bx" x="612" y="346" width="252" height="92"/>
+  <text x="624" y="370" class="h">ramen-node</text>
+  <text x="624" y="388" class="b">Rust + tonic, gRPC <tspan class="mono">:8080</tspan></text>
+  <text x="624" y="406" class="m">bearer key · source-range allowlist ·</text>
+  <text x="624" y="422" class="m">blocked names · 4 MiB · in-flight cap</text>
+
+  <path class="flow" d="M660,438 V464" marker-end="url(#a-coral)"/>
+  <text x="674" y="456" class="lbl">JSON-RPC over stdio</text>
+
+  <rect class="bx" x="612" y="464" width="252" height="56"/>
+  <text x="624" y="486" class="h">ramen_runtime</text>
+  <text x="624" y="506" class="b">Python 3.14 — runs your code</text>
+
+  <!-- bucket feeds the runtime -->
+  <rect class="bx" x="336" y="378" width="220" height="80"/>
+  <text x="350" y="404" class="h">Group bucket</text>
+  <text x="350" y="424" class="b mono">gs:// · s3:// · /buckets/</text>
+  <text x="350" y="444" class="b">tools, resources, prompts</text>
+
+  <path class="flow" d="M500,458 V492 H594" marker-end="url(#a-coral)"/>
+  <text x="548" y="484" class="lbl" text-anchor="middle">load by hash</text>
+
+  <!-- git repo -->
+  <rect class="bx" x="24" y="312" width="268" height="70"/>
+  <text x="38" y="338" class="h">Group git repo</text>
+  <text x="38" y="360" class="b mono">mcp/tools · resources · prompts</text>
+
+  <path class="mgmt" d="M158,382 V562" marker-end="url(#a-mute)"/>
+  <text x="170" y="470" class="m">clone + validate</text>
+
+  <!-- console -->
+  <rect class="bx" x="24" y="568" width="536" height="154"/>
+  <text x="40" y="596" class="h">Console — FastAPI, Jinja2, HTMX (same actions over an API key)</text>
+  <text x="40" y="622" class="b">groups (tenants) · environments · zones · users and roles</text>
+  <text x="40" y="644" class="b">canary deploy · rebalance · IP rules (per zone at the node, one Cloud Armor policy per group)</text>
+  <text x="40" y="666" class="b">MCP keys and API keys · secrets, never displayed · audit line per action</text>
+  <text x="40" y="692" class="m">state in Firestore (GCP) or DynamoDB (AWS); secrets in Secret Manager / Secrets Manager</text>
+
+  <path class="mgmt" d="M400,562 V460" marker-end="url(#a-mute)"/>
+  <text x="412" y="520" class="m">upload on deploy</text>
+
+  <path class="mgmt" d="M566,602 H888 V392 H870" marker-end="url(#a-mute)"/>
+  <text x="600" y="574" class="m"><tspan class="mono">Admin/Reload</tspan> · <tspan class="mono">Admin/Metrics</tspan> · <tspan class="mono">Health/Check</tspan></text>
+  <text x="600" y="591" class="m">straight to the pod IP, inside the cluster</text>
+
+  <!-- the hops that are plaintext by default -->
+  <path class="warnline" d="M34,730 L44,748 L24,748 Z" stroke-linejoin="round"/>
+  <text x="34" y="746" class="warn" font-size="12px" text-anchor="middle">!</text>
+  <text x="56" y="740" class="warn">Plaintext by default: bridge → load balancer is h2c unless <tspan class="mono">--tls</tspan> / <tspan class="mono">--ca</tspan> is given;</text>
+  <text x="56" y="757" class="warn">load balancer → node is h2c unless the node runs <tspan class="mono">RAMEN_TLS_CERT</tspan> / <tspan class="mono">RAMEN_TLS_KEY</tspan>.</text>
+  <text x="56" y="774" class="warn">Unauthenticated through the load balancer: <tspan class="mono">grpc.health.v1.Health</tspan> — by design. Reflection is off on deployed workers (<tspan class="mono">RAMEN_REFLECTION=0</tspan>).</text>
+
+  <!-- legend -->
+  <path class="flow" d="M24,802 H60"/>
+  <text x="68" y="806" class="m">MCP request path</text>
+  <path class="mgmt" d="M210,802 H246"/>
+  <text x="254" y="806" class="m">management path (console)</text>
+</svg>

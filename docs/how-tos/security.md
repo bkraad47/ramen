@@ -23,7 +23,10 @@ login except break-glass with `RAMEN_ADMIN_FORCE_PASSWORD=1`.
 ## Keys
 - **MCP keys** `rmk_<id>_<secret>`: stored hashed in the group's secrets, shown once, unioned into
   `RAMEN_MCP_KEYS` on the workers at deploy, compared in constant time. **No keys = deny all** (gRPC
-  `UNAUTHENTICATED`). Revoke on the group page, then deploy to push the change.
+  `UNAUTHENTICATED`). Revoke on the group page, then deploy to push the change — the deploy rewrites the zone's
+  Secret and rolls the pods for you, but the old pods keep accepting the old key set until they finish draining
+  (the job waits up to 180 s for that). Rotation is therefore quick, not instant: treat a leaked key as live for
+  a few minutes after you revoke it.
 - **API keys** `rmn_<id>_<secret>`: stored hashed, shown once, scoped. Revoke on the API Keys page.
 - **Admin key**: gates `Admin/Reload` and `Admin/Metrics`; rotate with the [rotate-keys skill](../wiki/skills.md).
 - **Fernet key** `RAMEN_FERNET_KEY`: encrypts password hashes, secret values, API-key hashes and git tokens at
@@ -36,28 +39,42 @@ The worker exposes one port with `ramen.v1.Mcp`, `ramen.v1.Admin` and `grpc.heal
 | Control | HTTP (≤ 0.3.0) | gRPC (0.3.1) |
 |---|---|---|
 | Bearer key | `Authorization` header → 401 / `-32001` | metadata `authorization` → `UNAUTHENTICATED` (16) |
-| Source range | `RAMEN_ALLOWED_CIDRS` → 403 | same env → `PERMISSION_DENIED` (7); `RAMEN_TRUST_PROXY=1` honours the first `x-forwarded-for` hop only |
+| Source range | `RAMEN_ALLOWED_CIDRS` → 403 | same env → `PERMISSION_DENIED` (7); the address checked is the `RAMEN_TRUST_PROXY_HOPS`-th `x-forwarded-for` entry **from the right** (GCP 2, AWS 1, `0` = the peer address) |
 | Admin surface | `X-Ramen-Admin-Key` + `RAMEN_ADMIN_CIDRS` | metadata `x-ramen-admin-key` + `RAMEN_ADMIN_CIDRS` |
 | Blocked tools | hidden from `*/list`, `-32601` | identical (inside the JSON-RPC body) |
-| Body size | 4 MiB | 4 MiB (`RESOURCE_EXHAUSTED` / `INVALID_ARGUMENT` from the framework) |
-| Concurrency | `RAMEN_MAX_INFLIGHT` → 429 | `RESOURCE_EXHAUSTED` (8) |
+| Body size | 4 MiB | 4 MiB → `OUT_OF_RANGE` (11), enforced by the tonic codec |
+| Concurrency | `RAMEN_MAX_INFLIGHT` → 429 | `RESOURCE_EXHAUSTED` (8). The limit is sized when the pod starts, so changing it takes a restart even though a deploy may set it |
 | Health | `/healthz`, `/readyz` unauthenticated | `Health/Check` unauthenticated; `NOT_SERVING` until code is loaded |
 | Access log | one JSON line per call | same fields plus `grpc_code` |
 
 TLS: the load balancer terminates it (GKE Gateway / ALB, self-signed until a domain exists — D17). To encrypt
 inside the cluster too, set `RAMEN_TLS_CERT` + `RAMEN_TLS_KEY` (PEM) on the workers and the port switches to h2;
 the GCP Gateway then uses `HTTP2` instead of h2c. Clients: the bridge's `--tls [--ca <pem>]`; `--insecure` is
-plaintext and is for the local compose stack only.
+plaintext and is for the local compose stack only — and note that `--insecure` **overrides** `--tls`/`--ca`
+rather than conflicting with them, so a leftover `--insecure` in an `mcpServers` entry quietly downgrades the
+connection. `--ca` replaces the trust store with that PEM; it is not certificate pinning, and because the
+Gateway certificate is self-signed until you supply a domain certificate, `--tls` on its own fails with
+`CERTIFICATE_VERIFY_FAILED` and `--ca` is required in practice.
 
 Routing metadata `ramen-group` / `ramen-zone` is **not** an authorisation signal: the LB uses it to pick a zone,
 then that zone's node still checks the key and the CIDR. Sending someone else's group name with your key gets
 `UNAUTHENTICATED` from their workers.
 
 ## Network
-- Node: `RAMEN_ALLOWED_CIDRS` (IPv4 + IPv6) for `Mcp/Call`, `RAMEN_ADMIN_CIDRS` for `Admin/*`, `RAMEN_TRUST_PROXY=1`
-  to honour the first `x-forwarded-for` hop behind the LB.
-- IP rules from the console become **Cloud Armor** (GCP) / **WAFv2** (AWS) policies on the zone's backend *and*
-  node CIDRs, so the node still enforces if the edge is misconfigured. Changing rules rolls the zone's pods.
+- Node: `RAMEN_ALLOWED_CIDRS` (IPv4 + IPv6) for `Mcp/Call`, `RAMEN_ADMIN_CIDRS` for `Admin/*`.
+- **Which address is checked**: `RAMEN_TRUST_PROXY_HOPS = n` takes the n-th `x-forwarded-for` entry counted from
+  the **right**, the end proxies append to, so the entries a caller supplies on the left are ignored and the
+  address checked is the one the outermost trusted proxy saw. Deployed values: **2 on GCP** (the external load
+  balancer appends the client, then itself), **1 on AWS** (the ALB appends the client), set by the worker chart
+  and both renderers and overridable, including to `0`. The default is `0` — never read the header, use the peer
+  address — which is right for local and compose. `RAMEN_TRUST_PROXY=1` is the legacy spelling of one hop; an
+  explicit hop count wins over it either way. Trust off, no header, too few entries or an unparseable entry all
+  fall back to the peer address, so a wrong count **fails closed**: behind a load balancer the peer is the proxy,
+  so a client-range allowlist denies instead of admitting.
+- IP rules from the console become a **Cloud Armor** policy at the edge (GCP; one policy per group, so changing
+  one zone's rules changes the whole group's edge) or the **WAFv2** equivalent (AWS, never applied) *and* the
+  zone's node CIDRs. With the hop count right the node check is a real check on the client address; what bounds
+  direct access to a pod is the worker `NetworkPolicy`. Changing rules rolls the zone's pods.
 - Worker pods carry a NetworkPolicy (ingress only on the node port) and a restrictive `securityContext`.
 - Console sessions: signed cookie (`ramen_session`, 12 h, `SameSite=Lax`, `Secure` with `RAMEN_COOKIE_SECURE=1`).
 - CSRF: per-session `ramen_csrf` token on HTML forms / `X-Ramen-CSRF` header; JSON API with an API key is exempt.
@@ -82,8 +99,9 @@ env vars scoped to env + zone. Redacted from tool errors. Details: [Secrets](sec
 - `audit`: every mutating console request `{ts, user, ip, action, target, ok, tags}` (also failed logins).
 - `activity`: deploys, permission requests, invocations summary.
 - Worker log: one JSON line per MCP call `ts, ip, group, method, name, status, grpc_code, ms, key_id` (key id,
-  never the key). `RAMEN_VERBOSE=1` per environment logs full request/response bodies — turn it on only while
-  debugging.
+  never the key). `key_id` is a short unsalted hash of the presented key, so it is not key material — but anyone
+  with log access can hash a guessed key and check whether it matches a line. Treat worker logs as sensitive.
+  `RAMEN_VERBOSE=1` per environment logs full request/response bodies — turn it on only while debugging.
 
 ## Isolation
 - Runtime is spawned per worker with the deploy env only; killed after `RAMEN_SIDECAR_IDLE_SECS`; a call timeout
@@ -92,6 +110,21 @@ env vars scoped to env + zone. Redacted from tool errors. Details: [Secrets](sec
 - Zone namespaces are labelled `ramen.io/group=<group>`; group delete destroys them and their service accounts.
 - Tool blocking (v0.3.0): per-environment block list enforced by the node (`-32601`), so a bad tool can be pulled
   without a redeploy of code.
+- The deploy file in the group's bucket (`.ramen/env-<zone>`) is a **configuration channel**, not just data: the
+  node reads a whitelist of keys from it, and that whitelist includes `RAMEN_MCP_KEYS` and
+  `RAMEN_ALLOWED_CIDRS`. Write access to a group's bucket prefix therefore means the ability to add an MCP key
+  and to widen that zone's address allowlist. The whitelist deliberately excludes the bucket, the port, the
+  group and zone identity, the admin key and the proxy-trust setting, so the same write access cannot redirect a
+  worker, take over its admin surface or change how it decides a caller's address. Bucket write access is a
+  console-side privilege — keep it that way.
+
+## The local stack is not a deployment
+`deploy/local/docker-compose.yml` publishes the worker on host port 8080 as plaintext h2c with
+`RAMEN_ALLOWED_CIDRS=0.0.0.0/0,::/0`, a committed `RAMEN_MCP_KEYS=local-mcp-key` and
+`RAMEN_ADMIN_KEY=local-admin-key`, and no `RAMEN_ADMIN_CIDRS` at all. On a developer laptop that means
+`Admin/Reload` and `Admin/Metrics` are available to anything that can reach the port, with a key that is in the
+repository. It is meant for `make up` on a machine you control: do not expose the compose stack, and do not
+reuse those values anywhere real.
 
 ## Reporting
 Open a private security advisory on GitHub (Security → Advisories) rather than a public issue.

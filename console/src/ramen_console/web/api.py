@@ -138,6 +138,21 @@ async def set_blocked(request: Request, group: str, env: str, body: m.Blocked, p
     return respond(request, await svc(request).update_env(group, env, blocked=body.blocked))
 
 
+@r.put("/groups/{group}/environments/{env}/zones/{zone}/blocked")
+async def set_zone_blocked(
+    request: Request, group: str, env: str, zone: str, body: m.Blocked, p: Principal = Depends(admin_g)
+):
+    """Per-zone blocking (U5). Adds to the environment-wide list; the next deploy writes the union of both into
+    that zone's `RAMEN_BLOCKED`, so a language model on this zone stops seeing those names."""
+    note(
+        request,
+        "environment.blocked_zone",
+        f"{group}/{env}/{zone}",
+        [f"group:{group}", f"zone:{zone}"] + [f"blocked:{n}" for n in body.blocked],
+    )
+    return respond(request, await svc(request).set_zone_blocked(group, env, zone, body.blocked))
+
+
 @r.delete("/groups/{group}/environments/{env}")
 async def delete_env(request: Request, group: str, env: str, p: Principal = Depends(admin_g)):
     note(request, "environment.delete", f"{group}/{env}", [f"group:{group}"])
@@ -152,7 +167,7 @@ async def deploy(
     s = svc(request)
     e = await s.get_env(group, env)
     if body.zone and body.zone not in e.get("zones", []):
-        raise invalid(f"zone {body.zone} is not attached to {env}")
+        raise invalid(f"Zone {body.zone} is not attached to {env}")
     note(request, "deploy.start", f"{group}/{env}", [f"group:{group}", f"canary:{body.canary}"])
     job = request.app.state.jobs.create("deploy", f"{group}/{env}")
     from ..audit import client_ip
@@ -257,7 +272,7 @@ async def logs(
     if not can(p, "viewer", group):
         from ..errors import forbidden
 
-        raise forbidden(f"no access to group {group}")
+        raise forbidden(f"No access to group {group}")
     s = svc(request)
     await s.get_group(group)
     text = await s.cloud.logs(group, zone, worker, tail)

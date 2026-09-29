@@ -1,0 +1,81 @@
+# Pre-created zone namespaces for group `demo`, zones `a` and `b`.
+# Two reasons the namespace and the worker ServiceAccount exist before the console attaches the zone:
+#  1. the KSA already carries an iam.gke.io/gcp-service-account annotation, so the console's identity path
+#     (GcpCloud._identity → IAM + Workload Identity) is skipped instead of failing — there is no IAM on kind.
+#     That path is proven on GKE, not here.
+#  2. each zone needs a NodePort for the host, and a NodePort cannot be created in a namespace that does not exist.
+# Everything else in the namespace (Deployments, Service, HPA, Secret, NetworkPolicy, HTTPRoute, HealthCheckPolicy)
+# is created by the console when the zone is attached, from the same renderer GKE uses.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ramen-demo-a
+  labels: { ramen.io/group: demo, ramen.io/zone: a, ramen.io/routes: "true" }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: ramen-demo-a
+  annotations: { iam.gke.io/gcp-service-account: ramen-demo-a@kind.iam.gserviceaccount.com }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-host
+  namespace: ramen-demo-a
+spec:
+  type: NodePort
+  selector: { app: worker }
+  ports: [{ name: grpc, port: 8080, targetPort: grpc, nodePort: 30081 }]
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ramen-demo-b
+  labels: { ramen.io/group: demo, ramen.io/zone: b, ramen.io/routes: "true" }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: ramen-demo-b
+  annotations: { iam.gke.io/gcp-service-account: ramen-demo-b@kind.iam.gserviceaccount.com }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-host
+  namespace: ramen-demo-b
+spec:
+  type: NodePort
+  selector: { app: worker }
+  ports: [{ name: grpc, port: 8080, targetPort: grpc, nodePort: 30082 }]
+---
+# Stable-track-only host port. A NodePort is an L4 hop, so one long-lived HTTP/2 connection pins to one pod for its
+# whole life; with the zone Service selecting both tracks (`app=worker`, CONTRACTS §7) a load generator can end up
+# driving only `worker-canary`, which no HPA manages. The autoscale proof therefore drives the stable track through
+# this port. On GKE the Gateway is an L7 proxy and balances per gRPC request across the NEG, so it does not arise.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-stable-host
+  namespace: ramen-demo-a
+spec:
+  type: NodePort
+  selector: { app: worker, ramen.io/track: stable }
+  ports: [{ name: grpc, port: 8080, targetPort: grpc, nodePort: 30084 }]
+---
+# Stable-track-only host port. A NodePort is an L4 hop, so one long-lived HTTP/2 connection pins to one pod for its
+# whole life; with the zone Service selecting both tracks (`app=worker`, CONTRACTS §7) a load generator can end up
+# driving only `worker-canary`, which no HPA manages. The autoscale proof therefore drives the stable track through
+# this port. On GKE the Gateway is an L7 proxy and balances per gRPC request across the NEG, so it does not arise.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-stable-host
+  namespace: ramen-demo-b
+spec:
+  type: NodePort
+  selector: { app: worker, ramen.io/track: stable }
+  ports: [{ name: grpc, port: 8080, targetPort: grpc, nodePort: 30085 }]

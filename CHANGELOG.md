@@ -2,8 +2,37 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
-## [0.4.0] — console polish, docs, and proof
-- (in progress) Console: naming and sentence case, sidebar identity, per-zone action sections, two-pane logs, per-zone package toggles, 12-character password and key policy, enforced API key client types (agent vs devops), colour-free health wording, session revocation. Docs: dark-only site, aligned badges, real architecture diagram, transport and security write-up, repository topics. Verification: multi-zone and autoscaling on kind then GKE, per-zone tool isolation, independent LLM clients, a role and group security matrix, and an independent review of the claims.
+## [0.4.0] — console, docs, and evidence
+**Breaking / behaviour**
+- API keys carry a client type and it is enforced: an `agent` key (`rmk_`) is accepted only by workers, a `devops` key (`rmn_`) only by the console API, each refused by the other side. Keys made before 0.4.0 keep working, typed by their prefix.
+- `RAMEN_TRUST_PROXY` is replaced by `RAMEN_TRUST_PROXY_HOPS=N`, which reads the Nth `x-forwarded-for` entry **counted from the right**. The old spelling still works and means one hop. Deployed values: GCP 2, AWS 1 — **measured on a live GKE Gateway**, not assumed. Any failure falls back to the peer address, so a wrong count denies rather than admits.
+- Server reflection is gated by `RAMEN_REFLECTION` and is **off on deployed workers**: `grpcurl` against a deployed worker now needs `-import-path proto -proto ramen/v1/mcp.proto`.
+- A super admin changing the authentication configuration signs out every other session, their own other clients included.
+
+**Security**
+- The worker address allowlist could be bypassed: proxy trust shipped enabled and the node read the leftmost `x-forwarded-for` entry, which a caller controls. Found by an independent review of the documentation's own claims.
+- Setting IP rules wrote the cloud edge policy before the worker allowlist on both clouds, so a cloud failure left the zone unlocked while reporting an error. The worker is now configured first; the edge policy is best effort.
+- A `canary:false` deploy left the previous canary pod serving the zone with the old configuration, so a disabled tool still ran, a revoked key still worked and a tightened allowlist did not apply. Stale canaries are now removed before the stable roll.
+- Sessions are revoked on password, role, group and authentication-configuration changes, and on delete.
+- Passwords and generated keys are at least 12 characters across four character classes.
+
+**Console**
+- Per-zone enable and disable for tools, resources and prompts, on top of the environment-wide list.
+- Two-pane logs with the consumer, timestamp, method and outcome per entry, and a worker filter.
+- One equal-width Actions group per zone; identity and role in the sidebar with the role named and coloured; health described by load rather than by colour; sentence case throughout; group pickers instead of typed lists.
+- `GET` for a single zone and a single environment. `refresh` survives a namespace that is terminating or unreadable.
+
+**Docs and repository**
+- Dark-only site, aligned badges, no edit button, no heading permalink symbols, `llms.txt` served but unlinked.
+- A hand-drawn architecture diagram that names its own plaintext hops, and a transport page whose every claim was checked against the code by a reviewer that did not write it.
+- Operator facts stated plainly: which hops are plaintext, what key rotation actually costs, what the deploy file can and cannot change, and that the AWS path has never been applied.
+- Repository description, homepage and topics set.
+
+**Verification**
+- `deploy/kind/` brings up a local two-zone cluster: `make kind-up`, `kind-test`, `kind-down`, and a CI job off the pull-request path.
+- Proven live: two zones serving independently, autoscaling one to two replicas under real load with the neighbouring zone untouched, rebalance, per-zone tool isolation, a 48-case role and group security matrix, both key types, and Claude Code driven as a real MCP client.
+- Proven on GKE: the forwarded-for hop count measured position by position, spoofed headers refused, reflection unreachable through the load balancer, and none of the eight defects from the 0.3.2 run recurring.
+
 ## [0.3.2] — verified on GKE
 - gRPC header routing verified on a live GKE Gateway over cleartext HTTP/2 (h2c); no TLS fallback needed. Live harness: 126 passed, 0 failed.
 - Fixes from the live run: zone identity (GSA + Workload Identity + baseline grants) is ensured when a zone is attached, not only by an explicit service-account call; IAM bindings on new service accounts wait for propagation; all worker services (Mcp, Health, reflection) are routed through the Gateway; the node retries its initial load instead of waiting for an admin reload; the bridge pins the server certificate in insecure-TLS mode.

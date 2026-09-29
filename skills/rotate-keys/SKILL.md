@@ -9,8 +9,8 @@ Which key? Pick the section. All console calls use `$U=$RAMEN_CONSOLE_URL/api/v1
 key in `X-Ramen-Api-Key` (or a cookie session). Contract: `docs/CONTRACTS.md` §3, §4a, §9.
 
 ## A. `rmk_` MCP keys (what MCP clients send to workers)
-Zero-downtime because workers accept the union of all minted keys.
-1. Mint the new key: `POST $U/groups/<g>/mcp-keys {name:"<client>-<date>"}` → `{id,key:"rmk_…"}`. Hand the key to the client owner once.
+Zero-downtime because workers accept the union of every key generated for the group.
+1. Generate the new key: `POST $U/groups/<g>/mcp-keys {name:"<client>-<date>"}` → `{id,key:"rmk_…"}`. Hand the key to the client owner once.
 2. Deploy every environment of the group (`POST $U/groups/<g>/environments/<e>/deploy {canary:true}`, poll `/jobs/<id>` to `ok`) so the new key reaches all zones.
 3. Wait for clients to switch (agree a window). Then revoke: `GET $U/groups/<g>/mcp-keys` → find the old `id` → `DELETE $U/groups/<g>/mcp-keys/<id>`.
 4. Deploy again; the old key stops working when the reload completes.
@@ -30,7 +30,7 @@ Change the env/Helm value `RAMEN_ADMIN_PASSWORD` and restart the console; the bo
 Rotating this re-encrypts nothing automatically. Procedure:
 1. `POST $U/backups {target:"bucket"}` (backup excludes secrets; secret values must be re-entered if the store backend is used).
 2. If `RAMEN_SECRETS_BACKEND=store`: export the list of secret **names** and scopes (`GET $U/groups/<g>/secrets`) for every group; get the values from their owners.
-3. Set the new key (Helm `console.secrets.RAMEN_FERNET_KEY` / `.env`), restart the console. Encrypted fields written with the old key are now unreadable: users log in via the bootstrap admin (re-applied), OAuth, or a password reset; `rmn_` keys must be re-minted; secrets re-added (store backend) — with `gcp`/`aws` backends the values live in the cloud secret manager and survive.
+3. Set the new key (Helm `console.secrets.RAMEN_FERNET_KEY` / `.env`), restart the console. Encrypted fields written with the old key are now unreadable: users log in via the bootstrap admin (re-applied), OAuth, or a password reset; `rmn_` keys must be generated again; secrets re-added (store backend) — with `gcp`/`aws` backends the values live in the cloud secret manager and survive.
 4. Deploy every environment so workers get the re-added secrets.
 Prefer `gcp`/`aws` secret backends in production precisely so that E is cheap.
 

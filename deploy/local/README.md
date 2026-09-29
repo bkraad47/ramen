@@ -39,6 +39,12 @@ grpcurl -plaintext -H "authorization: Bearer $KEY" -d "{\"body\":\"$BODY\"}" loc
 No key → gRPC `UNAUTHENTICATED` (the bridge relays it as JSON-RPC `-32001`). `mcp-client-config.example.json` is a
 ready stdio `mcpServers` entry for Claude Desktop / Cursor (needs `ramen-mcp-bridge` on PATH).
 
+**That example is local-only.** Its `args` end in `--insecure`, which forces a plaintext h2c channel and overrides
+`--tls`/`--ca`, so a copy of it pointed at a deployment would keep talking plaintext without saying so. For a real
+deployment use the `_DEPLOYED` block in the same file: drop `--insecure`, set `--target <lb-host>:443`, add `--tls`
+and `--ca <pem>` (omit `--ca` only if the load balancer's certificate is already in your system trust store), and use
+a group MCP key minted on the group page rather than the `.env` dev fallback.
+
 **`rmk_` vs `rmn_`:** `rmk_` MCP keys are per group and go to workers; `rmn_` API keys (API Keys page,
 `X-Ramen-Api-Key`) are for scripting the console and never reach a worker. Not interchangeable.
 

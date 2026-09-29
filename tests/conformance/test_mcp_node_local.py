@@ -73,15 +73,69 @@ def test_cidr_denied_outside_allowed_range():
         assert n.node.status(PING) == S.PERMISSION_DENIED
         assert n.node.health() in ("SERVING", "NOT_SERVING"), "health is unauthenticated and not CIDR-gated"
         spoof = [("x-forwarded-for", "192.0.2.7")]
-        assert n.node.status(PING, extra=spoof) == S.PERMISSION_DENIED, "x-forwarded-for ignored w/o RAMEN_TRUST_PROXY"
+        assert n.node.status(PING, extra=spoof) == S.PERMISSION_DENIED, (
+            "x-forwarded-for was consulted although RAMEN_TRUST_PROXY_HOPS is unset (proxy trust is off by default)"
+        )
 
 
-def test_trust_proxy_uses_forwarded_address():
-    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24", "RAMEN_TRUST_PROXY": "1"}) as n:
+def test_one_hop_uses_the_forwarded_address():
+    """`RAMEN_TRUST_PROXY_HOPS=1` = the right-most entry. The legacy `RAMEN_TRUST_PROXY=1` spelling means the same."""
+    for env in ({"RAMEN_TRUST_PROXY_HOPS": "1"}, {"RAMEN_TRUST_PROXY": "1"}):
+        with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24", **env}) as n:
+            n.wait_serving()
+            assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7")]) == S.OK, env
+            assert n.node.status(PING, extra=[("x-forwarded-for", "198.51.100.9")]) == S.PERMISSION_DENIED, env
+            assert n.node.status(PING) == S.PERMISSION_DENIED, env  # no header → peer (127.0.0.1) → denied
+
+
+def test_forwarded_for_hops_are_counted_from_the_right():
+    """`RAMEN_TRUST_PROXY_HOPS=n` → the client address is the n-th `x-forwarded-for` entry counted from the right,
+    because proxies append. Everything left of that is caller-supplied and must not be consulted."""
+    xff = "198.51.100.9, 192.0.2.7"  # a client, then the proxy's view of it
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "198.51.100.0/24", "RAMEN_TRUST_PROXY_HOPS": "2"}) as n:
         n.wait_serving()
-        assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7")]) == S.OK
-        assert n.node.status(PING, extra=[("x-forwarded-for", "198.51.100.9")]) == S.PERMISSION_DENIED
-        assert n.node.status(PING) == S.PERMISSION_DENIED  # no header → peer address (127.0.0.1) → denied
+        assert n.node.status(PING, extra=[("x-forwarded-for", xff)]) == S.OK
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24", "RAMEN_TRUST_PROXY_HOPS": "2"}) as n:
+        n.wait_serving()
+        assert n.node.status(PING, extra=[("x-forwarded-for", xff)]) == S.PERMISSION_DENIED, (
+            "hop 2 from the right was not the address checked"
+        )
+
+
+def test_a_spoofed_left_hand_entry_cannot_choose_the_checked_address():
+    """The regression the hop count exists for: a caller outside the allowlist prepends an allowed address."""
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24", "RAMEN_TRUST_PROXY_HOPS": "2"}) as n:
+        n.wait_serving()
+        spoof = [("x-forwarded-for", "192.0.2.7, 203.0.113.1, 203.0.113.2")]
+        assert n.node.status(PING, extra=spoof) == S.PERMISSION_DENIED, "a left-hand entry was trusted"
+        assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7")]) == S.PERMISSION_DENIED, (
+            "a one-entry header satisfied a two-hop deployment"
+        )
+
+
+def test_a_wrong_hop_count_fails_closed():
+    """Too many hops for the header that arrives → fall back to the peer address, never to a caller-chosen one."""
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24", "RAMEN_TRUST_PROXY_HOPS": "3"}) as n:
+        n.wait_serving()
+        assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7, 192.0.2.8")]) == S.PERMISSION_DENIED
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "127.0.0.0/8", "RAMEN_TRUST_PROXY_HOPS": "3"}) as n:
+        n.wait_serving()
+        assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7")]) == S.OK, "peer fallback not applied"
+
+
+def test_proxy_trust_is_off_unless_asked_for():
+    with LocalNode(env={"RAMEN_ALLOWED_CIDRS": "192.0.2.0/24"}) as n:
+        n.wait_serving()
+        assert n.node.status(PING, extra=[("x-forwarded-for", "192.0.2.7")]) == S.PERMISSION_DENIED
+
+
+def test_reflection_can_be_turned_off():
+    """`RAMEN_REFLECTION=0` (what deploy/helm/ramen-worker sets) removes the service entirely."""
+    with LocalNode(env={"RAMEN_REFLECTION": "0"}) as n:
+        n.wait_serving()
+        with pytest.raises(grpc.RpcError) as e:
+            n.node.reflect()
+        assert e.value.code() in (S.UNIMPLEMENTED, S.NOT_FOUND), e.value.code()
 
 
 def test_admin_cidr_and_key():

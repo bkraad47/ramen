@@ -41,7 +41,7 @@ demo_calculator_tool({"var1": 2, "var2": 3, "func": "add"}) -> 5
 PASS: demo_calculator_tool(2,3,add) -> 5
 ```
 The `PASS:` line is the success marker. `make demo` is safe to re-run: existing zone/group/environment answer
-`... exists` and a fresh MCP key is minted each time.
+`... exists` and a fresh MCP key is generated each time.
 
 What it did, through the console API: `POST /api/v1/zones {local}` → `POST /api/v1/groups {demo, repo_url}`
 → `POST /api/v1/groups/demo/environments {dev, zones:[local]}` → `POST /api/v1/groups/demo/mcp-keys` (an
@@ -52,12 +52,12 @@ client through `ramen-mcp-bridge` (`deploy/local/mcp_call.py`).
     The GCP/AWS guides ask you to create a zone and a group in the console. Locally `make demo` has already done
     that; the console shows zone `local` and group `demo` on first login.
 
-## 3. Mint a key
-The worker only accepts **`rmk_` MCP keys** minted for the group (`RAMEN_MCP_KEYS` in `.env` is a dev fallback that
-the compose stack also honours, default `local-mcp-key`). Mint one:
+## 3. Generate a key
+The worker only accepts **`rmk_` MCP keys** generated for the group (`RAMEN_MCP_KEYS` in `.env` is a dev fallback that
+the compose stack also honours, default `local-mcp-key`). Generate one:
 
 === "Console"
-    Groups → **demo** → *MCP auth keys* → enter a name → **Mint MCP key**. The key is shown **once**. Then click
+    Groups → **demo** → *MCP auth keys* → enter a name → **Generate key**. The key is shown **once**. Then click
     **Deploy (canary)** on the environment so the key reaches the worker.
 
 === "API (cookie session)"
@@ -78,7 +78,8 @@ the worker image has it too):
 ```sh
 uv tool install './runtime-py[grpc]'          # → ~/.local/bin/ramen-mcp-bridge
 ramen-mcp-bridge --target localhost:8080 --insecure --key "$KEY" --group demo --zone local
-# stdin/stdout is now an MCP server; Ctrl-C to stop. --insecure = plaintext h2c (local only); use --tls [--ca <pem>] against a load balancer.
+# stdin/stdout is now an MCP server; Ctrl-C to stop. --insecure = plaintext h2c (local only); use --tls --ca <pem> against a load balancer.
+# --key can be RAMEN_BRIDGE_KEY instead: on a shared machine `ps` shows your command line to everyone.
 ```
 
 === "Claude Desktop / Cursor"
@@ -141,7 +142,7 @@ balancer routes on, so keep them in every client config.
 ## `rmk_` vs `rmn_` — two different keys
 | | `rmk_…` MCP key | `rmn_…` API key |
 |---|---|---|
-| Minted at | group page → *MCP auth keys*, or `POST /api/v1/groups/{g}/mcp-keys` | *API Keys* page, or `POST /api/v1/api-keys` |
+| Generated at | group page → *MCP auth keys*, or `POST /api/v1/groups/{g}/mcp-keys` | *API Keys* page, or `POST /api/v1/api-keys` |
 | Sent as | gRPC metadata `authorization: Bearer rmk_…` to a **worker** (the bridge's `--key`) | `X-Ramen-Api-Key: rmn_…` to the **console** `/api/v1/*` (HTTP) |
 | Scope | one group; reaches every worker of that group on the next deploy | a console role (+ groups) never wider than the creator's |
 | Use for | Claude Desktop, Cursor, agents, `grpcurl` to tools | CI deploys, rotation, backups, scripting the console |
@@ -170,7 +171,7 @@ curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://
 curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/config/auth -d '{"password_login":false}'
 curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X PUT https://localhost:8443/api/v1/config/auth -d '{"password_login":true,"magic_link":false}'
 ```
-MCP keys live in the store, so `make down` (which discards the Firestore emulator) invalidates every key; mint again after a fresh `make up`.
+MCP keys live in the store, so `make down` (which discards the Firestore emulator) invalidates every key; generate again after a fresh `make up`.
 
 <figure markdown>
 ![Group page](../img/group.png){ .ramen-shot }
@@ -179,7 +180,7 @@ MCP keys live in the store, so `make down` (which discards the Firestore emulato
 ## 8. Your own group repo
 1. Copy the layout from [Protos](../wiki/protos.md) (or fork the demo repo).
 2. Console → Groups → **Add group** with your repo URL and ref. Private repo: add a secret named `GITHUB_TOKEN`.
-3. Add an environment with zone `local`, mint an MCP key, **Deploy**. Errors per package show up in the job.
+3. Add an environment with zone `local`, generate an MCP key, **Deploy**. Errors per package show up in the job.
 
 ## 9. Stop, reset, troubleshoot
 ```sh
@@ -190,7 +191,7 @@ docker compose -f deploy/local/docker-compose.yml ps
 | Symptom | Cause / fix |
 |---|---|
 | `curl: (60) SSL certificate problem` | self-signed cert on the console: use `-k` |
-| MCP call → gRPC `Unauthenticated` (16) | key not minted, or minted but not deployed yet; run a deploy |
+| MCP call → gRPC `Unauthenticated` (16) | key not generated, or generated but not deployed yet; run a deploy |
 | MCP call → gRPC `PermissionDenied` (7) | source address outside `RAMEN_ALLOWED_CIDRS` (zone IP rules) |
 | `Health/Check` → `NOT_SERVING` | no deploy has loaded code yet; `make demo` or click Deploy |
 | Bridge exits at once / client shows no tools | wrong `--target`, missing `--insecure` against the plaintext local worker, or a `--tls` mismatch; run the bridge by hand in a terminal and read stderr |

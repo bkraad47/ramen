@@ -26,8 +26,10 @@ from .cloud import make_cloud
 from .config import apply_config
 from .deploy import Jobs
 from .mail import Mailer
+from .rbac import role_label
 from .secrets import make_secrets_backend
 from .security import (
+    PASSWORD_RULE,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     redact_tokens_in_access_log,
@@ -70,7 +72,13 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.mailer = Mailer.from_env()
     st.cookie_secure = os.environ.get("RAMEN_COOKIE_SECURE", "0") == "1"
     st.templates = Jinja2Templates(directory=str(HERE / "templates"))
-    st.templates.env.globals.update(version=release_version(), tojson=json.dumps, csrf_token=csrf_token)
+    st.templates.env.globals.update(
+        version=release_version(),
+        tojson=json.dumps,
+        csrf_token=csrf_token,
+        role_label=role_label,
+        password_rule=f"Use {PASSWORD_RULE}.",
+    )
 
     app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
     app.add_middleware(AuthAuditMiddleware)

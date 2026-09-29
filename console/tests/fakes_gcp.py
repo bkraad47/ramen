@@ -407,6 +407,8 @@ def compute_handler(state):
 
     def h(coll, method, kw):
         if coll == "backendServices":
+            if state.get("find_raises") and method in ("list", "get"):
+                state["find_raises"]()
             if method in ("patch", "setSecurityPolicy") and state.get("bs_not_ready", 0) > 0:
                 state["bs_not_ready"] -= 1
                 raise FakeApiError(

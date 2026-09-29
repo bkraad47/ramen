@@ -1,4 +1,5 @@
-"""Cross-cutting hardening: signing-secret resolution, security headers, login rate limiting, log redaction."""
+"""Cross-cutting hardening: password and key strength, signing-secret resolution, security headers, login rate
+limiting, log redaction."""
 
 import logging
 import os
@@ -11,8 +12,69 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .errors import invalid
+
 log = logging.getLogger("ramen.security")
 _EPHEMERAL: list[str] = []
+
+# --- password and key strength (U3, CONTRACTS §12.1) ------------------------
+MIN_LEN = 12
+SPECIALS = "!#$%&()*+-:;<=>?@[]^_{}~"
+# Key secrets travel through `rmn_<id>_<secret>` (split on `_`), the comma-separated `RAMEN_MCP_KEYS` and a
+# `KEY=value` deploy file, so they use a narrower set: no `_`, no `,`, no `=`, no whitespace, no quotes.
+KEY_SPECIALS = "!#$%&()*+-:;<>?@[]^{}~"
+PASSWORD_RULE = (
+    f"at least {MIN_LEN} characters with an upper-case letter, a lower-case letter, a digit and a special character"
+)
+_CLASSES = (
+    ("an upper-case letter", re.compile(r"[A-Z]")),
+    ("a lower-case letter", re.compile(r"[a-z]")),
+    ("a digit", re.compile(r"[0-9]")),
+    ("a special character", re.compile(r"[^A-Za-z0-9]")),
+)
+
+
+def min_length() -> int:
+    """`RAMEN_MIN_PASSWORD_LEN` may raise the floor, never lower it (and never break on a bad value)."""
+    try:
+        return max(MIN_LEN, int(os.environ.get("RAMEN_MIN_PASSWORD_LEN", MIN_LEN)))
+    except ValueError:
+        return MIN_LEN
+
+
+def password_problem(value: str) -> str | None:
+    """The first unmet requirement, phrased for a person, or None when the value is strong enough."""
+    least = min_length()
+    if len(value or "") < least:
+        return f"it is shorter than {least} characters"
+    missing = [label for label, rx in _CLASSES if not rx.search(value)]
+    return f"it is missing {', '.join(missing)}" if missing else None
+
+
+def check_password(value: str) -> None:
+    """Raise a 422 naming the rule when `value` is too weak. Used wherever a password or key is set or changed."""
+    problem = password_problem(value)
+    if problem:
+        raise invalid(f"Password must be {PASSWORD_RULE}; {problem}.")
+
+
+_LOWER, _UPPER, _DIGIT = "abcdefghijkmnopqrstuvwxyz", "ABCDEFGHJKLMNPQRSTUVWXYZ", "23456789"
+
+
+def generate_password(length: int | None = None, specials: str = SPECIALS) -> str:
+    """A secret that always satisfies the rule: one character of each class, the rest random, then shuffled."""
+    length = max(length or min_length(), min_length())
+    pools = (_LOWER, _UPPER, _DIGIT, specials)
+    alphabet = "".join(pools)
+    chars = [secrets.choice(p) for p in pools]
+    chars += [secrets.choice(alphabet) for _ in range(length - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def generate_key_secret(length: int = 32) -> str:
+    """The secret half of an API or MCP key: same strength rule, transport-safe punctuation only."""
+    return generate_password(max(length, min_length()), KEY_SPECIALS)
 
 
 def resolve_signing_secret() -> str:
@@ -82,7 +144,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         key = f"{request.client.host if request.client else '-'}:{request.url.path.split('/')[1]}"
         if self._count(key, 0) >= self.limit:
             return JSONResponse(
-                {"detail": "too many attempts, slow down"}, status_code=429, headers={"Retry-After": "60"}
+                {"detail": "Too many attempts, slow down"}, status_code=429, headers={"Retry-After": "60"}
             )
         resp = await call_next(request)
         if resp.status_code >= 400:  # only failures count toward the limit

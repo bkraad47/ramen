@@ -40,12 +40,17 @@ the worker image at `/opt/venv/bin/ramen-mcp-bridge`):
 ramen-mcp-bridge --target <host:port> --key rmk_… --group <g> --zone <z> [--tls|--insecure] [--ca ca.pem] [--timeout 120]
 ramen-mcp-bridge --target <host:port> --health [ramen.v1.Admin]     # grpc.health.v1 probe: exit 0 when SERVING
 ```
-Every flag has an env fallback `RAMEN_BRIDGE_TARGET|KEY|GROUP|ZONE|TLS|CA|TIMEOUT`. Input is newline-delimited JSON-RPC
+Every flag has an env fallback `RAMEN_BRIDGE_TARGET|KEY|GROUP|ZONE|TLS|CA|TIMEOUT`; prefer `RAMEN_BRIDGE_KEY` to
+`--key` on a shared machine, since `ps` shows every other user your command line. Input is newline-delimited JSON-RPC
 (what the MCP stdio transport uses) or `Content-Length:` framed; replies use the same framing. Each message is sent
 as one `Mcp/Call` with metadata `authorization: Bearer <key>`, `ramen-group`, `ramen-zone` (the LB routes on the
 last two; omitted when empty). Notifications produce no output. A gRPC status becomes a JSON-RPC error for requests
 (`UNAUTHENTICATED` → `-32001`, other statuses → `-32000`, message `<CODE>: <details>`), never for notifications.
-Plaintext h2c is the default; `--tls` (or `--ca`) switches to TLS. Claude Desktop / Cursor config:
+Plaintext h2c is the default; `--tls` (or `--ca`) switches to TLS. Two sharp edges: `--insecure` **overrides**
+`--tls`/`--ca` rather than conflicting with them, so a stale `--insecure` in an `mcpServers` entry silently keeps
+the connection in cleartext; and `--ca` replaces the trust store with that PEM (hostname verification still
+applies) rather than pinning a certificate — against a self-signed load-balancer certificate `--tls` alone fails
+with `CERTIFICATE_VERIFY_FAILED`, so `--ca` is required in practice. Claude Desktop / Cursor config:
 ```json
 {"mcpServers": {"ramen-demo": {"command": "ramen-mcp-bridge",
   "args": ["--target", "localhost:8080", "--key", "rmk_…", "--group", "demo", "--zone", "local"]}}}

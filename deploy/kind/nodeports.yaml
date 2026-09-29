@@ -1,0 +1,14 @@
+# Host access on kind. On GKE the same traffic arrives through the Gateway, which routes on the
+# ramen-group / ramen-zone gRPC metadata (CONTRACTS §11); kind has no Gateway controller, so each zone gets its own
+# host port instead. The harness still sends the routing metadata on every call.
+apiVersion: v1
+kind: Service
+metadata:
+  name: console-host
+  namespace: ramen-system
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: ramen-console
+    app.kubernetes.io/instance: ramen
+  ports: [{ name: http, port: 8000, targetPort: http, nodePort: 30080 }]

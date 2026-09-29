@@ -1,0 +1,36 @@
+# Console chart values for kind (CONTRACTS §12.3). RAMEN_CLOUD=gcp on purpose: the console drives the *same*
+# Kubernetes code paths as GKE (deploy/kind/README.md says why). The GCP APIs that have no kind equivalent are
+# replaced (storage → fake GCS) or degrade to a note (compute / Cloud Armor / Cloud Logging / IAM).
+provider: gcp
+project: kind
+region: us-central1
+image:
+  repository: ramen-console          # side-loaded with `kind load docker-image`
+  tag: 0.4.0
+  pullPolicy: IfNotPresent
+serviceAccount:
+  name: console
+console:
+  replicas: 1
+  port: 8000
+  resources: { requests: { cpu: 100m, memory: 384Mi } }
+  env:
+    RAMEN_STORE: memory              # no Firestore on kind; one replica, state resets with the pod
+    RAMEN_CLOUD: gcp
+    RAMEN_SECRETS_BACKEND: store
+    RAMEN_ADMIN_EMAIL: admin@ramen.local
+    RAMEN_GCP_PROJECT: kind
+    RAMEN_GCP_REGION: us-central1
+    RAMEN_GROUPS_BUCKET: ramen-kind-groups
+    RAMEN_IMAGE_WORKER: ramen-worker-kind:0.4.0
+    STORAGE_EMULATOR_HOST: http://fake-gcs.ramen-system.svc.cluster.local:4443
+    RAMEN_DEPLOY_TIMEOUT_SECS: "420"
+    RAMEN_LOGIN_RATE_LIMIT: "0"      # the security matrix makes many deliberate failed logins
+  secrets:
+    RAMEN_ADMIN_PASSWORD: Kind-Console-1!     # 12+ chars, upper/lower/digit/special (U3)
+    RAMEN_ADMIN_KEY: Kind-Admin-Key-1!
+    RAMEN_SESSION_SECRET: kind-session-secret-0123456789
+gateway:
+  enabled: false                     # no GKE Gateway on kind; workers are reached through NodePorts
+rbac:
+  create: true

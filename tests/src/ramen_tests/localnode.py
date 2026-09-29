@@ -91,7 +91,15 @@ class LocalNode:
             "RAMEN_LOG_FILE": str(self.log),
             "RAMEN_MAX_INFLIGHT": "32",
         }
-        for k in ("RAMEN_TLS_CERT", "RAMEN_TLS_KEY", "RAMEN_BLOCKED", "RAMEN_TRUST_PROXY", "RAMEN_CONFIG"):
+        for k in (
+            "RAMEN_TLS_CERT",
+            "RAMEN_TLS_KEY",
+            "RAMEN_BLOCKED",
+            "RAMEN_TRUST_PROXY",
+            "RAMEN_TRUST_PROXY_HOPS",
+            "RAMEN_REFLECTION",
+            "RAMEN_CONFIG",
+        ):
             self.env.pop(k, None)
         self.env.pop("RAMEN_DOTENV", None)
         self.ca = None

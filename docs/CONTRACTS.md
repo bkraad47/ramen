@@ -59,7 +59,9 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | sa-restrictions | `PUT /api/v1/groups/{group}/sa-restrictions` {rules} | 409 on clash with super-admin rules |
 | verbose | `POST /api/v1/groups/{group}/environments/{env}/verbose` {verbose} | |
 | requests | `POST|GET /api/v1/requests`, `POST /api/v1/requests/{id}/approve` | permission requests (F4.2) |
-| restore / password | `POST /api/v1/backups/{id}/restore`, `POST /api/v1/users/{id}/password` | |
+| restore / password | `POST /api/v1/backups/{id}/restore` {dry_run,prune,reconcile,force} (§13.1), `POST /api/v1/users/{id}/password` | |
+| revocation (v0.4.1) | `POST /api/v1/requests/{id}/deny`, `POST /api/v1/requests/{id}/revoke`, `DELETE /api/v1/groups/{group}/zones/{zone}/permissions/{permission}` | super admin (§13.2) |
+| worker images (v0.4.1) | `GET|POST /api/v1/groups/{group}/images`, `PUT|DELETE /api/v1/groups/{group}/images/current` | GET: viewer of the group; writes: super admin (§13.3) |
 | logs | `GET /api/v1/logs?group&zone&worker?&tail&download=1` → text/plain (+Content-Disposition attachment) | |
 | requests (v0.3.0) | `POST /api/v1/requests` {group,zone,permission} → 201 {id,type:"permission",status}; approve → {status:"approved",applied:{ok,permissions,…}} | group admin of the group; 422 unknown permission, 409 denied by super-admin/group rules (audited) |
 | policy | `GET /api/v1/policy/permissions` → [{permission,desc,gcp:[roles],aws:[actions]}] | catalogue from `policy/permissions.py` |
@@ -190,3 +192,97 @@ Source: `instructions/v0.4.md`, normalised as U1–U26 in `facts/v0.4.md`. Decis
 - **Independent clients (U24 / D23)**: Claude Code configured against the bridge, screenshotted calling the demo tool; a Cursor config published for the user to capture. Screenshots land in `docs/img/clients/`.
 - **Security assumptions (U25)**: a matrix test over roles × groups × both key types, asserting every cross-group and cross-role action is refused, and that revocation takes effect immediately.
 - **Independent review (U26)**: a reviewer that did not write the text checks the U13 claims against the code and the reports, and files `reports/claims-review-v0.4.0.md`.
+
+## 13. v0.4.1 — the three half-finished promises (binding)
+Source: `facts/v0.4.md` V5.1–V5.3 (F7.2, F4.2, F9.3), confirmed by the human on 2026-09-29. Decisions D24–D26.
+
+### 13.1 Backup restore (V5.1 / F7.2)
+`POST /api/v1/backups/{bid}/restore` takes `{dry_run, prune, reconcile, force}`, all default `false`, super admin only.
+- **Version gate**: the backup's `release_version` is compared with the console's. Newer than the console → `409`
+  naming both versions, unless `force: true` (the audit entry carries `force:true`).
+- **Plan**: per collection (`groups`, `zones`, `environments`, `workers`, `users`, `config`) the restore computes
+  `created` (in the backup, absent from the store), `updated` (present and different), `unchanged`, and
+  `extra` (in the store, absent from the backup). `dry_run: true` returns that plan and writes nothing.
+- **Write**: each restored doc is merged field-wise over the existing one, so the fields a backup strips
+  (`password_hash`, secret `value`, `secret_hash`, `github_token` — `storage.encrypted.SENSITIVE`) survive a restore.
+  A user the store does not have is created with `login_disabled: true` and named in `warnings`: the backup carries no
+  hash, so the account must be re-invited rather than silently left password-less.
+- **Sessions**: every restored user's `session_epoch` is bumped (§12.1, V1.4). A role or group lowered by a restore
+  therefore cannot be outlived by an open session.
+- **Prune** (`prune: true`): `extra` docs are deleted from `groups`, `zones`, `environments`, `workers` and `users`.
+  `config` is never pruned. The acting principal's own user doc is never pruned, and says so in `warnings`.
+- **Reconcile** (`reconcile: true`): after the write, every restored `(group, zone)` whose zone still exists is
+  re-applied through `cloud.attach_zone(group, zone, zone_spec(...))`, so live zones match the restored count, size
+  and image pin. Namespaces the cloud has that the backup does not are reported as `orphans` and never deleted —
+  destroying infrastructure is `DELETE /groups/{g}`, not a restore.
+- **Response**: `{release_version, dry_run, restored:{col:{created,updated,unchanged}}, extra, pruned, reconciled,
+  orphans, warnings}`. Audit action `backup.restore`, tags carry the flags.
+
+### 13.2 Permission revocation (V5.2 / F4.2)
+Granting stays as §9. Revocation is the missing half.
+- `DELETE /api/v1/groups/{g}/zones/{z}/permissions/{permission}` (super admin): drops the permission from
+  `workers[].sa_permissions` and calls `cloud.apply_sa_permissions(g, z, remaining)`. `404` when it was never granted.
+- `POST /api/v1/requests/{rid}/deny` (super admin): a `pending` request becomes `denied`; nothing is applied.
+  `409` when the request is already handled.
+- `POST /api/v1/requests/{rid}/revoke` (super admin): an `approved` request becomes `revoked`.
+  - `type: permission` → the same effect as the `DELETE` above.
+  - `type: role` → the user's role returns to the `prior_role` the approval recorded and the group the approval added
+    is removed again; the user's `session_epoch` is bumped, so revocation takes effect on the next request (U25).
+    `approve_request` therefore records `prior_role` and `granted_group` on the request doc.
+- **`apply_sa_permissions` is a set operation, not an add**: called with a shorter list it unbinds the cloud roles that
+  no remaining permission maps to. GCP removes the member from the bucket, secret and project bindings
+  (`gcp_api.Iam.revoke_*`); AWS rewrites the inline policy `ramen-sa-permissions` and deletes it when the list is
+  empty; the local adapter rewrites its recorded JSON. The zone identity's baseline roles
+  (`roles/storage.objectViewer` on the group prefix, the group secret accessor) are never unbound — they are what
+  makes the zone's service account work, not a granted permission.
+- Audit actions `permission.revoke` and `permission.deny`. The group page shows `Revoke` beside each granted
+  permission, and `Deny` / `Revoke` on the requests table.
+
+### 13.3 Per-group worker images (V5.3 / F9.3)
+The console records and recalls image references; it never builds. Builds come from `make build-worker` or the release
+workflow and are pushed to the registry, so the console needs no build credentials and no new IAM.
+- Collection `images`: `{id, group, ref, tag, digest, note, created, created_by}`. `ref` is what the manifests use:
+  `tag`, or `tag@digest` when a digest is recorded. The group doc carries `image = {id, ref}` — the current pin.
+- `POST /api/v1/groups/{g}/images {tag, digest?, note?}` (super admin) records a build and pins it. `201`.
+- `GET /api/v1/groups/{g}/images` (viewer of the group) — history newest first, the pinned one flagged `current: true`.
+- `PUT /api/v1/groups/{g}/images/current {id}` (super admin) — recall an earlier record (F9.3 "recalled").
+- `DELETE /api/v1/groups/{g}/images/current` (super admin) — drop the pin; the group returns to the release image.
+- Validation (`util.parse_image`): the reference splits at its last `:` into a repository and a tag. The repository
+  matches `^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(:\d{2,5})?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$` (lowercase path, optional
+  registry port), the tag `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`, and a recorded digest `^sha256:[a-f0-9]{64}$`. A
+  reference with neither a tag nor a digest is `422`: an implicit `latest` would make "recall this build" meaningless.
+- `zone_spec()` gains `"image"`, the group's pinned `ref` or `None`. `GcpCloud._render` and `AwsCloud.deploy`/`_attach`
+  use `spec.get("image") or self.image`, so a group that pins nothing keeps running `RAMEN_IMAGE_WORKER` exactly as
+  before. Recalling a tag and redeploying the environment is what puts a group back on an older image.
+- `make build-worker GROUP=<g> TAG=<t>` tags per group; `make push-worker GROUP=<g>` pushes it. Recording it in the
+  console is a separate, deliberate API call.
+- UI: a `Worker image` section on the group page — the current pin, the history with `Recall`, and a form to record a
+  tag. Sentence case, no colour words (§12.1).
+
+## 14. v0.4.2 — console usability and docs (binding)
+Source: the user's `v0.4.2` instructions, normalised as W1–W10 in `manifests/iterate.md` and
+`facts/current_state.facts.md`. UI rules from §12.1 still hold: sentence case, no abbreviations, no colour words.
+
+- **W1 group picker (API keys)**: the multi-select list box is replaced by a dropdown of the groups the caller may
+  grant plus an `Add` button; chosen groups render as removable chips and post as repeated `groups` fields, so a key
+  can still name several groups (D21 mirrors agent keys to each). Choosing none still means "the caller's own groups".
+- **W2 dashboard**: the grid refreshes on load and **every 60 seconds**, gated by a filter the toggle button controls
+  (`Auto refresh: on|off`). Toggling off stops the polling; the button never hides the manual refresh.
+- **W3 audit**: the page renders the newest **100** rows (`/audit?limit=` up to 500), inside a scrollable frame. A
+  search box filters across every column and an outcome filter narrows to succeeded or failed; both act on the
+  rendered rows, so filtering never re-queries.
+- **W4 backups**: `Download`, `Preview restore`, `Restore` and `Restore and prune` share one width class and sit in an
+  evenly spaced row.
+- **W5 service-account rules**: the super admin adds a rule from an effect dropdown (`allow`/`deny`) and a permission
+  dropdown (the catalogue, plus a glob field), and removes one per row. The raw JSON stays as a read-only view of
+  what will be sent to `PUT /api/v1/config/sa-rules`, which is unchanged.
+- **W6 environments**: `last_deploy` is flattened into `Last deploy` (outcome), `When` and `Error` columns — never a
+  JSON blob — and the row actions use the shared width class.
+- **W7 users**: the row's `Save` and `Delete user` sit in one actions row, delete to the right, labelled `Delete user`.
+- **W8 favicon**: `console/src/ramen_console/static/favicon.png` (the docs site's favicon) is the icon for every
+  console page, the sign-in page included, and the docs site keeps `docs/img/favicon.png`.
+- **W9 version**: `ramen_console.__version__` and `ramen_runtime.__version__` are read from installed package
+  metadata, falling back to the repo `VERSION`; nothing hard-codes a version string. `scripts/check_versions.py`
+  checks both packages, so drift fails the gate instead of reaching the sidebar.
+- **W10 docs**: the site builds `--strict` with no dead links, `version_current` tracks `VERSION`, the console page
+  documents the behaviour above, and the release notes carry 0.4.1 and 0.4.2.

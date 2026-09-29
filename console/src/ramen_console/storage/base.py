@@ -15,6 +15,7 @@ COLLECTIONS = (
     "activity",
     "config",
     "backups",
+    "images",
 )
 Doc = dict[str, Any]
 Filters = dict[str, Any] | None

@@ -50,6 +50,16 @@ PERMISSIONS: dict[str, dict] = {
 }
 
 
+def all_roles(provider: str) -> list[str]:
+    """Every cloud role/action the catalogue can grant: what a set-semantics apply considers unbinding (§13.2)."""
+    out: list[str] = []
+    for p in PERMISSIONS.values():
+        for r in p.get(provider, []):
+            if r not in out:
+                out.append(r)
+    return out
+
+
 def known(permission: str) -> bool:
     return permission in PERMISSIONS
 

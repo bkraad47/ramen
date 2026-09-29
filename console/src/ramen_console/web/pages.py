@@ -74,6 +74,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         zones=zones,
         workers=workers,
         mcp_keys=await s.secrets(group, kind="mcp_key"),
+        images=await s.images(group),
         jobs=request.app.state.jobs.recent(f"{group}/"),
         can_admin=can(p, "group_admin", group),
         permissions=perm.table(),
@@ -173,13 +174,18 @@ async def logs(
 
 
 @r.get("/audit")
-async def audit(request: Request, p: Principal = Depends(viewer)):
-    from .api_admin import audit as api_audit
-
-    rows = (await api_audit(request, 200, None, p)).body
+async def audit(request: Request, limit: int = 100, p: Principal = Depends(viewer)):
+    """W3 (§14): the newest `limit` rows (100 by default, 500 at most) in a scrollable frame; the search and the
+    outcome filter narrow what is already rendered, so neither costs a round trip."""
     import json
 
-    return render(request, "audit.html", rows=json.loads(rows))
+    from ..errors import invalid
+    from .api_admin import audit as api_audit
+
+    if limit < 1 or limit > 500:
+        raise invalid("Limit must be between 1 and 500")
+    rows = json.loads((await api_audit(request, limit, None, p)).body)
+    return render(request, "audit.html", rows=rows, limit=limit)
 
 
 @r.get("/backups")

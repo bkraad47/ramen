@@ -1,10 +1,15 @@
-# Ramen v0.4.0 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
+# Ramen v0.4.2 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
 export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
 VERSION := $(shell cat VERSION)
 COMPOSE := docker compose -f deploy/local/docker-compose.yml
 PROJECT ?=
 REGION ?= us-central1
 PLATFORM ?= linux/amd64
+# Per-group worker images (CONTRACTS §13.3, F9.3): `make build-worker GROUP=demo` tags ramen-worker:<version>-demo,
+# `make push-worker GROUP=demo PROJECT=<id>` pushes it. Record the pushed reference in the console to pin it:
+#   POST /api/v1/groups/<group>/images {"tag": "<registry>/worker:<tag>"}
+GROUP ?=
+TAG ?= $(VERSION)$(if $(GROUP),-$(GROUP),)
 REGISTRY = $(REGION)-docker.pkg.dev/$(PROJECT)/ramen
 .PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean kind-up kind-test kind-down
 
@@ -35,7 +40,8 @@ test-harness:
 build: build-worker build-console
 
 build-worker:
-	docker build -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t ramen-worker:$(VERSION) .
+	docker build -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t ramen-worker:$(TAG) .
+	@echo "built ramen-worker:$(TAG)$(if $(GROUP), for group $(GROUP),)"
 
 build-console:
 	@if [ -f console/Dockerfile ]; then docker build -t ramen-console:$(VERSION) console; else echo "console/Dockerfile missing"; fi
@@ -49,7 +55,8 @@ auth-docker:
 	gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet
 
 push-worker:
-	docker buildx build --platform $(PLATFORM) -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t $(REGISTRY)/worker:$(VERSION) --push .
+	docker buildx build --platform $(PLATFORM) -f node-rs/Dockerfile --build-arg VERSION=$(VERSION) -t $(REGISTRY)/worker:$(TAG) --push .
+	@echo "pushed $(REGISTRY)/worker:$(TAG)$(if $(GROUP), — record it on group $(GROUP) to pin it,)"
 
 push-console:
 	docker buildx build --platform $(PLATFORM) --build-arg RAMEN_VERSION=$(VERSION) -t $(REGISTRY)/console:$(VERSION) --push console

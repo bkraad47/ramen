@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.4.0
+  version_current: 0.4.2
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -59,7 +59,7 @@ nav:
   - Home: index.md
   - How it works: how-it-works.md
   - Architecture:
-      - Current (v0.4.0): architecture/index.md
+      - Current (v0.4.2): architecture/index.md
       - v0.4.0: architecture/v0.4.0.md
       - v0.3.1: architecture/v0.3.1.md
       - v0.3.0: architecture/v0.3.0.md
@@ -67,6 +67,7 @@ nav:
       - v0.1.0: architecture/v0.1.0.md
   - How-tos:
       - Local quickstart: how-tos/local-quickstart.md
+      - The console, page by page: how-tos/console.md
       - GCP (verbose): how-tos/gcp.md
       - AWS (verbose, untested): how-tos/aws.md
       - Security: how-tos/security.md

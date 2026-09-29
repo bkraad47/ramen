@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Password reset</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/logo.png"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Password reset</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/favicon.png" type="image/png"></head>
 <body><div class="login card"><img src="/static/logo.png" alt="Project Ramen"><h1 style="text-align:center">Password reset</h1>
 {% if stage == 'request' %}{% if not mail %}<div class="err">Email is not configured (RAMEN_SMTP_HOST); ask a super admin to reset your password.</div>{% endif %}
 <form method="post" action="/auth/reset"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>Email<input name="email" type="email" required autofocus></label><br><br><button type="submit">Send reset link</button></form>

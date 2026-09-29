@@ -1,6 +1,15 @@
-{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Environments{% endblock %}
+{% extends "base.html" %}{% block title %}Environments{% endblock %}
 {% block body %}
-{% macro act(r) %}<a class="btn ghost sm" href="/groups/{{ r.group }}">Open group</a>{% endmacro %}
-{{ table(envs, ['group', 'name', 'ref', 'zones', 'verbose', 'last_deploy'], '/api/v1/environments', 'Environments', act) }}
+<div class="card"><div class="dl">Download: <a href="/api/v1/environments?format=csv">CSV</a><a href="/api/v1/environments?format=json">JSON</a></div>
+<h2 style="margin-top:0">Environments</h2>
+<table><thead><tr><th>Group</th><th>Name</th><th>Ref</th><th>Zones</th><th>Verbose</th><th>Last deploy</th><th>When</th><th>Error</th><th>Actions</th></tr></thead><tbody>
+{% for e in envs %}{% set d = e.last_deploy or {} %}<tr>
+<td>{{ e.group }}</td><td>{{ e.name }}</td><td>{{ e.ref or '' }}</td><td>{{ (e.zones or [])|join(', ') or '—' }}</td>
+<td>{{ 'On' if e.verbose else 'Off' }}</td>
+<td>{% if d.status %}<span class="badge {{ d.status }}">{{ 'Succeeded' if d.status == 'ok' else d.status|capitalize }}</span>{% else %}<span class="muted">Never deployed</span>{% endif %}</td>
+<td>{{ d.at or '—' }}</td><td>{% if d.error %}<span class="err">{{ d.error }}</span>{% else %}—{% endif %}</td>
+<td><div class="row-actions"><a class="btn ghost act" href="/groups/{{ e.group }}">Open group</a></div></td></tr>
+{% else %}<tr><td colspan="9" class="muted">No environments</td></tr>{% endfor %}
+</tbody></table></div>
 <p class="muted">Create and deploy environments from a group's page.</p>
 {% endblock %}

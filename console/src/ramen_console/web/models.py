@@ -120,6 +120,23 @@ class AuthConfig(BaseModel):
     magic_link: bool | None = None
 
 
+class ImageIn(BaseModel):
+    tag: str
+    digest: str | None = None
+    note: str = ""
+
+
+class ImageRecall(BaseModel):
+    id: str
+
+
 class BackupIn(BaseModel):
     target: str = "local"
     path: str | None = None
+
+
+class RestoreIn(BaseModel):
+    dry_run: bool = False
+    prune: bool = False
+    reconcile: bool = False
+    force: bool = False

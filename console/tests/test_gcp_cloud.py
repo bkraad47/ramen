@@ -831,9 +831,17 @@ async def test_apply_sa_permissions_binds_mapped_roles(cloud, fk):
     bucket = fk.storage.buckets["p1-groups"].policy.bindings
     assert [b["role"] for b in bucket] == ["roles/storage.objectViewer"]
     assert "p1-groups/objects/demo/" in bucket[0]["condition"]["expression"]
+    # §13.2: applying a shorter list is a revoke — the project-wide role logging no longer needs is unbound, and the
+    # emptied binding is shed. Baseline identity roles are reported as retained instead of being taken away.
     again = await cloud.apply_sa_permissions("demo", "a", ["bucket.read"])
-    assert again["applied"] == ["roles/storage.objectViewer"] and len(fk.iam_state["project_policy"]["bindings"]) == 1
-    assert (await cloud.apply_sa_permissions("demo", "a", []))["applied"] == []
+    assert again["applied"] == ["roles/storage.objectViewer"]
+    assert again["revoked"] == ["roles/logging.logWriter"] and fk.iam_state["project_policy"]["bindings"] == []
+    assert again["retained"] == ["roles/secretmanager.secretAccessor"]
+    assert [b["role"] for b in fk.storage.buckets["p1-groups"].policy.bindings] == ["roles/storage.objectViewer"]
+    last = await cloud.apply_sa_permissions("demo", "a", [])
+    assert last["applied"] == []
+    assert last["retained"] == ["roles/storage.objectViewer", "roles/secretmanager.secretAccessor"]
+    assert [b["role"] for b in fk.storage.buckets["p1-groups"].policy.bindings] == ["roles/storage.objectViewer"]
 
 
 async def test_apply_sa_permissions_without_project_iam_admin(cloud, fk, monkeypatch):
@@ -894,3 +902,58 @@ async def test_refresh_survives_a_terminating_or_unreadable_namespace(cloud, fk)
     r = await cloud.refresh()
     assert r["zones"] == [] and r["skipped"][0]["namespace"] == "ramen-demo-a"
     assert "403" in r["skipped"][0]["reason"] or "Forbidden" in r["skipped"][0]["reason"]
+
+
+async def test_a_pinned_group_image_is_what_the_zone_renders(cloud, fk):
+    """§13.3: the spec carries the group's pin; without one the adapter's release image is used."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
+    assert dep["spec"]["template"]["spec"]["containers"][0]["image"] == "img/worker:0.2.0"
+
+    await cloud.attach_zone("demo", "a", {**SPEC, "image": "ar/worker:demo-3"})
+    dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
+    assert dep["spec"]["template"]["spec"]["containers"][0]["image"] == "ar/worker:demo-3"
+    canary = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker-canary")]
+    assert canary["spec"]["template"]["spec"]["containers"][0]["image"] == "ar/worker:demo-3"
+
+
+async def test_unbinding_a_secret_role_rewrites_only_that_binding(cloud, fk):
+    """The secret leg of the revoke pass (§13.2). Every catalogue secret role is a baseline role today, so this is
+    exercised directly: it is what keeps a future non-baseline secretmanager permission revocable."""
+    iam = cloud._iam()
+    email = "ramen-demo-a@p1.iam.gserviceaccount.com"
+    member = f"serviceAccount:{email}"
+    sm = fk.secretmanager
+    sm.create_secret(request={"parent": "projects/p1", "secret_id": "ramen-demo-TOKEN", "secret": {}})
+    name = iam.group_secrets(sm, "demo")[0]
+    iam.bind_secret(sm, name, ["roles/secretmanager.admin", "roles/secretmanager.secretAccessor"], [member, "user:x@y"])
+
+    assert iam.unbind_secret(sm, name, ["roles/secretmanager.admin"], [member]) == ["roles/secretmanager.admin"]
+    pol = {b.role: list(b.members) for b in sm.get_iam_policy(request={"resource": name}).bindings}
+    assert pol["roles/secretmanager.admin"] == ["user:x@y"]  # the other member is untouched
+    assert member in pol["roles/secretmanager.secretAccessor"]  # the other role is untouched
+    assert iam.unbind_secret(sm, name, ["roles/secretmanager.admin"], [member]) == []  # idempotent
+    assert iam.revoke_secret_roles(sm, "demo", email, ["roles/secretmanager.secretAccessor"]) == [
+        "roles/secretmanager.secretAccessor"
+    ]
+    assert iam.unbind_secret(sm, "projects/p1/secrets/ramen-demo-GONE", ["roles/x"], [member]) == []
+
+
+async def test_revoking_project_roles_without_project_iam_admin_is_reported_not_raised(cloud, fk, monkeypatch):
+    import ramen_console.cloud.gcp_api as api
+
+    def deny(self, email, roles):
+        raise FakeApiError(403, "setIamPolicy denied")
+
+    await cloud.apply_sa_permissions("demo", "a", ["logs.write"])
+    monkeypatch.setattr(api.Iam, "revoke_project_roles", deny)
+    r = await cloud.apply_sa_permissions("demo", "a", ["bucket.write"])
+    assert r["ok"] and "roles/logging.logWriter" not in r.get("revoked", [])
+
+    def boom(self, email, roles):
+        raise RuntimeError("iam unreachable")
+
+    monkeypatch.setattr(api.Iam, "revoke_project_roles", boom)  # anything but a 403 is a real failure
+    with pytest.raises(ApiError) as e:
+        await cloud.apply_sa_permissions("demo", "a", [])
+    assert e.value.status_code == 502

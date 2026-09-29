@@ -4,19 +4,62 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.4.0` **(current)** | — | console polish, docs, and proof | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.0) · [architecture](architecture/v0.4.0.md) |
+| `0.4.2` **(current)** | — | console usability and docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.2) |
+| `0.4.1` | — | the three half-finished promises | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.1) |
+| `0.4.0` | 2026-09-29 | console, docs, and evidence | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.0) · [architecture](architecture/v0.4.0.md) |
 | `0.3.2` | 2026-09-28 | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
 | `0.3.1` | 2026-09-28 | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## 0.4.0 — console polish, docs, and proof
+## 0.4.2 — console usability and docs
 
-- (in progress) Console: naming and sentence case, sidebar identity, per-zone action sections, two-pane logs, per-zone package toggles, 12-character password and key policy, enforced API key client types (agent vs devops), colour-free health wording, session revocation. Docs: dark-only site, aligned badges, real architecture diagram, transport and security write-up, repository topics. Verification: multi-zone and autoscaling on kind then GKE, per-zone tool isolation, independent LLM clients, a role and group security matrix, and an independent review of the claims.
-- Node security fix from that review (contract §11a): behind a load balancer the node trusted the **left-most** `x-forwarded-for` hop, which is whatever the caller sent, so `RAMEN_ALLOWED_CIDRS` could be walked through by choosing the address in a header. The client address is now counted from the right-hand end, the end a proxy appends to: `RAMEN_TRUST_PROXY_HOPS=<n>` trusts `n` hops (GCP external load balancer `2`, AWS ALB `1` — the worker chart and both console renderers set it per provider), `RAMEN_TRUST_PROXY=1` still means one hop, and a header too short or malformed for the hop count falls back to the real peer address instead of a caller-supplied one.
-- Server reflection is now a choice: `RAMEN_REFLECTION` (default on for local use, **off on deployed workers**) — it is unauthenticated, not CIDR-gated and routed through the load balancer, so it let anyone reaching the edge list the services and describe `ramen.v1.Admin`.
-- `Admin/Metrics` no longer overflows `inflight` when an `Admin/Reload` lowers `RAMEN_MAX_INFLIGHT` below the permits in use.
+- API keys: the groups list box is a dropdown with an `Add` button; chosen groups show as removable chips and a key can still name several.
+- Dashboard: the grid refreshes every minute instead of every ten seconds, and `Auto refresh: on` stops the polling when you want to read a busy cluster.
+- Audit: the newest 100 entries in a scrollable frame, with a search box across every column and a succeeded-or-failed filter that work on what is already rendered. `?limit=` fetches up to 500.
+- Backups: `Download`, `Preview restore`, `Restore` and `Restore and prune` are one evenly spaced row of equal buttons.
+- Config: super-admin service-account rules are added from an effect dropdown and the permission catalogue (or a pattern), and removed per row, instead of hand-written JSON — which is still shown as what will be sent.
+- Environments: the last deploy is flattened into outcome, time and error columns instead of a JSON blob, and the row action is sized like every other.
+- Users: `Save` and `Delete user` sit in one actions row, delete on the right, and the confirmation names the account.
+- The favicon is the icon on every page, the sign-in and password-reset pages included.
+- `ramen_console.__version__` and `ramen_runtime.__version__` are read from the installed distribution's metadata, falling back to the repo `VERSION`. Nothing hard-codes a version any more, and `scripts/check_versions.py` fails if anything starts to.
+- New page: *The console, page by page* — what every page does, what each role sees, and which actions are destructive.
+- GitHub Pages deployed from `main` but **failed on every release tag**: the `github-pages` environment allowed only the `main` branch, so the tag build succeeded and its deploy was rejected. Release tags (`v*`) are now allowed to deploy.
+
+## 0.4.1 — the three half-finished promises
+
+- `POST /api/v1/backups/{id}/restore` takes `{dry_run, prune, reconcile, force}`. `dry_run` returns the plan and writes nothing; `prune` deletes what the backup does not contain (never `config`, never the account running the restore); `reconcile` re-applies the restored zones so counts, sizes and image pins take effect, reporting namespaces the backup never knew about as `orphans` rather than deleting them; `force` overrides the refusal to restore a backup from a newer release. A restore merges over the live documents, so hashes, secret values and tokens survive it, and it bumps every restored user's session epoch — everyone else is signed out at once, so a role a restore lowers cannot be outlived by an open session. A user the store had lost comes back `login_disabled` until a password reset or an SSO sign-in.
+- Granted service-account permissions can be taken back: `DELETE /api/v1/groups/{g}/zones/{z}/permissions/{permission}`, plus `POST /api/v1/requests/{id}/deny` for a pending request and `POST /api/v1/requests/{id}/revoke` for an approved one. Revoking a role grant puts the role and group back to what the approval recorded and ends that user's sessions immediately.
+- `Cloud.apply_sa_permissions` is now a **set** operation: called with a shorter list it unbinds the cloud roles no remaining permission needs. On GCP that means removing the member from the bucket, secret and project bindings; AWS already rewrote its inline policy. The zone identity's baseline roles (`storage.objectViewer` on the group prefix, the group secret accessor) are never unbound and are reported as `retained` — so revoking `bucket.read` or `secrets.read` takes the grant off the record while the identity keeps that baseline read access.
+- Each group can pin its own worker image: `POST /api/v1/groups/{g}/images {tag,digest?,note?}` records a build and pins it, `GET …/images` lists the history, `PUT …/images/current {id}` recalls an earlier one and `DELETE …/images/current` returns to the release image. The pin travels in the zone spec, so both cloud adapters render it into the worker and canary Deployments. A reference must carry a `:tag` or a `sha256:` digest; there is no implicit `latest`. The console records and recalls, it never builds — `make build-worker GROUP=<g>` and `make push-worker GROUP=<g>` do that, so the console needs no registry or build credentials.
+- Backups page: preview a restore, restore, or restore and prune, each showing what it did per collection with its warnings.
+- Group page: a `Worker image` section with the current pin, the history and `Recall`; a revoke button beside every granted permission; approve, deny and revoke on the requests table.
+- Kind: a per-group image side-loaded, pinned, deployed and answering tool calls in both zones, then recalled; a role grant revoked mid-session; a restore that prunes and reconciles a populated two-zone deployment while both zones keep serving.
+- GKE: the cloud IAM path — an approved permission bound, then unbound by a revoke with the baseline roles kept — and a restore against the Firestore-backed store with a bucket backup.
+
+## 0.4.0 — console, docs, and evidence
+
+- API keys carry a client type and it is enforced: an `agent` key (`rmk_`) is accepted only by workers, a `devops` key (`rmn_`) only by the console API, each refused by the other side. Keys made before 0.4.0 keep working, typed by their prefix.
+- `RAMEN_TRUST_PROXY` is replaced by `RAMEN_TRUST_PROXY_HOPS=N`, which reads the Nth `x-forwarded-for` entry **counted from the right**. The old spelling still works and means one hop. Deployed values: GCP 2, AWS 1 — **measured on a live GKE Gateway**, not assumed. Any failure falls back to the peer address, so a wrong count denies rather than admits.
+- Server reflection is gated by `RAMEN_REFLECTION` and is **off on deployed workers**: `grpcurl` against a deployed worker now needs `-import-path proto -proto ramen/v1/mcp.proto`.
+- A super admin changing the authentication configuration signs out every other session, their own other clients included.
+- The worker address allowlist could be bypassed: proxy trust shipped enabled and the node read the leftmost `x-forwarded-for` entry, which a caller controls. Found by an independent review of the documentation's own claims.
+- Setting IP rules wrote the cloud edge policy before the worker allowlist on both clouds, so a cloud failure left the zone unlocked while reporting an error. The worker is now configured first; the edge policy is best effort.
+- A `canary:false` deploy left the previous canary pod serving the zone with the old configuration, so a disabled tool still ran, a revoked key still worked and a tightened allowlist did not apply. Stale canaries are now removed before the stable roll.
+- Sessions are revoked on password, role, group and authentication-configuration changes, and on delete.
+- Passwords and generated keys are at least 12 characters across four character classes.
+- Per-zone enable and disable for tools, resources and prompts, on top of the environment-wide list.
+- Two-pane logs with the consumer, timestamp, method and outcome per entry, and a worker filter.
+- One equal-width Actions group per zone; identity and role in the sidebar with the role named and coloured; health described by load rather than by colour; sentence case throughout; group pickers instead of typed lists.
+- `GET` for a single zone and a single environment. `refresh` survives a namespace that is terminating or unreadable.
+- Dark-only site, aligned badges, no edit button, no heading permalink symbols, `llms.txt` served but unlinked.
+- A hand-drawn architecture diagram that names its own plaintext hops, and a transport page whose every claim was checked against the code by a reviewer that did not write it.
+- Operator facts stated plainly: which hops are plaintext, what key rotation actually costs, what the deploy file can and cannot change, and that the AWS path has never been applied.
+- Repository description, homepage and topics set.
+- `deploy/kind/` brings up a local two-zone cluster: `make kind-up`, `kind-test`, `kind-down`, and a CI job off the pull-request path.
+- Proven live: two zones serving independently, autoscaling one to two replicas under real load with the neighbouring zone untouched, rebalance, per-zone tool isolation, a 48-case role and group security matrix, both key types, and Claude Code driven as a real MCP client.
+- Proven on GKE: the forwarded-for hop count measured position by position, spoofed headers refused, reflection unreachable through the load balancer, and none of the eight defects from the 0.3.2 run recurring.
 
 ## 0.3.2 — verified on GKE
 

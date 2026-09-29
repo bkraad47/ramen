@@ -46,3 +46,16 @@ code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--li
 .log-panes>.card{position:sticky;top:0}
 .log-panes>.log-list{position:static}
 .pkg-zone{margin-top:12px}.pkg-zone h3{font-size:14px;margin:0 0 6px}
+
+/* §14: one width for every row action, evenly spaced (W4, W6, W7) */
+.row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row-actions form.inline{margin:0;gap:6px}
+/* W1 group chips */
+.chips{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:6px}
+.chip{background:#fff;border:1px solid var(--coral);color:var(--coral);border-radius:999px;padding:2px 10px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.chip .x{background:none;border:0;color:var(--coral);cursor:pointer;padding:0;font:inherit}
+/* W3 audit: a scrollable frame with its own filter row */
+.audit-filters{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.audit-filters input[type=search]{min-width:260px}
+#audit-scroll{max-height:60vh;overflow:auto}
+#audit-scroll thead th{position:sticky;top:0;background:var(--bg);z-index:1}

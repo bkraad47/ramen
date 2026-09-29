@@ -11,7 +11,7 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 <a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a>
 </p>
 
-**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
+**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [Add and deploy a tool](https://bkraad47.github.io/ramen/how-tos/add-a-tool/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
 > **0.5.0 puts Streamable HTTP back at the front door.** Every worker serves `POST /mcp` — a URL and a bearer
 > header, nothing to install — next to the gRPC service it has had since 0.3.1, on the same port, through the same

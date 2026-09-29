@@ -2,6 +2,43 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.4.2] — console usability and docs
+Contract §14, from the user's own list of ten things that were awkward to use.
+
+**Console**
+- API keys: the groups list box is a dropdown with an `Add` button; chosen groups show as removable chips and a key can still name several.
+- Dashboard: the grid refreshes every minute instead of every ten seconds, and `Auto refresh: on` stops the polling when you want to read a busy cluster.
+- Audit: the newest 100 entries in a scrollable frame, with a search box across every column and a succeeded-or-failed filter that work on what is already rendered. `?limit=` fetches up to 500.
+- Backups: `Download`, `Preview restore`, `Restore` and `Restore and prune` are one evenly spaced row of equal buttons.
+- Config: super-admin service-account rules are added from an effect dropdown and the permission catalogue (or a pattern), and removed per row, instead of hand-written JSON — which is still shown as what will be sent.
+- Environments: the last deploy is flattened into outcome, time and error columns instead of a JSON blob, and the row action is sized like every other.
+- Users: `Save` and `Delete user` sit in one actions row, delete on the right, and the confirmation names the account.
+- The favicon is the icon on every page, the sign-in and password-reset pages included.
+
+**Versioning**
+- `ramen_console.__version__` and `ramen_runtime.__version__` are read from the installed distribution's metadata, falling back to the repo `VERSION`. Nothing hard-codes a version any more, and `scripts/check_versions.py` fails if anything starts to.
+
+**Docs and the site**
+- New page: *The console, page by page* — what every page does, what each role sees, and which actions are destructive.
+- GitHub Pages deployed from `main` but **failed on every release tag**: the `github-pages` environment allowed only the `main` branch, so the tag build succeeded and its deploy was rejected. Release tags (`v*`) are now allowed to deploy.
+
+## [0.4.1] — the three half-finished promises
+Contract §13. The three F-requirements the first four releases only half kept: F7.2 restore, F4.2 revocation, F9.3 per-group worker images.
+
+**Behaviour**
+- `POST /api/v1/backups/{id}/restore` takes `{dry_run, prune, reconcile, force}`. `dry_run` returns the plan and writes nothing; `prune` deletes what the backup does not contain (never `config`, never the account running the restore); `reconcile` re-applies the restored zones so counts, sizes and image pins take effect, reporting namespaces the backup never knew about as `orphans` rather than deleting them; `force` overrides the refusal to restore a backup from a newer release. A restore merges over the live documents, so hashes, secret values and tokens survive it, and it bumps every restored user's session epoch — everyone else is signed out at once, so a role a restore lowers cannot be outlived by an open session. A user the store had lost comes back `login_disabled` until a password reset or an SSO sign-in.
+- Granted service-account permissions can be taken back: `DELETE /api/v1/groups/{g}/zones/{z}/permissions/{permission}`, plus `POST /api/v1/requests/{id}/deny` for a pending request and `POST /api/v1/requests/{id}/revoke` for an approved one. Revoking a role grant puts the role and group back to what the approval recorded and ends that user's sessions immediately.
+- `Cloud.apply_sa_permissions` is now a **set** operation: called with a shorter list it unbinds the cloud roles no remaining permission needs. On GCP that means removing the member from the bucket, secret and project bindings; AWS already rewrote its inline policy. The zone identity's baseline roles (`storage.objectViewer` on the group prefix, the group secret accessor) are never unbound and are reported as `retained` — so revoking `bucket.read` or `secrets.read` takes the grant off the record while the identity keeps that baseline read access.
+- Each group can pin its own worker image: `POST /api/v1/groups/{g}/images {tag,digest?,note?}` records a build and pins it, `GET …/images` lists the history, `PUT …/images/current {id}` recalls an earlier one and `DELETE …/images/current` returns to the release image. The pin travels in the zone spec, so both cloud adapters render it into the worker and canary Deployments. A reference must carry a `:tag` or a `sha256:` digest; there is no implicit `latest`. The console records and recalls, it never builds — `make build-worker GROUP=<g>` and `make push-worker GROUP=<g>` do that, so the console needs no registry or build credentials.
+
+**Console**
+- Backups page: preview a restore, restore, or restore and prune, each showing what it did per collection with its warnings.
+- Group page: a `Worker image` section with the current pin, the history and `Recall`; a revoke button beside every granted permission; approve, deny and revoke on the requests table.
+
+**Verification**
+- Kind: a per-group image side-loaded, pinned, deployed and answering tool calls in both zones, then recalled; a role grant revoked mid-session; a restore that prunes and reconciles a populated two-zone deployment while both zones keep serving.
+- GKE: the cloud IAM path — an approved permission bound, then unbound by a revoke with the baseline roles kept — and a restore against the Firestore-backed store with a bucket backup.
+
 ## [0.4.0] — console, docs, and evidence
 **Breaking / behaviour**
 - API keys carry a client type and it is enforced: an `agent` key (`rmk_`) is accepted only by workers, a `devops` key (`rmn_`) only by the console API, each refused by the other side. Keys made before 0.4.0 keep working, typed by their prefix.

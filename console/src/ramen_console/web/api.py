@@ -55,6 +55,31 @@ async def sa_restrictions(request: Request, group: str, body: m.Rules, p: Princi
     return respond(request, await svc(request).set_sa_restrictions(group, body.rules))
 
 
+# --- per-group worker images (§13.3, F9.3): the console records and recalls references, it never builds ----------
+@r.get("/groups/{group}/images")
+async def images(request: Request, group: str, format: str | None = None, p: Principal = Depends(viewer_g)):
+    return tabular(await svc(request).images(group), format, "images")
+
+
+@r.post("/groups/{group}/images", status_code=201)
+async def record_image(request: Request, group: str, body: m.ImageIn, p: Principal = Depends(super_)):
+    note(request, "image.record", f"{group}:{body.tag}", [f"group:{group}"])
+    doc = await svc(request).record_image(group, body.tag, body.digest, body.note, p.name)
+    return respond(request, doc, 201)
+
+
+@r.put("/groups/{group}/images/current")
+async def recall_image(request: Request, group: str, body: m.ImageRecall, p: Principal = Depends(super_)):
+    note(request, "image.recall", f"{group}:{body.id}", [f"group:{group}"])
+    return respond(request, await svc(request).recall_image(group, body.id))
+
+
+@r.delete("/groups/{group}/images/current")
+async def unpin_image(request: Request, group: str, p: Principal = Depends(super_)):
+    note(request, "image.unpin", group, [f"group:{group}"])
+    return respond(request, await svc(request).unpin_image(group))
+
+
 @r.get("/groups/{group}/mcp-keys")
 async def mcp_keys(request: Request, group: str, p: Principal = Depends(viewer_g)):
     return await svc(request).secrets(group, kind="mcp_key")
@@ -224,6 +249,13 @@ async def service_account(request: Request, group: str, zone: str, p: Principal 
     w["service_account"] = sa.get("name")
     await s.store.put("workers", w["id"], w)
     return respond(request, sa)
+
+
+@r.delete("/groups/{group}/zones/{zone}/permissions/{permission}")
+async def revoke_permission(request: Request, group: str, zone: str, permission: str, p: Principal = Depends(super_)):
+    """§13.2: revoke one granted service-account permission; the adapter re-applies the remaining set."""
+    note(request, "permission.revoke", f"{group}/{zone}:{permission}", [f"group:{group}", f"permission:{permission}"])
+    return respond(request, await svc(request).revoke_sa_permission(group, zone, permission))
 
 
 @r.get("/groups/{group}/secrets")

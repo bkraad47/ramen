@@ -40,9 +40,9 @@ class Accounts:
 
     async def authenticate(self, email, password) -> dict | None:
         users = await self.store.list("users", {"email": email})
-        if users and verify_password(password, users[0].get("password_hash", "")):
-            return users[0]
-        return None
+        if not users or users[0].get("login_disabled"):  # §13.1: restored without a hash, until a reset
+            return None
+        return users[0] if verify_password(password, users[0].get("password_hash", "")) else None
 
     async def principal_for_user(self, user_id) -> Principal | None:
         u = await self.store.get("users", user_id)
@@ -165,6 +165,7 @@ class Accounts:
             raise not_found("user")
         check_password(password)
         u["password_hash"] = hash_password(password)
+        u.pop("login_disabled", None)  # §13.1: a reset is how a restored account gets back in
         await self.store.put("users", uid_, await self.bump_epoch(u))
 
     async def list_keys(self, p: Principal) -> list[dict]:
@@ -254,10 +255,45 @@ class Accounts:
             return await self.store.put("activity", rid, r)
         u = await self.store.get("users", r["user"])
         if u:
+            # §13.2: what the approval changed is recorded, so a later revoke can put it back exactly.
+            r["prior_role"] = u["role"]
             if RANK[r["role"]] > RANK[u["role"]]:
                 u["role"] = r["role"]
             if r.get("group") and r["group"] not in u["groups"]:
                 u["groups"].append(r["group"])
+                r["granted_group"] = r["group"]
             await self.store.put("users", u["id"], await self.bump_epoch(u))
         r.update(status="approved", approved_by=by, approved=now())
+        return await self.store.put("activity", rid, r)
+
+    # --- the other half of the flow: deny a request, revoke a grant (§13.2, V5.2) --------------------------------
+    async def _request(self, rid, expected) -> dict:
+        r = await self.store.get("activity", rid)
+        if not r or r.get("kind") != "permission_request":
+            raise not_found("request")
+        if r.get("status") != expected:
+            raise conflict(f"Request is {r.get('status')}, not {expected}")
+        return r
+
+    async def deny_request(self, rid, by) -> dict:
+        r = await self._request(rid, "pending")
+        r.update(status="denied", denied_by=by, denied=now())
+        return await self.store.put("activity", rid, r)
+
+    async def revoke_request(self, rid, by, revoke=None) -> dict:
+        """An approved request taken back. Permission requests go to the cloud adapter; role requests put the user's
+        role and group back to what the approval recorded and end their sessions at once (U25)."""
+        r = await self._request(rid, "approved")
+        if r.get("type") == "permission":
+            r["revoked_result"] = await revoke(r["group"], r["zone"], r["permission"]) if revoke else None
+        else:
+            u = await self.store.get("users", r["user"])
+            if u:
+                prior = r.get("prior_role")
+                if prior in RANK and RANK[prior] < RANK[u["role"]]:
+                    u["role"] = prior
+                if r.get("granted_group") in u.get("groups", []):
+                    u["groups"] = [g for g in u["groups"] if g != r["granted_group"]]
+                await self.store.put("users", u["id"], await self.bump_epoch(u))
+        r.update(status="revoked", revoked_by=by, revoked=now())
         return await self.store.put("activity", rid, r)

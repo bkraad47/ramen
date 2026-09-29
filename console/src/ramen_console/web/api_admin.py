@@ -134,6 +134,21 @@ async def approve(request: Request, rid: str, p: Principal = Depends(super_)):
     )
 
 
+@r.post("/requests/{rid}/deny")
+async def deny(request: Request, rid: str, p: Principal = Depends(super_)):
+    note(request, "permission.deny", rid)
+    return respond(request, await accounts(request).deny_request(rid, p.name))
+
+
+@r.post("/requests/{rid}/revoke")
+async def revoke(request: Request, rid: str, p: Principal = Depends(super_)):
+    """Takes an approved request back: the cloud roles for a permission, or the role and group for a role grant."""
+    note(request, "permission.revoke", rid)
+    return respond(
+        request, await accounts(request).revoke_request(rid, p.name, revoke=svc(request).revoke_sa_permission)
+    )
+
+
 @r.get("/audit")
 async def audit(request: Request, limit: int = 200, format: str | None = None, p: Principal = Depends(viewer)):
     rows = await svc(request).store.list("audit")
@@ -161,9 +176,45 @@ async def download_backup(request: Request, bid: str, p: Principal = Depends(sup
 
 
 @r.post("/backups/{bid}/restore")
-async def restore_backup(request: Request, bid: str, p: Principal = Depends(super_)):
-    note(request, "backup.restore", bid)
-    return respond(request, await backups(request).restore(bid))
+async def restore_backup(request: Request, bid: str, body: m.RestoreIn | None = None, p: Principal = Depends(super_)):
+    """§13.1: `dry_run` reports the plan, `prune` removes what the backup does not have, `reconcile` re-applies the
+    restored zones, `force` overrides the release gate."""
+    b = body or m.RestoreIn()
+    note(request, "backup.restore", bid, [f"{k}:{str(v).lower()}" for k, v in b.model_dump().items() if v])
+    result = await backups(request).restore(
+        bid, p.name, p.id, dry_run=b.dry_run, prune=b.prune, reconcile=b.reconcile, force=b.force
+    )
+    resp = respond(request, result, hx_html=_restore_html(result))
+    # A restore bumps every restored user's epoch, which would sign out the super admin mid-request; they keep a
+    # session on the new epoch and every *other* session dies (same rule as a change to config/auth).
+    return await _reissue_session(request, resp, p)
+
+
+def _restore_html(r: dict) -> str:
+    """A restore is destructive, so the page shows what it did (or would do) instead of only refreshing."""
+    from markupsafe import escape
+
+    head = "Restore preview" if r["dry_run"] else "Restore done"
+    rows = "".join(
+        f"<tr><td>{c}</td><td>{v['created']}</td><td>{v['updated']}</td><td>{v['unchanged']}</td>"
+        f"<td>{len(r['extra'].get(c, []))}</td></tr>"
+        for c, v in r["restored"].items()
+    )
+    parts = [
+        f'<div class="once"><strong>{head}</strong> (release {escape(r["release_version"])})',
+        "<table><tr><th>Collection</th><th>Created</th><th>Updated</th><th>Unchanged</th>"
+        f"<th>Not in the backup</th></tr>{rows}</table>",
+    ]
+    for label, value in (
+        ("Pruned", ", ".join(f"{c}: {', '.join(v)}" for c, v in r["pruned"].items())),
+        ("Reconciled", ", ".join(r["reconciled"])),
+        ("Left running but not in the backup", ", ".join(r["orphans"])),
+    ):
+        if value:
+            parts.append(f"<p>{label}: <code>{escape(value)}</code></p>")
+    for w in r["warnings"]:
+        parts.append(f'<p class="err">{escape(w)}</p>')
+    return "".join(parts) + "</div>"
 
 
 def masked_env() -> dict[str, str]:

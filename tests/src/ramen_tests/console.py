@@ -56,6 +56,13 @@ ROUTES = {
     "auth_reset_token": "/auth/reset/{token}",  # form POST {password} → 303 /login
     "auth_magic": "/auth/magic",  # form POST {email} (auth.magic_link)
     "auth_magic_token": "/auth/magic/{token}",  # GET → 303 + session
+    # v0.4.1 (CONTRACTS §13)
+    "backup_restore": "/api/v1/backups/{id}/restore",  # POST {dry_run?,prune?,reconcile?,force?} (super admin)
+    "request_deny": "/api/v1/requests/{id}/deny",  # POST → status denied (pending only)
+    "request_revoke": "/api/v1/requests/{id}/revoke",  # POST → status revoked (approved only)
+    "zone_permission": "/api/v1/groups/{group}/zones/{zone}/permissions/{permission}",  # DELETE → remaining set
+    "images": "/api/v1/groups/{group}/images",  # GET history; POST {tag,digest?,note?} → 201 (super admin)
+    "image_current": "/api/v1/groups/{group}/images/current",  # PUT {id} recall; DELETE unpin (super admin)
     "oauth_login": "/auth/{name}/login",
     "oauth_callback": "/auth/{name}/callback",
 }

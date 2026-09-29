@@ -82,7 +82,9 @@ def test_permission_request_lifecycle(demo, tmp_path):
     assert w["sa_permissions"] == ["bucket.read", "secrets.read"]
     assert demo.get("/api/v1/groups/demo/zones/zone-b/workers").json().get("sa_permissions") is None
     page = demo.get("/groups/demo").text
-    assert "bucket.read, secrets.read" in page and "approved" in page
+    # §13.2: each granted permission is its own badge now, so a super admin can revoke them one at a time
+    assert "bucket.read" in page and "secrets.read" in page and "approved" in page
+    assert page.count("Revoke permission") == 2
     users_page = demo.get("/users").text
     assert "Service-account permission" in users_page and "bucket.read" in users_page
     assert demo.post(f"/api/v1/requests/{rid}/approve").status_code == 409

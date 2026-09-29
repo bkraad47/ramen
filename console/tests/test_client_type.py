@@ -203,9 +203,10 @@ def test_a_group_mcp_key_is_not_accepted_by_the_console_api(app, root):
         assert c.get("/api/v1/me", headers={apikeys.HEADER: key}).status_code == 401
 
 
-def test_the_page_offers_the_caller_groups_as_a_multi_select(root):
+def test_the_page_offers_the_caller_groups_as_a_dropdown(root):
+    """W1 (§14): the list box became a dropdown plus Add; the options are still the groups the caller may grant."""
     html = root.get("/api-keys").text
-    assert '<select name="groups" multiple' in html
+    assert '<select id="group-pick">' in html and "multiple" not in html
     assert '<option value="demo">demo</option>' in html
     assert '<option value="other">other</option>' in html
 

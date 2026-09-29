@@ -39,12 +39,14 @@ MCP clients need `rmk_` keys (see [local quickstart](local-quickstart.md#rmk_-vs
 | Rebalance / IP rules | `POST …/zones/{z}/rebalance` · `PUT …/zones/{z}/ip-rules {cidrs}` |
 | Service account | `POST …/zones/{z}/service-account` (super admin) · `PUT $U/groups/{g}/sa-restrictions {rules}` |
 | Permission requests | `POST $U/requests {group,zone,permission}` · `GET $U/requests` · `POST $U/requests/{id}/approve` |
+| Take a grant back (v0.4.1) | `POST $U/requests/{id}/deny` (pending) · `POST $U/requests/{id}/revoke` (approved) · `DELETE $U/groups/{g}/zones/{z}/permissions/{permission}` |
+| Worker image per group (v0.4.1) | `GET $U/groups/{g}/images` · `POST $U/groups/{g}/images {tag,digest?,note?}` · `PUT $U/groups/{g}/images/current {id}` · `DELETE $U/groups/{g}/images/current` |
 | Secrets | `POST $U/groups/{g}/secrets {name,value,env?,zone?}` · `GET` (names) · `DELETE …/secrets/{id}` |
 | MCP keys | `POST $U/groups/{g}/mcp-keys {name}` → `{key:"rmk_…"}` · `DELETE …/mcp-keys/{id}` |
 | API keys | `POST $U/api-keys {name,role?,groups?}` · `DELETE $U/api-keys/{id}` |
 | Logs | `GET $U/logs?group=&zone=&worker=&tail=500&download=1` (text/plain) |
 | Audit / dashboard | `GET $U/audit` · `GET $U/dashboard` |
-| Backups (super admin) | `POST $U/backups {target:"local"|"bucket"}` → `{id,release_version}` · `GET $U/backups/{id}/download` · `POST $U/backups/{id}/restore` |
+| Backups (super admin) | `POST $U/backups {target:"local"|"bucket"}` → `{id,release_version}` · `GET $U/backups/{id}/download` · `POST $U/backups/{id}/restore {dry_run?,prune?,reconcile?,force?}` |
 | Config (super admin) | `GET $U/config` · `POST $U/config/reload` · `GET|PUT $U/config/sa-rules` · `PUT $U/config/auth` · `POST $U/refresh` |
 
 ## A CI deploy job
@@ -74,8 +76,38 @@ key and go through `ramen.v1.Mcp/Call` — see the [local quickstart](local-quic
 ## Backups
 `POST $U/backups {"target":"bucket"}` writes a JSON export tagged with the release version (zones, users without
 password hashes, groups, environments, workers, config; **no secrets**) to `<bucket root>/_backups` (local) or the
-groups bucket. Restore with `POST $U/backups/{id}/restore`; the bootstrap admin is re-applied from env on the next
-start. See the [backup-restore skill](../wiki/skills.md).
+groups bucket.
+
+Restore with `POST $U/backups/{id}/restore` ([contract §13.1](../CONTRACTS.md)), whose four flags all default to
+false:
+
+| Flag | What it does |
+|---|---|
+| `dry_run` | Returns the plan — created, updated, unchanged and what the store has that the backup does not — and writes nothing. Run this first. |
+| `prune` | Deletes the groups, zones, environments, workers and users the backup does not contain. `config` is never pruned and the account running the restore is never deleted. |
+| `reconcile` | Re-applies every restored zone, so counts, sizes and image pins take effect in the cluster. Namespaces the cloud still runs that the backup never knew about come back as `orphans` — reported, never deleted. |
+| `force` | Restores a backup taken on a **newer** release than this console. Without it that is a 409. |
+
+A restore merges each document over the live one, so the fields a backup strips (password hashes, secret values,
+GitHub tokens) survive it. It bumps every restored user's session epoch: everyone else is signed out immediately, so
+a role a restore lowers cannot be outlived by an open session. A user the store no longer has comes back with
+`login_disabled` — the backup holds no hash — until a password reset or an SSO sign-in. See the
+[backup-restore skill](../wiki/skills.md).
+
+## Pin a worker image per group
+Groups run the release worker image until one is recorded for them ([§13.3](../CONTRACTS.md), F9.3). The console
+records and recalls references; it never builds, so it needs no registry credentials:
+
+```sh
+make build-worker GROUP=demo                       # ramen-worker:<version>-demo
+make push-worker  GROUP=demo PROJECT=<gcp project> # <region>-docker.pkg.dev/<project>/ramen/worker:<version>-demo
+eval "$C" -X POST $U/groups/demo/images -d '{"tag":"<that reference>","note":"pandas 2.3"}'   # 201, pinned
+eval "$C" -X POST $U/groups/demo/environments/prod/deploy -d '{"canary":true}'                # rolls the zones
+```
+`GET $U/groups/demo/images` lists the history with the pinned one flagged `current`. To go back to a build that
+worked, `PUT $U/groups/demo/images/current {"id":"<older id>"}` and deploy again; `DELETE
+$U/groups/demo/images/current` returns the group to the release image. A reference needs a `:tag` or a recorded
+`sha256:` digest — there is no implicit `latest`, because "recall that build" has to mean something.
 
 ## Config yaml
 `RAMEN_CONFIG=/path/ramen.yaml` — top-level keys map to `RAMEN_*` (nested keys join with `_`), env wins;

@@ -106,13 +106,14 @@ class AwsCloud(GcpCloud):
         role = (ksa.get("metadata", {}).get("annotations") or {}).get(ROLE_ANNOTATION) or spec.get("service_account")
         w = parse_weights(self.kube.read("Ingress", ns, "worker"))  # re-applying never resets the traffic split
         stable, canary = w.get("worker", 100), w.get("worker-canary", 0)
+        image = spec.get("image") or self.image  # §13.3: the group's pinned image, else the release image
         if helm_available(self.chart):
             return "helm", helm_manifests(
                 self.chart,
                 group,
                 zone,
                 spec,
-                self.image,
+                image,
                 self.bucket_uri(group),
                 role,
                 self.alb_group,
@@ -121,7 +122,7 @@ class AwsCloud(GcpCloud):
                 canary,
             )
         return "python", manifests(
-            group, zone, spec, self.image, self.bucket_uri(group), role, self.alb_group, stable, canary
+            group, zone, spec, image, self.bucket_uri(group), role, self.alb_group, stable, canary
         )
 
     def _set_weights(self, ns, stable, canary) -> dict:

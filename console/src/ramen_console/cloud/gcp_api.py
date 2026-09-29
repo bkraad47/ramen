@@ -276,6 +276,18 @@ class Iam:
         policy["bindings"].append(b)
         return True
 
+    @staticmethod
+    def _remove(policy, roles: set[str], member) -> list[str]:
+        """Drop `member` from every binding for `roles`, whatever the condition, and shed emptied bindings (§13.2)."""
+        changed = []
+        for b in policy.get("bindings", []):
+            if b["role"] in roles and member in b["members"]:
+                b["members"] = [m for m in b["members"] if m != member]
+                changed.append(b["role"])
+        if changed:
+            policy["bindings"] = [b for b in policy["bindings"] if b["members"]]
+        return changed
+
     # resource-level bindings (SEC-08): the console holds no project-level setIamPolicy -------------------------
     def grant_bucket_roles(self, storage, bucket_name, email, bindings: list[tuple[str, dict | None]]) -> list[str]:
         """Bind roles on the groups bucket itself (conditions keep them to the group's prefix)."""
@@ -295,6 +307,64 @@ class Iam:
                         raise
                     time.sleep(min(2**attempt, 10))
         return [r for r, _ in bindings]
+
+    def revoke_bucket_roles(self, storage, bucket_name, email, roles: list[str]) -> list[str]:
+        """Unbind the member from those roles on the groups bucket. Returns the roles that were actually bound."""
+        bucket = storage.bucket(bucket_name)
+        pol = bucket.get_iam_policy(requested_policy_version=3)
+        doc = {"bindings": [dict(b) for b in pol.bindings]}
+        changed = self._remove(doc, set(roles), f"serviceAccount:{email}")
+        if changed:
+            pol.version = 3
+            pol.bindings = doc["bindings"]
+            bucket.set_iam_policy(pol)
+        return changed
+
+    def revoke_secret_roles(self, sm, group, email, roles: list[str]) -> list[str]:
+        changed: list[str] = []
+        for name in self.group_secrets(sm, group):
+            changed += [r for r in self.unbind_secret(sm, name, roles, [f"serviceAccount:{email}"]) if r not in changed]
+        return changed
+
+    @staticmethod
+    def unbind_secret(sm, name, roles: list[str], members: list[str]) -> list[str]:
+        """Remove `members` from `roles` on one secret; [] when nothing changed or the secret is gone."""
+        try:
+            pol = sm.get_iam_policy(request={"resource": name})
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) == 404:
+                return []
+            raise
+        get = lambda b, k: b[k] if isinstance(b, dict) else getattr(b, k)  # noqa: E731 - proto message or dict
+        doc = [{"role": get(b, "role"), "members": list(get(b, "members"))} for b in pol.bindings]
+        changed = []
+        for b in doc:
+            if b["role"] in roles:
+                keep = [m for m in b["members"] if m not in members]
+                if len(keep) != len(b["members"]):
+                    b["members"] = keep
+                    changed.append(b["role"])
+        if changed:
+            from google.iam.v1 import policy_pb2
+
+            del pol.bindings[:]
+            pol.bindings.extend(policy_pb2.Binding(role=b["role"], members=b["members"]) for b in doc if b["members"])
+            sm.set_iam_policy(request={"resource": name, "policy": pol})
+        return changed
+
+    def revoke_project_roles(self, email, roles: list[str]) -> list[str]:
+        pol = (
+            self.crm.projects()
+            .getIamPolicy(resource=self.project, body={"options": {"requestedPolicyVersion": 3}})
+            .execute(num_retries=3, http=fresh_http())
+        )
+        pol["version"] = 3
+        changed = self._remove(pol, set(roles), f"serviceAccount:{email}")
+        if changed:
+            self.crm.projects().setIamPolicy(resource=self.project, body={"policy": pol}).execute(
+                num_retries=3, http=fresh_http()
+            )
+        return changed
 
     def group_secrets(self, sm, group) -> list[str]:
         prefix = f"ramen-{group}-"

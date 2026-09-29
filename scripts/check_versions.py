@@ -28,6 +28,9 @@ TEXT = {
     "deploy/local/docker-compose.yml": r"\$\{VERSION:-([^}]+)\}",
 }
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
+# §14 W9: these derive __version__ from distribution metadata. A literal here is drift waiting to happen.
+DERIVED = ("console/src/ramen_console/__init__.py", "runtime-py/src/ramen_runtime/__init__.py")
+HARDCODED = re.compile(r'^__version__\s*=\s*[\'"]\d', re.M)
 
 
 def read(path: Path, keys) -> str | None:
@@ -68,6 +71,15 @@ def main() -> int:
         for v in found:
             if v != version:
                 bad.append(f"{rel}: {v} != {version}")
+    for rel in DERIVED:
+        path = a.root / rel
+        if not path.exists():
+            bad.append(f"{rel}: missing")
+            continue
+        literal = HARDCODED.search(path.read_text())
+        rows.append((rel, "(hard-coded)" if literal else "(from metadata)"))
+        if literal:
+            bad.append(f"{rel}: __version__ is hard-coded; derive it from the installed distribution")
     if a.tag:
         t = a.tag.removeprefix("v")
         rows.append(("tag", t))

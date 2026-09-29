@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>{% block title %}Console{% endblock %}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#F26B3A">
-<link rel="icon" href="/static/logo.png"><link rel="stylesheet" href="/static/ramen.css"><script src="/static/htmx.min.js"></script></head>
+<link rel="icon" href="/static/favicon.png" type="image/png"><link rel="stylesheet" href="/static/ramen.css"><script src="/static/htmx.min.js"></script></head>
 <body>
 <nav class="side"><img src="/static/logo.png" alt="Project Ramen">
 {% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones and workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
@@ -17,4 +17,24 @@ htmx.defineExtension('json',{onEvent:(n,e)=>{if(n==='htmx:configRequest')e.detai
  encodeParameters:(xhr,params)=>{xhr.overrideMimeType('text/json');const o={};params.forEach((v,k)=>{if(k in o)o[k]=[].concat(o[k],v);else o[k]=v});return JSON.stringify(o)}});
 document.body.addEventListener('htmx:responseError',e=>{const t=document.getElementById('toast');t.textContent=e.detail.xhr.responseText||('Error '+e.detail.xhr.status);t.style.display='block';setTimeout(()=>t.style.display='none',6000)});
 document.body.addEventListener('htmx:sendError',()=>{const t=document.getElementById('toast');t.textContent='Network error';t.style.display='block'});
+// W2: the dashboard's every-60s trigger is filtered by this flag, so the toggle really stops the polling.
+window.ramenAuto=true;
+function ramenToggleAuto(b){window.ramenAuto=!window.ramenAuto;b.textContent='Auto refresh: '+(window.ramenAuto?'on':'off')}
+// W1: a dropdown plus Add builds removable chips that post as repeated `groups` fields.
+function ramenAddGroup(b){const sel=b.parentElement.querySelector('#group-pick')||document.getElementById('group-pick');
+ const chips=document.getElementById('group-chips');const v=sel.value;if(!v||chips.querySelector('[data-group="'+v+'"]'))return;
+ const chip=document.createElement('span');chip.className='chip';chip.dataset.group=v;
+ chip.innerHTML='<input type="hidden" name="groups">'+sel.options[sel.selectedIndex].text+' <button type="button" class="x">Remove</button>';
+ chip.querySelector('input').value=v;chip.querySelector('button').onclick=()=>chip.remove();chips.appendChild(chip)}
+// W5: a rule is added by sending the current list plus the new row; the API takes the whole list.
+function ramenAddRule(){const cur=JSON.parse(document.getElementById('rules').textContent||'[]');
+ const glob=(document.getElementById('rule-glob').value||'').trim();
+ return cur.concat([{effect:document.getElementById('rule-effect').value,
+                     permission:glob||document.getElementById('rule-permission').value}])}
+// W3: search and outcome filter act on the rendered audit rows; no re-query.
+function ramenAuditFilter(){const q=(document.getElementById('audit-search').value||'').toLowerCase();
+ const out=document.getElementById('audit-outcome').value;
+ document.querySelectorAll('#audit-scroll tbody tr').forEach(tr=>{const t=tr.textContent.toLowerCase();
+  const ok=tr.dataset.ok==='True'||tr.dataset.ok==='true';
+  const show=(!q||t.includes(q))&&(out===''||(out==='ok')===ok);tr.style.display=show?'':'none'})}
 </script></body></html>

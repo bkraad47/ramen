@@ -49,12 +49,25 @@
 {% else %}<p class="muted">No zones attached to this environment.</p>{% endfor %}</div>
 {% else %}<p class="muted">No environments</p>{% endfor %}
 
+<h2>Worker image</h2>
+<div class="card"><p class="muted">Workers run the release image unless this group pins one. Builds are pushed to the registry ({{ 'make build-worker GROUP=' ~ group.id }}); recording a tag here pins it, and the pin reaches the zones on the next deploy.</p>
+<p>Current: {% if group.image %}<code>{{ group.image.ref }}</code>{% else %}<span class="muted">The release image</span>{% endif %}
+{% if p.role == 'super_admin' and group.image %} <button class="sm ghost" hx-delete="/api/v1/groups/{{ group.id }}/images/current" hx-swap="none">Use the release image</button>{% endif %}</p>
+{% if p.role == 'super_admin' %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/images" hx-ext="json" hx-swap="none"><label>Tag<input name="tag" required placeholder="registry/path:{{ group.id }}-1"></label><label>Digest (optional)<input name="digest" placeholder="sha256:…"></label><label>Note<input name="note" placeholder="What changed"></label><button>Record image</button></form>{% endif %}
+<table><tr><th>Image</th><th>Note</th><th>Recorded</th><th>By</th><th>Pinned</th><th></th></tr>
+{% for i in images %}<tr><td><code>{{ i.ref }}</code></td><td>{{ i.note or '—' }}</td><td>{{ i.created }}</td><td>{{ i.created_by or '—' }}</td>
+<td>{% if i.current %}<span class="badge ok">In use</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+<td>{% if p.role == 'super_admin' and not i.current %}<button class="sm ghost" hx-put="/api/v1/groups/{{ group.id }}/images/current" hx-ext="json" hx-vals='{{ tojson({"id": i.id}) }}' hx-swap="none">Recall</button>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No image recorded for this group</td></tr>{% endfor %}</table></div>
+
 <h2>Service-account permissions</h2>
 <div class="card"><p class="muted">Approved permissions per zone are bound to the zone's service account (least privilege, F6.5). Requests go to a super admin.</p>
-<table><tr><th>Zone</th><th>Service account</th><th>Approved permissions</th></tr>{% for z in zones %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td><td>{{ (workers[z.id].sa_permissions or [])|join(', ') or '—' }}</td></tr>{% endfor %}</table>
+<table><tr><th>Zone</th><th>Service account</th><th>Approved permissions</th></tr>{% for z in zones %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td>
+<td>{% for q in workers[z.id].sa_permissions or [] %}<span class="badge ok">{{ q }}</span>{% if p.role == 'super_admin' %} <button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/permissions/{{ q }}" hx-confirm="Take {{ q }} away from zone {{ z.id }}?" hx-swap="none">Revoke permission</button>{% endif %} {% else %}—{% endfor %}</td></tr>{% endfor %}</table>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/requests" hx-ext="json" hx-vals='{"group": "{{ group.id }}"}' hx-swap="none"><label>Zone<select name="zone">{% for z in zones %}<option>{{ z.id }}</option>{% endfor %}</select></label>
 <label>Permission<select name="permission">{% for q in permissions %}<option value="{{ q.permission }}">{{ q.permission }} — {{ q.desc }}</option>{% endfor %}</select></label><button>Request permission</button></form>{% endif %}
-{% if requests %}<table><tr><th>Requested by</th><th>Zone</th><th>Permission</th><th>Status</th></tr>{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.zone }}</td><td><code>{{ q.permission }}</code></td><td><span class="badge {{ 'ok' if q.status == 'approved' else '' }}">{{ q.status }}</span></td></tr>{% endfor %}</table>{% endif %}</div>
+{% if requests %}<table><tr><th>Requested by</th><th>Zone</th><th>Permission</th><th>Status</th><th></th></tr>{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.zone }}</td><td><code>{{ q.permission }}</code></td><td><span class="badge {{ 'ok' if q.status == 'approved' else ('error' if q.status in ['denied', 'revoked'] else '') }}">{{ q.status }}</span></td>
+<td>{% if p.role == 'super_admin' %}{% if q.status == 'pending' %}<button class="sm" hx-post="/api/v1/requests/{{ q.id }}/approve" hx-swap="none">Approve</button> <button class="sm danger" hx-post="/api/v1/requests/{{ q.id }}/deny" hx-swap="none">Deny</button>{% elif q.status == 'approved' %}<button class="sm danger" hx-post="/api/v1/requests/{{ q.id }}/revoke" hx-confirm="Revoke this permission?" hx-swap="none">Revoke</button>{% endif %}{% endif %}</td></tr>{% endfor %}</table>{% endif %}</div>
 
 <h2>MCP auth keys</h2>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/mcp-keys" hx-ext="json" hx-target="#mcp-once" hx-swap="innerHTML"><label>Key name<input name="name" required></label><button>Generate key</button></form><div id="mcp-once"></div>

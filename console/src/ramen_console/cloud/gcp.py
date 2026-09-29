@@ -82,11 +82,12 @@ class GcpCloud(Cloud):
         gsa = (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account") or spec.get(
             "service_account"
         )
+        image = spec.get("image") or self.image  # §13.3: the group's pinned image, else the release image
         if helm_available(self.chart):
             return "helm", helm_manifests(
-                self.chart, self.project, group, zone, spec, self.image, self.bucket_uri(group), gsa
+                self.chart, self.project, group, zone, spec, image, self.bucket_uri(group), gsa
             )
-        return "python", manifests(group, zone, spec, self.image, self.bucket_uri(group), gsa)
+        return "python", manifests(group, zone, spec, image, self.bucket_uri(group), gsa)
 
     def _ensure_namespace(self, group, zone) -> None:
         """Namespace + the RoleBinding that scopes the console's zone permissions to it (SEC-09)."""
@@ -368,8 +369,35 @@ class GcpCloud(Cloud):
             removed["service_accounts"].append(email)
         return removed
 
+    def _revoke_stale(self, iam, email, group, keep: list[str]) -> tuple[list[str], list[str]]:
+        """§13.2: `apply_sa_permissions` is a set operation. Every catalogue role the remaining permissions no longer
+        need is unbound at the scope it was bound on. Returns (revoked, retained-because-baseline)."""
+        needed = set(keep)
+        stale = [r for r in perm.all_roles("gcp") if r not in needed]
+        retained = [r for r in stale if r in self.BASELINE_ROLES]
+        stale = [r for r in stale if r not in self.BASELINE_ROLES]
+        bucket = [r for r in stale if r.startswith("roles/storage.")]
+        secret = [r for r in stale if r.startswith("roles/secretmanager.")]
+        project = [r for r in stale if r not in bucket and r not in secret]
+        revoked: list[str] = []
+        if bucket:
+            revoked += iam.revoke_bucket_roles(self.c.storage, self.bucket, email, bucket)
+        if secret:
+            revoked += iam.revoke_secret_roles(self.c.secretmanager, group, email, secret)
+        if project:
+            try:
+                revoked += iam.revoke_project_roles(email, project)
+            except Exception as e:  # noqa: BLE001 - no projectIamAdmin: the resource-level unbinds still happened
+                if http_status(e) != 403:
+                    raise
+        return revoked, retained
+
     # identity (SEC-08: bucket and secret roles are bound on the resources, never on the project) ---------------
     SECRET_ROLE = "roles/secretmanager.secretAccessor"
+    # §13.2: what the zone identity holds because it is a Ramen worker, not because a permission was granted. These
+    # are never unbound by a revoke — `bucket.read` and `secrets.read` map onto them, so revoking either takes the
+    # grant off the record while the identity keeps that baseline read access. `retained` says so in the response.
+    BASELINE_ROLES = ("roles/storage.objectViewer", SECRET_ROLE)
 
     def _bucket_condition(self, group) -> dict:
         """IAM condition restricting a storage role to the group's prefix in the groups bucket."""
@@ -456,6 +484,7 @@ class GcpCloud(Cloud):
         def run():
             email, _ = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
             applied, skipped = self._grant(iam, email, group, roles)
+            revoked, retained = self._revoke_stale(iam, email, group, roles)
             out = {
                 "ok": True,
                 "service_account": email,
@@ -463,6 +492,10 @@ class GcpCloud(Cloud):
                 "permissions": list(permissions),
                 "ksa": f"{ns}/worker",
             }
+            if revoked:
+                out["revoked"] = revoked
+            if retained:
+                out["retained"] = retained
             if skipped:
                 out["skipped"] = skipped
                 out["note"] = (

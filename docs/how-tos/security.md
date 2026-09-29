@@ -20,6 +20,26 @@ Bootstrap super admin comes from `RAMEN_ADMIN_EMAIL` / `RAMEN_ADMIN_PASSWORD` an
 (cloud admins reset it by changing the env). `auth.password_login: false` (super admin toggle) disables password
 login except break-glass with `RAMEN_ADMIN_FORCE_PASSWORD=1`.
 
+## Granting and taking back (v0.4.1)
+A group admin requests an extra cloud permission for one of their zones; a super admin approves it and the mapped
+cloud role is bound to that zone's service account ([contract §9](../CONTRACTS.md)). Since 0.4.1 the other direction
+exists too ([§13.2](../CONTRACTS.md)):
+
+- `POST /api/v1/requests/{id}/deny` refuses a pending request. `POST /api/v1/requests/{id}/revoke` takes an approved
+  one back. `DELETE /api/v1/groups/{g}/zones/{z}/permissions/{permission}` revokes a grant directly.
+- Revoking calls the adapter with the permissions that **remain**, and the adapter treats that as the full set: the
+  cloud roles nothing needs any more are unbound (GCP removes the member from the bucket, secret and project
+  bindings; AWS rewrites the inline policy and deletes it when the set is empty).
+- **Two permissions cannot be fully revoked, by design.** `bucket.read` and `secrets.read` map onto the roles every
+  zone identity holds anyway — `roles/storage.objectViewer` on the group's bucket prefix and the group's secret
+  accessor — because without them a worker cannot load its own code or read its own secrets. Revoking them removes
+  the grant from the record; the identity keeps that baseline read access, and the response says so in `retained`.
+  If a zone must lose bucket or secret access entirely, delete the zone or the group.
+- Revoking a **role** grant returns the user to the role and groups the approval recorded, and ends their sessions
+  immediately: sessions carry a per-user epoch, and the epoch is bumped on role, group, password, delete,
+  authentication-configuration changes and on a backup restore. There is no window where an open tab keeps the
+  permission it just lost.
+
 ## Keys
 - **MCP keys** `rmk_<id>_<secret>`: stored hashed in the group's secrets, shown once, unioned into
   `RAMEN_MCP_KEYS` on the workers at deploy, compared in constant time. **No keys = deny all** (gRPC

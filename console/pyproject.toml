@@ -1,6 +1,6 @@
 [project]
 name = "ramen-console"
-version = "0.4.0"
+version = "0.4.2"
 description = "Ramen console: FastAPI + Jinja2 + HTMX manager UI and /api/v1 for groups, environments, zones, secrets and deploys"
 license = "BSD-3-Clause"
 requires-python = ">=3.14"

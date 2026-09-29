@@ -7,7 +7,7 @@ from .rbac import Principal, RuleClash, check_clash
 from .secrets.base import SecretsBackend, StoreBackend
 from .security import generate_key_secret
 from .storage.base import Store
-from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, public, uid
+from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, parse_image, public, uid
 
 
 def clean_blocked(names) -> list[str]:
@@ -113,6 +113,32 @@ class Services:
         await self.store.put("workers", w["id"], w)
         return result
 
+    async def revoke_sa_permission(self, group, zone, permission) -> dict:
+        """§13.2: drop one granted permission and re-apply the remaining set, so the cloud roles shrink with it."""
+        w = await self.worker_config(group, zone)
+        perms = list(w.get("sa_permissions", []))
+        if permission not in perms:
+            raise not_found(f"permission {permission} in {group}/{zone}")
+        perms = [q for q in perms if q != permission]
+        result = await self.cloud.apply_sa_permissions(group, zone, perms)
+        w["sa_permissions"] = perms
+        await self.store.put("workers", w["id"], w)
+        await self._mark_revoked(group, zone, permission)
+        return {"group": group, "zone": zone, "revoked": permission, "permissions": perms, "cloud": result}
+
+    async def _mark_revoked(self, group, zone, permission) -> int:
+        """A permission can be revoked directly, so the approval record has to follow the grant, not the other way."""
+        rows = [
+            q
+            for q in await self.store.list("activity", {"kind": "permission_request"})
+            if q.get("status") == "approved"
+            and (q.get("group"), q.get("zone"), q.get("permission")) == (group, zone, permission)
+        ]
+        for q in rows:
+            q.update(status="revoked", revoked=now())
+            await self.store.put("activity", q["id"], q)
+        return len(rows)
+
     async def zones(self) -> list[dict]:
         return sorted(await self.store.list("zones"), key=lambda z: z["name"])
 
@@ -185,7 +211,62 @@ class Services:
             "count": w.get("count", 1),
             "allowed_sizes": w.get("allowed_sizes", []),
             "service_account": w.get("service_account"),
+            "image": await self.image_for(group),  # §13.3: None means the release image the adapter was given
         }
+
+    # --- per-group worker images (§13.3, F9.3) --------------------------------
+    async def image_for(self, group) -> str | None:
+        return ((await self.store.get("groups", group) or {}).get("image") or {}).get("ref")
+
+    async def images(self, group) -> list[dict]:
+        g = await self.get_group(group)
+        pinned = (g.get("image") or {}).get("id")
+        # `created` has second resolution, so two builds recorded in the same second need `seq` to stay ordered.
+        rows = sorted(
+            await self.store.list("images", {"group": group}),
+            key=lambda d: (d["created"], d.get("seq", 0)),
+            reverse=True,
+        )
+        return [{**d, "current": d["id"] == pinned} for d in rows]
+
+    async def record_image(self, group, tag, digest=None, note="", by="") -> dict:
+        """Record a build that already exists in a registry and pin it. The console never builds (§13.3)."""
+        await self.get_group(group)
+        tag, digest, ref = parse_image(tag, digest)
+        doc = await self.store.put(
+            "images",
+            uid(),
+            {
+                "group": group,
+                "seq": len(await self.store.list("images", {"group": group})) + 1,
+                "tag": tag,
+                "digest": digest,
+                "ref": ref,
+                "note": (note or "").strip(),
+                "created": now(),
+                "created_by": by,
+            },
+        )
+        return {**await self._pin(group, doc), "current": True}
+
+    async def recall_image(self, group, image_id) -> dict:
+        doc = await self.store.get("images", image_id)
+        if not doc or doc.get("group") != group:
+            raise not_found("image")
+        return {**await self._pin(group, doc), "current": True}
+
+    async def unpin_image(self, group) -> dict:
+        """Back to the release image the adapter was configured with; the history is kept."""
+        g = await self.get_group(group)
+        g.pop("image", None)
+        await self.store.put("groups", group, g)
+        return {"ok": True, "image": None}
+
+    async def _pin(self, group, doc) -> dict:
+        g = await self.get_group(group)
+        g["image"] = {"id": doc["id"], "ref": doc["ref"]}
+        await self.store.put("groups", group, g)
+        return doc
 
     async def update_env(self, group, name, **fields) -> dict:
         e = await self.get_env(group, name)

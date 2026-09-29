@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.5.2
+  version_current: 0.5.3
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -60,7 +60,7 @@ nav:
   - How it works: how-it-works.md
   - Threat model: threat-model.md
   - Architecture:
-      - Current (v0.5.2): architecture/index.md
+      - Current (v0.5.3): architecture/index.md
       - v0.4.0: architecture/v0.4.0.md
       - v0.3.1: architecture/v0.3.1.md
       - v0.3.0: architecture/v0.3.0.md
@@ -69,6 +69,7 @@ nav:
   - How-tos:
       - Local quickstart: how-tos/local-quickstart.md
       - End to end, console to AI client (local and GKE): how-tos/end-to-end.md
+      - Add and deploy a tool (the demo group): how-tos/add-a-tool.md
       - The console, page by page: how-tos/console.md
       - GCP (verbose): how-tos/gcp.md
       - AWS (verbose, untested): how-tos/aws.md

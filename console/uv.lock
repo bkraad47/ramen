@@ -1596,7 +1596,7 @@ wheels = [
 
 [[package]]
 name = "ramen-console"
-version = "0.5.2"
+version = "0.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },

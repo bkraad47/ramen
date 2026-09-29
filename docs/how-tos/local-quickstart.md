@@ -209,7 +209,7 @@ MCP keys live in the store, so `make down` (which discards the Firestore emulato
 </figure>
 
 ## 8. Your own group repo
-1. Copy the layout from [Protos](../wiki/protos.md) (or fork the demo repo).
+1. Copy the layout from [Protos](../wiki/protos.md) (or fork the demo repo) — the step-by-step is [Add and deploy a tool](add-a-tool.md).
 2. Console → Groups → **Add group** with your repo URL and ref. Private repo: add a secret named `GITHUB_TOKEN`.
 3. Add an environment with zone `local`, generate an MCP key, **Deploy**. Errors per package show up in the job.
 

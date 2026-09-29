@@ -2,6 +2,9 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.3] — how to add and deploy a tool
+- `docs/how-tos/add-a-tool.md`: from an empty folder to a tool an AI client can call, with the demo group as the worked example — the layout, the calculator read line by line, a new `word_count` tool in two files, a local check by driving the worker's own runtime over stdio (`runtime.load`, `runtime.call_tool`; real transcript), push, deploy from the console (canary, per-package errors, disable), the call, and resources and prompts in brief. Linked from the README header, the docs home, the nav and the quickstart. A test keeps every guide the README promises present, in the nav and linked.
+
 ## [0.5.2] — the mark is the logo
 - The console's sidebar and its sign-in, password-reset and OAuth consent cards now show the square bowl mark the favicon is made of (`/static/logo-mark.png`, 256 px), not the wide "PROJECT RAMEN" wordmark that rendered as a blurry 56 px rectangle. Square sizes and rounded corners in the CSS; the wordmark stays in the README and the docs. A test pins every branded page to the mark; screenshots re-captured (`ui_contract` 0.5.2).
 

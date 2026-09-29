@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.2` **(current)** | — | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
+| `0.5.3` **(current)** | — | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
+| `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
 | `0.5.1` | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
 | `0.5.0` | 2026-09-29 | Streamable HTTP at the edge, gRPC inside | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.0) |
 | `0.4.3` | — | screenshots that cannot go stale | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.3) |
@@ -16,6 +17,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.5.3 — how to add and deploy a tool
+
+- `docs/how-tos/add-a-tool.md`: from an empty folder to a tool an AI client can call, with the demo group as the worked example — the layout, the calculator read line by line, a new `word_count` tool in two files, a local check by driving the worker's own runtime over stdio (`runtime.load`, `runtime.call_tool`; real transcript), push, deploy from the console (canary, per-package errors, disable), the call, and resources and prompts in brief. Linked from the README header, the docs home, the nav and the quickstart. A test keeps every guide the README promises present, in the nav and linked.
 
 ## 0.5.2 — the mark is the logo
 

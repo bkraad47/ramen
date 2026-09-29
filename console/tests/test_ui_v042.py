@@ -31,6 +31,9 @@ def test_dashboard_polls_every_minute_behind_a_toggle(demo):
     assert "every 60s" in page and "every 10s" not in page
     assert "Auto refresh" in page
     assert "ramenAuto" in page  # the trigger is filtered by the flag the button owns
+    # the first cut floated the buttons into the legend and they overflowed the card (found in a screenshot)
+    assert "float:right" not in page
+    assert "legend-bar" in page and "row-actions" in page
 
 
 # --- W3 audit: newest 100, searchable, filterable, scrollable ------------------------------------------------------

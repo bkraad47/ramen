@@ -26,6 +26,9 @@ button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;paddin
 .act{width:170px;flex:0 0 170px;padding:6px 10px;font-size:12px;display:inline-block;text-align:center}
 .grid{display:grid;gap:8px}.cell{border-radius:10px;padding:10px;color:#fff;min-height:64px;font-size:13px}
 .cell.load-low{background:var(--blue)}.cell.load-even{background:var(--green)}.cell.load-high{background:var(--red)}.cell.load-down{background:var(--grey)}.cell b{display:block}
+.legend-bar{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.legend-bar .row-actions{flex:0 0 auto}
+.legend-bar .row-actions button{white-space:nowrap}
 .legend span{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 12px;vertical-align:middle}
 .swatch-low{background:var(--blue)}.swatch-even{background:var(--green)}.swatch-high{background:var(--red)}.swatch-down{background:var(--grey)}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--ink)}.badge.ok{background:#dff3e6;color:#1f6b40}.badge.error{background:#fbe0e0;color:#8f1f1f}.badge.running{background:#fde9df;color:#a4451f}

@@ -1,4 +1,4 @@
-# Ramen v0.4.2 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
+# Ramen v0.4.3 developer entrypoints. Needs: uv, cargo (rust-toolchain.toml), docker compose (+ buildx and gcloud for `push`).
 export PATH := /opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$(HOME)/.cargo/bin:$(PATH)
 VERSION := $(shell cat VERSION)
 COMPOSE := docker compose -f deploy/local/docker-compose.yml
@@ -11,9 +11,16 @@ PLATFORM ?= linux/amd64
 GROUP ?=
 TAG ?= $(VERSION)$(if $(GROUP),-$(GROUP),)
 REGISTRY = $(REGION)-docker.pkg.dev/$(PROJECT)/ramen
-.PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean kind-up kind-test kind-down
+.PHONY: proto test test-runtime test-node test-console test-harness lint build build-worker build-console push push-worker push-console auth-docker env up down logs demo demo-worker clean kind-up kind-test kind-down shots
 
 test: test-runtime test-node test-console
+
+# Console screenshots for docs/img (CONTRACTS §15): seeds a throwaway console with fake workers, captures every page
+# with playwright, and records docs/img/shots.json. `make shots OUT=reports/ui-<version>` writes elsewhere.
+# First run needs the browser: uv run --with playwright playwright install chromium
+OUT ?= docs/img
+shots:
+	cd console && uv run --with playwright --with httpx python ../scripts/shots.py --out $(OUT)
 
 # ruff (shared ruff.toml) on every Python tree, cargo fmt/clippy, helm lint, terraform fmt; actionlint/shellcheck when installed.
 lint:

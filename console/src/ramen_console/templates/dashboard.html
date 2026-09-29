@@ -1,7 +1,8 @@
 {% extends "base.html" %}{% block title %}Dashboard{% endblock %}
 {% block body %}
-<div class="card"><div class="legend">Load per zone and group: <span class="swatch-low"></span>Low <span class="swatch-even"></span>Even <span class="swatch-high"></span>High <span class="swatch-down"></span>Down or not deployed
-<span style="float:right"><button id="auto-refresh" class="sm ghost" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button>
-{% if p.role == 'super_admin' %} <button class="sm ghost" hx-post="/api/v1/refresh" hx-swap="none">Refresh discovery</button>{% endif %}</span></div></div>
+<div class="card"><div class="legend-bar">
+<div class="legend">Load per zone and group: <span class="swatch-low"></span>Low <span class="swatch-even"></span>Even <span class="swatch-high"></span>High <span class="swatch-down"></span>Down or not deployed</div>
+<div class="row-actions"><button id="auto-refresh" class="sm ghost" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button>
+{% if p.role == 'super_admin' %}<button class="sm ghost" hx-post="/api/v1/refresh" hx-swap="none">Refresh discovery</button>{% endif %}</div></div></div>
 <div id="grid" hx-get="/ui/dashboard" hx-trigger="load, every 60s[window.ramenAuto]" hx-swap="innerHTML"><p class="muted">Loading…</p></div>
 {% endblock %}

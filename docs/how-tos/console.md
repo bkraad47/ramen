@@ -9,6 +9,11 @@ Users, API keys, Backups and Config as well. The sidebar names the signed-in add
 version sits at the bottom — it comes from the installed package, so it is the version actually running.
 
 ## Dashboard
+
+<figure markdown>
+![The dashboard's load grid](../img/dashboard.png){ .ramen-shot }
+</figure>
+
 A grid of zones by groups. Each cell names its load — `low`, `even`, `high` or `down` — and colours it; the words
 carry the meaning, so the grid reads without colour.
 
@@ -51,6 +56,11 @@ listed below with `Approve`, `Deny` and, once approved, `Revoke` — revoking en
 immediately. `Change my password` at the bottom applies the 12-character rule to everyone, super admins included.
 
 ## API keys
+
+<figure markdown>
+![Generating an API key](../img/api-keys.png){ .ramen-shot }
+</figure>
+
 `Generate key` mints a key that is shown **once**. Two types, and each is refused by the other side:
 
 | Type | Prefix | Used by |
@@ -62,11 +72,21 @@ Pick the groups from the dropdown and press `Add` for each one — the chosen gr
 Add none and the key inherits your own groups. A key can never outrank its creator.
 
 ## Audit
+
+<figure markdown>
+![The audit page with its search and outcome filter](../img/audit.png){ .ramen-shot }
+</figure>
+
 The newest 100 entries, with a search box that filters across every column and an outcome filter for succeeded or
 failed; both work on what is already on the page, so they are instant. `Load 500` fetches more, and CSV and JSON
 downloads give the whole log. Every mutating request is here, failed sign-ins included.
 
 ## Backups
+
+<figure markdown>
+![The backups page](../img/backups.png){ .ramen-shot }
+</figure>
+
 `Create backup` writes a JSON export tagged with the release version — no secret values, no password hashes — to a
 local path or the groups bucket. Each row then offers four equally sized actions:
 
@@ -81,6 +101,11 @@ Preview first. A restore signs every other session out, and a user the store had
 until a password reset — the result panel says so. Details: [DevOps with the API and keys](devops-api.md#backups).
 
 ## Config
+
+<figure markdown>
+![The config page](../img/config.png){ .ramen-shot }
+</figure>
+
 The config file in use and a hot reload, the authentication toggles, the service-account permission catalogue, the
 effective `RAMEN_*` environment (secrets masked), and the **super-admin service-account rules**: pick `Allow` or
 `Deny` and a permission from the catalogue — or type a pattern such as `kms.*` — then `Add rule`. Each rule has

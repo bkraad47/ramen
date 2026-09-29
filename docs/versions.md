@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.3` **(current)** | — | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
+| `0.5.3` **(current)** | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
 | `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
 | `0.5.1` | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
 | `0.5.0` | 2026-09-29 | Streamable HTTP at the edge, gRPC inside | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.0) |
@@ -17,6 +17,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## Unreleased
+
+- Test-only: `log::tests::mirrors_to_file` counted every line of the process-global log file and flaked when another test emitted concurrently (it failed CI on the 0.5.3 commit and took the pipeline with it); it now counts only its own lines.
 
 ## 0.5.3 — how to add and deploy a tool
 

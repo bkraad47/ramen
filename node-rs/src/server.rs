@@ -7,7 +7,7 @@ use crate::log::emit;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::{Identity, Server, ServerTlsConfig};
+use tonic::transport::Server;
 
 pub async fn run(
     cfg: Config,
@@ -35,28 +35,32 @@ pub async fn run(
             json!({"bucket": cfg.bucket}),
         );
     }
-    let builder = match tls(&cfg) {
-        Ok(Some(t)) => Server::builder().tls_config(t).map_err(|e| e.to_string()),
-        Ok(None) => Ok(Server::builder()),
-        Err(e) => Err(e),
-    };
     // §16.1: the HTTP handler joins the gRPC services on the same router; HTTP/1.1 must be accepted because
     // Streamable HTTP clients speak it (gRPC stays h2/h2c).
     let mut routes = grpc::routes(&app);
     let merged = std::mem::take(routes.axum_router_mut()).merge(crate::http::router(app.clone()));
     *routes.axum_router_mut() = merged;
-    match builder {
-        Ok(b) => {
-            if let Err(e) = b
-                .accept_http1(true)
-                .add_routes(routes)
+    let server = Server::builder().accept_http1(true).add_routes(routes);
+    let served = match tls(&cfg) {
+        // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
+        // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.
+        Ok(Some(acceptor)) => {
+            server
+                .serve_with_incoming_shutdown(tls_incoming(listener, acceptor), shutdown)
+                .await
+        }
+        Ok(None) => {
+            server
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
                 .await
-            {
-                emit("error", "serve failed", json!({"error": e.to_string()}));
-            }
         }
-        Err(e) => emit("error", "tls config failed", json!({"error": e})),
+        Err(e) => {
+            emit("error", "tls config failed", json!({"error": e}));
+            Ok(())
+        }
+    };
+    if let Err(e) = served {
+        emit("error", "serve failed", json!({"error": e.to_string()}));
     }
     app.sidecar.kill("shutdown").await;
     app
@@ -98,14 +102,69 @@ fn retry_initial_load(app: Shared, first_delay_secs: u64) {
     });
 }
 
-fn tls(cfg: &Config) -> Result<Option<ServerTlsConfig>, String> {
+fn tls(cfg: &Config) -> Result<Option<tokio_rustls::TlsAcceptor>, String> {
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
     let Some((cert, key)) = &cfg.tls else {
         return Ok(None);
     };
     let read = |p: &std::path::Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
-    Ok(Some(
-        ServerTlsConfig::new().identity(Identity::from_pem(read(cert)?, read(key)?)),
-    ))
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&read(cert)?)
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{}: {e}", cert.display()))?;
+    let key = PrivateKeyDer::from_pem_slice(&read(key)?)
+        .map_err(|e| format!("{}: {e}", key.display()))?;
+    let mut config = tokio_rustls::rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| e.to_string())?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Some(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(
+        config,
+    ))))
+}
+
+/// Accept TCP connections and hand each one to the TLS acceptor on its own task, so one slow or hostile handshake
+/// never holds the accept loop. Only completed handshakes reach the server; a failed one is a log line.
+fn tls_incoming(
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+) -> tokio_stream::wrappers::ReceiverStream<
+    Result<tokio_rustls::server::TlsStream<tokio::net::TcpStream>, std::io::Error>,
+> {
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(async move {
+        loop {
+            let (stream, peer) = match listener.accept().await {
+                Ok(x) => x,
+                Err(e) => {
+                    emit("warn", "accept failed", json!({"error": e.to_string()}));
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+            };
+            let acceptor = acceptor.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let handshake = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    acceptor.accept(stream),
+                );
+                match handshake.await {
+                    Ok(Ok(tls)) => {
+                        let _ = tx.send(Ok(tls)).await;
+                    }
+                    Ok(Err(e)) => emit(
+                        "warn",
+                        "tls handshake failed",
+                        json!({"peer": peer, "error": e.to_string()}),
+                    ),
+                    Err(_) => emit("warn", "tls handshake timed out", json!({"peer": peer})),
+                }
+            });
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
 #[cfg(test)]
@@ -180,7 +239,12 @@ mod tests {
             ("RAMEN_TLS_CERT", "/nonexistent/c.pem"),
             ("RAMEN_TLS_KEY", "/nonexistent/k.pem"),
         ]);
-        assert!(tls(&c).unwrap_err().contains("c.pem"));
+        assert!(
+            tls(&c)
+                .err()
+                .expect("missing files must fail")
+                .contains("c.pem")
+        );
         let app = run(c, listener, async {}).await;
         assert!(!app.sidecar.alive().await);
     }

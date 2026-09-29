@@ -936,7 +936,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ramen-node"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -947,10 +947,12 @@ dependencies = [
  "protox",
  "rcgen",
  "ring",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "subtle",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tonic",
  "tonic-health",

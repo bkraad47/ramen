@@ -113,7 +113,9 @@ TLS terminates at the load balancer, which is the hop that crosses the internet.
 cleartext HTTP/2 by default — that is what GKE's `appProtocol: kubernetes.io/h2c` means, and it is the path that
 was verified on a live GKE Gateway in 0.3.2. If you want the last hop encrypted too, give the node
 `RAMEN_TLS_CERT` and `RAMEN_TLS_KEY` and switch the Service to `HTTP2`; that mode has local tests but has not
-been exercised in a cloud deployment.
+been exercised in a cloud deployment. Since 0.5.1 the node terminates TLS itself and offers both `h2` and
+`http/1.1` on ALPN — tonic's own acceptor offers only `h2`, which refused every Streamable HTTP client at the
+handshake (CI caught it after 0.5.0; the laptop had skipped the case for want of `openssl`).
 
 **Turning on node TLS is two changes, not one.** The console dials worker pods with an insecure channel unless it
 is *also* given `RAMEN_WORKER_TLS=1` (plus `RAMEN_WORKER_CA`, or `RAMEN_WORKER_CERT` / `RAMEN_WORKER_KEY` for a
@@ -224,13 +226,20 @@ the runtime has actually loaded the group's code.
 
 ## What is verified, and what is not
 
-- **Verified in 0.5.0 on real node processes, not yet in a cloud:** the whole guard table on both transports (key,
+- **Verified live in 0.5.1 on one GKE Autopilot cluster through the Gateway load balancer** (`reports/cloud-v0.5.0.md`
+  in the private workspace): `POST /mcp` with an `rmk_` key routed by `ramen-group`/`ramen-zone` to the zone's pods,
+  the 401/403 answers and the session id through the balancer, the OAuth flow from the console's consent page to a
+  `tools/call` with the token, refresh rotation and reuse revocation, the worker's RFC 9728 challenge naming the
+  console (`scripts/oauth_roundtrip.py`, `scripts/cloud_smoke.sh`), harness 218 passed, 0 failed, 15 skipped with stated reasons. Two things the run taught: the
+  Gateway takes minutes to program a new route (until then `/mcp` is a `404` from the console), and a console
+  rollout answers `503` through the balancer for about a minute.
+- **Verified in 0.5.0 on real node processes:** the whole guard table on both transports (key,
   source range, blocked names, 4 MiB and in-flight caps, protocol errors as JSON-RPC bodies, notifications), the
   HTTP-only checks (Origin, sessions bound to the credential and refused under another key, content negotiation,
   protocol version, the RFC 9728 metadata), a console-minted OAuth token accepted by the node, and the official
   `mcp` SDK's Streamable HTTP client end to end — in CI on Linux and on a Windows runner that builds the node
-  natively (`tests/conformance/test_transports_local.py`). The HTTP path through a real load balancer, and the
-  OAuth flow against a deployed console, are what the next cloud run has to show.
+  natively (`tests/conformance/test_transports_local.py`), and — since 0.5.1 — Streamable HTTP over node TLS,
+  which CI found broken after 0.5.0 (see TLS above).
 - **Verified live**, on one GKE Autopilot cluster in `us-central1` (0.3.2), with the whole harness green through
   the load balancer (126 passed, 0 failed):
     - header routing on `ramen-group` / `ramen-zone` over h2c, and gRPC health checks;

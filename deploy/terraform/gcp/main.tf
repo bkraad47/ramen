@@ -22,6 +22,9 @@ locals {
     "container.googleapis.com", "firestore.googleapis.com", "secretmanager.googleapis.com",
     "storage.googleapis.com", "compute.googleapis.com", "artifactregistry.googleapis.com",
     "iam.googleapis.com", "logging.googleapis.com",
+    # the console's project-wide role bindings (console_project_iam) go through Resource Manager; without the API
+    # the call is a bare 403 that looks like a missing role — found on the 0.5.1 GKE run
+    "cloudresourcemanager.googleapis.com",
   ]
   console_roles = concat([
     "roles/secretmanager.admin", # create ramen-<group>-* secrets and set their IAM (secret-level accessor bindings)

@@ -58,7 +58,7 @@ helm template ramen-worker deploy/helm/ramen-worker --set project=$PROJECT,group
 kubectl -n ramen-demo-a rollout status deploy/worker        # first start: pod sync + pip install, 1-3 min
 kubectl -n ramen-demo-a port-forward svc/worker 8080 &
 grpcurl -plaintext -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" localhost:8080 ramen.v1.Mcp/Call
-# same call through the LB once the Gateway has programmed the route (~2 min; routing by metadata, TLS at the LB):
+# same call through the LB once the Gateway has programmed the route (2–7 min; routing by metadata, TLS at the LB):
 grpcurl -insecure -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" $IP:443 ramen.v1.Mcp/Call
 ```
 MCP clients reach `<console_ip>:443` over gRPC with metadata `ramen-group`/`ramen-zone` + `authorization: Bearer rmk_…` (standard

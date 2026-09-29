@@ -3,6 +3,8 @@
 
     make shots            # seeds a throwaway console on :18100, captures docs/img/*.png, updates docs/img/shots.json
     make shots OUT=reports/ui-v0.4.3   # same captures into another directory (before/after sets)
+    scripts/shots.py --base https://34.1.2.3 --email admin@ramen.local --password '…' --out docs/img/gke --live gke
+                          # live mode (CONTRACTS §17.2): capture only, from a real console; nothing is seeded
 
 The console runs with the memory store and the local cloud adapter, seeded with fictional groups, users and keys —
 no cloud, no real credentials, nothing that outlives the run. `docs/img/shots.json` records which release each shot
@@ -39,7 +41,17 @@ PAGES = {
     "users.png": ("/users", "Users, permission requests and the password rule", False),
     "environments.png": ("/environments", "Environments with the last deploy flattened", False),
     "config.png": ("/config", "Config: authentication, the permission catalogue, service-account rules", True),
+    # §17.2: the two moments the end-to-end guide needs that a plain page load does not show
+    "key-shown.png": ("/api-keys", "The one-time display of a new agent key", False),
+    "oauth-consent.png": (
+        "/oauth/authorize?{consent}",
+        "OAuth: the consent page a person sees when a client asks",
+        False,
+    ),
 }
+# live mode captures pages that need no seeded state; the two moments above are made by clicking, so they are
+# taken there too, with whatever the live console holds
+LIVE_SKIP = {"login.png"}
 
 
 def workers():
@@ -67,8 +79,9 @@ def free(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
-def seed(client) -> None:
-    """Fictional material: two groups over two zones, users, keys, secrets, an image pin, a backup, a deploy."""
+def seed(client) -> dict:
+    """Fictional material: two groups over two zones, users, keys, secrets, an image pin, a backup, a deploy.
+    Returns the dynamic values page paths need (the OAuth client id for the consent page)."""
 
     def h():
         t = client.cookies.get("ramen_csrf")
@@ -118,6 +131,29 @@ def seed(client) -> None:
         zone = {"name": f"retired-{i}", "provider": "local", "region": "local"}
         client.post("/api/v1/zones", json=zone, headers=h())
         client.delete(f"/api/v1/zones/retired-{i}", headers=h())
+    oc = client.post(
+        "/api/v1/oauth/clients",
+        json={"name": "Claude Desktop", "redirect_uris": ["http://127.0.0.1:9999/callback"]},
+        headers=h(),
+    )
+    return {"consent": consent_query(oc.json()["client_id"], "demo", "a")}
+
+
+def consent_query(client_id: str, group: str, zone: str) -> str:
+    """The authorize query a real client sends (PKCE challenge is a fixed, valid-shaped value: nothing is exchanged)."""
+    from urllib.parse import urlencode
+
+    return urlencode(
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": "http://127.0.0.1:9999/callback",
+            "scope": f"mcp:{group}:{zone}",
+            "state": "shots",
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256",
+        }
+    )
 
 
 def write_worker_log(client) -> None:
@@ -163,33 +199,60 @@ def write_worker_log(client) -> None:
     log.write_text("\n".join(lines) + "\n")
 
 
-def capture(out: Path, only: list[str]) -> list[str]:
+def capture(
+    out: Path, only: list[str], base: str = BASE, creds=(EMAIL, PASSWORD), values=None, live=False
+) -> list[str]:
     from playwright.sync_api import sync_playwright
 
+    email, password = creds
+    values = values or {}
     out.mkdir(parents=True, exist_ok=True)
     taken = []
+
+    def sign_in(page):
+        page.goto(f"{base}/login")
+        page.fill("input[name=email]", email)
+        page.fill("input[name=password]", password)
+        page.click("button[type=submit]")
+        page.wait_for_load_state("networkidle")
+
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
-        page = browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=2)
-        page.goto(f"{BASE}/login")
-        page.fill("input[name=email]", EMAIL)
-        page.fill("input[name=password]", PASSWORD)
+        page = browser.new_page(
+            viewport={"width": 1440, "height": 900}, device_scale_factor=2, ignore_https_errors=True
+        )
         for name, (path, _, full) in PAGES.items():
-            if only and name not in only:
+            if only and name not in only or live and name in LIVE_SKIP:
                 continue
             if name == "login.png":  # the one page that must not be signed in
-                page.goto(f"{BASE}/logout")
-                page.goto(f"{BASE}/login")
+                page.goto(f"{base}/logout")
+                page.goto(f"{base}/login")
             else:
                 if "ramen_session" not in {c["name"] for c in page.context.cookies()}:
-                    page.goto(f"{BASE}/login")
-                    page.fill("input[name=email]", EMAIL)
-                    page.fill("input[name=password]", PASSWORD)
-                    page.click("button[type=submit]")
-                    page.wait_for_load_state("networkidle")
-                page.goto(f"{BASE}{path}")
+                    sign_in(page)
+                if "{consent}" in path and "consent" not in values:
+                    values["consent"] = live_consent(page, base)
+                page.goto(f"{base}{path.format(**values)}")
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(700)  # htmx partials (worker rows, the dashboard grid) land after load
+            if name == "key-shown.png":  # generate an agent key and catch the one-time display
+                page.fill("form[hx-post='/api/v1/api-keys'] input[name=name]", "claude-desktop")
+                page.select_option("form[hx-post='/api/v1/api-keys'] select[name=client_type]", "agent")
+                replies: list[tuple[str, int]] = []
+
+                def remember(r, replies=replies):
+                    if "/api/v1/api-keys" in r.url:
+                        replies.append((r.url, r.status))
+
+                page.on("response", remember)
+                page.select_option("#group-pick", "demo")  # an agent key names its groups (§14 W1)
+                page.get_by_role("button", name="Add").click()
+                page.get_by_role("button", name="Generate key").click()
+                try:
+                    page.wait_for_function("document.querySelector('#once').innerText.trim().length > 0", timeout=8000)
+                except Exception:  # noqa: BLE001 - say what the API answered instead of a blank picture
+                    print(f"key-shown: no one-time display; api replies {replies}", file=sys.stderr)
+                page.wait_for_timeout(300)
             page.screenshot(path=str(out / name), full_page=full)
             taken.append(name)
             print(f"captured {name} <- {path}")
@@ -197,9 +260,41 @@ def capture(out: Path, only: list[str]) -> list[str]:
     return taken
 
 
-def record(taken: list[str], contract: str) -> None:
+def live_consent(page, base: str) -> str:
+    """Live mode: the consent page needs a registered client; use the first one, or register a throwaway."""
+    import httpx
+
+    cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+    with httpx.Client(base_url=base, cookies=cookies, verify=False, timeout=30) as c:
+        h = {"X-Ramen-CSRF": cookies.get("ramen_csrf", "")}
+        clients = c.get("/api/v1/oauth/clients", headers=h).json()
+        if not clients:
+            clients = [
+                c.post(
+                    "/api/v1/oauth/clients",
+                    json={"name": "Claude Desktop", "redirect_uris": ["http://127.0.0.1:9999/callback"]},
+                    headers=h,
+                ).json()
+            ]
+        groups = c.get("/api/v1/groups", headers=h).json()
+        g = groups[0]["id"] if groups else "demo"
+        zones = c.get("/api/v1/zones", headers=h).json()
+        z = zones[0]["id"] if zones else "a"
+    return consent_query(clients[0]["client_id"], g, z)
+
+
+def record(taken: list[str], contract: str, live: str | None = None) -> None:
     f = ROOT / "docs/img/shots.json"
     doc = json.loads(f.read_text()) if f.exists() else {"ui_contract": contract, "screenshots": {}}
+    if live:  # §17.2: a cloud set is recorded under its own key with the run's date; no staleness gate
+        doc.setdefault("live", {})[live] = {
+            "captured_for": VERSION,
+            "date": datetime.now(UTC).date().isoformat(),
+            "screenshots": {name: PAGES[name][1] for name in taken},
+        }
+        f.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+        print(f"recorded {len(taken)} live shots ({live}) in {f.relative_to(ROOT)}")
+        return
     doc["ui_contract"] = contract
     for name in taken:
         doc["screenshots"][name] = {"page": PAGES[name][1], "captured_for": VERSION}
@@ -213,9 +308,19 @@ def main() -> int:
     ap.add_argument("--only", nargs="*", default=[], help="capture just these file names")
     ap.add_argument("--contract", default=VERSION, help="the release whose UI these shots must match")
     ap.add_argument("--no-record", action="store_true", help="do not touch docs/img/shots.json")
+    ap.add_argument("--base", help="live mode: capture from this console instead of seeding one (§17.2)")
+    ap.add_argument("--email", default=EMAIL)
+    ap.add_argument("--password", default=os.environ.get("RAMEN_SHOTS_PASSWORD", PASSWORD))
+    ap.add_argument("--live", default="gke", help="live mode: the key the set is recorded under")
     a = ap.parse_args()
 
     import httpx
+
+    if a.base:
+        taken = capture(ROOT / a.out, a.only, base=a.base.rstrip("/"), creds=(a.email, a.password), live=True)
+        if not a.no_record:
+            record(taken, a.contract, live=a.live)
+        return 0
 
     if not free(PORT):
         print(f"port {PORT} is busy; set RAMEN_SHOTS_PORT or stop what is there", file=sys.stderr)
@@ -256,8 +361,8 @@ def main() -> int:
             print("console did not start", file=sys.stderr)
             return 1
         with httpx.Client(base_url=BASE, timeout=30, follow_redirects=False) as client:
-            seed(client)
-        taken = capture(ROOT / a.out, a.only)
+            values = seed(client)
+        taken = capture(ROOT / a.out, a.only, values=values)
         if not a.no_record and a.out == "docs/img":
             record(taken, a.contract)
     finally:

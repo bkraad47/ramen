@@ -327,6 +327,7 @@ def test_deploy_hands_the_zone_the_session_secret_and_the_issuer(demo, monkeypat
     r = demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": False})
     assert r.status_code == 202
     assert handed["zone-a"]["RAMEN_OAUTH_ISSUER"] == "https://console.example"
+    assert handed["zone-a"]["RAMEN_PUBLIC_URL"] == "https://console.example"  # absolute resource_metadata (RFC 9728)
     secret = handed["zone-a"]["RAMEN_SESSION_SECRET"]
     assert len(secret) >= 32
     # the same secret in every zone of the group and on every deploy (§16.2: any pod verifies any session)

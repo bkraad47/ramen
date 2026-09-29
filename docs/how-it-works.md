@@ -6,26 +6,10 @@ a way to ship changes without an outage, secrets that never leak into prompts or
 what, and a network edge that only trusted ranges can reach. Ramen is that place.
 
 ## The shape
-```
-git repo (mcp/tools, mcp/resources, mcp/prompts)
-   │  deploy (console)
-   ▼
-bucket  gs://…/<group>  |  s3://…/<group>  |  /buckets/<group>
-   │  sync on load
-   ▼
-worker pod  ┌───────────────┐  JSON-RPC over stdio  ┌──────────────────┐
-            │ ramen-node    │ ───────────────────▶  │ ramen_runtime    │
- gRPC :8080 │ (Rust, tonic) │ ◀───────────────────  │ (Python 3.14)    │
-   ──────▶  │ auth, CIDR,   │                       │ loads protos,    │
-            │ health, logs  │                       │ runs your code   │
-            └───────────────┘                       └──────────────────┘
-   ▲
-   │ ramen.v1.Mcp/Call  metadata: authorization: Bearer rmk_…, ramen-group, ramen-zone
-   │ LB (GKE Gateway | ALB) routes on the two headers → zone's workers
-   │
-ramen-mcp-bridge (stdio ⇄ gRPC)  ◀── Claude Desktop, Cursor, the mcp SDK
-grpcurl / any gRPC client       ◀── agents, CI, curl-style checks
-```
+
+<figure class="ramen-diagram" markdown>
+![One MCP call, end to end: a stdio MCP client talks to ramen-mcp-bridge, which sends each JSON-RPC message as one ramen.v1.Mcp/Call over gRPC to the load balancer; the load balancer matches the ramen-group and ramen-zone metadata and forwards to that zone's worker pod, where the Rust node checks the key and source range and hands the message to the Python runtime, which loads the group's code from the group bucket; alongside, the console clones the group git repo, uploads it on deploy and calls the node directly on its pod IP](img/architecture.svg)
+</figure>
 
 A **group** is a tenant: it owns one git repo, one bucket prefix, its secrets, keys and users. An **environment** binds
 a group to a git ref and to one or more **zones**; a zone is a Kubernetes namespace pinned to a cloud zone with a
@@ -51,7 +35,9 @@ What that buys, compared with the HTTP endpoint 0.1.0–0.3.0 exposed:
 The cost is that browsers and plain MCP-over-HTTP clients cannot connect directly. `ramen-mcp-bridge` (a Python
 console script, also in the worker image) is a stdio MCP server that forwards each message to `Mcp/Call`, so
 Claude Desktop, Cursor and the `mcp` SDK see an ordinary stdio server. See the
-[migration note](how-tos/migrate-0.3.1.md).
+[migration note](how-tos/migrate-0.3.1.md), and
+[Transport and what secures each hop](wiki/transport.md) for what protects each leg of that path — including the
+legs that are plaintext unless you configure TLS.
 
 ## Why a Rust node *and* a Python runtime
 - The node owns everything that must not be slowed down or broken by user code: the gRPC surface, bearer-key
@@ -76,10 +62,10 @@ then rolls `worker`. Any failure scales the canary back to 0 and leaves the stab
 [Canary deploys](wiki/canary.md).
 
 ## Why two kinds of key
-- `rmk_…` **MCP keys** are minted per group and pushed to the workers of that group on deploy. MCP clients send
+- `rmk_…` **MCP keys** are generated per group and pushed to the workers of that group on deploy. MCP clients send
   them as gRPC metadata `authorization: Bearer rmk_…` (the bridge does this for you with `--key`). No keys
   deployed = the node denies everything.
-- `rmn_…` **API keys** are minted per console user, scoped to a role and a set of groups, and sent as
+- `rmn_…` **API keys** are generated per console user, scoped to a role and a set of groups, and sent as
   `X-Ramen-Api-Key` to the console's `/api/v1/*` (still HTTP) for automation (CI deploys, rotation, backups).
   They never reach a worker.
 
@@ -97,5 +83,10 @@ the release version, restorable at any time. See [decision D2](architecture/inde
 The load balancer (GKE Gateway / ALB) routes calls whose metadata says `ramen-group: <g>` and `ramen-zone: <z>` to
 that zone's NEG / target group, with a gRPC health check on every backend. Adding a zone adds a namespace, a
 service account and a route; nothing in the data model or the deploy code assumes one zone. Rebalance adjusts
-backend capacity per zone from the console; IP rules become Cloud Armor / WAF policies plus a node-level CIDR
-check, so a misconfigured LB still cannot expose a worker.
+backend capacity per zone from the console; IP rules become a Cloud Armor policy at the edge (one per group) plus
+a per-zone CIDR check on the node. The node takes the client address from `x-forwarded-for` at a configured
+number of hops counted from the right — the end the proxies append to — so it checks the client rather than the
+load balancer, and a caller cannot choose the address it reads. Get the hop count wrong and it falls back to the
+peer address and denies rather than admits. What stops something reaching a worker directly is the worker
+`NetworkPolicy`, not this list. See
+[Transport and what secures each hop](wiki/transport.md#the-source-range-allowlist).

@@ -400,7 +400,7 @@ async def test_rebalance_fallback_name(cloud, fk):
 async def test_set_ip_rules(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
     r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])
-    assert r["ok"] and not r["attached"] and "not attached" in r["note"]
+    assert r["ok"] and not r["attached"] and "not attached" in r["note"] and "enforced at the node" in r["note"]
     pol = fk.compute_state["policies"]["ramen-demo"]
     assert (
         obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"]
@@ -561,7 +561,7 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "ramen_console.cloud.gcp_k8s.subprocess.run", lambda *a, **k: NS(returncode=1, stdout="", stderr="bad chart")
     )
-    with pytest.raises(ApiError, match="helm"):
+    with pytest.raises(ApiError, match="Helm"):
         await cloud.attach_zone("demo", "a", SPEC)
 
 
@@ -848,3 +848,49 @@ async def test_apply_sa_permissions_without_project_iam_admin(cloud, fk, monkeyp
     r = await cloud.apply_sa_permissions("demo", "a", ["bucket.read", "logs.write"])
     assert r["ok"] and r["applied"] == ["roles/storage.objectViewer"]
     assert r["skipped"] == ["roles/logging.logWriter"] and "console_project_iam" in r["note"]
+
+
+async def test_rebalance_degrades_when_the_compute_api_is_unreachable(cloud, fk):
+    """§7: the load-balancer leg never fails the call, whatever the compute API does — and the HPA
+    re-scale, which needs no cloud API, must survive it (D-CONSOLE-1, found on kind)."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
+
+    class NoCreds(Exception):
+        pass
+
+    def boom(*a, **k):
+        raise NoCreds("Your default credentials were not found")
+
+    fk.compute_state["find_raises"] = boom
+    r = await cloud.rebalance("demo", "a")
+    assert r["ok"] and r["applied"] is False and "NoCreds" in r["note"]
+    assert r["scaled_to"] == 3, "the HPA re-scale must not be lost with the load-balancer leg"
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+    out = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    assert out["ok"] and out["attached"] is False and "enforced at the node" in out["note"]
+    # the control that matters reached the node even though no cloud call could be made
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"
+
+
+async def test_refresh_survives_a_terminating_or_unreadable_namespace(cloud, fk):
+    """D4 (found on GKE): a group delete leaves its namespace Terminating for minutes with the console's
+    RoleBinding already collected, so reads inside it answer 403. Reconcile must survey what it can."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    await cloud.attach_zone("demo", "b", SPEC)
+    fk.k8s.objs[("Namespace", None, "ramen-demo-b")].setdefault("status", {})["phase"] = "Terminating"
+    r = await cloud.refresh()
+    assert [z["zone"] for z in r["zones"]] == ["a"]
+    assert r["skipped"] == [{"namespace": "ramen-demo-b", "reason": "terminating"}]
+
+    real_read = cloud.kube.read
+
+    def forbidden(kind, ns, name):
+        if ns == "ramen-demo-a":
+            raise FakeApiError(403, "Forbidden")
+        return real_read(kind, ns, name)
+
+    cloud.kube.read = forbidden
+    r = await cloud.refresh()
+    assert r["zones"] == [] and r["skipped"][0]["namespace"] == "ramen-demo-a"
+    assert "403" in r["skipped"][0]["reason"] or "Forbidden" in r["skipped"][0]["reason"]

@@ -5,6 +5,13 @@ from fastapi import HTTPException, Request
 
 ROLES = ("super_admin", "group_admin", "viewer")
 RANK = {r: i for i, r in enumerate(reversed(ROLES))}
+# How a role is written for a person (U6/U10); the key is also the CSS token suffix on `.role-*`.
+ROLE_LABELS = {"super_admin": "Super Admin", "group_admin": "Group Admin", "viewer": "Viewer"}
+AGENT_KEY_REFUSED = "Agent key cannot call the console API"
+
+
+def role_label(role: str) -> str:
+    return ROLE_LABELS.get(role, (role or "").replace("_", " ").title())
 
 
 @dataclass
@@ -14,11 +21,18 @@ class Principal:
     role: str
     groups: list[str] = field(default_factory=list)
     kind: str = "user"
+    client_type: str = "devops"
+
+    @property
+    def label(self) -> str:
+        return role_label(self.role)
 
     def to_dict(self):
         d = {"id": self.id, "name": self.name, "role": self.role, "groups": self.groups, "kind": self.kind}
         if self.kind == "user":
             d["email"] = self.name
+        else:
+            d["client_type"] = self.client_type
         return d
 
 
@@ -38,10 +52,12 @@ def require(role: str, group_param: str | None = None):
         if p is None:
             if not request.url.path.startswith("/api/"):
                 raise HTTPException(303, headers={"Location": f"/login?next={request.url.path}"})
-            raise HTTPException(401, "authentication required")
+            raise HTTPException(401, "Authentication required")
+        if p.kind == "apikey" and p.client_type == "agent":  # D21: agent keys belong to workers, not the console
+            raise HTTPException(403, AGENT_KEY_REFUSED)
         group = request.path_params.get(group_param) if group_param else None
         if not can(p, role, group):
-            raise HTTPException(403, f"requires {role}" + (f" on group {group}" if group else ""))
+            raise HTTPException(403, f"Requires {role_label(role)}" + (f" on group {group}" if group else ""))
         return p
 
     return dep

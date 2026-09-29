@@ -116,5 +116,7 @@ def test_redeploy_is_idempotent(admin, deployed):
 
 
 def test_console_logs_reach_worker_output(admin, deployed):
+    if E.no_cloud("logs"):
+        pytest.skip("no Cloud Logging here (RAMEN_NO_CLOUD=logs); the logs suites run on the compose stack and GKE")
     r = admin.get("logs", params={"group": GROUP, "zone": ZONE, "tail": 50})
     assert r.status_code == 200

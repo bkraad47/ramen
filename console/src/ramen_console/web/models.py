@@ -105,6 +105,7 @@ class KeyIn(ListFields):
     name: str
     role: str | None = None
     groups: list[str] | None = None
+    client_type: str = "devops"
 
 
 class RequestIn(BaseModel):

@@ -7,7 +7,7 @@ Poll `GET /api/v1/jobs/{id}`; the group page polls it every 2 s and shows *refre
 1. **Sync** the group repo at the environment's ref into the bucket (`gs://` / `s3://` / `/buckets`). GitHub token
    from a secret named `GITHUB_TOKEN` (env- or group-scoped), else the group's stored fallback token.
 2. **Write config**: the zone Secret `ramen-deploy` (cloud) or `<bucket>/.ramen/env-<zone>` (local) with
-   `RAMEN_MCP_KEYS` (all minted `rmk_` keys), `RAMEN_SECRET_<GROUP>__<NAME>` for secrets scoped to this env/zone,
+   `RAMEN_MCP_KEYS` (every `rmk_` key generated for the group), `RAMEN_SECRET_<GROUP>__<NAME>` for secrets scoped to this env/zone,
    `RAMEN_BLOCKED`, `RAMEN_VERBOSE`, group/env/zone labels and `RAMEN_ALLOWED_CIDRS`.
 3. **Canary**: scale `worker-canary` to 1, rollout restart, wait for the pod to be ready
    (`RAMEN_DEPLOY_TIMEOUT_SECS`, 300 s).

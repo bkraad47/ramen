@@ -38,6 +38,22 @@ def deploy(admin, blocked):
     assert job["status"] == "ok", job
 
 
+def fresh_calls(node, n: int = 8) -> list[str]:
+    """`call_blocked` over `n` brand-new connections.
+
+    One gRPC channel is one TCP connection and a Service in front of a zone selects **both** tracks
+    (`app=worker`, CONTRACTS §7), so a single reused channel only ever reaches one pod. A blocked name has to be
+    denied by every worker of the zone or it is not blocked.
+    """
+    from ramen_tests.mcp_client import Node
+
+    out = []
+    for _ in range(n):
+        with Node(node.target, node.key, group=node.group, zone=node.zone, tls=node.tls, timeout=node.timeout) as c:
+            out.append(call_blocked(c))
+    return out
+
+
 def settled(node, hidden: bool, timeout: float = 90) -> list[str]:
     """tools/list once the LB has stopped routing to the pre-deploy pods (they drain a few seconds after the job)."""
     deadline, names = time.monotonic() + timeout, tool_names(node)
@@ -58,4 +74,25 @@ def test_block_hides_and_denies_then_unblock_restores(admin, node):
     finally:
         deploy(admin, [])
     assert TOOL in settled(node, hidden=False)
+
+
+def test_a_blocked_tool_is_denied_by_every_worker_in_the_zone(admin, node):
+    """§9: blocking is a control, so it has to hold for every connection into the zone, not for most of them.
+
+    This is the case that the single-channel check above cannot see. It fails today when the environment was
+    deployed with `canary:false`, because that path never restarts `worker-canary` and the zone Service routes to
+    it, so the previous configuration — including the unblocked tool — keeps being served.
+    """
+    deploy(admin, [TOOL])
+    try:
+        settled(node, hidden=True)
+        got = fresh_calls(node)
+        assert set(got) == {"jsonrpc -32601"}, (
+            f"a blocked tool was still executed on some connections: {got}\n"
+            "DEFECT stale-canary: a deploy with canary:false leaves worker-canary running the previous config, and "
+            "the zone Service selects both tracks, so the block only applies to the share of traffic that lands on "
+            "a stable pod. Scale the canary to 0, or roll it too, when a deploy is not using it."
+        )
+    finally:
+        deploy(admin, [])
     assert call_blocked(node) == "ok"

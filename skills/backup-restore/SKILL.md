@@ -20,7 +20,7 @@ bucket and needs no backup. Super-admin `rmn_` key required: `H='X-Ramen-Api-Key
 2. Stop writers: tell admins, or set `auth.password_login:false` temporarily (`PUT $U/config/auth`) if the team agrees.
 3. `POST $U/backups/<id>/restore` (backup must exist on that console; to restore into a new console, upload the JSON to `<bucket>/_backups/` with the same name first, or use `target:"local"` and copy it to `RAMEN_BACKUP_ROOT`).
 4. Users are restored without password hashes: the bootstrap super admin is re-applied from env on the next console start (`kubectl -n ramen-system rollout restart deploy/console`); other users log in via OAuth/magic link or get a password reset (`POST $U/users/<id>/password`).
-5. Re-add secret values (if `RAMEN_SECRETS_BACKEND=store`), re-mint `rmn_` keys, then deploy every environment so zones are reconciled (`POST $U/refresh` first on GCP/AWS to re-discover namespaces).
+5. Re-add secret values (if `RAMEN_SECRETS_BACKEND=store`), generate `rmn_` keys again, then deploy every environment so zones are reconciled (`POST $U/refresh` first on GCP/AWS to re-discover namespaces).
 
 ## Validate
 (read-only sub-agent; viewer or super-admin `rmn_` key; the backup file path)

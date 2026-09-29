@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Environments{% endblock %}
 {% block body %}
-{% macro act(r) %}<a class="btn ghost sm" href="/groups/{{ r.group }}">group</a>{% endmacro %}
+{% macro act(r) %}<a class="btn ghost sm" href="/groups/{{ r.group }}">Open group</a>{% endmacro %}
 {{ table(envs, ['group', 'name', 'ref', 'zones', 'verbose', 'last_deploy'], '/api/v1/environments', 'Environments', act) }}
 <p class="muted">Create and deploy environments from a group's page.</p>
 {% endblock %}

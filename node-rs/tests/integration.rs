@@ -319,6 +319,7 @@ async fn trust_proxy_uses_forwarded_ip() {
         code(&call_raw(&strict, &xff, ping.as_bytes()).await),
         Code::PermissionDenied
     );
+    // legacy RAMEN_TRUST_PROXY=1 = one hop = the right-most (proxy-appended) entry
     let trusting = serve(
         app(cfg(&[
             ("RAMEN_ALLOWED_CIDRS", "10.0.0.0/8"),
@@ -331,6 +332,149 @@ async fn trust_proxy_uses_forwarded_ip() {
         call_raw(&trusting, &xff, ping.as_bytes()).await.unwrap()["result"],
         json!({})
     );
+}
+
+/// Claims review rows 14/36: the allowlist must not be spoofable by a caller-supplied `x-forwarded-for`.
+/// The real peer here is 127.0.0.1, which the allowlist excludes, so anything that ends up trusting a
+/// caller-chosen entry shows up as an allowed call.
+#[tokio::test]
+async fn forwarded_for_spoof_is_refused_and_hop_count_is_per_provider() {
+    let allowed = "203.0.113.9"; // inside RAMEN_ALLOWED_CIDRS
+    let real = "198.51.100.1"; // a real client outside it
+    // GCP external ALB appends "<client>, <lb>": the client is the 2nd entry from the right.
+    let gcp = xff_node("2", "203.0.113.0/24").await;
+    assert_eq!(
+        xff_status(&gcp, &format!("{allowed}, {real}, 130.211.0.5")).await,
+        Code::PermissionDenied,
+        "a left-most entry the caller chose must not be trusted"
+    );
+    assert_eq!(
+        xff_status(&gcp, &format!("{real}, {allowed}, 130.211.0.5")).await,
+        Code::Ok,
+        "the entry the GCP load balancer appends the client as must be honoured"
+    );
+    // AWS ALB appends "<client>": the client is the right-most entry.
+    let aws = xff_node("1", "203.0.113.0/24").await;
+    assert_eq!(
+        xff_status(&aws, &format!("{allowed}, {real}")).await,
+        Code::PermissionDenied
+    );
+    assert_eq!(
+        xff_status(&aws, &format!("{real}, {allowed}")).await,
+        Code::Ok
+    );
+    // Too short or malformed for the configured hop count → the peer address, not a header value.
+    for xff in [allowed, "junk, 203.0.113.9", ""] {
+        assert_eq!(
+            xff_status(&gcp, xff).await,
+            Code::PermissionDenied,
+            "fell back to a header value for {xff:?}"
+        );
+    }
+    // ... and that fallback really is the peer (127.0.0.1), not a blanket denial.
+    let loopback = xff_node("2", "127.0.0.0/8").await;
+    assert_eq!(xff_status(&loopback, allowed).await, Code::Ok);
+    // Proxy trust off (the default) ignores the header entirely.
+    let off = xff_node("0", "203.0.113.0/24").await;
+    assert_eq!(
+        xff_status(&off, &format!("{real}, {allowed}, 130.211.0.5")).await,
+        Code::PermissionDenied
+    );
+    assert_eq!(xff_status(&off, allowed).await, Code::PermissionDenied);
+}
+
+async fn xff_node(hops: &str, cidrs: &str) -> Node {
+    let c = cfg(&[
+        ("RAMEN_ALLOWED_CIDRS", cidrs),
+        ("RAMEN_TRUST_PROXY_HOPS", hops),
+    ]);
+    serve(app(c).await).await
+}
+
+/// `Mcp/Call ping` with a good key and this `x-forwarded-for`, as a gRPC code.
+async fn xff_status(node: &Node, xff: &str) -> Code {
+    let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let md = [("authorization", "Bearer k1"), ("x-forwarded-for", xff)];
+    code(&call_raw(node, &md, ping.as_bytes()).await)
+}
+
+/// Claims review, incidental: `Admin/Reload` may lower `RAMEN_MAX_INFLIGHT` below the permits the (never
+/// resized) semaphore already holds, which used to make `metrics_json` subtract with overflow.
+#[tokio::test]
+async fn reload_to_a_lower_max_inflight_keeps_metrics_readable() {
+    let start = cfg(&[
+        ("RAMEN_MAX_INFLIGHT", "4"),
+        ("RAMEN_PYTHON", "/nonexistent/python"),
+    ]);
+    let lower = cfg(&[
+        ("RAMEN_MAX_INFLIGHT", "1"),
+        ("RAMEN_PYTHON", "/nonexistent/python"),
+    ]);
+    let n = serve(app_with(start, Box::new(move || Ok(lower.clone()))).await).await;
+    // the load fails (no interpreter), but the config swap happens regardless
+    assert_eq!(
+        code(&reload(&n, &[("x-ramen-admin-key", "adm")]).await),
+        Code::Internal
+    );
+    assert_eq!(n.app.cfg.read().await.max_inflight, 1);
+    let m = metrics(&n).await;
+    assert_eq!(
+        (m["inflight"].as_u64(), m["load"].as_str()),
+        (Some(0), Some("low"))
+    );
+    let permit = n.app.sem.acquire_many(3).await.unwrap();
+    let m = metrics(&n).await;
+    assert_eq!(
+        m["inflight"].as_u64(),
+        Some(3),
+        "measured against the live semaphore"
+    );
+    drop(permit);
+}
+
+/// The reflection services run ahead of every guard, so whether they are registered is a deliberate choice
+/// (`RAMEN_REFLECTION`, default on; the worker chart turns it off).
+#[tokio::test]
+async fn reflection_is_on_by_default_and_switchable() {
+    let on = serve(app(cfg(&[])).await).await;
+    let services = list_services(&on).await.expect("reflection on by default");
+    for want in ["ramen.v1.Mcp", "ramen.v1.Admin", "grpc.health.v1.Health"] {
+        assert!(services.iter().any(|s| s == want), "{want} in {services:?}");
+    }
+    let off = serve(app(cfg(&[("RAMEN_REFLECTION", "0")])).await).await;
+    assert_eq!(
+        list_services(&off).await.err().map(|e| e.code()),
+        Some(Code::Unimplemented)
+    );
+    // ... and the rest of the surface is untouched.
+    assert_eq!(health(&off, "ramen.v1.Admin").await, ServingStatus::Serving);
+    assert_eq!(
+        rpc(&off, "k1", "ping", json!({})).await.unwrap()["result"],
+        json!({})
+    );
+}
+
+async fn list_services(node: &Node) -> Result<Vec<String>, Status> {
+    use tonic_reflection::pb::v1::ServerReflectionRequest;
+    use tonic_reflection::pb::v1::server_reflection_client::ServerReflectionClient;
+    use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
+    use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
+    let mut c = ServerReflectionClient::new(channel(node.addr).await);
+    let req = ServerReflectionRequest {
+        host: String::new(),
+        message_request: Some(MessageRequest::ListServices(String::new())),
+    };
+    let mut stream = c
+        .server_reflection_info(tokio_stream::iter(vec![req]))
+        .await?
+        .into_inner();
+    let msg = stream.message().await?.expect("one reflection response");
+    match msg.message_response {
+        Some(MessageResponse::ListServicesResponse(r)) => {
+            Ok(r.service.into_iter().map(|s| s.name).collect())
+        }
+        other => panic!("unexpected reflection response: {other:?}"),
+    }
 }
 
 #[tokio::test]

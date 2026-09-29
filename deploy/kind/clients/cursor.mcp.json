@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "ramen": {
+      "command": "/path/to/ramen/runtime-py/.venv/bin/ramen-mcp-bridge",
+      "args": [
+        "--target",
+        "localhost:18082",
+        "--key",
+        "rmk_REPLACE_ME",
+        "--group",
+        "demo",
+        "--zone",
+        "b",
+        "--insecure"
+      ],
+      "env": {
+        "RAMEN_BRIDGE_TIMEOUT": "120"
+      }
+    }
+  }
+}

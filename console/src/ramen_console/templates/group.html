@@ -3,50 +3,63 @@
 <div class="card"><b>Repo:</b> <code>{{ group.repo_url or '—' }}</code> @ <code>{{ group.ref }}</code> · MCP auth: <span class="badge">{{ group.mcp_auth.mode }}</span>
 {% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}" hx-ext="json" hx-swap="none">
 <label>Repo URL<input name="repo_url" value="{{ group.repo_url }}"></label><label>Ref<input name="ref" value="{{ group.ref }}"></label>
-<label>Fallback GitHub token (stored encrypted, never shown)<input name="github_token" type="password" placeholder="prefer a GITHUB_TOKEN secret"></label><button>Save</button></form>{% endif %}</div>
+<label>Fallback GitHub token (stored encrypted, never shown)<input name="github_token" type="password" placeholder="Prefer a GITHUB_TOKEN secret"></label><button>Save</button></form>{% endif %}</div>
 
 <h2>Environments</h2>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/environments" hx-ext="json" hx-swap="none">
 <label>Name<input name="name" required></label><label>Ref<input name="ref" placeholder="{{ group.ref }}"></label><label>Zones (comma)<input name="zones" placeholder="{{ zones|map(attribute='id')|join(',') }}"></label><button>Add environment</button></form>{% endif %}
-<div class="card"><table><tr><th>env</th><th>ref</th><th>zones</th><th>verbose</th><th>last deploy</th><th></th></tr>
+<div class="card"><table><tr><th>Environment</th><th>Ref</th><th>Zones</th><th>Verbose</th><th>Last deploy</th><th></th></tr>
 {% for e in envs %}<tr><td>{{ e.name }}</td><td>{{ e.ref }}</td><td>{{ e.zones|join(', ') }}</td>
-<td>{% if can_admin %}<button class="sm ghost" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'on → off' if e.verbose else 'off → on' }}</button>{% else %}{{ 'on' if e.verbose else 'off' }}{% endif %}</td>
+<td>{% if can_admin %}<button class="sm ghost" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'Turn off' if e.verbose else 'Turn on' }}</button>{% else %}{{ 'On' if e.verbose else 'Off' }}{% endif %}</td>
 <td>{% if e.last_deploy %}<span class="badge {{ e.last_deploy.status }}">{{ e.last_deploy.status }}</span> {{ e.last_deploy.at }}{% if e.last_deploy.error %}<div class="err">{{ e.last_deploy.error }}</div>{% endif %}{% endif %}</td>
 <td>{% if can_admin %}<button class="sm" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/deploy" hx-ext="json" hx-vals='{"canary": true}' hx-target="#jobs" hx-swap="afterbegin">Deploy (canary)</button>
-<button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}" hx-confirm="Delete environment?" hx-swap="none">delete</button>{% endif %}</td></tr>
-{% else %}<tr><td colspan="6" class="muted">no environments</td></tr>{% endfor %}</table></div>
+<button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}" hx-confirm="Delete environment?" hx-swap="none">Delete</button>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No environments</td></tr>{% endfor %}</table></div>
 
-<h2>Deploy jobs</h2><div id="jobs">{% for job in jobs %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">no jobs yet</p>{% endif %}</div>
+<h2>Deploy jobs</h2><div id="jobs">{% for job in jobs %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">No jobs yet</p>{% endif %}</div>
 
-<h2>Zones / workers</h2>
-<div class="card"><table><tr><th>zone</th><th>count</th><th>size</th><th>allowed sizes</th><th>live</th><th>IP allow-list</th><th>service account</th><th></th></tr>
+<h2>Zones and workers</h2>
+<div class="card"><table><tr><th>Zone</th><th>Count</th><th>Size</th><th>Allowed sizes</th><th>Live</th><th>IP allow-list</th><th>Service account</th><th>Actions</th></tr>
 {% for z in zones %}{% set w = workers[z.id] %}<tr><td>{{ z.id }}{% if z.provider == 'gcp' %}<br><code>ramen-{{ group.id }}-{{ z.id }}</code>{% endif %}</td><td>{{ w.count }}</td><td><span class="badge">{{ w.size }}</span></td>
 <td>{{ (w.allowed_sizes or [])|join(', ') or '—' }}</td><td hx-get="/ui/groups/{{ group.id }}/zones/{{ z.id }}/workers" hx-trigger="load" hx-swap="innerHTML">…</td><td>{{ (w.cidrs or [])|join(', ') }}</td><td>{{ w.service_account or '—' }}</td>
-<td>{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/workers" hx-ext="json" hx-swap="none"><input name="count" type="number" min="1" value="{{ w.count }}" style="min-width:70px">{% if p.role == 'super_admin' %}<select name="size">{% for s in ['s', 'm', 'l'] %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select><input name="allowed_sizes" placeholder="allowed: s,m" value="{{ (w.allowed_sizes or [])|join(',') }}" style="min-width:90px">{% elif w.allowed_sizes %}<select name="size">{% for s in w.allowed_sizes %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select>{% endif %}<button class="sm">scale</button></form>
-<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/ip-rules" hx-ext="json" hx-swap="none"><input name="cidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" value="{{ (w.cidrs or [])|join(',') }}"><button class="sm ghost">IP rules</button></form>
-<button class="sm ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/rebalance" hx-swap="none">Rebalance</button>
-{% if p.role == 'super_admin' %}<button class="sm ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/service-account" hx-swap="none">Create SA</button>{% endif %}
-<a class="btn ghost sm" href="/logs?group={{ group.id }}&zone={{ z.id }}">logs</a>{% endif %}</td></tr>{% endfor %}</table></div>
+<td>{% if can_admin %}<div class="zone-actions">
+<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/workers" hx-ext="json" hx-swap="none"><input name="count" type="number" min="1" value="{{ w.count }}" aria-label="Worker count">{% if p.role == 'super_admin' %}<select name="size" aria-label="Worker size">{% for s in ['s', 'm', 'l'] %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select><input name="allowed_sizes" placeholder="s,m" value="{{ (w.allowed_sizes or [])|join(',') }}" aria-label="Allowed sizes">{% elif w.allowed_sizes %}<select name="size" aria-label="Worker size">{% for s in w.allowed_sizes %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select>{% endif %}<button class="act">Scale workers</button></form>
+<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/ip-rules" hx-ext="json" hx-swap="none"><input name="cidrs" placeholder="10.0.0.0/8" value="{{ (w.cidrs or [])|join(',') }}" aria-label="Allowed CIDRs"><button class="act ghost">IP rules</button></form>
+<button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/service-account" hx-swap="none" {{ 'disabled title="Only a super admin may create a service account"' if p.role != 'super_admin' }}>Create service account</button>
+<button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/rebalance" hx-swap="none">Rebalance</button>
+<a class="btn ghost act" href="/logs?group={{ group.id }}&zone={{ z.id }}">View logs</a>
+</div>{% else %}<span class="muted">—</span>{% endif %}</td></tr>{% endfor %}</table></div>
 
-<h2>Loaded packages (tools / resources / prompts)</h2>
-{% for e in envs %}<div class="card"><b>{{ e.name }}</b> · blocked: {% for n in e.blocked or [] %}<span class="badge error">{{ n }}</span>{% if can_admin %} <button class="sm ghost" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or [])|reject("equalto", n)|list}) }}' hx-swap="none">unblock</button>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}
-{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-swap="none"><input name="blocked" value="{{ (e.blocked or [])|join(',') }}" placeholder="tool_a,resource_b (comma)"><button class="sm ghost">Set blocked list</button></form>{% endif %}
-<p class="muted">Blocked names disappear from list calls and answer <code>-32601</code>; takes effect on the next deploy.</p>
-{% if e.last_deploy and e.last_deploy.packages %}{% for w, pk in e.last_deploy.packages.items() %}<b>{{ w }}</b><table><tr><th>kind</th><th>name</th><th>call</th><th></th></tr>
-{% for kind in ['tools', 'resources', 'prompts'] %}{% for it in pk.get(kind, []) %}{% set n = it.name or it.uri %}<tr><td>{{ kind }}</td><td><code>{{ n }}</code>{% if it.uri and it.name %} <span class="muted">{{ it.uri }}</span>{% endif %}</td><td><code class="muted">{{ tojson(it.get('inputSchema') or it.get('arguments') or {}) }}</code></td>
-<td>{% if n in (e.blocked or []) %}<span class="badge error">blocked</span>{% elif can_admin %}<button class="sm danger" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or []) + [n]}) }}' hx-swap="none">block</button>{% endif %}</td></tr>{% endfor %}{% endfor %}
-{% if pk.errors %}<tr><td colspan="4"><span class="badge error">errors</span> <code>{{ tojson(pk.errors) }}</code></td></tr>{% endif %}</table>{% endfor %}{% else %}<span class="muted">deploy to see the package list reported by workers</span>{% endif %}</div>{% else %}<p class="muted">no environments</p>{% endfor %}
+<h2>Packages per zone (tools, resources and prompts)</h2>
+{% for e in envs %}<div class="card"><b>{{ e.name }}</b> · Blocked across the environment: {% for n in e.blocked or [] %}<span class="badge error">{{ n }}</span>{% if can_admin %} <button class="sm ghost" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or [])|reject("equalto", n)|list}) }}' hx-swap="none">Unblock</button>{% endif %}{% else %}<span class="muted">None</span>{% endfor %}
+{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-swap="none"><label>Blocked everywhere (comma)<input name="blocked" value="{{ (e.blocked or [])|join(',') }}" placeholder="tool_a,resource_b"></label><button class="sm ghost">Save list</button></form>{% endif %}
+<p class="muted">Disabled names disappear from list calls and answer <code>-32601</code>; a change takes effect on the next deploy.</p>
+{% set packages = (e.last_deploy and e.last_deploy.packages) or {} %}
+{% for z in e.zones %}{% set zb = (e.blocked_zones or {}).get(z, []) %}
+<div class="pkg-zone"><h3>Zone {{ z }}</h3>
+{% set ns = namespace(found=false) %}
+{% for wkey, pk in packages.items() %}{% if wkey.split(' ')[0] == z %}{% set ns.found = true %}
+<table><tr><th>Kind</th><th>Name</th><th>Call</th><th>State</th></tr>
+{% for kind in ['tools', 'resources', 'prompts'] %}{% for it in pk.get(kind, []) %}{% set n = it.name or it.uri %}{% set off = n in zb or n in (e.blocked or []) %}
+<tr><td>{{ kind }}</td><td><code>{{ n }}</code>{% if it.uri and it.name %} <span class="muted">{{ it.uri }}</span>{% endif %}</td><td><code class="muted">{{ tojson(it.get('inputSchema') or it.get('arguments') or {}) }}</code></td>
+<td>{% if n in (e.blocked or []) %}<span class="badge error">Disabled everywhere</span>{% elif can_admin %}<button class="sm {{ 'ghost' if off else 'danger' }}" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/zones/{{ z }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (zb|reject("equalto", n)|list) if off else (zb + [n])}) }}' hx-swap="none">{{ 'Enable' if off else 'Disable' }}</button>{% else %}<span class="badge {{ 'error' if off else 'ok' }}">{{ 'Disabled' if off else 'Enabled' }}</span>{% endif %}</td></tr>
+{% endfor %}{% endfor %}
+{% if pk.errors %}<tr><td colspan="4"><span class="badge error">Errors</span> <code>{{ tojson(pk.errors) }}</code></td></tr>{% endif %}</table>{% endif %}{% endfor %}
+{% if not ns.found %}<p class="muted">Deploy to see the packages this zone's workers report.</p>{% endif %}</div>
+{% else %}<p class="muted">No zones attached to this environment.</p>{% endfor %}</div>
+{% else %}<p class="muted">No environments</p>{% endfor %}
 
 <h2>Service-account permissions</h2>
 <div class="card"><p class="muted">Approved permissions per zone are bound to the zone's service account (least privilege, F6.5). Requests go to a super admin.</p>
-<table><tr><th>zone</th><th>service account</th><th>approved permissions</th></tr>{% for z in zones %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td><td>{{ (workers[z.id].sa_permissions or [])|join(', ') or '—' }}</td></tr>{% endfor %}</table>
+<table><tr><th>Zone</th><th>Service account</th><th>Approved permissions</th></tr>{% for z in zones %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td><td>{{ (workers[z.id].sa_permissions or [])|join(', ') or '—' }}</td></tr>{% endfor %}</table>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/requests" hx-ext="json" hx-vals='{"group": "{{ group.id }}"}' hx-swap="none"><label>Zone<select name="zone">{% for z in zones %}<option>{{ z.id }}</option>{% endfor %}</select></label>
 <label>Permission<select name="permission">{% for q in permissions %}<option value="{{ q.permission }}">{{ q.permission }} — {{ q.desc }}</option>{% endfor %}</select></label><button>Request permission</button></form>{% endif %}
-{% if requests %}<table><tr><th>requested by</th><th>zone</th><th>permission</th><th>status</th></tr>{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.zone }}</td><td><code>{{ q.permission }}</code></td><td><span class="badge {{ 'ok' if q.status == 'approved' else '' }}">{{ q.status }}</span></td></tr>{% endfor %}</table>{% endif %}</div>
+{% if requests %}<table><tr><th>Requested by</th><th>Zone</th><th>Permission</th><th>Status</th></tr>{% for q in requests %}<tr><td>{{ q.email }}</td><td>{{ q.zone }}</td><td><code>{{ q.permission }}</code></td><td><span class="badge {{ 'ok' if q.status == 'approved' else '' }}">{{ q.status }}</span></td></tr>{% endfor %}</table>{% endif %}</div>
 
 <h2>MCP auth keys</h2>
-{% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/mcp-keys" hx-ext="json" hx-target="#mcp-once" hx-swap="innerHTML"><label>Key name<input name="name" required></label><button>Mint MCP key</button></form><div id="mcp-once"></div>{% endif %}
-{% macro mact(r) %}{% if can_admin %}<button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/mcp-keys/{{ r.id }}" hx-swap="none">revoke</button>{% endif %}{% endmacro %}
+{% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/mcp-keys" hx-ext="json" hx-target="#mcp-once" hx-swap="innerHTML"><label>Key name<input name="name" required></label><button>Generate key</button></form><div id="mcp-once"></div>
+<p class="muted">A group MCP key is an agent key: language models present it to this group's workers. It is never accepted by the console API.</p>{% endif %}
+{% macro mact(r) %}{% if can_admin %}<button class="sm danger" hx-delete="/api/v1/groups/{{ group.id }}/mcp-keys/{{ r.id }}" hx-swap="none">Revoke</button>{% endif %}{% endmacro %}
 {{ table(mcp_keys, ['name', 'env', 'zone', 'created', 'created_by'], '/api/v1/groups/' + group.id + '/mcp-keys', 'MCP keys (values never shown)', mact) }}
 
 <h2>Service-account restrictions</h2>

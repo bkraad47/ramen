@@ -35,6 +35,8 @@ spec:
             - { name: RAMEN_BUCKET, value: {{ $root.Values.bucketPath | quote }} }
             - { name: RAMEN_BUCKET_URI, value: {{ include "rw.bucketUri" $root | quote }} }
             - { name: RAMEN_TRACK, value: {{ $t.track | quote }} }
+            - { name: RAMEN_TRUST_PROXY_HOPS, value: {{ include "rw.trustProxyHops" $root | quote }} }   # counted from the right (CONTRACTS §11)
+            - { name: RAMEN_REFLECTION, value: {{ ternary "1" "0" $root.Values.reflection | quote }} }
             {{- range $k, $v := $root.Values.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}

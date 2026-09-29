@@ -3,6 +3,6 @@
 <div class="card"><form class="inline" hx-post="/api/v1/backups" hx-ext="json" hx-swap="none">
 <label>Target<select name="target"><option>local</option><option>bucket</option></select></label><label>Path override (optional)<input name="path"></label><button>Create backup</button></form>
 <p class="muted">JSON of groups, zones, environments, workers, users (no password hashes) and config, tagged with release version. Secrets are not included.</p></div>
-{% macro act(r) %}<a class="btn ghost sm" href="/api/v1/backups/{{ r.id }}/download">download</a> <button class="sm" hx-post="/api/v1/backups/{{ r.id }}/restore" hx-confirm="Restore {{ r.id }} over current state?" hx-swap="none">restore</button>{% endmacro %}
+{% macro act(r) %}<a class="btn ghost sm" href="/api/v1/backups/{{ r.id }}/download">Download</a> <button class="sm" hx-post="/api/v1/backups/{{ r.id }}/restore" hx-confirm="Restore {{ r.id }} over current state?" hx-swap="none">Restore</button>{% endmacro %}
 {{ table(backups, ['id', 'created', 'release_version', 'target', 'path', 'by', 'counts'], '/api/v1/backups', 'Backups', act) }}
 {% endblock %}

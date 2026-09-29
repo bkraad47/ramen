@@ -74,7 +74,11 @@ message JsonRpc { bytes body = 1; }                    // UTF-8 JSON-RPC 2.0 req
 |---|---|
 | `authorization: Bearer rmk_…` | the group's MCP key; missing/wrong → gRPC `UNAUTHENTICATED` (empty key set = deny all) |
 | `ramen-group`, `ramen-zone` | routing at the load balancer; not an auth signal |
-| (peer address / `x-forwarded-for` with `RAMEN_TRUST_PROXY=1`) | must match `RAMEN_ALLOWED_CIDRS` → else `PERMISSION_DENIED` |
+| (client address: the peer, or the `RAMEN_TRUST_PROXY_HOPS`-th `x-forwarded-for` entry counted from the right) | must match `RAMEN_ALLOWED_CIDRS` → else `PERMISSION_DENIED` |
+
+Every guard behind that table — the constant-time key compare, the source-range allowlist, where TLS starts and
+stops, per-zone identity — is written out hop by hop in
+[Transport and what secures each hop](transport.md).
 
 Transport failures are gRPC statuses; protocol failures stay JSON-RPC errors in the body (`-32601` for a blocked or
 unknown tool, `-32602` for bad arguments, `isError: true` for an exception in your code). Messages are capped at

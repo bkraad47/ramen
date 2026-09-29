@@ -58,9 +58,9 @@ async def test_gcp_backend_errors():
             raise FakeApiError(500, "internal")
 
     b = GcpSecrets("p1", Boom())
-    with pytest.raises(ApiError, match="secret manager"):
+    with pytest.raises(ApiError, match="Secret Manager"):
         await b.put("g", None, None, "A", "v")
-    with pytest.raises(ApiError, match="secret manager"):
+    with pytest.raises(ApiError, match="Secret Manager"):
         await b.delete({"ref": "sm://projects/p1/secrets/x"})
 
 

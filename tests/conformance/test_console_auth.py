@@ -36,7 +36,14 @@ def world(admin: Console, console_url, suffix):
     uid = ok(admin.create_user(gadmin, PW, "group_admin", [g]), 201).json()["id"]
     c = Console(console_url)
     ok(c.login(gadmin, PW), 303, 200)
-    yield {"zone": zone, "group": g, "gadmin": gadmin, "gadmin_c": c, "uid": uid}
+
+    def relogin():
+        """V1.4: a change to `config/auth` bumps every user's session epoch, so any client that logged in before it
+        is dead — including this one. The acting super admin is re-issued a session in the same response; nobody
+        else is."""
+        ok(c.login(gadmin, PW), 303, 200)
+
+    yield {"zone": zone, "group": g, "gadmin": gadmin, "gadmin_c": c, "uid": uid, "relogin": relogin}
     c.close()
     admin.delete("user", id=uid)
     admin.delete("group", group=g)
@@ -68,6 +75,12 @@ def test_auth_config_toggle_is_super_admin_only_and_audited(admin, world):
     if not cfg["providers"] and not cfg["break_glass"] and not cfg["magic_link"]:
         r = admin.put("config_auth", {"password_login": False})
         assert r.status_code == 422, "disabling password login with no other way in must be refused"
+    # V1.4: an accepted change to config/auth bumps every user's session epoch. The acting super admin is re-issued a
+    # session in the same response; every other client in this module has to log in again, or the tests after this
+    # one see 401 on calls that have nothing to do with authentication.
+    assert admin.me().status_code == 200, "the acting super admin was not re-issued a session"
+    world["relogin"]()
+    assert world["gadmin_c"].me().status_code == 200
 
 
 def test_permission_request_approve_and_rules(admin, world):

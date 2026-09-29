@@ -50,3 +50,14 @@ def node_target(url: str) -> tuple[str, bool]:
 def routing_metadata() -> list[tuple[str, str]]:
     """`ramen-group` / `ramen-zone` sent on every call so an LB can route by headers (§11)."""
     return [("ramen-group", env("RAMEN_E2E_GROUP", "demo")), ("ramen-zone", env("RAMEN_E2E_ZONE", "local"))]
+
+
+def no_cloud(feature: str) -> bool:
+    """`RAMEN_NO_CLOUD=iam,logs,...` — cloud services the target deployment genuinely does not have.
+
+    Only `deploy/kind/test.sh` sets it: a kind cluster runs the GCP adapter's Kubernetes paths but has no IAM,
+    Cloud Logging, Cloud Armor or compute API. Cases that need one of those then **skip with a reason** instead of
+    failing, and stay failures everywhere else, including GKE. Never set it for a cloud run.
+    """
+    wanted = {f.strip().lower() for f in (env("RAMEN_NO_CLOUD", "") or "").split(",") if f.strip()}
+    return feature.lower() in wanted

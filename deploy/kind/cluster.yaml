@@ -1,0 +1,19 @@
+# kind cluster for the v0.4.0 multi-zone / autoscale / rebalance proofs (CONTRACTS §12.3).
+# Two worker nodes carry topology.kubernetes.io/zone labels so the per-zone nodeSelector the console renders
+# (zone record `region` → nodeSelector, CONTRACTS §7) pins each zone's pods to its own node, as on GKE.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ramen
+nodes:
+  - role: control-plane
+    extraPortMappings:                  # NodePort → host (deploy/kind/nodeports.yaml); kube-proxy routes to any node
+      - { containerPort: 30080, hostPort: 18000, protocol: TCP }   # console HTTP
+      - { containerPort: 30081, hostPort: 18081, protocol: TCP }   # zone a worker, gRPC h2c
+      - { containerPort: 30082, hostPort: 18082, protocol: TCP }   # zone b worker, gRPC h2c
+      - { containerPort: 30083, hostPort: 18083, protocol: TCP }   # fake GCS (bucket inspection from the host)
+      - { containerPort: 30084, hostPort: 18084, protocol: TCP }   # zone a, stable track only (autoscale load)
+      - { containerPort: 30085, hostPort: 18085, protocol: TCP }   # zone b, stable track only (autoscale load)
+  - role: worker
+    labels: { topology.kubernetes.io/zone: kind-a }
+  - role: worker
+    labels: { topology.kubernetes.io/zone: kind-b }

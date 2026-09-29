@@ -8,7 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console.mail import Mailer
-from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
+from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
+
+FIRST, SECOND, THIRD = "F1rst-Passw0rd!", "S3cond-Passw0rd!", "Th1rd-Passw0rd!"
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ def test_password_login_toggle_and_break_glass(demo, monkeypatch):
     r = demo.put("/api/v1/config/auth", json={"password_login": False})
     assert r.status_code == 200 and r.json()["password_login"] is False and r.json()["break_glass"] is True
     with TestClient(demo.app) as v:
-        r = v.post("/login", data={"email": "v@x", "password": "pw"}, follow_redirects=False)
+        r = v.post("/login", data={"email": "v@x", "password": PW}, follow_redirects=False)
         assert r.status_code == 403 and "disabled" in r.text
         page = v.get("/login").text
         assert "break-glass" in page and 'name="password"' in page
@@ -69,16 +71,14 @@ def test_password_login_toggle_and_break_glass(demo, monkeypatch):
         )
     assert demo.put("/api/v1/config/auth", json={"password_login": True}).json()["password_login"] is True
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         assert v.put("/api/v1/config/auth", json={"magic_link": True}).status_code == 403
     assert demo.get("/config").status_code == 200
 
 
 def test_invite_and_reset_flow(demo, maildir):
     demo.app.state.mailer = Mailer.from_env()
-    u = demo.post(
-        "/api/v1/users", json={"email": "new@x", "password": "first-pw", "role": "viewer", "groups": ["demo"]}
-    )
+    u = demo.post("/api/v1/users", json={"email": "new@x", "password": FIRST, "role": "viewer", "groups": ["demo"]})
     assert u.status_code == 201 and u.json()["invite"] == {"ok": True, "backend": "file"}
     inv = mails(maildir)
     assert (
@@ -87,7 +87,7 @@ def test_invite_and_reset_flow(demo, maildir):
         and inv[0]["From"] == "console@ramen.test"
         and "invited" in inv[0]["Subject"]
     )
-    assert "first-pw" not in inv[0].get_content()
+    assert FIRST not in inv[0].get_content()
     set_path = link(inv[0], "reset")
     with TestClient(demo.app) as anon:
         assert anon.get("/auth/reset").status_code == 200
@@ -102,14 +102,13 @@ def test_invite_and_reset_flow(demo, maildir):
         assert anon.get("/auth/reset/garbage").status_code == 400
         # the newer request superseded the invite nonce: the invite link is now dead
         assert anon.post(set_path, data={"password": "x" * 8}).status_code == 400
-        r = anon.post(reset_path, data={"password": "second-pw"}, follow_redirects=False)
+        r = anon.post(reset_path, data={"password": SECOND}, follow_redirects=False)
         assert r.status_code == 303 and "/login" in r.headers["location"]
-        assert anon.post(reset_path, data={"password": "third-pw"}).status_code == 400  # single use
+        assert anon.post(reset_path, data={"password": THIRD}).status_code == 400  # single use
         assert (
-            anon.post("/login", data={"email": "new@x", "password": "first-pw"}, follow_redirects=False).status_code
-            == 401
+            anon.post("/login", data={"email": "new@x", "password": FIRST}, follow_redirects=False).status_code == 401
         )
-        login(anon, "new@x", "second-pw")
+        login(anon, "new@x", SECOND)
     audit = demo.get("/api/v1/audit").json()
     assert any(a["action"] == "password.reset" and a["user"] == "new@x" and a["ok"] for a in audit)
     assert any(a["action"] == "password.reset.request" and a["user"] == "nobody@x" for a in audit)

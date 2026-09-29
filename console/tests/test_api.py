@@ -9,6 +9,8 @@ from ramen_console.grpcclient import Client
 from ramen_console.storage import make_store
 
 SECRET_VALUE = "sup3r-s3cret-value-XYZ"
+PW = "Passw0rd!-for-tests"  # meets the U3 strength rule
+NEWPW = "N3wPassw0rd!-here"
 
 
 @pytest.fixture
@@ -65,7 +67,7 @@ def demo(root):
     return root
 
 
-def make_user(root, email, role, groups, pw="pw"):
+def make_user(root, email, role, groups, pw=PW):
     r = root.post("/api/v1/users", json={"email": email, "password": pw, "role": role, "groups": groups})
     assert r.status_code == 201, r.text
     return r.json()
@@ -128,17 +130,17 @@ def test_groups_crud_and_rbac(demo):
     make_user(demo, "v@x", "viewer", ["demo"])
     make_user(demo, "other@x", "viewer", ["other"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert ga.post("/api/v1/groups", json={"name": "g2"}).status_code == 403
         assert ga.delete("/api/v1/groups/demo").status_code == 403
         assert ga.put("/api/v1/groups/demo", json={"ref": "main"}).status_code == 200
         assert ga.get("/groups/demo").status_code == 200
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         assert v.put("/api/v1/groups/demo", json={"ref": "main"}).status_code == 403
         assert [g["name"] for g in v.get("/api/v1/groups").json()] == ["demo"]
     with TestClient(demo.app) as o:
-        login(o, "other@x", "pw")
+        login(o, "other@x", PW)
         assert o.get("/api/v1/groups/demo").status_code == 403
         assert [g["name"] for g in o.get("/api/v1/groups").json()] == ["other"]
     assert demo.delete("/api/v1/groups/demo").status_code == 200
@@ -180,7 +182,7 @@ def test_zones_workers(demo):
     assert demo.get("/api/v1/groups/demo/zones/nozone/workers").status_code == 404
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert ga.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2}).status_code == 200
         assert ga.put("/api/v1/groups/demo/zones/zone-a/workers", json={"size": "big"}).status_code == 403
         assert ga.post("/api/v1/zones", json={"name": "z9"}).status_code == 403
@@ -194,7 +196,8 @@ def test_dashboard(demo):
     assert d["cells"]["zone-a"]["demo"]["color"] == "blue"
     assert d["cells"]["zone-b"]["demo"]["color"] == "red"
     html = demo.get("/ui/dashboard").text
-    assert "blue" in html and "red" in html
+    assert "load-low" in html and "load-high" in html
+    assert ">Low<" in html and ">High<" in html  # U11: the text names the load, not the colour
 
 
 def test_secrets_never_leak(demo):
@@ -232,7 +235,7 @@ def test_secrets_never_leak(demo):
     assert "mask-me" not in demo.get("/api/v1/config").text and "mask-me" not in demo.get("/config").text
     make_user(demo, "v@x", "viewer", ["demo"])
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         r = v.get("/api/v1/groups/demo/secrets")
         assert r.status_code == 200 and SECRET_VALUE not in r.text
         assert v.post("/api/v1/groups/demo/secrets", json={"name": "X", "value": "y"}).status_code == 403
@@ -320,7 +323,7 @@ def test_sa_rules(demo):
     assert demo.put("/api/v1/config/sa-rules", json={"rules": [{"bad": 1}]}).status_code == 422
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert ga.put("/api/v1/config/sa-rules", json={"rules": []}).status_code == 403
         ok = ga.put(
             "/api/v1/groups/demo/sa-restrictions", json={"rules": [{"effect": "allow", "permission": "storage.get"}]}
@@ -352,29 +355,29 @@ def test_users(demo):
     demo.put(f"/api/v1/users/{u['id']}", json={"role": "group_admin", "groups": ["demo"]})
     assert demo.put("/api/v1/users/nope", json={"role": "viewer"}).status_code == 404
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
-        r = ga.post("/api/v1/users", json={"email": "v@x", "password": "pw", "role": "viewer", "groups": ["demo"]})
+        login(ga, "ga@x", PW)
+        r = ga.post("/api/v1/users", json={"email": "v@x", "password": PW, "role": "viewer", "groups": ["demo"]})
         assert r.status_code == 201
         vid = r.json()["id"]
         assert (
             ga.post(
-                "/api/v1/users", json={"email": "v2@x", "password": "pw", "role": "group_admin", "groups": ["demo"]}
+                "/api/v1/users", json={"email": "v2@x", "password": PW, "role": "group_admin", "groups": ["demo"]}
             ).status_code
             == 403
         )
         assert (
             ga.post(
-                "/api/v1/users", json={"email": "v3@x", "password": "pw", "role": "viewer", "groups": ["other"]}
+                "/api/v1/users", json={"email": "v3@x", "password": PW, "role": "viewer", "groups": ["other"]}
             ).status_code
             == 403
         )
         assert [x["email"] for x in ga.get("/api/v1/users").json()] == ["ga@x", "v@x"]
         assert ga.put(f"/api/v1/users/{vid}", json={"role": "viewer"}).status_code == 403
         assert ga.delete(f"/api/v1/users/{u['id']}").status_code == 403
-        assert ga.post("/api/v1/users/me/password", json={"password": "newpw"}).status_code == 200
+        assert ga.post("/api/v1/users/me/password", json={"password": NEWPW}).status_code == 200
         assert ga.delete(f"/api/v1/users/{vid}").status_code == 200
         assert ga.get("/users").status_code == 200
-    login(TestClient(demo.app), "ga@x", "newpw")
+    login(TestClient(demo.app), "ga@x", NEWPW)
     assert demo.delete(f"/api/v1/users/{u['id']}").status_code == 200
     assert demo.delete(f"/api/v1/users/{u['id']}").status_code == 404
     me = demo.get("/api/v1/me").json()
@@ -384,7 +387,7 @@ def test_users(demo):
 def test_permission_requests(demo):
     make_user(demo, "v@x", "viewer", ["demo"])
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         r = v.post("/api/v1/requests", json={"role": "group_admin", "group": "demo"})
         assert r.status_code == 201
         rid = r.json()["id"]
@@ -416,7 +419,7 @@ def test_api_keys(demo):
     assert r.json()["role"] == "viewer"
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert ga.post("/api/v1/api-keys", json={"name": "esc", "role": "super_admin"}).status_code == 403
         assert ga.post("/api/v1/api-keys", json={"name": "esc", "groups": ["other"]}).status_code == 403
         own = ga.post("/api/v1/api-keys", json={"name": "mine"}).json()
@@ -460,12 +463,12 @@ def test_audit(demo):
     make_user(demo, "ga@x", "group_admin", ["demo"])
     make_user(demo, "o@x", "group_admin", ["other"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         ga.put("/api/v1/groups/demo", json={"ref": "x"})
         mine = ga.get("/api/v1/audit").json()
         assert mine and all("group:demo" in x["tags"] for x in mine)
     with TestClient(demo.app) as o:
-        login(o, "o@x", "pw")
+        login(o, "o@x", PW)
         theirs = o.get("/api/v1/audit").json()
         assert theirs and all("group:other" in x["tags"] and "group:demo" not in x["tags"] for x in theirs)
 
@@ -501,7 +504,7 @@ def test_config_and_refresh(demo, tmp_path, monkeypatch):
     assert r.status_code == 200 and "groups" in r.json()
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert ga.post("/api/v1/refresh").status_code == 403
         assert ga.get("/config").status_code == 403
 

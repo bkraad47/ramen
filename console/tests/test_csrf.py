@@ -17,7 +17,7 @@ def test_cookie_authenticated_api_mutation_needs_header(demo):
     assert r.status_code == 303 and c.cookies.get("ramen_csrf")
     assert c.get("/api/v1/me").status_code == 200  # reads never need it
     r = c.post("/api/v1/zones", json={"name": "z-csrf"})
-    assert r.status_code == 403 and "csrf" in r.json()["detail"]
+    assert r.status_code == 403 and "CSRF" in r.json()["detail"]
     assert c.post("/api/v1/zones", json={"name": "z-csrf"}, headers={"X-Ramen-CSRF": "wrong"}).status_code == 403
     tok = c.cookies.get("ramen_csrf")
     assert c.post("/api/v1/zones", json={"name": "z-csrf"}, headers={"X-Ramen-CSRF": tok}).status_code == 201

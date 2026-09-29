@@ -1,0 +1,19 @@
+# The shipped worker NetworkPolicy (SEC-04, rendered by the console) allows ingress only from the ramen-system
+# namespace and the Google front-end CIDRs 35.191.0.0/16 + 130.211.0.0/22. kind enforces NetworkPolicy (kindnetd
+# does), and on kind there is no Google front end: NodePort traffic arrives from the node network, so it is dropped.
+# This policy is kind's stand-in for those two Google CIDRs — the same hole, on the address range that plays the
+# load balancer's part here. It is additive; the console's own `worker` policy is untouched and still in force.
+# __CIDRS__ is replaced by deploy/kind/up.sh with the kind docker network and pod CIDRs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-kind-host
+  namespace: __NS__
+  labels: { ramen.io/kind-only: "true" }
+spec:
+  podSelector:
+    matchLabels: { app: worker }
+  policyTypes: [Ingress]
+  ingress:
+    - from: __CIDRS__
+      ports: [{ port: 8080, protocol: TCP }]

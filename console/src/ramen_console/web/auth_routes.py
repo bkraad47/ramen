@@ -30,7 +30,8 @@ def base_url(request: Request) -> str:
 def _login_response(request: Request, user: dict, next_: str = "/"):
     resp = RedirectResponse(safe_next(next_), 303)
     kw = {"samesite": "lax", "secure": request.app.state.cookie_secure, "max_age": 12 * 3600}
-    resp.set_cookie(COOKIE, request.app.state.signer.sign({"uid": user["id"]}), httponly=True, **kw)
+    session = {"uid": user["id"], "ep": request.app.state.accounts.epoch_of(user)}
+    resp.set_cookie(COOKIE, request.app.state.signer.sign(session), httponly=True, **kw)
     resp.set_cookie(csrf.COOKIE, csrf.token(request), httponly=False, **kw)
     return resp
 
@@ -112,7 +113,7 @@ async def reset_finish(request: Request, token: str, password: str = Form(), _=D
     user = parsed and await st.accounts.redeem_token(parsed[0], "reset", parsed[1], password=password)
     note(request, "password.reset", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
-        raise ApiError(400, "reset link is invalid, expired or already used")
+        raise ApiError(400, "This reset link is invalid, expired or already used")
     return RedirectResponse("/login?msg=Password+updated%2C+sign+in", 303)
 
 
@@ -122,7 +123,7 @@ async def magic_request(request: Request, email: str = Form(), _=Depends(csrf.cs
     st = request.app.state
     note(request, "login.magic.request", email, user=email)
     if not (await auth_settings(request)).magic_link:
-        raise ApiError(403, "magic-link login is disabled (auth.magic_link)")
+        raise ApiError(403, "Magic-link login is disabled")
     started = await st.accounts.start_token(email, "magic")
     if started and st.mailer.enabled:
         user, nonce = started
@@ -142,7 +143,7 @@ async def magic_login(request: Request, token: str):
     )
     note(request, "login.magic", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
-        raise ApiError(400, "sign-in link is invalid, expired or already used")
+        raise ApiError(400, "This sign-in link is invalid, expired or already used")
     return _login_response(request, user)
 
 
@@ -150,7 +151,7 @@ async def magic_login(request: Request, token: str):
 def _client(request: Request, name: str):
     client = request.app.state.oauth.client(name)
     if not client:
-        raise not_found("oauth provider")
+        raise not_found("OAuth provider")
     return client
 
 
@@ -171,7 +172,7 @@ async def oauth_callback(request: Request, name: str):
         token = await client.authorize_access_token(request)
     except OAuthError as e:
         note(request, "login.oauth", name, [f"provider:{name}"], user="-")
-        raise ApiError(401, f"oauth error: {e.error}") from e
+        raise ApiError(401, f"OAuth error: {e.error}") from e
     info = dict(token.get("userinfo") or {})
     if not info.get("email"):
         info = dict(await client.userinfo(token=token))
@@ -179,7 +180,7 @@ async def oauth_callback(request: Request, name: str):
     note(request, "login.oauth", email or "-", [f"provider:{name}"], user=email or "-")
     trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
     if not email or (info.get("email_verified") is not True and not trusted):
-        raise ApiError(403, "provider did not return a verified email")
+        raise ApiError(403, "The provider did not return a verified email")
     role, groups = (await auth_settings(request)).map_role(name, info)
     user = await request.app.state.accounts.upsert_sso_user(email, role, groups, provider=name)
     return _login_response(request, user)

@@ -1,4 +1,30 @@
 {
+  "_README": [
+    "LOCAL STACK ONLY. The entry below talks to the compose worker over plaintext h2c on localhost.",
+    "`--insecure` forces a plaintext channel and OVERRIDES --tls/--ca, so it must be removed before this is",
+    "pointed at anything but localhost. JSON has no comments; the deployed form is spelled out in _DEPLOYED below."
+  ],
+  "_DEPLOYED": {
+    "_why": "Through a cloud load balancer: TLS on, the LB's CA pinned, and the group/zone metadata the LB routes on.",
+    "mcpServers": {
+      "ramen": {
+        "command": "ramen-mcp-bridge",
+        "args": [
+          "--target", "mcp.example.com:443",
+          "--key", "rmk_...",
+          "--group", "demo",
+          "--zone", "us-central1-a",
+          "--tls",
+          "--ca", "/absolute/path/to/lb-ca.pem"
+        ]
+      }
+    },
+    "_notes": [
+      "Drop --ca only when the load balancer serves a certificate your system trust store already has.",
+      "Never keep --insecure in a deployed entry: it silently downgrades the hop to plaintext.",
+      "The key is a group MCP key (rmk_), minted on the group page. rmn_ API keys are refused by workers."
+    ]
+  },
   "mcpServers": {
     "ramen-demo": {
       "command": "ramen-mcp-bridge",

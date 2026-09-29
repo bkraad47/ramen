@@ -1,6 +1,6 @@
 # Ramen
 
-> Multizone, highly available, enterprise-grade MCP (Model Context Protocol) server for GCP and AWS Kubernetes. A Rust MCP node and a Python 3.14 runtime run tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit. BSD-3-Clause. Version 0.3.1.
+> Multizone, highly available, enterprise-grade MCP (Model Context Protocol) server for GCP and AWS Kubernetes. A Rust MCP node and a Python 3.14 runtime run tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit. BSD-3-Clause. Version 0.4.0.
 
 Since 0.3.1 Ramen exposes MCP as JSON-RPC 2.0 over gRPC: one `ramen.v1.Mcp/Call` per message (`bytes body`), metadata `authorization: Bearer rmk_<key>` plus `ramen-group` / `ramen-zone` for load-balancer routing, `grpc.health.v1.Health` on the same port (worker `localhost:8080` h2c locally; `<lb>:443` TLS in the cloud). Standard MCP clients (Claude Desktop, Cursor, the mcp SDK) connect through the stdio bridge `ramen-mcp-bridge --target <host:port> --key <rmk_> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]`. The HTTP `/mcp` endpoint of 0.1.0–0.3.0 is removed. Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json` (proto: type, name, description, callable, input, output, error). Deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll the stable track.
 
@@ -8,16 +8,17 @@ Since 0.3.1 Ramen exposes MCP as JSON-RPC 2.0 over gRPC: one `ramen.v1.Mcp/Call`
 
 - [Landing page](https://bkraad47.github.io/ramen/): value proposition, 5-command local quickstart, badges
 - [How it works and why](https://bkraad47.github.io/ramen/how-it-works/): design rationale (Rust node + Python runtime, git→bucket→worker, canary, keys, secrets)
-- [Architecture (current)](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions D1–D19
+- [Architecture (current)](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions D1–D23
 - [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/): binding contracts for the group repo, sidecar protocol, gRPC transport (§11), console API, GCP/AWS deployment, auth/policy, docs
 - [Local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/): docker compose stack, console URL and login, minting rmk_ MCP keys vs rmn_ API keys, bridge config for Claude Desktop / mcp SDK, grpcurl example
-- [GCP how-to](https://bkraad47.github.io/ramen/how-tos/gcp/): Terraform + Helm bring-up on GKE Autopilot (header-routed gRPC through the Gateway), verified in 0.3.0
+- [GCP how-to](https://bkraad47.github.io/ramen/how-tos/gcp/): Terraform + Helm bring-up on GKE Autopilot (header-routed gRPC through the Gateway), verified on a live GKE Gateway in 0.3.2
 - [AWS how-to](https://bkraad47.github.io/ramen/how-tos/aws/): Terraform/CloudFormation + Helm on EKS (ALB gRPC target groups), untested
 - [Security](https://bkraad47.github.io/ramen/how-tos/security/): roles, keys, gRPC parity table, IP rules, CSRF, OAuth+PKCE, audit, 0.3.1 IAM/RBAC narrowing
 - [Secrets](https://bkraad47.github.io/ramen/how-tos/secrets/): `{{$group.NAME}}` references, backends, scoping
 - [DevOps with the API](https://bkraad47.github.io/ramen/how-tos/devops-api/): every console route with curl, API keys, backups, rotation, worker Admin/Metrics + Admin/Reload over grpcurl
 - [Migrate 0.3.0 → 0.3.1](https://bkraad47.github.io/ramen/how-tos/migrate-0.3.1/): HTTP MCP endpoint removed; bridge config before/after, edge rollout order, verification
 - [Concepts](https://bkraad47.github.io/ramen/wiki/concepts/): group, environment, zone, worker, roles
+- [Transport and what secures each hop](https://bkraad47.github.io/ramen/wiki/transport/): JSON-RPC 2.0 over gRPC, why the node is Rust, per-hop protection (bearer key with constant-time compare, CIDR allowlist, TLS at the edge and optional node TLS, blocked names, per-zone cloud identity), which hops are plaintext h2c by default, and what is verified versus untested
 - [Protos](https://bkraad47.github.io/ramen/wiki/protos/): group repo contract with examples, plus the gRPC transport section (mcp.proto, metadata, status codes)
 - [Canary deploys](https://bkraad47.github.io/ramen/wiki/canary/)
 - [Rebalance and load](https://bkraad47.github.io/ramen/wiki/rebalance/)
@@ -33,4 +34,4 @@ Since 0.3.1 Ramen exposes MCP as JSON-RPC 2.0 over gRPC: one `ramen.v1.Mcp/Call`
 ## Optional
 
 - [Changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md)
-- [Architecture v0.1.0](https://bkraad47.github.io/ramen/architecture/v0.1.0/), [v0.2.0](https://bkraad47.github.io/ramen/architecture/v0.2.0/), [v0.3.0](https://bkraad47.github.io/ramen/architecture/v0.3.0/), [v0.3.1](https://bkraad47.github.io/ramen/architecture/v0.3.1/)
+- [Architecture v0.1.0](https://bkraad47.github.io/ramen/architecture/v0.1.0/), [v0.2.0](https://bkraad47.github.io/ramen/architecture/v0.2.0/), [v0.3.0](https://bkraad47.github.io/ramen/architecture/v0.3.0/), [v0.3.1](https://bkraad47.github.io/ramen/architecture/v0.3.1/), [v0.4.0](https://bkraad47.github.io/ramen/architecture/v0.4.0/)

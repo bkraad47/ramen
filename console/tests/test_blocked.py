@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
+from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 
 
 @pytest.fixture(autouse=True)
@@ -62,12 +62,13 @@ def test_group_page_block_toggles(demo):
     job = wait_job(demo, demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": False}).json()["id"])
     assert job["status"] == "ok"
     page = demo.get("/groups/demo").text
-    assert "<code>calc</code>" in page and ">block<" in page and "/environments/prod/blocked" in page
+    assert "<code>calc</code>" in page and ">Disable<" in page
+    assert "/environments/prod/zones/zone-a/blocked" in page  # U5: the toggle is per zone
     demo.put("/api/v1/groups/demo/environments/prod/blocked", json={"blocked": ["calc"]})
     page = demo.get("/groups/demo").text
-    assert ">blocked<" in page and ">unblock<" in page
+    assert ">Disabled everywhere<" in page and ">Unblock<" in page
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         page = v.get("/groups/demo").text
-        assert ">block<" not in page and ">unblock<" not in page and "calc" in page
+        assert ">Disable<" not in page and ">Unblock<" not in page and "calc" in page
         assert v.put("/api/v1/groups/demo/environments/prod/blocked", json={"blocked": []}).status_code == 403

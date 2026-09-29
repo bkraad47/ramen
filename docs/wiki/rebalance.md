@@ -1,10 +1,11 @@
 # Rebalance and load
 
-## Load colours
+## Load levels
 Every node reports `ramen.v1.Admin/Metrics` (gRPC, metadata `x-ramen-admin-key`; JSON in the reply) →
 `{inflight, total, errors, load, sidecar_alive, loaded_at, packages}` where
 `load` is `low` (< 30 % of `RAMEN_MAX_INFLIGHT`), `even`, or `high` (> 80 %). The dashboard aggregates per
-zone × group: **blue** = low, **green** = even, **red** = high, grey = down/none.
+zone × group and labels every cell `low`, `even`, `high` or `down`; colour is the visual signal, the label is the
+statement.
 
 ## Rebalance
 `POST /api/v1/groups/{group}/zones/{zone}/rebalance` → `{ok, load, capacity_scaler, backend_service, applied, note?, scaled_to?}`.

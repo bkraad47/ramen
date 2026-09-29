@@ -3,7 +3,6 @@ site_description: Multizone, highly available, enterprise-grade MCP server for G
 site_url: https://bkraad47.github.io/ramen/
 repo_url: https://github.com/bkraad47/ramen
 repo_name: bkraad47/ramen
-edit_uri: edit/main/docs/
 copyright: BSD-3-Clause · © 2026 Raad
 docs_dir: docs
 site_dir: site
@@ -19,15 +18,11 @@ theme:
   logo: img/logo-mark.png
   favicon: img/favicon.png
   language: en
+  # U18: dark only. One scheme, no toggle; tokens live in docs/stylesheets/ramen.css.
   palette:
-    - scheme: ramen
-      primary: custom
-      accent: custom
-      toggle: { icon: material/weather-night, name: Dark mode }
-    - scheme: slate
-      primary: custom
-      accent: custom
-      toggle: { icon: material/weather-sunny, name: Light mode }
+    scheme: slate
+    primary: custom
+    accent: custom
   features:
     - navigation.tabs
     - navigation.sections
@@ -36,7 +31,6 @@ theme:
     - search.suggest
     - search.highlight
     - content.code.copy
-    - content.action.edit
 extra_css: [stylesheets/ramen.css]
 extra:
   version_current: 0.4.0
@@ -50,7 +44,7 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - tables
-  - toc: { permalink: true }
+  - toc: { permalink: false }
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.tabbed: { alternate_style: true }
@@ -65,7 +59,8 @@ nav:
   - Home: index.md
   - How it works: how-it-works.md
   - Architecture:
-      - Current (v0.3.1): architecture/index.md
+      - Current (v0.4.0): architecture/index.md
+      - v0.4.0: architecture/v0.4.0.md
       - v0.3.1: architecture/v0.3.1.md
       - v0.3.0: architecture/v0.3.0.md
       - v0.2.0: architecture/v0.2.0.md
@@ -80,6 +75,7 @@ nav:
       - Migrate 0.3.0 → 0.3.1 (gRPC): how-tos/migrate-0.3.1.md
   - Wiki:
       - Concepts: wiki/concepts.md
+      - Transport and security: wiki/transport.md
       - Protos (group repo contract): wiki/protos.md
       - Canary deploys: wiki/canary.md
       - Rebalance and load: wiki/rebalance.md
@@ -87,4 +83,3 @@ nav:
   - Reference:
       - Interface contracts: CONTRACTS.md
       - Versions: versions.md
-      - llms.txt: llms.md

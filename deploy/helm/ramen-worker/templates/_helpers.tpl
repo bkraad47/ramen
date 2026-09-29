@@ -25,3 +25,12 @@ ramen.io/zone: {{ .Values.zone | quote }}
 {{ default (printf "gs://ramen-%s-groups/%s" .Values.project .Values.group) .Values.bucketUri }}
 {{- end -}}
 {{- end -}}
+{{/* Trusted x-forwarded-for hops: explicit trustProxyHops, else per provider (the AWS ALB appends "<client>";
+     the GCP external ALB appends "<client>, <lb>", so the client is the 2nd entry from the right). */}}
+{{- define "rw.trustProxyHops" -}}
+{{- if ne (toString .Values.trustProxyHops) "" -}}
+{{ .Values.trustProxyHops }}
+{{- else -}}
+{{ ternary "1" "2" (eq .Values.provider "aws") }}
+{{- end -}}
+{{- end -}}

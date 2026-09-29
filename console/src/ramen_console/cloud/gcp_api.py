@@ -19,7 +19,7 @@ def sync_repo_to_gcs(storage, bucket_name, group, repo_url, ref, token) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
         if r.returncode != 0:
-            raise ApiError(502, "git failed: " + redact(r.stderr, token).strip()[:500])
+            raise ApiError(502, "Git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
         local = {}
         for p in root.rglob("*"):
@@ -43,7 +43,7 @@ _K8S_NAME = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 def k8s_name(value: str, what: str) -> str:
     """Namespace/pod names only: anything else could rewrite a log filter or query (SEC-02)."""
     if not isinstance(value, str) or not _K8S_NAME.match(value):
-        raise ApiError(422, f"invalid {what} name")
+        raise ApiError(422, f"Invalid {what} name")
     return value
 
 

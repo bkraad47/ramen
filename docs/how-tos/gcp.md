@@ -70,7 +70,7 @@ Open `https://<console_ip>/` (accept the self-signed warning), login `admin@rame
    Workload Identity, a Role + RoleBinding for the console KSA, Service (`appProtocol: kubernetes.io/h2c`) + NEG,
    HTTPRoute matching headers `ramen-group: demo` + `ramen-zone: a` (no path, no rewrite), `HealthCheckPolicy`
    type `GRPC`, Secret `ramen-deploy`.
-4. **Mint MCP key** on the group page (shown once) — this is what MCP clients send.
+4. **Generate key** on the group page (shown once) — this is what MCP clients send.
 5. **Deploy (canary)**. Watch the job log: sync → canary → reload (first run: bucket sync + pip install, 1–3 min)
    → smoke → stable.
 

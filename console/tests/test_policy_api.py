@@ -4,7 +4,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
+from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 
 
 def test_permission_request_lifecycle(demo, tmp_path):
@@ -17,7 +17,7 @@ def test_permission_request_lifecycle(demo, tmp_path):
         == 200
     )
     with TestClient(demo.app) as ga:
-        login(ga, "ga@x", "pw")
+        login(ga, "ga@x", PW)
         assert (
             ga.post("/api/v1/requests", json={"group": "demo", "zone": "zone-a", "permission": "nope"}).status_code
             == 422
@@ -48,7 +48,7 @@ def test_permission_request_lifecycle(demo, tmp_path):
         assert r2.status_code == 201
         assert ga.get("/groups/demo").status_code == 200 and "Request permission" in ga.get("/groups/demo").text
     with TestClient(demo.app) as v:
-        login(v, "v@x", "pw")
+        login(v, "v@x", PW)
         assert (
             v.post(
                 "/api/v1/requests", json={"group": "demo", "zone": "zone-a", "permission": "bucket.read"}
@@ -84,6 +84,6 @@ def test_permission_request_lifecycle(demo, tmp_path):
     page = demo.get("/groups/demo").text
     assert "bucket.read, secrets.read" in page and "approved" in page
     users_page = demo.get("/users").text
-    assert "SA permission" in users_page and "bucket.read" in users_page
+    assert "Service-account permission" in users_page and "bucket.read" in users_page
     assert demo.post(f"/api/v1/requests/{rid}/approve").status_code == 409
     assert demo.get("/config").status_code == 200 and "kms.decrypt" in demo.get("/config").text

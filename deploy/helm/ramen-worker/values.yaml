@@ -32,8 +32,15 @@ sizes:
   m: { cpu: 500m, memory: 1Gi }
   l: { cpu: "1", memory: 2Gi }
 hpa: { enabled: false, minReplicas: 1, maxReplicas: 4, cpuPercent: 70 }
-env:                        # extra NON-deploy vars only (container env beats the Secret); deploy-scoped keys go in secret.data
-  RAMEN_TRUST_PROXY: "1"
+# x-forwarded-for hops the node may trust. The client address is the Nth entry counted from the RIGHT,
+# the end a proxy appends to; the left-hand entries are caller-supplied and ignored (CONTRACTS §11).
+# "" = the provider default: gcp 2 (the external ALB appends "<client>, <lb>"), aws 1 (the ALB appends
+# "<client>"). 0 turns proxy trust off, so the node checks the real peer address.
+trustProxyHops: ""
+# grpc.reflection.v1[alpha]: unauthenticated and not CIDR-gated, and `route.paths` puts it behind the load
+# balancer, so it is off on deployed workers (it stays on by default in the binary for local use).
+reflection: false
+env: {}                     # extra NON-deploy vars only (container env beats the Secret); deploy-scoped keys go in secret.data
 secret:
   create: true              # placeholder `ramen-deploy`; the console rewrites it on every deploy
   data:                     # RAMEN_ENV, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_ALLOWED_CIDRS, RAMEN_SIDECAR_IDLE_SECS, RAMEN_SECRET_<GROUP>__<VAR>...

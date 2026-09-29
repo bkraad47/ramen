@@ -4,11 +4,19 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.3.2` **(current)** | 2026-09-28 | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
+| `0.4.0` **(current)** | — | console polish, docs, and proof | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.0) · [architecture](architecture/v0.4.0.md) |
+| `0.3.2` | 2026-09-28 | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
 | `0.3.1` | 2026-09-28 | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.4.0 — console polish, docs, and proof
+
+- (in progress) Console: naming and sentence case, sidebar identity, per-zone action sections, two-pane logs, per-zone package toggles, 12-character password and key policy, enforced API key client types (agent vs devops), colour-free health wording, session revocation. Docs: dark-only site, aligned badges, real architecture diagram, transport and security write-up, repository topics. Verification: multi-zone and autoscaling on kind then GKE, per-zone tool isolation, independent LLM clients, a role and group security matrix, and an independent review of the claims.
+- Node security fix from that review (contract §11a): behind a load balancer the node trusted the **left-most** `x-forwarded-for` hop, which is whatever the caller sent, so `RAMEN_ALLOWED_CIDRS` could be walked through by choosing the address in a header. The client address is now counted from the right-hand end, the end a proxy appends to: `RAMEN_TRUST_PROXY_HOPS=<n>` trusts `n` hops (GCP external load balancer `2`, AWS ALB `1` — the worker chart and both console renderers set it per provider), `RAMEN_TRUST_PROXY=1` still means one hop, and a header too short or malformed for the hop count falls back to the real peer address instead of a caller-supplied one.
+- Server reflection is now a choice: `RAMEN_REFLECTION` (default on for local use, **off on deployed workers**) — it is unauthenticated, not CIDR-gated and routed through the load balancer, so it let anyone reaching the edge list the services and describe `ramen.v1.Admin`.
+- `Admin/Metrics` no longer overflows `inflight` when an `Admin/Reload` lowers `RAMEN_MAX_INFLIGHT` below the permits in use.
 
 ## 0.3.2 — verified on GKE
 

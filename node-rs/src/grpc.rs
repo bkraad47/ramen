@@ -36,6 +36,11 @@ pub struct App {
     pub cfg: RwLock<Config>,
     pub sidecar: Arc<Sidecar>,
     pub sem: Semaphore,
+    /// `sem`'s capacity, fixed at startup. A later `Admin/Reload` can lower `RAMEN_MAX_INFLIGHT` without
+    /// resizing the semaphore, so `inflight` is measured against this and never against the config value.
+    pub sem_max: usize,
+    /// Whether `grpc::routes` registered server reflection (`RAMEN_REFLECTION`); startup-fixed.
+    pub reflection: bool,
     pub metrics: Metrics,
     /// Re-read on `Admin/Reload` (env + yaml in production; injectable for tests).
     pub config_source: ConfigSource,
@@ -60,6 +65,8 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
     let sidecar = Sidecar::new(cfg.clone());
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),
+        sem_max: cfg.max_inflight,
+        reflection: cfg.reflection,
         cfg: RwLock::new(cfg),
         sidecar,
         metrics: Metrics::default(),
@@ -86,7 +93,9 @@ impl App {
         let loaded = self.sidecar.loaded().await;
         let packages = loaded.as_ref().map(|l| json!({"tools": len(&l.result, "tools"), "resources": len(&l.result, "resources"), "prompts": len(&l.result, "prompts"), "errors": len(&l.result, "errors")})).unwrap_or(Value::Null);
         self.metrics.snapshot(
-            max - self.sem.available_permits(),
+            // Saturating: an `Admin/Reload` that lowers `RAMEN_MAX_INFLIGHT` leaves more permits available
+            // than the new `max`, and the semaphore keeps its startup capacity until the pod restarts.
+            self.sem_max.saturating_sub(self.sem.available_permits()),
             max,
             self.sidecar.alive().await,
             loaded.map(|l| l.at),
@@ -95,23 +104,35 @@ impl App {
     }
 }
 
-/// Health, Mcp, Admin (message limit applied) plus unauthenticated server reflection (v1 + v1alpha) so
-/// `grpcurl` works without `-proto`.
+/// Health, Mcp, Admin (message limit applied), plus server reflection (v1 + v1alpha) when
+/// `RAMEN_REFLECTION` is on (the default) so `grpcurl` works without `-proto`.
+///
+/// Reflection, like Health, runs ahead of every guard: no key, no CIDR check. That is fine on a laptop and
+/// is why the default is on, but it lets anyone who can reach the port enumerate the services (including
+/// `ramen.v1.Admin`), so a deployment that routes the port through a load balancer sets `RAMEN_REFLECTION=0`
+/// — the worker chart and the console's renderers do. With it off both reflection services are not
+/// registered at all and answer `UNIMPLEMENTED`.
 pub fn routes(app: &Shared) -> Routes {
-    let reflection = || {
-        tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(crate::pb::FILE_DESCRIPTOR_SET)
-            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
-    };
-    Routes::new(HealthServer::new(HealthService::from_health_reporter(
+    let mut routes = Routes::new(HealthServer::new(HealthService::from_health_reporter(
         app.health.clone(),
-    )))
-    .add_service(reflection().build_v1().expect("reflection v1"))
-    .add_service(reflection().build_v1alpha().expect("reflection v1alpha"))
-    .add_service(McpServer::new(McpSvc(app.clone())).max_decoding_message_size(MAX_MESSAGE_BYTES))
-    .add_service(
-        AdminServer::new(AdminSvc(app.clone())).max_decoding_message_size(MAX_MESSAGE_BYTES),
-    )
+    )));
+    if app.reflection {
+        let reflection = || {
+            tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(crate::pb::FILE_DESCRIPTOR_SET)
+                .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+        };
+        routes = routes
+            .add_service(reflection().build_v1().expect("reflection v1"))
+            .add_service(reflection().build_v1alpha().expect("reflection v1alpha"));
+    }
+    routes
+        .add_service(
+            McpServer::new(McpSvc(app.clone())).max_decoding_message_size(MAX_MESSAGE_BYTES),
+        )
+        .add_service(
+            AdminServer::new(AdminSvc(app.clone())).max_decoding_message_size(MAX_MESSAGE_BYTES),
+        )
 }
 
 fn len(v: &Value, k: &str) -> usize {

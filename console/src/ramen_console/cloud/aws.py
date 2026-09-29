@@ -24,7 +24,7 @@ from .aws_k8s import (
     split_weights,
     weights,
 )
-from .gcp import GcpCloud
+from .gcp import GcpCloud, detail_of
 from .gcp_k8s import ns_name
 
 
@@ -36,7 +36,7 @@ def _guard(fn):
         except ApiError:
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
-            raise ApiError(502, f"aws {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
+            raise ApiError(502, f"AWS {fn.__name__}: {type(e).__name__}: {str(e)[:300]}") from e
 
     return wrapper
 
@@ -195,19 +195,11 @@ class AwsCloud(GcpCloud):
 
     @_guard
     async def set_ip_rules(self, group, zone, cidrs):
-        ns, waf = ns_name(group, zone), aws_api.Waf(self.c.wafv2)
+        ns = ns_name(group, zone)
         cidrs = list(cidrs)
         v4, v6 = [c for c in cidrs if ":" not in c], [c for c in cidrs if ":" in c]
-
-        def write_waf():
-            arns = []
-            if v4:
-                arns.append(waf.ensure_ip_set(f"ramen-{group}", v4, "IPV4"))
-            if v6:
-                arns.append(waf.ensure_ip_set(f"ramen-{group}-v6", v6, "IPV6"))
-            return waf.set_group_rule(self.alb_group, group, arns)
-
-        acl = await asyncio.to_thread(write_waf)
+        # Node enforcement first: it is the control that actually gates a call and it needs no cloud API.
+        # The WAF rule at the edge is defence in depth and is attempted afterwards, best effort.
         await asyncio.to_thread(
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
@@ -217,8 +209,26 @@ class AwsCloud(GcpCloud):
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)
                 await asyncio.to_thread(self.kube.wait_ready, ns, dep)
-        out = {"ok": True, "policy": f"ramen-{group}", "cidrs": cidrs, "web_acl": acl, "alb": None, "attached": False}
-        alb = await asyncio.to_thread(aws_api.Alb(self.c.elbv2).find, self.alb_group)
+        out = {"ok": True, "policy": f"ramen-{group}", "cidrs": cidrs, "web_acl": None, "alb": None, "attached": False}
+
+        def write_waf(waf):
+            arns = []
+            if v4:
+                arns.append(waf.ensure_ip_set(f"ramen-{group}", v4, "IPV4"))
+            if v6:
+                arns.append(waf.ensure_ip_set(f"ramen-{group}-v6", v6, "IPV6"))
+            return waf.set_group_rule(self.alb_group, group, arns)
+
+        try:
+            # Built here, not above: the boto3 client is lazy, so absent credentials raise on first use
+            # and must land inside the degrading path, not outside it.
+            waf = aws_api.Waf(self.c.wafv2)
+            acl = await asyncio.to_thread(write_waf, waf)
+            alb = await asyncio.to_thread(aws_api.Alb(self.c.elbv2).find, self.alb_group)
+        except Exception as e:  # noqa: BLE001 - the node already enforces; the edge rule is best effort.
+            out["note"] = f"enforced at the node; web ACL not updated: {detail_of(e)}"
+            return out
+        out["web_acl"] = acl
         if alb is None:
             out["note"] = (
                 f"rules written to Secret and web ACL but not attached: "

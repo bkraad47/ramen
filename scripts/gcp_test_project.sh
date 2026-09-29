@@ -9,7 +9,10 @@ STATE="${RAMEN_GCP_PROJECT_FILE:-$HOME/.ramen-test-project}"   # remembers the i
 if [ -n "${RAMEN_GCP_PROJECT:-}" ]; then PROJECT="$RAMEN_GCP_PROJECT"
 elif [ "$1" = "delete" ] && [ -s "$STATE" ]; then PROJECT="$(cat "$STATE")"
 else PROJECT="ramen-test-$(date +%y%m%d)"; fi
-BILLING="${RAMEN_BILLING_ACCOUNT:?set RAMEN_BILLING_ACCOUNT to your billing account id}"
+# `delete` never needs the billing account (unlink takes none), and demanding it there means teardown fails
+# for whoever did not keep the id — which is exactly when a project must be easy to delete.
+[ "$cmd" = create ] && BILLING="${RAMEN_BILLING_ACCOUNT:?set RAMEN_BILLING_ACCOUNT to your billing account id}"
+BILLING="${BILLING:-}"
 APIS="container.googleapis.com firestore.googleapis.com secretmanager.googleapis.com storage.googleapis.com"
 
 run() { if [ "${DRY_RUN:-0}" = "1" ]; then echo "+ $*"; else echo "+ $*" >&2; "$@"; fi; }

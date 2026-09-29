@@ -66,9 +66,9 @@ async def test_aws_backend_errors(fk):
             raise ClientError({"Error": {"Code": "InternalServiceError", "Message": "x"}}, "DeleteSecret")
 
     b = AwsSecrets("us-east-1", Boom())
-    with pytest.raises(ApiError, match="secrets manager"):
+    with pytest.raises(ApiError, match="Secrets Manager"):
         await b.put("g", None, None, "A", "v")
-    with pytest.raises(ApiError, match="secrets manager"):
+    with pytest.raises(ApiError, match="Secrets Manager"):
         await b.delete({"ref": "asm://ramen/g/all/all/A"})
 
 

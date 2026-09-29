@@ -157,7 +157,8 @@ def manifests(
     if role_arn:
         ksa["metadata"]["annotations"] = {ROLE_ANNOTATION: role_arn}
     deps = [
-        _deployment(ns, name, track, group, zone, spec, image, bucket_uri)
+        # the ALB appends "<client>" to x-forwarded-for, so the client is the 1st entry from the right
+        _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_proxy_hops=1)
         for name, track in (("worker", "stable"), ("worker-canary", "canary"))
     ]
     return [
@@ -217,7 +218,7 @@ def helm_manifests(
         cmd += ["--set", f"{k}={v}"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise ApiError(502, f"helm template failed: {r.stderr.strip()[:500]}")
+        raise ApiError(502, f"Helm template failed: {r.stderr.strip()[:500]}")
     docs = [d for d in yaml.safe_load_all(r.stdout) if d]
     for d in docs:
         if d["kind"] != "Namespace":

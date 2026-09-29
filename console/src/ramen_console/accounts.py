@@ -4,6 +4,7 @@ from .auth import apikeys
 from .auth.passwords import hash_password, verify_password
 from .errors import conflict, forbidden, invalid, not_found
 from .rbac import RANK, ROLES, Principal
+from .security import check_password
 from .storage.base import Store
 from .util import now, public, uid
 
@@ -11,6 +12,31 @@ from .util import now, public, uid
 class Accounts:
     def __init__(self, store: Store):
         self.store = store
+
+    # --- session epoch (V1.4) ------------------------------------------------
+    @staticmethod
+    def epoch_of(user: dict) -> int:
+        return int(user.get("session_epoch") or 0)
+
+    async def bump_epoch(self, user: dict) -> dict:
+        """Invalidate every session this user already holds. Callers pass the doc they are about to write."""
+        user["session_epoch"] = self.epoch_of(user) + 1
+        return user
+
+    async def bump_all_epochs(self) -> int:
+        """Used when the auth configuration changes: nobody keeps a session minted under the old rules."""
+        users = await self.store.list("users")
+        for u in users:
+            await self.store.put("users", u["id"], await self.bump_epoch(u))
+        return len(users)
+
+    async def principal_for_session(self, session: dict | None) -> Principal | None:
+        if not session:
+            return None
+        u = await self.store.get("users", session.get("uid"))
+        if not u or self.epoch_of(u) != int(session.get("ep") or 0):
+            return None
+        return Principal(u["id"], u["email"], u["role"], list(u.get("groups", [])))
 
     async def authenticate(self, email, password) -> dict | None:
         users = await self.store.list("users", {"email": email})
@@ -26,19 +52,29 @@ class Accounts:
         parsed = apikeys.parse(raw or "")
         if not parsed:
             return None
-        k = await self.store.get("api_keys", parsed[0])
-        if not k or not apikeys.verify(parsed[1], k["secret_hash"]):
+        kid, secret, prefix = parsed
+        k = await self.store.get("api_keys", kid)
+        if not k or not apikeys.verify(secret, k["secret_hash"]):
             return None
-        return Principal(k["id"], k["name"], k["role"], list(k["groups"]), kind="apikey")
+        if k.get("prefix") and k["prefix"] != prefix:  # a key may not be replayed under the other client type
+            return None
+        return Principal(
+            k["id"],
+            k["name"],
+            k["role"],
+            list(k["groups"]),
+            kind="apikey",
+            client_type=apikeys.client_type_of(k, prefix),
+        )
 
     async def _check_scope(self, p: Principal, role, groups):
         if role not in ROLES:
-            raise invalid(f"role must be one of {', '.join(ROLES)}")
+            raise invalid(f"Role must be one of {', '.join(ROLES)}")
         known = {g["id"] for g in await self.store.list("groups")}
         if any(g not in known for g in groups):
-            raise invalid("unknown group")
+            raise invalid("Unknown group")
         if p.role != "super_admin" and (RANK[role] >= RANK[p.role] or any(g not in p.groups for g in groups)):
-            raise forbidden("cannot grant beyond your own role and groups")
+            raise forbidden("Cannot grant beyond your own role and groups")
 
     async def list_users(self, p: Principal) -> list[dict]:
         users = await self.store.list("users")
@@ -48,8 +84,10 @@ class Accounts:
 
     async def create_user(self, p: Principal, email, password, role="viewer", groups=(), provider="password") -> dict:
         if await self.store.list("users", {"email": email}):
-            raise conflict(f"user {email} exists")
+            raise conflict(f"User {email} exists")
         await self._check_scope(p, role, groups)
+        if password:
+            check_password(password)
         doc = {
             "email": email,
             "role": role,
@@ -90,19 +128,24 @@ class Accounts:
             return None
         u.pop(f"{kind}_nonce", None)
         if password is not None:
+            check_password(password)
             u["password_hash"] = hash_password(password)
+            await self.bump_epoch(u)
         return await self.store.put("users", uid_, u)
 
     async def update_user(self, uid_, role=None, groups=None) -> dict:
         u = await self.store.get("users", uid_)
         if not u:
             raise not_found("user")
-        if role:
+        changed = False
+        if role and role != u.get("role"):
             if role not in ROLES:
-                raise invalid("bad role")
-            u["role"] = role
-        if groups is not None:
-            u["groups"] = list(groups)
+                raise invalid("Unknown role")
+            u["role"], changed = role, True
+        if groups is not None and list(groups) != list(u.get("groups", [])):
+            u["groups"], changed = list(groups), True
+        if changed:  # V1.4: a role or group change revokes the sessions minted under the old scope
+            await self.bump_epoch(u)
         return public(await self.store.put("users", uid_, u))
 
     async def delete_user(self, p: Principal, uid_) -> None:
@@ -110,40 +153,61 @@ class Accounts:
         if not u:
             raise not_found("user")
         if p.role != "super_admin" and (u["role"] != "viewer" or any(g not in p.groups for g in u.get("groups", []))):
-            raise forbidden("group admins may only delete viewers in their groups")
+            raise forbidden("Group admins may only delete viewers in their groups")
         if u["id"] == p.id:
-            raise conflict("cannot delete yourself")
+            raise conflict("Cannot delete yourself")
+        await self.store.put("users", uid_, await self.bump_epoch(u))  # V1.4: kill live sessions before the doc goes
         await self.store.delete("users", uid_)
 
     async def set_password(self, uid_, password) -> None:
         u = await self.store.get("users", uid_)
         if not u:
             raise not_found("user")
+        check_password(password)
         u["password_hash"] = hash_password(password)
-        await self.store.put("users", uid_, u)
+        await self.store.put("users", uid_, await self.bump_epoch(u))
 
     async def list_keys(self, p: Principal) -> list[dict]:
         keys = await self.store.list("api_keys")
         if p.role != "super_admin":
             keys = [k for k in keys if k.get("owner") == p.id]
-        return [public(k) for k in sorted(keys, key=lambda k: k["created"])]
+        return [
+            {**public(k), "client_type": apikeys.client_type_of(k)} for k in sorted(keys, key=lambda k: k["created"])
+        ]
 
-    async def mint_key(self, p: Principal, name, role=None, groups=None) -> dict:
+    async def mint_key(self, p: Principal, name, role=None, groups=None, client_type="devops") -> dict:
         role, groups = role or p.role, list(p.groups if groups is None else groups)
+        if client_type not in apikeys.CLIENT_TYPES:
+            raise invalid(f"Client type must be one of {', '.join(apikeys.CLIENT_TYPES)}")
+        if client_type == "agent" and not groups:
+            raise invalid("An agent key must name at least one group")
         if p.role != "super_admin" and (RANK[role] > RANK[p.role] or any(g not in p.groups for g in groups)):
             raise forbidden("API key scope cannot exceed your own")
         if role not in ROLES:
-            raise invalid("bad role")
-        raw, kid, h = apikeys.mint()
-        doc = {"name": name, "role": role, "groups": groups, "secret_hash": h, "owner": p.id, "created": now()}
+            raise invalid("Unknown role")
+        raw, kid, h = apikeys.mint(client_type)
+        doc = {
+            "name": name,
+            "role": role,
+            "groups": groups,
+            "client_type": client_type,
+            "prefix": apikeys.prefix_for(client_type),
+            "secret_hash": h,
+            "owner": p.id,
+            "created": now(),
+        }
         return {**public(await self.store.put("api_keys", kid, doc)), "key": raw}
 
-    async def delete_key(self, p: Principal, kid) -> None:
+    async def get_key(self, kid) -> dict:
         k = await self.store.get("api_keys", kid)
         if not k:
-            raise not_found("api key")
+            raise not_found("API key")
+        return k
+
+    async def delete_key(self, p: Principal, kid) -> None:
+        k = await self.get_key(kid)
         if p.role != "super_admin" and k.get("owner") != p.id:
-            raise forbidden("not your key")
+            raise forbidden("Not your key")
         await self.store.delete("api_keys", kid)
 
     async def request_permission(self, p: Principal, role=None, group=None, zone=None, permission=None) -> dict:
@@ -162,7 +226,7 @@ class Accounts:
             }
         else:
             if role not in ROLES:
-                raise invalid("bad role")
+                raise invalid("Unknown role")
             doc = {
                 "kind": "permission_request",
                 "type": "role",
@@ -183,7 +247,7 @@ class Accounts:
         if not r or r.get("kind") != "permission_request":
             raise not_found("request")
         if r["status"] != "pending":
-            raise conflict("request already handled")
+            raise conflict("Request already handled")
         if r.get("type") == "permission":
             r["applied"] = await apply(r["group"], r["zone"], r["permission"]) if apply else None
             r.update(status="approved", approved_by=by, approved=now())
@@ -194,6 +258,6 @@ class Accounts:
                 u["role"] = r["role"]
             if r.get("group") and r["group"] not in u["groups"]:
                 u["groups"].append(r["group"])
-            await self.store.put("users", u["id"], u)
+            await self.store.put("users", u["id"], await self.bump_epoch(u))
         r.update(status="approved", approved_by=by, approved=now())
         return await self.store.put("activity", rid, r)

@@ -1,6 +1,7 @@
 """CONTRACTS §11: node gRPC surface against a deployed worker/LB. Needs RAMEN_NODE_URL (host:port) + RAMEN_MCP_KEY
 (or the key minted by e2e earlier in the run). Opt: RAMEN_ADMIN_KEY (Admin/*), RAMEN_EXPECT_CIDR_DENIED=1 (a node
 deployed with an excluding RAMEN_ALLOWED_CIDRS), RAMEN_EXPECT_BLOCKED=<tool> (a node deployed with RAMEN_BLOCKED),
+RAMEN_EXPECT_NO_REFLECTION=1 (a node deployed with RAMEN_REFLECTION=0, as the worker chart does),
 RAMEN_WORKER_LOG=<host path of RAMEN_LOG_FILE> (access-log fields). Node-configuration cases that cannot be asserted
 on an arbitrary deployment live in test_mcp_node_local.py."""
 
@@ -30,7 +31,18 @@ def test_health_is_serving_and_unauthenticated(node):
 
 
 def test_server_reflection_lists_services(node):
-    assert {"ramen.v1.Mcp", "ramen.v1.Admin", "grpc.health.v1.Health"} <= set(node.reflect())
+    """Reflection is unauthenticated and runs ahead of every guard, and the LB routes it, so whether it is
+    registered is a deployment choice: `RAMEN_REFLECTION` (default on in the binary, off in
+    deploy/helm/ramen-worker and both console renderers -- CONTRACTS §11a). Either it lists the services or it
+    is not there at all; `RAMEN_EXPECT_NO_REFLECTION=1` says which of the two this deployment should give."""
+    off_expected = E.env("RAMEN_EXPECT_NO_REFLECTION") == "1"
+    try:
+        services = set(node.reflect())
+    except grpc.RpcError as e:
+        assert e.code() in (S.UNIMPLEMENTED, S.NOT_FOUND), f"reflection off should be UNIMPLEMENTED, got {e.code()}"
+        return
+    assert not off_expected, "reflection answered although the deployment sets RAMEN_REFLECTION=0"
+    assert {"ramen.v1.Mcp", "ramen.v1.Admin", "grpc.health.v1.Health"} <= services
 
 
 def test_initialize_reports_contract_protocol(node):

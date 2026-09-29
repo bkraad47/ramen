@@ -1,11 +1,11 @@
-{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Zones / Workers{% endblock %}
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Zones and workers{% endblock %}
 {% block body %}
 {% if p.role == 'super_admin' %}<div class="card"><form class="inline" hx-post="/api/v1/zones" hx-ext="json" hx-swap="none">
 <label>Name<input name="name" pattern="[a-z][a-z0-9-]*" required></label><label>Provider<select name="provider"><option>local</option><option>gcp</option><option>aws</option></select></label><label>Region<input name="region"></label><button>Add zone</button></form></div>{% endif %}
-{% macro act(r) %}{% if p.role == 'super_admin' %}<button class="sm danger" hx-delete="/api/v1/zones/{{ r.id }}" hx-confirm="Delete zone {{ r.id }}?" hx-swap="none">delete</button>{% endif %}{% endmacro %}
+{% macro act(r) %}{% if p.role == 'super_admin' %}<button class="sm danger" hx-delete="/api/v1/zones/{{ r.id }}" hx-confirm="Delete zone {{ r.id }}?" hx-swap="none">Delete</button>{% endif %}{% endmacro %}
 {{ table(zones, ['name', 'provider', 'region', 'created'], '/api/v1/zones', 'Zones', act) }}
-<h2>Workers per group</h2><div class="card"><table><tr><th>group</th><th>zone</th><th>namespace</th><th>live workers / canary</th></tr>
+<h2>Workers per group</h2><div class="card"><table><tr><th>Group</th><th>Zone</th><th>Namespace</th><th>Live workers and canary</th></tr>
 {% for g in groups %}{% for z in zones %}<tr><td><a href="/groups/{{ g.id }}">{{ g.id }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
 <td>{% if z.provider == 'gcp' %}<code>ramen-{{ g.id }}-{{ z.id }}</code>{% else %}—{% endif %}</td>
-<td hx-get="/ui/groups/{{ g.id }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endfor %}{% else %}<tr><td colspan="4" class="muted">no groups</td></tr>{% endfor %}</table></div>
+<td hx-get="/ui/groups/{{ g.id }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endfor %}{% else %}<tr><td colspan="4" class="muted">No groups</td></tr>{% endfor %}</table></div>
 {% endblock %}

@@ -1,6 +1,6 @@
 [project]
 name = "ramen-runtime"
-version = "0.5.4"
+version = "0.5.5"
 description = "Ramen Python worker runtime: loads mcp/ packages from a bucket and executes them over JSON-RPC"
 requires-python = ">=3.14"
 license = "BSD-3-Clause"

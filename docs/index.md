@@ -13,7 +13,7 @@ hide: [toc]
   "applicationCategory": "DeveloperApplication",
   "applicationSubCategory": "MCP server (Model Context Protocol)",
   "operatingSystem": "Kubernetes (GKE, EKS), Docker",
-  "softwareVersion": "0.4.0",
+  "softwareVersion": "0.5.4",
   "license": "https://opensource.org/licenses/BSD-3-Clause",
   "url": "https://bkraad47.github.io/ramen/",
   "codeRepository": "https://github.com/bkraad47/ramen",
@@ -52,8 +52,9 @@ rebalancing, logs and audit, is the OAuth authorization server for per-user acce
 available through an API key.
 
 **Before the pitch, what is verified today:** both transports on real node processes in CI (Linux and Windows); the
-gRPC path live on one GKE cluster (0.3.2, 0.4.0); the HTTP path and OAuth not yet in a cloud; the AWS path never
-applied to a real account. [The full list, kept current →](wiki/transport.md#what-is-verified-and-what-is-not)
+gRPC path live on one GKE cluster (0.3.2, 0.4.0); the HTTP path and OAuth live on GKE through the same load
+balancer since 0.5.1, now over a publicly-trusted certificate (0.5.5); the AWS path never applied to a real
+account. [The full list, kept current →](wiki/transport.md#what-is-verified-and-what-is-not)
 
 <div class="ramen-grid" markdown>
 <div markdown>

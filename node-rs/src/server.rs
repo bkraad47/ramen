@@ -19,7 +19,18 @@ pub async fn run(
         "ramen-node start",
         json!({"version": env!("CARGO_PKG_VERSION"), "addr": listener.local_addr().ok(), "bucket": cfg.bucket, "group": cfg.group, "zone": cfg.zone, "keys": cfg.mcp_keys.len(), "tls": cfg.tls.is_some()}),
     );
-    crate::log::set_file(cfg.log_file.clone());
+    {
+        // v0.5.5: `FILE` (log.rs) is process-global; cargo test runs tests on parallel threads, so this
+        // ordinary startup side effect can redirect it mid-way through an unrelated test that briefly needs
+        // it pinned (log::tests::mirrors_to_file). Block on the same lock that test holds, so `set_file`
+        // here only runs before or after — never during — that test's short critical section. No-op cost
+        // outside `cfg(test)`.
+        #[cfg(test)]
+        let _log_guard = crate::log::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::log::set_file(cfg.log_file.clone());
+    }
     let app = grpc::app(cfg.clone()).await;
     app.sidecar.start_reaper();
     // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.

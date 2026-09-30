@@ -3,7 +3,7 @@ import os
 from fastapi import APIRouter, Depends, Request
 
 from .. import deploy as dep
-from ..logview import EAGER, parse_log
+from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
 from .api_admin import masked_env
@@ -168,8 +168,6 @@ async def logs(
         tail=tail,
         text=text,
         entries=entries,
-        eager=entries[:EAGER],
-        rest=entries[EAGER:],
         live_workers=sorted({*live, *([worker] if worker else [])}),
     )
 
@@ -187,6 +185,19 @@ async def audit(request: Request, limit: int = 100, p: Principal = Depends(viewe
         raise invalid("Limit must be between 1 and 500")
     rows = json.loads((await api_audit(request, limit, None, p)).body)
     return render(request, "audit.html", rows=rows, limit=limit)
+
+
+@r.get("/ui/audit")
+async def audit_rows(request: Request, limit: int = 100, p: Principal = Depends(viewer)):
+    import json
+
+    from ..errors import invalid
+    from .api_admin import audit as api_audit
+
+    if limit < 1 or limit > 500:
+        raise invalid("Limit must be between 1 and 500")
+    rows = json.loads((await api_audit(request, limit, None, p)).body)
+    return render(request, "partials/audit_rows.html", rows=rows)
 
 
 @r.get("/backups")

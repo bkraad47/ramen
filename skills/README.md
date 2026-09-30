@@ -1,10 +1,15 @@
-# Ramen cloud-ops skills
+# Ramen skills
 
-[agentskills](https://agentskills.io)-style skills for agents (Claude Code, Cursor, CI bots) that operate a Ramen
-deployment. Each folder has one `SKILL.md`: front matter (`name`, `description`), **Inputs**, numbered **Steps**,
-**Validate**, **Boundaries**. Skills only use the documented surfaces: the console API (`rmn_` key), the worker's gRPC surface
-(`grpcurl` / `ramen-mcp-bridge` with an `rmk_` key), `terraform`, `helm`, `kubectl`, `make`. They never read secret values and never post anything outside the deployment.
+[agentskills](https://agentskills.io)-style skills for agents (Claude Code, Cursor, Gemini CLI, Copilot, or any
+other agentskills-compatible client — AI-agnostic by design) working on Ramen. Each folder has one `SKILL.md`:
+front matter (`name`, `description`), **Inputs**, numbered **Steps**, **Validate**, **Boundaries**.
 
+Two kinds, in two groups below: **operate** a running Ramen deployment, or **contribute** to Ramen's own code.
+The operate skills only use the documented surfaces: the console API (`rmn_` key), the worker's gRPC surface
+(`grpcurl` / `ramen-mcp-bridge` with an `rmk_` key), `terraform`, `helm`, `kubectl`, `make`. They never read secret
+values and never post anything outside the deployment.
+
+## Operate a deployment
 | Skill | Use when |
 |---|---|
 | `deploy-gcp/` | bringing Ramen up on a GCP project (verified path) |
@@ -12,6 +17,16 @@ deployment. Each folder has one `SKILL.md`: front matter (`name`, `description`)
 | `rotate-keys/` | rotating `rmk_` MCP keys, `rmn_` API keys, the worker admin key or the Fernet key |
 | `backup-restore/` | taking a versioned backup before risky changes, restoring after a bad one |
 | `scale-zone/` | adding/removing a zone, changing worker count/size, rebalancing |
+
+## Contribute to the code (v0.5.5 I17)
+| Skill | Use when |
+|---|---|
+| `test/` | running the test suite (Rust, Python runtime, Python console, cross-component harness) with the 90% coverage gate |
+| `iterate/` | fixing a bug or changing behavior: a reproduce-fix-verify loop, TDD, against `facts/STATE.md` and `docs/CONTRACTS.md` |
+
+`facts/STATE.md` (repo root) is the scratchpad/fact block these two skills read first — a short, kept-current
+snapshot of what exists, separate from `docs/CONTRACTS.md` (the binding, append-only spec). Any agent, not just
+one vendor's, can point at either file with no special setup.
 
 ## Loading
 Point the agent at the folder (`skills/<name>/SKILL.md`) or copy it into the agent's skills directory

@@ -38,7 +38,7 @@ class Services:
             raise not_found("group")
         return g
 
-    async def create_group(self, name, repo_url="", ref="main", by="") -> dict:
+    async def create_group(self, name, repo_url="", ref="main", by="", github_token=None) -> dict:
         if not NAME_RE.match(name or ""):
             raise invalid("Group name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("groups", name):
@@ -52,6 +52,8 @@ class Services:
             "mcp_auth": {"mode": "bearer"},
             "sa_restrictions": [],
         }
+        if github_token:  # private GitHub or GitLab repos (I2); encrypted at rest, see storage/encrypted.py
+            doc["github_token"] = github_token
         return public(await self.store.put("groups", name, doc))
 
     async def update_group(self, name, **fields) -> dict:

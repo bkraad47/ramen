@@ -171,6 +171,22 @@ def test_the_action_buttons_share_one_width_class(demo):
     assert re.search(r"\.act\{[^}]*width:", css)
 
 
+# --- v0.5.5 I3: zone-actions buttons must not have an arbitrary colour outlier, and fields need a visible label,
+# not just aria-label (sighted users can't see an aria attribute) ------------------------------------------------
+def test_the_action_buttons_all_share_the_same_colour_style(demo):
+    html = demo.get("/groups/demo").text
+    section = re.search(r'<div class="zone-actions">(.*?)</div>\s*</td>', html, re.S).group(1)
+    controls = re.findall(r"<(?:button|a)[^>]*class=\"([^\"]*)\"[^>]*>", section)
+    assert controls and all("ghost" in c for c in controls), controls
+
+
+def test_the_zone_actions_fields_have_a_visible_label(demo):
+    html = demo.get("/groups/demo").text
+    section = re.search(r'<div class="zone-actions">(.*?)</div>\s*</td>', html, re.S).group(1)
+    for field, text in [("count", "Count"), ("size", "Size"), ("allowed_sizes", "Allowed sizes"), ("cidrs", "CIDRs")]:
+        assert re.search(rf"<label[^>]*>{text}\s*<[^>]*name=\"{field}\"", section), field
+
+
 def test_a_viewer_gets_no_action_buttons(demo, app):  # noqa: F811
     from fastapi.testclient import TestClient
 

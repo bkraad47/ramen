@@ -7,7 +7,6 @@ line — is kept verbatim so nothing is silently dropped.
 
 import json
 
-EAGER = 15  # newest entries rendered eagerly; the rest go in the scrollable frame
 ANONYMOUS = "anonymous"
 
 

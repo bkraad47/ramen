@@ -159,4 +159,6 @@ def test_logs_endpoint(demo, fk):
         {"@timestamp": "2026-09-28 01:00:00.000", "kubernetes.pod_name": "worker-0", "stream": "stdout", "log": "hello"}
     ]
     r = demo.get("/api/v1/logs?group=demo&zone=a")
-    assert r.status_code == 200 and "worker-0 hello" in r.text
+    # v0.5.5 I9: a non-JSON line is kept verbatim, not corrupted with a "ts stream pod " prefix that used to
+    # make every real worker JSON line unparseable by logview.parse_log too.
+    assert r.status_code == 200 and "hello" in r.text

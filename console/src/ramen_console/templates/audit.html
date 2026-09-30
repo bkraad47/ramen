@@ -1,11 +1,11 @@
-{% extends "base.html" %}{% from "partials/table.html" import cell %}{% block title %}Audit{% endblock %}
+{% extends "base.html" %}{% block title %}Audit{% endblock %}
 {% block body %}
 <div class="card"><div class="dl">Download: <a href="/api/v1/audit?format=csv">CSV</a><a href="/api/v1/audit?format=json">JSON</a></div>
 <h2 style="margin-top:0">Audit log (newest {{ limit }})</h2>
 <div class="audit-filters"><label>Search<input id="audit-search" type="search" placeholder="User, action, target, tag or address" oninput="ramenAuditFilter()"></label>
 <label>Outcome<select id="audit-outcome" onchange="ramenAuditFilter()"><option value="">Any</option><option value="ok">Succeeded</option><option value="fail">Failed</option></select></label>
-<span class="muted">Showing the newest {{ rows|length }}. <a href="/audit?limit=500">Load 500</a></span></div>
-<div id="audit-scroll"><table><thead><tr>{% for c in ['ts', 'user', 'ip', 'action', 'target', 'ok', 'tags'] %}<th>{{ c|replace('_', ' ')|capitalize }}</th>{% endfor %}</tr></thead><tbody>
-{% for a in rows %}<tr data-ok="{{ a.ok }}">{% for c in ['ts', 'user', 'ip', 'action', 'target', 'ok', 'tags'] %}<td>{{ cell(c, a.get(c)) }}</td>{% endfor %}</tr>{% else %}<tr><td colspan="7" class="muted">Nothing yet</td></tr>{% endfor %}
-</tbody></table></div></div>
+<span class="muted">Showing the newest {{ rows|length }}</span>
+<a class="btn ghost act" href="/audit?limit=500">Load 500</a>
+<button id="auto-refresh" class="sm ghost" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button></div>
+<div id="audit-scroll" hx-get="/ui/audit?limit={{ limit }}" hx-trigger="load, every 60s[window.ramenAuto]" hx-swap="innerHTML" hx-on::after-swap="ramenAuditFilter()"></div></div>
 {% endblock %}

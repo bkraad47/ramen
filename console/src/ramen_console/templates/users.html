@@ -1,10 +1,13 @@
-{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Users{% endblock %}
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% from "partials/group_picker.html" import group_picker %}{% block title %}Users{% endblock %}
 {% block body %}
-<div class="card"><form class="inline" hx-post="/api/v1/users" hx-ext="json" hx-swap="none">
+<div class="card"><details><summary class="btn">Create user</summary>
+<form class="inline" hx-post="/api/v1/users" hx-ext="json" hx-swap="none">
 <label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>
 <label>Role<select name="role"><option value="viewer">Viewer</option>{% if p.role == 'super_admin' %}<option value="group_admin">Group Admin</option><option value="super_admin">Super Admin</option>{% endif %}</select></label>
-<label>Groups<select name="groups" multiple size="4">{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select></label><button>Create user</button></form></div>
-{% macro act(r) %}<div class="row-actions">{% if p.role == 'super_admin' %}<form class="inline" hx-put="/api/v1/users/{{ r.id }}" hx-ext="json" hx-swap="none"><select name="role">{% for role in ['viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}" {{ 'selected' if role == r.role }}>{{ role_label(role) }}</option>{% endfor %}</select><input name="groups" value="{{ r.groups|join(',') }}"><button class="sm act">Save</button></form>{% endif %}
+{{ group_picker(groups) }}
+<button>Create user</button></form></details></div>
+{% macro act(r) %}<div class="row-actions">{% if p.role == 'super_admin' %}<form class="inline" hx-put="/api/v1/users/{{ r.id }}" hx-ext="json" hx-swap="none"><select name="role">{% for role in ['viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}" {{ 'selected' if role == r.role }}>{{ role_label(role) }}</option>{% endfor %}</select><input name="groups" value="{{ r.groups|join(',') }}"><button class="sm act">Save</button></form>
+<form class="inline" hx-post="/api/v1/users/{{ r.id }}/password" hx-ext="json" hx-swap="none"><input name="password" type="password" minlength="12" required placeholder="New password" title="{{ password_rule }}"><button class="sm ghost act">Reset password</button></form>{% endif %}
 <button class="sm danger act" hx-delete="/api/v1/users/{{ r.id }}" hx-confirm="Delete the user {{ r.email }}?" hx-swap="none">Delete user</button></div>{% endmacro %}
 {{ table(users, ['email', 'role', 'groups', 'provider', 'created'], '/api/v1/users', 'Users', act) }}
 {% if p.role == 'super_admin' %}<h2>Permission requests</h2><div class="card"><table><tr><th>User</th><th>Request</th><th>Group</th><th>Zone</th><th>Status</th><th>Actions</th></tr>

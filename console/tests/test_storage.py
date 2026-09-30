@@ -10,7 +10,8 @@ from ramen_console.storage.dynamodb import DynamoStore
 from ramen_console.storage.encrypted import SENSITIVE, EncryptedStore, FieldCipher
 from ramen_console.storage.firestore import FirestoreStore
 from ramen_console.storage.memory import MemoryStore
-from tests.fakes import FakeFirestoreClient
+from ramen_console.storage.postgres import PostgresStore
+from tests.fakes import FakeAsyncpgPool, FakeFirestoreClient
 
 
 @pytest.fixture
@@ -25,12 +26,14 @@ def ddb_store():
         yield s
 
 
-@pytest.fixture(params=["memory", "firestore", "dynamodb"])
+@pytest.fixture(params=["memory", "firestore", "dynamodb", "postgres"])
 def store(request, ddb_store) -> Store:
     if request.param == "memory":
         return MemoryStore()
     if request.param == "firestore":
         return FirestoreStore(client=FakeFirestoreClient())
+    if request.param == "postgres":
+        return PostgresStore(pool=FakeAsyncpgPool())
     return ddb_store
 
 
@@ -121,12 +124,38 @@ def test_factory_dynamodb(monkeypatch):
         assert isinstance(s.inner, DynamoStore)
 
 
+def test_factory_postgres(monkeypatch):
+    monkeypatch.setenv("RAMEN_STORE", "postgres")
+    monkeypatch.setenv("RAMEN_POSTGRES_DSN", "postgresql://u:p@localhost/ramen")
+    s = make_store()
+    assert isinstance(s.inner, PostgresStore)
+    monkeypatch.delenv("RAMEN_POSTGRES_DSN")
+    with pytest.raises(ValueError, match="RAMEN_POSTGRES_DSN"):
+        make_store()
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not os.environ.get("FIRESTORE_EMULATOR_HOST"), reason="no emulator")
 async def test_firestore_real_client():
     s = FirestoreStore.from_env()
     await s.put("users", "it", {"x": 1})
     assert (await s.get("users", "it"))["x"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not os.environ.get("RAMEN_TEST_POSTGRES_DSN"), reason="no postgres (set RAMEN_TEST_POSTGRES_DSN)")
+async def test_postgres_real_client(monkeypatch):
+    monkeypatch.setenv("RAMEN_POSTGRES_DSN", os.environ["RAMEN_TEST_POSTGRES_DSN"])
+    s = PostgresStore.from_env()
+    assert await s.get("users", "it") is None
+    doc = await s.put("users", "it", {"x": 1})
+    assert doc == {"id": "it", "x": 1}
+    assert (await s.get("users", "it"))["x"] == 1
+    await s.put("users", "it", {"x": 2})  # ON CONFLICT DO UPDATE, not a duplicate row
+    assert (await s.get("users", "it"))["x"] == 2
+    assert [d["id"] for d in await s.list("users", {"x": 2})] == ["it"]
+    await s.delete("users", "it")
+    assert await s.get("users", "it") is None
 
 
 def test_firestore_from_env_constructs(monkeypatch):

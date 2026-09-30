@@ -24,11 +24,14 @@ terraform init && terraform apply
 cd ../../..
 ```
 Creates: regional GKE Autopilot cluster `ramen`, Firestore Native `(default)`, Artifact Registry repo `ramen`,
-static IP `ramen-console`, groups bucket `ramen-<project>-groups`, console GSA `ramen-console@<project>` with
+static IP `ramen-console`, a Certificate Manager Google-managed certificate + map for a free `sslip.io` hostname
+derived from that IP (v0.5.5 I11 — no domain purchase needed; D17 superseded), groups bucket
+`ramen-<project>-groups`, console GSA `ramen-console@<project>` with
 `roles/iam.serviceAccountCreator` + `serviceAccountDeleter` + `serviceAccountUser`, a custom role `ramenConsoleSaIam` (get/list/getIamPolicy/setIamPolicy on `ramen-*` service accounts) and
 resource-level bindings on the bucket and secrets (no `projectIamAdmin` since 0.3.1, §11), Workload Identity binding
 to `ramen-system/console`. Outputs: `cluster_name`, `region`,
-`console_ip`, `artifact_repo`, `console_gsa`, `groups_bucket`. Nothing per-group is created by Terraform.
+`console_ip`, `public_hostname`, `certificate_map`, `artifact_repo`, `console_gsa`, `groups_bucket`. Nothing
+per-group is created by Terraform.
 
 ## 3. Images (~5 min)
 ```sh
@@ -39,21 +42,26 @@ Builds `linux/amd64` images and pushes `<region>-docker.pkg.dev/<project>/ramen/
 ## 4. Console (Helm)
 ```sh
 gcloud container clusters get-credentials ramen --region $REGION
-IP=$(terraform -chdir=deploy/terraform/gcp output -raw console_ip)
-deploy/scripts/selfsigned.sh $IP                        # Secret ramen-system/ramen-console-tls (D17)
+HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
+CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
 kubectl label ns ramen-system ramen.io/routes=true      # the Gateway only admits routes from labelled namespaces
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set project=$PROJECT,region=$REGION \
+  --set gateway.certificateMap=$CERTMAP \
+  --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
 kubectl -n ramen-system get gateway ramen -w            # PROGRAMMED=True after ~5 min; ADDRESS = static IP
-curl -k https://$IP/readyz                              # {"ok":true,"store":"firestore","version":"0.3.1"}  (console is still HTTP)
+                                                          # the managed cert reaches ACTIVE a few minutes later:
+                                                          # gcloud certificate-manager certificates describe ramen-console
+curl https://$HOSTNAME/readyz                            # {"ok":true,"store":"firestore","version":"0.5.5"} — real cert, no -k
 ```
 Keep the three generated secrets somewhere safe (a password manager, not the shell history). The chart installs:
 console Deployment (KSA `console`, Workload Identity), Service (NEG), Gateway `ramen`
-(`gke-l7-global-external-managed`, static IP, TLS Secret), HTTPRoute `/`, HealthCheckPolicy, a ClusterRole for
+(`gke-l7-global-external-managed`, static IP, Google-managed cert via the `networking.gke.io/certmap` annotation),
+HTTPRoute `/`, HealthCheckPolicy, a ClusterRole for
 namespaces, networkpolicies, HTTPRoutes and read verbs (per-zone Roles cover deployments/secrets/services/HPAs/pods,
 §11), and a `GCPBackendPolicy` with a 300 s timeout.
 
@@ -61,7 +69,8 @@ Console env set by the chart: `RAMEN_STORE=firestore RAMEN_CLOUD=gcp RAMEN_SECRE
 RAMEN_GCP_REGION RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER`.
 
 ## 5. First zone, group and deploy (console or API)
-Open `https://<console_ip>/` (accept the self-signed warning), login `admin@ramen.local` / the password above.
+Open `https://<public_hostname>/`, login `admin@ramen.local` / the password above. The cert is publicly trusted
+(Certificate Manager) — no browser warning.
 
 1. **Zones → Add zone**: name `a`, provider `gcp`, region `us-central1-a` (the *GCP zone* the workers pin to).
 2. **Groups → Add group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
@@ -76,37 +85,36 @@ Open `https://<console_ip>/` (accept the self-signed warning), login `admin@rame
 
 Same thing with the API (`rmn_` key or cookie):
 ```sh
-C="curl -sk -H 'Content-Type: application/json' -H \"X-Ramen-Api-Key: $RMN\""
-eval $C -X POST https://$IP/api/v1/zones -d "'{\"name\":\"a\",\"provider\":\"gcp\",\"region\":\"us-central1-a\"}'"
-eval $C -X POST https://$IP/api/v1/groups -d "'{\"name\":\"demo\",\"repo_url\":\"https://github.com/bkraad47/ramen-demo-mcp-group\",\"ref\":\"main\"}'"
-eval $C -X POST https://$IP/api/v1/groups/demo/environments -d "'{\"name\":\"default\",\"ref\":\"main\",\"zones\":[\"a\"]}'"
-eval $C -X POST https://$IP/api/v1/groups/demo/mcp-keys -d "'{\"name\":\"first\"}'"        # → {"key":"rmk_…"}
-eval $C -X POST https://$IP/api/v1/groups/demo/environments/default/deploy -d "'{\"canary\":true}'"   # → 202 {id}
+C="curl -s -H 'Content-Type: application/json' -H \"X-Ramen-Api-Key: $RMN\""
+eval $C -X POST https://$HOSTNAME/api/v1/zones -d "'{\"name\":\"a\",\"provider\":\"gcp\",\"region\":\"us-central1-a\"}'"
+eval $C -X POST https://$HOSTNAME/api/v1/groups -d "'{\"name\":\"demo\",\"repo_url\":\"https://github.com/bkraad47/ramen-demo-mcp-group\",\"ref\":\"main\"}'"
+eval $C -X POST https://$HOSTNAME/api/v1/groups/demo/environments -d "'{\"name\":\"default\",\"ref\":\"main\",\"zones\":[\"a\"]}'"
+eval $C -X POST https://$HOSTNAME/api/v1/groups/demo/mcp-keys -d "'{\"name\":\"first\"}'"        # → {"key":"rmk_…"}
+eval $C -X POST https://$HOSTNAME/api/v1/groups/demo/environments/default/deploy -d "'{\"canary\":true}'"   # → 202 {id}
 ```
-Or run the whole thing with `scripts/cloud_smoke.sh https://$IP admin@ramen.local '<password>' '<admin key>'`
+Or run the whole thing with `scripts/cloud_smoke.sh https://$HOSTNAME admin@ramen.local '<password>' '<admin key>'`
 which prints PASS/FAIL.
 
 ## 6. Call it through the load balancer (gRPC, routed by metadata)
 The same static IP serves the console (`/`, HTTP) and every zone's workers (gRPC). The Gateway picks the zone from
-the `ramen-group` / `ramen-zone` metadata; there is no path. Export the self-signed cert once (D17) so clients can
-verify it, then use the bridge or `grpcurl`:
+the `ramen-group` / `ramen-zone` metadata; there is no path. The certificate is publicly trusted (Certificate
+Manager, v0.5.5 I11) — no CA export, no `kubectl` step, just the bridge or `grpcurl` against the hostname:
 ```sh
-kubectl -n ramen-system get secret ramen-console-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > ramen-lb.pem
-
 # MCP clients (Claude Desktop, Cursor, mcp SDK): the bridge as a stdio server
-ramen-mcp-bridge --target $IP:443 --tls --ca ramen-lb.pem --key rmk_… --group demo --zone a
+ramen-mcp-bridge --target $HOSTNAME:443 --tls --key rmk_… --group demo --zone a
 
 # raw call
 REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64)
-grpcurl -cacert ramen-lb.pem -import-path proto -proto ramen/v1/mcp.proto \
+grpcurl -import-path proto -proto ramen/v1/mcp.proto \
   -H "authorization: Bearer rmk_…" -H 'ramen-group: demo' -H 'ramen-zone: a' \
-  -d "{\"body\":\"$REQ\"}" $IP:443 ramen.v1.Mcp/Call | python3 -c 'import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)["body"]).decode())'
+  -d "{\"body\":\"$REQ\"}" $HOSTNAME:443 ramen.v1.Mcp/Call | python3 -c 'import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)["body"]).decode())'
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
-grpc_health_probe -addr $IP:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'   # SERVING
+grpc_health_probe -addr $HOSTNAME:443 -tls -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'   # SERVING
 ```
 The route appears minutes after the namespace is created — two on a good day, seven on the 0.5.1 run — and until then the Gateway answers 404 / `UNIMPLEMENTED` (a `POST /mcp` lands on the console and gets its `404 {"detail":"Not Found"}`).
 A call with the wrong group/zone headers reaches no backend (404 from the Gateway); a call with the right headers
-and a wrong key gets `UNAUTHENTICATED` from the node. Drop `--ca` / `-cacert` once a managed certificate is in place.
+and a wrong key gets `UNAUTHENTICATED` from the node. `deploy/scripts/selfsigned.sh` still exists for a self-signed
+fallback (unset `gateway.certificateMap`) — e.g. a cluster with no public hostname at all.
 
 ## 7. Day-2 from the console
 - **Scale**: group page → zone row → count (admins) / size `s|m|l` + allowed sizes (super admin). HPA min = count.

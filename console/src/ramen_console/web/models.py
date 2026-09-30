@@ -19,6 +19,7 @@ class GroupIn(BaseModel):
     name: str
     repo_url: str = ""
     ref: str = "main"
+    github_token: str | None = None
 
 
 class GroupUpdate(BaseModel):

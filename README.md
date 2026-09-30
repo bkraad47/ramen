@@ -13,15 +13,16 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 
 **Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [Add and deploy a tool](https://bkraad47.github.io/ramen/how-tos/add-a-tool/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
-> **0.5.0 puts Streamable HTTP back at the front door.** Every worker serves `POST /mcp` — a URL and a bearer
-> header, nothing to install — next to the gRPC service it has had since 0.3.1, on the same port, through the same
-> guards. Phones, browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only
-> speak stdio. Per-user access through OAuth (the console is the authorization server) is new in this release too.
+> **Streamable HTTP is the front door.** Every worker serves `POST /mcp` — a URL and a bearer header, nothing to
+> install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. Phones,
+> browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
+> Per-user access through OAuth (the console is the authorization server), live-verified on GKE since 0.5.1.
 
 **What is true today, before the pitch.** The local stack and CI prove both transports on real node processes on
-Linux and Windows. One GKE cluster proved the gRPC path end to end in 0.3.2 and 0.4.0. The HTTP path and OAuth have
-**not yet run in a cloud**, and the AWS path has **never** been applied to a real account. Everything below is
-written so those lines stay findable.
+Linux and Windows. One GKE cluster has proved the gRPC path end to end (0.3.2, 0.4.0) and, separately, the HTTP
+path + OAuth end to end through the same load balancer (0.5.1: harness 218 passed, 0 failed, 15 skipped with
+stated reasons — publicly-trusted TLS via a Google-managed cert since 0.5.5, no self-signed warning). The AWS
+path has **never** been applied to a real account. Everything below is written so those lines stay findable.
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a
@@ -165,10 +166,11 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
 Bring-up on GCP is `terraform apply` → `make push` → `helm upgrade --install` → add a zone and a group in the
-console → Deploy. About 25 minutes, mostly waiting for GKE and the load balancer. Clients then use
-`https://<console_ip>/mcp` with `Authorization: Bearer rmk_…` and the `ramen-group` / `ramen-zone` headers (the
-same address serves the console and, by those headers, every zone); stdio-only clients point the bridge at
-`<console_ip>:443 --tls --ca <pem>`.
+console → Deploy. About 25 minutes, mostly waiting for GKE and the load balancer. The load balancer gets a
+publicly-trusted certificate automatically (a free `sslip.io` hostname derived from the static IP — no domain to
+buy, since 0.5.5). Clients then use `https://<public_hostname>/mcp` with `Authorization: Bearer rmk_…` and the
+`ramen-group` / `ramen-zone` headers (the same address serves the console and, by those headers, every zone);
+stdio-only clients point the bridge at `<public_hostname>:443 --tls` — no `--ca`, nothing to import.
 
 ## Write your own tools
 

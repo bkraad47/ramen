@@ -36,9 +36,9 @@ Prefer `gcp`/`aws` secret backends in production precisely so that E is cheap.
 
 ## Validate
 (read-only sub-agent; needs the **new** `rmk_` and a viewer `rmn_` key, plus the old `rmk_` if step A was run)
-- V1 `tools/list` with the new `rmk_` through the bridge (`ramen-mcp-bridge --target <lb>:443 --tls --ca lb.pem --key $RMK_NEW --group <g> --zone <z>`; locally `--target localhost:8080 --insecure`) or `grpcurl … ramen.v1.Mcp/Call` (see deploy-gcp V3) → OK with tools; the old key → `Unauthenticated`.
+- V1 `tools/list` with the new `rmk_` through the bridge (`ramen-mcp-bridge --target <lb>:443 --tls --key $RMK_NEW --group <g> --zone <z>`; locally `--target localhost:8080 --insecure`) or `grpcurl … ramen.v1.Mcp/Call` (see deploy-gcp V3) → OK with tools; the old key → `Unauthenticated`.
 - V2 Same call with the old revoked `rmk_` → 401 (only after A.4).
-- V3 `curl -sk -H "X-Ramen-Api-Key: $RMN_NEW" $CONSOLE/api/v1/me` → 200; with the old `rmn_` → 401.
+- V3 `curl -s -H "X-Ramen-Api-Key: $RMN_NEW" $CONSOLE/api/v1/me` → 200; with the old `rmn_` → 401.
 - V4 `curl -sk -H "X-Ramen-Api-Key: $RMN_NEW" $CONSOLE/api/v1/audit` shows entries `mcp-keys.create`/`delete` (or `api-keys.*`) with `ok:true`.
 - V5 For C: the last deploy job of every environment is `ok` (`GET $U/jobs/<id>` or the environment's `last_deploy.status`).
 

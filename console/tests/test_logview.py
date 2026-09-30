@@ -3,7 +3,7 @@
 import json
 
 from ramen_console.keyid import key_id
-from ramen_console.logview import EAGER, parse_log
+from ramen_console.logview import parse_log
 
 OK = json.dumps(
     {
@@ -99,12 +99,11 @@ def test_body_is_pretty_printed_json_for_structured_lines():
     assert json.loads(body)["name"] == "demo_calculator_tool"
 
 
-def test_split_puts_the_newest_fifteen_first():
+def test_entries_are_newest_first():
     lines = [json.dumps({"ts": f"t{i:03d}", "msg": "mcp", "status": "ok"}) for i in range(40)]
     entries = parse_log("\n".join(lines))
-    assert len(entries[:EAGER]) == 15
     assert entries[0]["ts"] == "t039"
-    assert entries[EAGER]["ts"] == "t024"
+    assert entries[-1]["ts"] == "t000"
 
 
 def test_empty_log_parses_to_nothing():

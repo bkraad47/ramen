@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% from "partials/table.html" import table %}{% from "partials/group_picker.html" import group_picker %}{% block title %}API keys{% endblock %}
 {% block body %}
-<div class="card"><form class="inline" hx-post="/api/v1/api-keys" hx-ext="json" hx-target="#once" hx-swap="innerHTML">
+<div class="card"><form class="inline controls" hx-post="/api/v1/api-keys" hx-ext="json" hx-target="#once" hx-swap="innerHTML">
 <label>Name<input name="name" required></label>
 <label>Client type<select name="client_type"><option value="devops">Devops — console API</option><option value="agent">Agent — language model to worker</option></select></label>
 <label>Role (up to your own)<select name="role"><option value="">Same as me</option><option value="viewer">Viewer</option><option value="group_admin">Group Admin</option>{% if p.role == 'super_admin' %}<option value="super_admin">Super Admin</option>{% endif %}</select></label>

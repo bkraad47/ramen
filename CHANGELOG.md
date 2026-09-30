@@ -2,6 +2,71 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.5] — Google-managed TLS, a third storage backend, and a round of real bugs found by testing for real
+17 user-filed items (`instructions/v0.5.5.md`), worked one at a time with a failing test written first for
+each. Several turned out to already be fixed and just needed a stale note corrected; several surfaced real
+defects that automated testing had not caught because nothing had ever exercised that path for real.
+
+**Console UI**: create-group/create-user/create-backup forms moved behind a button with a proper
+dropdown+chips group picker (matching the existing API-keys page pattern) instead of an always-open inline
+form or a 4-row multi-select listbox; zone-actions, api-keys, logs and audit header rows now share one
+`.controls`/`.act` sizing convention instead of each control sizing to its own content; the audit page gained
+auto-refresh behind the same toggle the dashboard already used; admins get a reset-password button per user
+row (the API already existed and was tested — only the UI was missing).
+
+**Logs**: the "All workers" view only ever read a file literally named `worker.log` — any zone with more
+than one worker showed nothing. GCP and AWS log fetchers were prefixing each line with `ts severity pod `
+plain text before the worker's JSON, which silently broke `logview.py`'s `json.loads` on every real line and
+rendered every row as `-`/`-` for consumer and timestamp on GKE. Both fixed; the page is now one bounded
+scrollable frame instead of 15 unbounded rows then a separate scrollbox.
+
+**TLS (D17 superseded)**: the console's GKE Gateway now provisions a Google-managed certificate automatically
+— a free `sslip.io` hostname derived from the load balancer's own static IP, no domain purchase required —
+instead of the D17 self-signed fallback. `ramen-mcp-bridge --tls` needs no `--ca` and no `kubectl` step
+against it; verified live end to end on a throwaway GKE project (cert reached `ACTIVE`, the console answered
+`200` over plain `curl` with no `-k`, issuer `Google Trust Services`). Self-signed remains available as an
+opt-out (`gateway.certificateMap` unset).
+
+**Storage**: Postgres joins Firestore and DynamoDB as a third `RAMEN_STORE` backend (self-hosted/on-prem use,
+D2/G1 partly superseded) — one table, four methods, no migrations. Found and fixed during testing: the
+adapter's lazy connection-pool lock was named `self._lock`, silently shadowing the base `Store` class's own
+`_lock()` method and breaking every backend's generic `transaction()` — caught immediately by a test that
+actually calls it. New `docs/how-tos/storage-backend.md`.
+
+**Multi-zone load and rebalance**: `rebalance`'s known defect (D-CONSOLE-1: a non-`ApiError` from the
+compute API turned the whole call into a 502 instead of degrading, losing the HPA re-scale leg that needs no
+cloud API) was already fixed with a regression test — only a kind test's explanatory comment describing the
+old bug was stale; corrected it. The kind load generator was gRPC-only; it now also drives Streamable HTTP
+traffic, and two new tests prove autoscale and rebalance work under HTTP load too, not just gRPC — all
+live-verified against a real kind cluster.
+
+**A real pip-install test, and what it found**: no fixture group had ever listed a real third-party package,
+so nothing had proven a group's `requirements.txt` actually reaches the worker's `pip install`. Added one
+that installs and imports `numpy` for real. It immediately found that the `uv`-managed dev/CI virtualenv for
+`runtime-py` has no `pip` at all (uv doesn't need one; `runtime_py/deps.py` shells out to `python -m pip`
+directly) — not a production bug (the real worker image's plain `python -m venv` includes pip), but it had
+silently made every local/CI conformance run of this path untestable. Fixed in three CI jobs and documented.
+
+**Three new public repos / a public dev-contribution path (I17)**: `ramen-mcp-grpc` (bridge install/use docs;
+code stays in `runtime-py/` for now) and `ramen-demo-mcp-group` submoduled locally as `ramen-demo-mcp/` (D8
+partly superseded). `skills/test/` and `skills/iterate/` ship an AI-agnostic (agentskills.io format, any
+compatible agent — not just one vendor's) version of this project's own reproduce-fix-verify workflow, reading
+a new `facts/STATE.md` scratchpad — the public analogue of the private workspace's own fact-block convention.
+
+**Docs**: fixed a real self-contradiction — the README and docs landing page both still said HTTP/OAuth had
+"not yet run in a cloud" while their own accurate sections, right below, already said 0.5.1 proved it live on
+GKE.
+
+**`log::tests::mirrors_to_file`, actually fixed this time**: the 0.5.4 fix (count only this test's own lines)
+addressed concurrent *writers* to the process-global log file, not the real cause — `server::run()` calls
+`log::set_file` as an ordinary startup side effect, and every test that starts a node (`server.rs`, and
+`http.rs` via a shared helper — about a dozen call sites) could redirect the file pointer mid-test on a
+parallel thread. Fixed at the root with a test-only lock shared between the two; 10 consecutive clean runs
+confirmed it where the first run of this release had failed.
+
+Carried forward, not yet done: a Gmail SMTP smoke test (`scripts/mail_smoke.py`, written and verified against
+the local file-backend; needs the user's own Gmail App Password in `deploy/local/.env`).
+
 ## [0.5.4] — honest deploy pictures, aligned environment buttons, docs brought current
 - The docs' group and deploy-job screenshots showed a deploy that had **failed** ("Authentication failed for https://github.com/…"): the screenshot rig deployed the demo group from GitHub through a laptop with a stale keychain token. The rig now clones a local git copy of the demo group, so the seeded deploy succeeds and the pictures show a job that ends in `ok` with packages per zone.
 - Group page → Environments: the verbose toggle, **Deploy (canary)** and **Delete** were three sizes on two baselines; all three now use the equal-width `row-actions` pattern (the toggle reads `Verbose: on/off`). A test pins it.

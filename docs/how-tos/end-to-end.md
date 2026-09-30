@@ -127,16 +127,16 @@ access log with one line per call, naming the transport and the key id or `user:
 ## Part 2 — GKE
 
 The same eight steps against a cluster. The pictures in this part are live captures from the GKE run that verified
-0.5.0 (`scripts/shots.py --base https://<console_ip> …`), not a seeded console. Bring-up is [GCP (verbose)](gcp.md) §1–4 — throwaway project, Terraform,
-images, the console chart with `--set console.env.RAMEN_PUBLIC_URL=https://$IP` (that URL becomes the OAuth issuer
-the workers trust). From here on it is the console.
+0.5.0 (`scripts/shots.py --base https://<console_ip> …`), not a seeded console; the URLs in them predate v0.5.5's
+Google-managed certificate (I11) and still show a raw IP. Bring-up is [GCP (verbose)](gcp.md) §1–4 — throwaway
+project, Terraform, images, the console chart with `--set gateway.certificateMap=$CERTMAP --set
+console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME` (that URL becomes the OAuth issuer the workers trust; `$HOSTNAME` is
+the free sslip.io hostname `terraform output public_hostname` gives you, or your own domain). From here on it is
+the console.
 
 ### 1. Sign in
-`https://<console_ip>/`, the admin password you passed to Helm. Export the load balancer's self-signed certificate
-once so clients can verify it:
-```sh
-kubectl -n ramen-system get secret ramen-console-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > ramen-lb.pem
-```
+`https://<public_hostname>/`, the admin password you passed to Helm. The certificate is issued by a public CA
+(Google Certificate Manager, D17 superseded by v0.5.5 I11) — no warning, no CA export step, no kubectl needed.
 
 ### 2. A zone
 **Zones and workers → Add zone**: name `a`, provider `gcp`, region `us-central1-a`. A zone is a GKE namespace with
@@ -166,22 +166,22 @@ namespace:
 {
   "mcpServers": {
     "ramen-demo": {
-      "url": "https://<console_ip>/mcp",
+      "url": "https://<public_hostname>/mcp",
       "headers": {"Authorization": "Bearer rmk_…", "ramen-group": "demo", "ramen-zone": "a"}
     }
   }
 }
 ```
-Until a real certificate is in place a client must trust `ramen-lb.pem` (Claude Desktop and Cursor use the
-system trust store: import the certificate there, or put a managed certificate on the Gateway). With `curl`:
+The certificate is publicly trusted (Google Certificate Manager), so Claude Desktop, Cursor and `curl` all verify
+it with their normal system trust store — nothing to import:
 ```sh
-curl -s --cacert ramen-lb.pem https://$IP/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
+curl -s https://$HOSTNAME/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
   -H 'ramen-group: demo' -H 'ramen-zone: a' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 ```
 
 ### 7. Per-user access with OAuth
-As in Part 1. The worker's challenge names `https://<console_ip>/.well-known/oauth-protected-resource`, which names
+As in Part 1. The worker's challenge names `https://<public_hostname>/.well-known/oauth-protected-resource`, which names
 the console as the authorization server; the token's issuer is the `RAMEN_PUBLIC_URL` you set at install.
 `scripts/oauth_roundtrip.py` does the whole flow as a client would; this is its output through the load balancer:
 ```

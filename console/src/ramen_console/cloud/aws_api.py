@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from ..errors import ApiError
-from .gcp_api import k8s_name
+from .gcp_api import _try_json, k8s_name
 from .gcp_clients import GcpClients
 from .local import redact, run_git
 
@@ -173,10 +173,14 @@ def fetch_logs(logs, log_group, ns, worker, tail, poll=1.0, timeout=60.0, days=7
     lines = []
     for row in reversed(r.get("results", [])):
         f = {c["field"]: c["value"] for c in row}
-        lines.append(
-            f"{f.get('@timestamp', '-')} {f.get('stream', '-')} {f.get('kubernetes.pod_name', '-')} "
-            f"{f.get('log') or f.get('@message', '')}"
-        )
+        raw = f.get("log") or f.get("@message", "")
+        doc = _try_json(raw)
+        if doc is None:
+            lines.append(raw)
+            continue
+        doc.setdefault("ts", f.get("@timestamp"))
+        doc.setdefault("pod", f.get("kubernetes.pod_name"))
+        lines.append(json.dumps(doc))
     return "\n".join(lines) + ("\n" if lines else "")
 
 

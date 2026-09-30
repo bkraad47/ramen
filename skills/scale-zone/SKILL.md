@@ -15,7 +15,7 @@ super admin; environments attach them. Group admins change **count**; only super
 3. (super admin, cloud) `POST $U/groups/<g>/zones/b/service-account` if the environment update did not report one; `PUT $U/groups/<g>/zones/b/workers {count:1,size:"s",allowed_sizes:["s","m"]}`.
 4. Deploy: `POST $U/groups/<g>/environments/<e>/deploy {canary:true,zone:"b"}` → poll job to `ok` (first run 1–3 min). Deploying without `zone` rolls every zone of the environment.
 5. Copy IP rules if the group uses them: `PUT $U/groups/<g>/zones/b/ip-rules {cidrs:[...]}` (same list as zone a).
-6. Tell MCP client owners to point a bridge at the new zone: `ramen-mcp-bridge --target <lb>:443 --tls --ca lb.pem --key rmk_… --group <g> --zone b` (same `rmk_` keys, only `--zone` changes).
+6. Tell MCP client owners to point a bridge at the new zone: `ramen-mcp-bridge --target <lb>:443 --tls --key rmk_… --group <g> --zone b` (same `rmk_` keys, only `--zone` changes; `--ca` is only needed on a cluster still using the self-signed fallback instead of the default Google-managed cert, v0.5.5).
 
 ## Change count / size
 - Count (group admin): `PUT $U/groups/<g>/zones/<z>/workers {count:N}` → HPA min N, max 2N (cloud) / no-op locally. No deploy needed.
@@ -36,7 +36,7 @@ reconciling; it retries in the background — do not loop. Repeat for the other 
 - V1 `GET $U/zones` lists the zone with the expected provider/region.
 - V2 `GET $U/groups/<g>/environments/<e>` → `zones` contains it; `last_deploy.status == "ok"`.
 - V3 `GET $U/groups/<g>/zones/<z>/workers` → `count` as requested, `size` as requested, `live` has ≥1 `stable` worker with `phase:"Running"` (cloud) and `load` set.
-- V4 `tools/list` via `grpcurl -cacert lb.pem -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: <z>' -d "{\"body\":\"$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" <lb>:443 ramen.v1.Mcp/Call` → OK with tools in the decoded body (locally `-plaintext localhost:8080`, no group/zone headers needed).
+- V4 `tools/list` via `grpcurl -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: <z>' -d "{\"body\":\"$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" <lb>:443 ramen.v1.Mcp/Call` → OK with tools in the decoded body (locally `-plaintext localhost:8080`, no group/zone headers needed; no CA needed against the LB either — the cert is publicly trusted, v0.5.5).
 - V5 `GET $U/dashboard` shows the zone×group cell as low/even/high (not down).
 - V6 For removals: `kubectl get ns ramen-<g>-<z>` → NotFound; `GET $U/audit` has the `environments.update` entry `ok:true`.
 

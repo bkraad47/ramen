@@ -58,11 +58,28 @@ def fetch_logs(client, ns, worker, tail) -> str:
     )
     lines = []
     for e in reversed(entries):
-        payload = e.payload if isinstance(e.payload, str) else json.dumps(e.payload)
         pod = (getattr(e.resource, "labels", None) or {}).get("pod_name", "-")
-        ts = e.timestamp.isoformat(timespec="seconds") if e.timestamp else "-"
-        lines.append(f"{ts} {e.severity or '-'} {pod} {payload}")
+        ts = e.timestamp.isoformat(timespec="seconds") if e.timestamp else None
+        doc = e.payload if isinstance(e.payload, dict) else _try_json(e.payload)
+        if doc is None:
+            # not a worker JSON line (startup banner, sidecar noise) — kept verbatim, logview's fallback path
+            # renders it read-only rather than corrupting it with a prefix that only looks like JSON
+            lines.append(e.payload if isinstance(e.payload, str) else json.dumps(e.payload))
+            continue
+        doc.setdefault("ts", ts)
+        doc.setdefault("pod", pod)
+        lines.append(json.dumps(doc))
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _try_json(text) -> dict | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError, TypeError:
+        return None
+    return doc if isinstance(doc, dict) else None
 
 
 class Compute:

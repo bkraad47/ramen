@@ -4,9 +4,9 @@
 |---|---|
 | `local/` | docker compose stack (Firestore emulator + console + one worker). `make demo` from the repo root. |
 | `terraform/gcp/` | GCP infra per `docs/CONTRACTS.md` §7: GKE Autopilot (regional), Firestore Native, Artifact Registry, static IP, groups bucket, console GSA + Workload Identity. |
-| `helm/ramen/` | console chart → namespace `ramen-system`: KSA `console` (Workload Identity + ClusterRole), Service, GKE **Gateway** `ramen` (global external HTTPS LB on the static IP, self-signed TLS Secret), HTTPRoute `/` → console, HealthCheckPolicy. |
+| `helm/ramen/` | console chart → namespace `ramen-system`: KSA `console` (Workload Identity + ClusterRole), Service, GKE **Gateway** `ramen` (global external HTTPS LB on the static IP, Google-managed cert via Certificate Manager — `gateway.certificateMap`, v0.5.5 I11), HTTPRoute `/` → console, HealthCheckPolicy. |
 | `helm/ramen-worker/` | one zone → namespace `ramen-<group>-<zone>` (labelled `ramen.io/routes=true`): `worker` + `worker-canary` Deployments pinned to a GCP zone, NEG Service (`appProtocol: kubernetes.io/h2c`), HTTPRoute on the console Gateway matching gRPC metadata `ramen-group`/`ramen-zone` (paths `/ramen.v1.Mcp`, `/grpc.health.v1.Health`, reflection; Admin stays internal), HealthCheckPolicy (GRPC), KSA `worker`, Secret `ramen-deploy`. The console's gcp adapter renders/applies it; you can also apply it by hand. |
-| `scripts/selfsigned.sh` | creates the console TLS Secret for an IP or host (D17). |
+| `scripts/selfsigned.sh` | fallback console TLS Secret for an IP or host (D17) — only needed if you unset `gateway.certificateMap` and go back to a self-signed cert. |
 | `terraform/aws/` | **UNTESTED** AWS infra per `docs/CONTRACTS.md` §8: VPC (2 public subnets), EKS + one small managed node group, OIDC provider (IRSA), DynamoDB `ramen` table, S3 groups bucket, ECR `ramen/console` + `ramen/worker`, console IAM role, AWS Load Balancer Controller + Fluent Bit (CloudWatch Container Insights) via Helm, self-signed cert imported into ACM. |
 | `cloudformation/ramen.yaml` | **UNTESTED** CloudFormation equivalent of the Terraform base (no Helm, no ACM import) for teams that cannot run Terraform. `cfn-lint` clean. |
 
@@ -20,7 +20,8 @@ gcloud auth application-default login                   # terraform/gsutil creds
 
 # 1. infra
 cd deploy/terraform/gcp && cp terraform.tfvars.example terraform.tfvars   # set project/region
-terraform init && terraform apply                       # ~8 min; outputs cluster_name, region, console_ip, artifact_repo, console_gsa, groups_bucket
+terraform init && terraform apply                       # ~8 min; outputs cluster_name, region, console_ip,
+                                                          # public_hostname, certificate_map, artifact_repo, console_gsa, groups_bucket
 cd ../../..
 
 # 2. images (linux/amd64 → Artifact Registry repo `ramen`)
@@ -28,20 +29,25 @@ make push PROJECT=$PROJECT REGION=$REGION               # runs gcloud auth confi
 
 # 3. console
 gcloud container clusters get-credentials ramen --region $REGION
-IP=$(terraform -chdir=deploy/terraform/gcp output -raw console_ip)
-deploy/scripts/selfsigned.sh $IP                        # Secret ramen-system/ramen-console-tls
+HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)   # free sslip.io hostname (v0.5.5 I11); or your own domain if you set public_hostname
+CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
 kubectl label ns ramen-system ramen.io/routes=true      # Gateway only admits routes from labelled namespaces
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set project=$PROJECT,region=$REGION \
-  --set console.env.RAMEN_PUBLIC_URL=https://$IP \
+  --set gateway.certificateMap=$CERTMAP \
+  --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
 kubectl -n ramen-system get gateway ramen -w            # PROGRAMMED=True after ~5 min; ADDRESS = static IP
-curl -k https://$IP/readyz                              # {"ok":true,...}
+                                                          # the managed cert (kubectl get certificate -n ramen-system, if using the
+                                                          # ManagedCertificate view, or `gcloud certificate-manager certificates describe
+                                                          # ramen-console`) reaches ACTIVE a few minutes after the Gateway is programmed
+curl https://$HOSTNAME/readyz                            # {"ok":true,...} — publicly-trusted cert, no -k needed
 ```
-Console: `https://<console_ip>/` (self-signed, accept the warning), login `admin@ramen.local` / the password above.
+Console: `https://<public_hostname>/`, login `admin@ramen.local` / the password above. No certificate warning: the
+cert is issued by a public CA, not self-signed.
 Then in the console: add zone `a` (provider gcp, region `us-central1-a`), add group `demo` pointing at
 `https://github.com/bkraad47/ramen-demo-mcp-group`, attach the zone, deploy. The console creates the
 per-zone namespace, GSA and Secret; workers sync `gs://ramen-<project>-groups/<group>` on every reload.
@@ -58,11 +64,14 @@ helm template ramen-worker deploy/helm/ramen-worker --set project=$PROJECT,group
 kubectl -n ramen-demo-a rollout status deploy/worker        # first start: pod sync + pip install, 1-3 min
 kubectl -n ramen-demo-a port-forward svc/worker 8080 &
 grpcurl -plaintext -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" localhost:8080 ramen.v1.Mcp/Call
-# same call through the LB once the Gateway has programmed the route (2–7 min; routing by metadata, TLS at the LB):
-grpcurl -insecure -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" $IP:443 ramen.v1.Mcp/Call
+# same call through the LB once the Gateway has programmed the route (2–7 min; routing by metadata, TLS at the LB,
+# publicly-trusted cert so no -insecure needed once the managed cert is ACTIVE):
+grpcurl -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAMEN_MCP_KEYS>' -d "{\"body\":\"$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" $HOSTNAME:443 ramen.v1.Mcp/Call
 ```
-MCP clients reach `<console_ip>:443` over gRPC with metadata `ramen-group`/`ramen-zone` + `authorization: Bearer rmk_…` (standard
-clients: `ramen-mcp-bridge --target <console_ip>:443 --tls --key rmk_… --group demo --zone a`, see docs). The LB backend service
+MCP clients reach `<public_hostname>:443` over gRPC with metadata `ramen-group`/`ramen-zone` + `authorization: Bearer rmk_…`
+(standard clients: `ramen-mcp-bridge --target <public_hostname>:443 --tls --key rmk_… --group demo --zone a` — no `--ca`/kubectl
+step: the cert is publicly trusted, so the bridge verifies it with the system CA store like any other TLS client, see
+`ramen-bridge/README.md`). The LB backend service
 for a zone is auto-named by GKE (`gkegw1-…-ramen-<group>-<zone>-worker-8080-…`); the console finds it by the NEG name
 `ramen-<group>-<zone>` (worker Service `cloud.google.com/neg` annotation) for rebalance and Cloud Armor rules.
 

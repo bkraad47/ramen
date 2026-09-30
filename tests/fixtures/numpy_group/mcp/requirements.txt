@@ -1,0 +1,4 @@
+# Packages installed into the group's worker runtime at deploy time.
+# numpy_stats_tool imports numpy for real — this fixture exists to prove third-party packages actually
+# reach the worker's pip install, not just the stdlib-only path every other fixture group takes (I13).
+numpy

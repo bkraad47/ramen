@@ -4,17 +4,16 @@
 <span class="who">{{ e.consumer or '—' }}</span><br><span class="meta">{{ e.ts or '—' }}{% if e.method %} · {{ e.method }}{% if e.name %} · {{ e.name }}{% endif %}{% endif %}</span></button>
 {% endmacro %}
 {% block body %}
-<div class="card"><form class="inline" method="get">
+<div class="card"><form class="inline controls" method="get">
 <label>Group<select name="group">{% for g in groups %}<option {{ 'selected' if g.id == group }}>{{ g.id }}</option>{% endfor %}</select></label>
 <label>Zone<select name="zone">{% for z in zones %}<option {{ 'selected' if z.id == zone }}>{{ z.id }}</option>{% endfor %}</select></label>
 <label>Worker<select name="worker"><option value="">All workers</option>{% for w in live_workers %}<option value="{{ w }}" {{ 'selected' if w == worker }}>{{ w }}</option>{% endfor %}</select></label>
-<label>Tail<input name="tail" type="number" value="{{ tail }}" style="min-width:80px"></label><button>Show</button>
-{% if group and zone %}<a class="btn ghost" href="/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
+<label>Tail<input name="tail" type="number" value="{{ tail }}"></label><button class="act">Show</button>
+{% if group and zone %}<a class="btn ghost act" href="/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
 {% if entries %}
 <div class="log-panes">
 <div class="card log-list"><h2 style="margin-top:0">Entries ({{ entries|length }}, newest first)</h2>
-<div class="log-eager">{% for e in eager %}{{ row(e) }}{% endfor %}</div>
-{% if rest %}<div class="log-rest">{% for e in rest %}{{ row(e) }}{% endfor %}</div>{% endif %}</div>
+<div id="log-scroll">{% for e in entries %}{{ row(e) }}{% endfor %}</div></div>
 <div class="card"><h2 style="margin-top:0">Entry</h2><div class="log-body"><pre id="log-body">{{ entries[0].body }}</pre></div></div>
 </div>
 <script id="log-data" type="application/json">{{ tojson(entries|map(attribute='body')|list) }}</script>

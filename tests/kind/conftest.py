@@ -14,7 +14,7 @@ import pytest
 
 from ramen_tests import env as E
 from ramen_tests import kube, state
-from ramen_tests.mcp_client import Node
+from ramen_tests.mcp_client import HttpError, HttpNode, Node
 
 pytestmark = pytest.mark.kind
 
@@ -106,12 +106,19 @@ def nodes(stack, zone_targets, group) -> dict[str, Node]:
 
 # -- load generation ---------------------------------------------------------------------------------------------
 class Load:
-    """Concurrent `tools/call` load against one zone. RESOURCE_EXHAUSTED is a legitimate outcome (the node caps
-    concurrency at RAMEN_MAX_INFLIGHT, §11) and is counted, not raised."""
+    """Concurrent `tools/call` load against one zone, over either transport (v0.5.5 I16 — HTTP and gRPC share
+    the same port and guard functions, D32, so the same autoscale/rebalance proofs must hold for both, not
+    just gRPC). RESOURCE_EXHAUSTED / HTTP 429 is a legitimate outcome (the node caps concurrency at
+    RAMEN_MAX_INFLIGHT, §11) and is counted, not raised."""
 
-    def __init__(self, target: str, key: str, group: str, zone: str, threads: int = 8, recycle: int = 10):
+    def __init__(
+        self, target: str, key: str, group: str, zone: str, threads: int = 8, recycle: int = 10, transport: str = "grpc"
+    ):
         self.target, self.key, self.group, self.zone, self.threads = target, key, group, zone, threads
-        self.recycle = recycle  # new channel every N calls, so new pods get their share of a round-robin NodePort
+        self.recycle = (
+            recycle  # new channel/client every N calls, so new pods get their share of a round-robin NodePort
+        )
+        self.transport = transport
         self.ok = self.busy = self.failed = 0
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -124,9 +131,14 @@ class Load:
         "params": {"name": "demo_calculator_tool", "arguments": {"var1": 7, "var2": 6, "func": "multiply"}},
     }
 
+    def _client(self):
+        if self.transport == "http":
+            return HttpNode(E.node_http_url(self.target), self.key, group=self.group, zone=self.zone, timeout=20)
+        return Node(self.target, self.key, group=self.group, zone=self.zone, timeout=20)
+
     def _run(self):
         while not self._stop.is_set():
-            with Node(self.target, self.key, group=self.group, zone=self.zone, timeout=20) as n:
+            with self._client() as n:
                 for _ in range(self.recycle):
                     if self._stop.is_set():
                         return
@@ -138,6 +150,13 @@ class Load:
                     except grpc.RpcError as e:
                         with self._lock:
                             if e.code() == grpc.StatusCode.RESOURCE_EXHAUSTED:
+                                self.busy += 1
+                            else:
+                                self.failed += 1
+                        time.sleep(0.05)
+                    except HttpError as e:
+                        with self._lock:
+                            if e.status_code == 429:
                                 self.busy += 1
                             else:
                                 self.failed += 1
@@ -161,7 +180,7 @@ class Load:
 
 @pytest.fixture
 def load(stack, stable_targets, group):
-    def make(zone: str, threads: int = 8) -> Load:
-        return Load(stable_targets[zone], stack["key"], group, zone, threads)
+    def make(zone: str, threads: int = 8, transport: str = "grpc") -> Load:
+        return Load(stable_targets[zone], stack["key"], group, zone, threads, transport=transport)
 
     return make

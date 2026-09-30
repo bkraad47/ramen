@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "numpy_stats_tool",
+  "description": "Mean and standard deviation of a list of numbers, computed with numpy.",
+  "callable": "stats_func",
+  "input": {
+    "values": {"type": "string", "description": "comma-separated numbers to summarize"}
+  },
+  "output": {"type": "object"},
+  "error": {"type": "string"}
+}

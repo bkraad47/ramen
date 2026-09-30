@@ -4,6 +4,10 @@ kind: Gateway
 metadata:
   name: {{ .Values.gateway.name }}
   labels: {{- include "ramen.labels" . | nindent 4 }}
+  {{- if .Values.gateway.certificateMap }}
+  annotations:
+    networking.gke.io/certmap: {{ .Values.gateway.certificateMap }}
+  {{- end }}
 spec:
   gatewayClassName: {{ .Values.gateway.className }}
   addresses:
@@ -13,9 +17,13 @@ spec:
     - name: https
       protocol: HTTPS
       port: 443
+      {{- if not .Values.gateway.certificateMap }}
+      # Self-signed fallback (D17) — omitted entirely when certificateMap is set: the GKE Gateway controller
+      # rejects a listener carrying both tls.certificateRefs and the certmap annotation.
       tls:
         mode: Terminate
         certificateRefs: [{ kind: Secret, name: {{ .Values.gateway.tlsSecret }} }]
+      {{- end }}
       allowedRoutes:
         namespaces:
           from: Selector

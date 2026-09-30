@@ -22,10 +22,11 @@ def _rebalance(admin, group, zone) -> dict:
     r = admin.post("rebalance", {}, group=group, zone=zone)
     assert r.status_code == 200, (
         f"{zone}: {r.status_code} {r.text[:300]}\n"
-        "DEFECT rebalance-502: GcpCloud.rebalance only catches ApiError around the load-balancer leg, so any other "
-        "failure from the compute API (no credentials, 401/403, a transient 503) turns the whole call into a 502 and "
-        "the HPA re-scale -- which needs no cloud API at all -- never runs. CONTRACTS §7 says this leg returns 200 "
-        "with applied:false and a note, never an error."
+        "DEFECT D-CONSOLE-1 regressed: GcpCloud.rebalance must catch every exception (not just ApiError) around "
+        "the load-balancer leg, so a compute-API problem (no credentials, 401/403, a transient 503) degrades to "
+        "200 {applied:false, note:...} per CONTRACTS §7, and the HPA re-scale below -- which needs no cloud API "
+        "at all -- still runs. Fixed and regression-tested at the unit level: "
+        "console/tests/test_gcp_cloud.py::test_rebalance_degrades_when_the_compute_api_is_unreachable."
     )
     return r.json()
 

@@ -25,7 +25,12 @@ locals {
     # the console's project-wide role bindings (console_project_iam) go through Resource Manager; without the API
     # the call is a bare 403 that looks like a missing role — found on the 0.5.1 GKE run
     "cloudresourcemanager.googleapis.com",
+    "certificatemanager.googleapis.com", # Google-managed TLS for the console Gateway (D17 supersession, v0.5.5 I11)
   ]
+  # D17 said a Google-managed cert waits "until a domain exists" because Google won't issue a publicly-trusted
+  # cert for a bare IP. sslip.io resolves <ip-with-dashes>.sslip.io straight to that IP with zero DNS setup, so
+  # the static IP alone is enough — no purchased domain required. `public_hostname` overrides it with a real one.
+  public_hostname = coalesce(var.public_hostname, "${replace(google_compute_global_address.console.address, ".", "-")}.sslip.io")
   console_roles = concat([
     "roles/secretmanager.admin", # create ramen-<group>-* secrets and set their IAM (secret-level accessor bindings)
     "roles/container.developer", "roles/logging.viewer",
@@ -130,4 +135,26 @@ resource "google_service_account_iam_member" "console_wi" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project}.svc.id.goog[ramen-system/console]"
   depends_on         = [google_container_cluster.ramen] # the WI pool exists only once the cluster does
+}
+
+# Google-managed TLS for the Gateway (D17 supersession, §gateway.yaml `networking.gke.io/certmap`): a
+# publicly-trusted cert for local.public_hostname, so an MCP bridge (or any client) trusts it with the
+# system CA store — no kubectl secret pull, no --tls custom-CA flag. Validated by the LB it's attached to
+# (load-balancer authorization), not by proving domain ownership, so it needs no DNS TXT record.
+resource "google_certificate_manager_certificate" "console" {
+  name = "ramen-console"
+  managed { domains = [local.public_hostname] }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_certificate_manager_certificate_map" "console" {
+  name       = "ramen-console"
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_certificate_manager_certificate_map_entry" "console" {
+  name         = "ramen-console"
+  map          = google_certificate_manager_certificate_map.console.name
+  hostname     = local.public_hostname
+  certificates = [google_certificate_manager_certificate.console.id]
 }

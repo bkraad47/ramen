@@ -26,7 +26,11 @@ async def groups(request: Request, format: str | None = None, p: Principal = Dep
 @r.post("/groups", status_code=201)
 async def create_group(request: Request, body: m.GroupIn, p: Principal = Depends(super_)):
     note(request, "group.create", body.name, [f"group:{body.name}"])
-    return respond(request, await svc(request).create_group(body.name, body.repo_url, body.ref, p.name), 201)
+    return respond(
+        request,
+        await svc(request).create_group(body.name, body.repo_url, body.ref, p.name, body.github_token),
+        201,
+    )
 
 
 @r.get("/groups/{group}")

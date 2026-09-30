@@ -7,6 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static FILE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
+/// `FILE` is process-global, but `cargo test` runs tests on parallel threads within one process. Any test
+/// that calls `set_file` (directly, or indirectly via `server::run`) must hold this for its whole duration,
+/// or another such test's `set_file` call can land between this one's `set_file` and its `emit`/`raw` calls
+/// and silently redirect them — found as a real flake (v0.5.5), not just a theoretical race: `server.rs`'s
+/// own tests call `run()`, which calls `set_file(None)` as an ordinary side effect of startup.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn set_file(path: Option<PathBuf>) {
     if let Some(p) = &path
         && let Some(dir) = p.parent()
@@ -92,6 +100,7 @@ mod tests {
 
     #[test]
     fn mirrors_to_file() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let p = std::env::temp_dir().join(format!("ramen-log-{}/sub/w.log", std::process::id()));
         set_file(Some(p.clone()));
         emit("info", "hello", serde_json::json!({"k": 1}));

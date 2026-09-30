@@ -5,9 +5,14 @@ Workers: helm template ramen-worker deploy/helm/ramen-worker --set provider=aws,
          → gRPC to <address>:443 with metadata ramen-group=<g> ramen-zone=<z> (CONTRACTS §11; ramen-mcp-bridge --tls)
 {{- else }}
 Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} (project {{ .Values.project }}, {{ .Values.region }}).
+{{- if .Values.gateway.certificateMap }}
+TLS: Google-managed cert via Certificate Manager map {{ .Values.gateway.certificateMap }} (terraform output
+     certificate_map / public_hostname) — no kubectl CA step, `ramen-mcp-bridge --tls` alone verifies it (I11).
+{{- else }}
 Prereqs: TLS Secret {{ .Values.gateway.tlsSecret }} (deploy/scripts/selfsigned.sh <console_ip> {{ .Release.Namespace }} {{ .Values.gateway.tlsSecret }})
+{{- end }}
          kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (lets the console HTTPRoute attach)
-LB: kubectl -n {{ .Release.Namespace }} get gateway {{ .Values.gateway.name }} (programmed in ~5 min) ; curl -k https://<console_ip>/readyz
+LB: kubectl -n {{ .Release.Namespace }} get gateway {{ .Values.gateway.name }} (programmed in ~5 min) ; curl {{ if not .Values.gateway.certificateMap }}-k {{ end }}https://<public_hostname or console_ip>/readyz
 Workers: helm template ramen-worker deploy/helm/ramen-worker --set project={{ .Values.project }},group=<g>,zone=<z>,gcpZone=<region-zone> | kubectl apply -f -
-         → gRPC to <console_ip>:443 with metadata ramen-group=<g> ramen-zone=<z> (CONTRACTS §11; ramen-mcp-bridge --tls)
+         → gRPC to <public_hostname or console_ip>:443 with metadata ramen-group=<g> ramen-zone=<z> (CONTRACTS §11; ramen-mcp-bridge --tls)
 {{- end }}

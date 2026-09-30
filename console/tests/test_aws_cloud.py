@@ -194,7 +194,11 @@ async def test_logs(cloud, fk):
     fk.logs.pending = 2
     text = await cloud.logs("demo", "a", tail=5)
     lines = text.splitlines()
-    assert lines[0].endswith("stderr worker-1 a") and '{"msg":"b"}' in lines[1]
+    # v0.5.5 I9: a non-JSON line stays verbatim; a JSON worker line gets ts/pod backfilled INTO the object
+    # (never prefixed as plain text, which used to break logview.parse_log's json.loads on every real line).
+    assert lines[0] == "a"
+    doc = json.loads(lines[1])
+    assert doc["msg"] == "b" and doc["pod"] == "worker-0" and doc["ts"] == "2026-09-28 01:00:01.000"
     q = fk.logs.queries[0]
     assert (
         q["logGroupName"] == "/aws/containerinsights/ramen/application"

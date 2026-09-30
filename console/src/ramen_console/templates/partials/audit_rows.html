@@ -1,0 +1,4 @@
+{% from "partials/table.html" import cell %}
+<table><thead><tr>{% for c in ['ts', 'user', 'ip', 'action', 'target', 'ok', 'tags'] %}<th>{{ c|replace('_', ' ')|capitalize }}</th>{% endfor %}</tr></thead><tbody>
+{% for a in rows %}<tr data-ok="{{ a.ok }}">{% for c in ['ts', 'user', 'ip', 'action', 'target', 'ok', 'tags'] %}<td>{{ cell(c, a.get(c)) }}</td>{% endfor %}</tr>{% else %}<tr><td colspan="7" class="muted">Nothing yet</td></tr>{% endfor %}
+</tbody></table>

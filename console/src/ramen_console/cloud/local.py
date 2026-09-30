@@ -143,11 +143,18 @@ class LocalCloud(Cloud):
         return out
 
     async def logs(self, group, zone, worker=None, tail=500):
-        name = worker.replace("://", "_").replace("/", "_").replace(":", "_") if worker else "worker"
-        p = self.log_root / group / zone / f"{name}.log"
-        if not p.exists():
-            return ""
-        lines = p.read_text().splitlines(keepends=True)
+        d = self.log_root / group / zone
+        if worker:
+            name = worker.replace("://", "_").replace("/", "_").replace(":", "_")
+            files = [d / f"{name}.log"]
+        else:
+            # "All workers": every log file in the zone, not just one hardcoded name (a real zone can have
+            # more than one worker, each mirroring RAMEN_LOG_FILE to its own path)
+            files = sorted(d.glob("*.log")) if d.is_dir() else []
+        lines = []
+        for p in files:
+            if p.exists():
+                lines.extend(p.read_text().splitlines(keepends=True))
         return "".join(lines[-tail:])
 
     async def rebalance(self, group, zone):

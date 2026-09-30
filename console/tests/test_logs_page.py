@@ -76,20 +76,15 @@ def test_the_body_pane_shows_the_selected_entry(demo, logfile):
     assert "other_tool" in body
 
 
-def test_the_newest_fifteen_are_eager_and_the_rest_are_scrollable(demo, logfile):
+def test_all_entries_render_in_one_scrollable_frame(demo, logfile):
+    """v0.5.5 I9: a single fixed-height scrollable window, not 15 unbounded rows then a second, separate
+    scrollable box for the rest."""
     logfile([line(i) for i in range(1, 26)])
     html = page(demo)
-    eager = re.search(r'<div class="log-eager">(.*?)</div>\s*<div class="log-rest"', html, re.S).group(1)
-    rest = re.search(r'<div class="log-rest">(.*?)</div>', html, re.S).group(1)
-    assert eager.count("log-row") == 15
-    assert rest.count("log-row") == 10
+    scroll = re.search(r'<div id="log-scroll">(.*?)</div>\s*</div>', html, re.S).group(1)
+    assert scroll.count("log-row") == 25
     css = Path(__file__).resolve().parents[1].joinpath("src/ramen_console/static/ramen.css").read_text()
-    assert re.search(r"\.log-rest\{[^}]*overflow-y:auto", css)
-
-
-def test_without_enough_entries_there_is_no_scrollable_frame(demo, logfile):
-    logfile([line(i) for i in range(1, 4)])
-    assert 'class="log-rest"' not in page(demo)
+    assert re.search(r"#log-scroll\{[^}]*overflow:auto", css)
 
 
 def test_every_row_shows_consumer_timestamp_method_and_outcome(demo, logfile, mcp_key):
@@ -123,6 +118,16 @@ def test_the_worker_selector_lists_the_live_workers_and_defaults_to_all(demo, lo
     selector = re.search(r'<select name="worker">(.*?)</select>', html, re.S).group(1)
     assert '<option value="">All workers</option>' in selector
     assert "worker" in selector
+
+
+def test_all_workers_aggregates_every_log_file_not_just_worker_log(demo, logfile, tmp_path):
+    """v0.5.5 I9: before this fix, 'All workers' only ever looked for a file literally named worker.log —
+    real multi-worker zones write one file per worker, so the default view showed nothing for them."""
+    logfile([line(1, name="from_default_file")])
+    p = tmp_path / "logs" / "demo" / "zone-a" / "second-worker.log"
+    p.write_text(line(2, name="from_second_file") + "\n")
+    html = page(demo)
+    assert "from_default_file" in html and "from_second_file" in html
 
 
 def test_choosing_a_worker_narrows_the_query(demo, logfile, tmp_path):

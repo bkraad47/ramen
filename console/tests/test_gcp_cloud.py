@@ -342,7 +342,12 @@ async def test_logs(fk, cloud):
     ]
     text = await cloud.logs("demo", "a", tail=5)
     lines = text.splitlines()
-    assert lines[0].endswith("worker-1 a") and '"msg": "b"' in lines[1]
+    # v0.5.5 I9: a non-JSON payload stays verbatim; a JSON/dict payload gets ts/pod backfilled INTO the
+    # object (never prefixed as plain text, which used to break logview.parse_log's json.loads on every
+    # real worker line — every GKE log row rendered as "-"/"-" for consumer/timestamp).
+    assert lines[0] == "a"
+    doc = json.loads(lines[1])
+    assert doc["msg"] == "b" and doc["pod"] == "worker-0" and doc["ts"] == "2026-09-27T01:00:01+00:00"
     assert (
         'resource.type="k8s_container"' in fk.logging.filters[0]
         and 'namespace_name="ramen-demo-a"' in fk.logging.filters[0]

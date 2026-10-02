@@ -23,9 +23,10 @@ scrollable frame instead of 15 unbounded rows then a separate scrollbox.
 **TLS (D17 superseded)**: the console's GKE Gateway now provisions a Google-managed certificate automatically
 — a free `sslip.io` hostname derived from the load balancer's own static IP, no domain purchase required —
 instead of the D17 self-signed fallback. `ramen-mcp-bridge --tls` needs no `--ca` and no `kubectl` step
-against it; verified live end to end on a throwaway GKE project (cert reached `ACTIVE`, the console answered
-`200` over plain `curl` with no `-k`, issuer `Google Trust Services`). Self-signed remains available as an
-opt-out (`gateway.certificateMap` unset).
+against it; verified live end to end on two throwaway GKE projects (cert reached `ACTIVE`, the console
+answered `200` over plain `curl` with no `-k`, issuer `Google Trust Services`, and — on the second round —
+`ramen-mcp-bridge --tls` forwarded a real `demo_calculator_tool` call through the load balancer and got
+`5` back for 2+3). Self-signed remains available as an opt-out (`gateway.certificateMap` unset).
 
 **Storage**: Postgres joins Firestore and DynamoDB as a third `RAMEN_STORE` backend (self-hosted/on-prem use,
 D2/G1 partly superseded) — one table, four methods, no migrations. Found and fixed during testing: the

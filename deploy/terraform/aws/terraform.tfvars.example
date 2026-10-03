@@ -1,4 +1,4 @@
-# cp terraform.tfvars.example terraform.tfvars && edit. UNTESTED on a real account (no AWS account available, F10.3).
+# cp terraform.tfvars.example terraform.tfvars && edit. Verified live on a real account, v0.5.6 N10.
 region = "us-east-1"
 # name              = "ramen"
 # node_instance_type = "t3.small"

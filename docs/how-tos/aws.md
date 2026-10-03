@@ -75,7 +75,11 @@ RAMEN_GROUPS_BUCKET RAMEN_IMAGE_WORKER RAMEN_EKS_CLUSTER RAMEN_ALB_GROUP=ramen` 
 ## 4. Zone, group, deploy
 Same as [GCP step 5](gcp.md#5-first-zone-group-and-deploy-console-or-api) with provider `aws` and region e.g.
 `us-east-1a`. Clients target the ALB with gRPC and the routing metadata; export the ACM cert (or the PEM you
-imported) for `--ca`:
+imported) for `--ca`. Verified live end to end with the real `ramen-mcp-bridge` pip package (v0.5.8):
+the self-signed cert's SAN now covers `*.<region>.elb.amazonaws.com` (every AWS ALB hostname is exactly one
+label under that), not just the placeholder `ramen-console.local` — without it, `--ca` alone passes chain
+trust but fails strict TLS hostname verification (grpc's gRPC channel, not `curl -k`/`grpcurl -insecure`,
+which skip that check entirely and so never caught it):
 ```sh
 ramen-mcp-bridge --target <alb-dns>:443 --tls --ca ramen-lb.pem --key rmk_… --group demo --zone a
 grpc_health_probe -addr <alb-dns>:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'

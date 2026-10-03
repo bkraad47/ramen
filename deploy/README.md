@@ -7,7 +7,7 @@
 | `helm/ramen/` | console chart → namespace `ramen-system`: KSA `console` (Workload Identity + ClusterRole), Service, GKE **Gateway** `ramen` (global external HTTPS LB on the static IP, Google-managed cert via Certificate Manager — `gateway.certificateMap`, v0.5.5 I11), HTTPRoute `/` → console, HealthCheckPolicy. |
 | `helm/ramen-worker/` | one zone → namespace `ramen-<group>-<zone>` (labelled `ramen.io/routes=true`): `worker` + `worker-canary` Deployments pinned to a GCP zone, NEG Service (`appProtocol: kubernetes.io/h2c`), HTTPRoute on the console Gateway matching gRPC metadata `ramen-group`/`ramen-zone` (paths `/ramen.v1.Mcp`, `/grpc.health.v1.Health`, reflection; Admin stays internal), HealthCheckPolicy (GRPC), KSA `worker`, Secret `ramen-deploy`. The console's gcp adapter renders/applies it; you can also apply it by hand. |
 | `scripts/selfsigned.sh` | fallback console TLS Secret for an IP or host (D17) — only needed if you unset `gateway.certificateMap` and go back to a self-signed cert. |
-| `terraform/aws/` | **UNTESTED** AWS infra per `docs/CONTRACTS.md` §8: VPC (2 public subnets), EKS + one small managed node group, OIDC provider (IRSA), DynamoDB `ramen` table, S3 groups bucket, ECR `ramen/console` + `ramen/worker`, console IAM role, AWS Load Balancer Controller + Fluent Bit (CloudWatch Container Insights) via Helm, self-signed cert imported into ACM. |
+| `terraform/aws/` | AWS infra, verified live (v0.5.6 N10) per `docs/CONTRACTS.md` §8: VPC (2 public subnets), EKS + one small managed node group, OIDC provider (IRSA), DynamoDB `ramen` table, S3 groups bucket, ECR `ramen/console` + `ramen/worker`, console IAM role, AWS Load Balancer Controller + Fluent Bit (CloudWatch Container Insights) via Helm, self-signed cert imported into ACM. |
 | `cloudformation/ramen.yaml` | **UNTESTED** CloudFormation equivalent of the Terraform base (no Helm, no ACM import) for teams that cannot run Terraform. `cfn-lint` clean. |
 
 ## GCP bring-up (tested on a throwaway project, ~25 min, mostly GKE + LB provisioning)
@@ -71,7 +71,7 @@ grpcurl -H 'ramen-group: demo' -H 'ramen-zone: a' -H 'authorization: Bearer <RAM
 MCP clients reach `<public_hostname>:443` over gRPC with metadata `ramen-group`/`ramen-zone` + `authorization: Bearer rmk_…`
 (standard clients: `ramen-mcp-bridge --target <public_hostname>:443 --tls --key rmk_… --group demo --zone a` — no `--ca`/kubectl
 step: the cert is publicly trusted, so the bridge verifies it with the system CA store like any other TLS client, see
-`ramen-bridge/README.md`). The LB backend service
+[github.com/bkraad47/ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge)). The LB backend service
 for a zone is auto-named by GKE (`gkegw1-…-ramen-<group>-<zone>-worker-8080-…`); the console finds it by the NEG name
 `ramen-<group>-<zone>` (worker Service `cloud.google.com/neg` annotation) for rebalance and Cloud Armor rules.
 

@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.6` **(current)** | 2026-10-03 | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
+| `0.5.7` **(current)** | 2026-10-03 | The MCP bridge becomes its own pip-installable package | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.7) |
+| `0.5.6` | 2026-10-03 | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
 | `0.5.4` | 2026-09-30 | honest deploy pictures, aligned environment buttons, docs brought current | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.4) |
 | `0.5.3` | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
 | `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
@@ -19,6 +20,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.5.7 — The MCP bridge becomes its own pip-installable package
+
+- (nothing yet)
 
 ## 0.5.6 — Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account
 

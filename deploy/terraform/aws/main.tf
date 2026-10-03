@@ -1,4 +1,4 @@
-# Ramen on AWS (CONTRACTS §8, v0.3.0). UNTESTED: written without an AWS account and only checked with `terraform validate`.
+# Ramen on AWS (CONTRACTS §8, v0.3.0). Verified live on a real account, v0.5.6 N10 (2026-10-03).
 # Mirror of ../gcp: EKS (one small managed node group), DynamoDB single-table state, one S3 groups bucket, ECR repos,
 # console IAM role (IRSA), AWS Load Balancer Controller + Fluent Bit → CloudWatch Logs via Helm, self-signed cert in ACM.
 # Nothing per-group is created here (the console's aws adapter does that at runtime).
@@ -212,7 +212,12 @@ resource "tls_self_signed_cert" "console" {
   private_key_pem       = tls_private_key.console.private_key_pem
   validity_period_hours = 8760
   allowed_uses          = ["key_encipherment", "digital_signature", "server_auth"]
-  dns_names             = ["ramen-console.local"]
+  # "ramen-console.local" alone fails real TLS clients (grpc hostname verification, not just curl -k/grpcurl
+  # -insecure, which skip the check entirely): the ALB's real hostname isn't known until it's created, well
+  # after this cert — fixed with a wildcard SAN for the region's ELB domain (AWS ALB hostnames are always
+  # exactly one label under <region>.elb.amazonaws.com, so this matches any ALB this terraform creates here
+  # without needing the literal hostname). Found live testing ramen-mcp-bridge --ca against a real ALB.
+  dns_names = ["ramen-console.local", "*.${var.region}.elb.amazonaws.com"]
   subject {
     common_name  = "ramen-console"
     organization = "ramen"

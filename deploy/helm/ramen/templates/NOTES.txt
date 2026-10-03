@@ -1,5 +1,5 @@
 {{- if eq .Values.provider "aws" }}
-Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on EKS {{ .Values.aws.cluster }} ({{ .Values.region }}, account {{ .Values.aws.account }}). UNTESTED provider (no AWS account, CONTRACTS §8).
+Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on EKS {{ .Values.aws.cluster }} ({{ .Values.region }}, account {{ .Values.aws.account }}). Verified live on a real account (v0.5.6 N10).
 ALB: kubectl -n {{ .Release.Namespace }} get ingress console   (ADDRESS after ~3 min) ; curl -k https://<address>/readyz
 Workers: helm template ramen-worker deploy/helm/ramen-worker --set provider=aws,aws.account={{ .Values.aws.account }},aws.region={{ .Values.region }},group=<g>,zone=<z>,aws.zone=<az> | kubectl apply -f -
          → gRPC to <address>:443 with metadata ramen-group=<g> ramen-zone=<z> (CONTRACTS §11; ramen-mcp-bridge --tls)

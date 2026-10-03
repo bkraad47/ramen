@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.5.94
+  version_current: 0.5.95
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -74,6 +74,7 @@ nav:
       - GCP (verbose): how-tos/gcp.md
       - AWS (verbose, untested): how-tos/aws.md
       - Security: how-tos/security.md
+      - Sign in with Entra ID / Google Workspace: how-tos/sso.md
       - Secrets: how-tos/secrets.md
       - Changing the state store: how-tos/storage-backend.md
       - DevOps with the API and keys: how-tos/devops-api.md

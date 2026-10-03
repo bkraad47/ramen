@@ -10,7 +10,7 @@ from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
 from .api_admin import masked_env
-from .auth_routes import auth_settings
+from .auth_routes import auth_settings, base_url
 from .helpers import accounts, backups, svc
 
 r = APIRouter()
@@ -26,8 +26,6 @@ def render(request: Request, name: str, **ctx):
 @r.get("/")
 async def dashboard(request: Request, p: Principal = Depends(require("mcp_user"))):
     if p.role == "mcp_user":  # 0.5.92: their only page — which groups they may connect a client to, and how
-        from .auth_routes import base_url
-
         return render(request, "mcp_user.html", groups=sorted(p.groups), public_url=base_url(request))
     return render(request, "dashboard.html")
 
@@ -87,9 +85,11 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         permissions=perm.table(),
         requests=[
             q
-            for q in await request.app.state.accounts.list_requests()
+            for q in await request.app.state.accounts.list_requests(p)
             if q.get("group") == group and q.get("type") == "permission"
         ],
+        providers=request.app.state.oauth.providers(),
+        public_url=base_url(request),
     )
 
 
@@ -106,11 +106,12 @@ async def zones(request: Request, p: Principal = Depends(viewer)):
 
 
 @r.get("/secrets")
-async def secrets(request: Request, group: str | None = None, p: Principal = Depends(viewer)):
+async def secrets(request: Request, group: str | None = None, p: Principal = Depends(admin)):
+    """N18: secrets are for super and group admins; the picker offers the groups the person administers."""
     s = svc(request)
-    groups = await s.visible_groups(p)
+    groups = [g for g in await s.visible_groups(p) if can(p, "group_admin", g["id"])]
     group = group or (groups[0]["id"] if groups else None)
-    items = await s.secrets(group) if group and can(p, "viewer", group) else []
+    items = await s.secrets(group) if group and can(p, "group_admin", group) else []
     envs = await s.environments(group) if group else []
     return render(
         request,
@@ -125,16 +126,28 @@ async def secrets(request: Request, group: str | None = None, p: Principal = Dep
 
 
 @r.get("/users")
-async def users(request: Request, p: Principal = Depends(admin)):
+async def users(request: Request, p: Principal = Depends(viewer)):
+    """D41/N22: everyone sees the users of their groups, mapped per group and role; admins edit their groups."""
     a = accounts(request)
-    reqs = await a.list_requests() if p.role == "super_admin" else []
+    users = await a.list_users(p)
+    groups = await svc(request).visible_groups(p)
+    members = {g["id"]: [u for u in users if g["id"] in u.get("memberships", {})] for g in groups}
+    manageable = {u["id"] for u in users if await a.can_manage(p, u)}
     return render(
-        request, "users.html", users=await a.list_users(p), groups=await svc(request).visible_groups(p), requests=reqs
+        request,
+        "users.html",
+        users=users,
+        groups=groups,
+        members=members,
+        admin_groups=[g["id"] for g in groups if can(p, "group_admin", g["id"])],
+        manageable=manageable,
+        is_admin=can(p, "group_admin"),
+        requests=await a.list_requests(p) if can(p, "group_admin") else [],
     )
 
 
 @r.get("/api-keys")
-async def api_keys(request: Request, p: Principal = Depends(admin)):
+async def api_keys(request: Request, p: Principal = Depends(super_)):
     """Groups are picked from the ones the caller may grant, never typed (U8)."""
     return render(
         request,
@@ -179,7 +192,7 @@ async def logs(
 
 
 @r.get("/audit")
-async def audit(request: Request, limit: int = 100, p: Principal = Depends(viewer)):
+async def audit(request: Request, limit: int = 100, p: Principal = Depends(super_)):
     """W3 (§14): the newest `limit` rows (100 by default, 500 at most) in a scrollable frame; the search and the
     outcome filter narrow what is already rendered, so neither costs a round trip."""
     import json
@@ -194,7 +207,7 @@ async def audit(request: Request, limit: int = 100, p: Principal = Depends(viewe
 
 
 @r.get("/ui/audit")
-async def audit_rows(request: Request, limit: int = 100, p: Principal = Depends(viewer)):
+async def audit_rows(request: Request, limit: int = 100, p: Principal = Depends(super_)):
     import json
 
     from ..errors import invalid

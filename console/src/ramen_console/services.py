@@ -3,7 +3,7 @@ from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
 from .keyid import key_id
 from .policy import permissions as perm
-from .rbac import Principal, RuleClash, check_clash
+from .rbac import Principal, RuleClash, can, check_clash
 from .secrets.base import SecretsBackend, StoreBackend
 from .security import generate_key_secret
 from .storage.base import Store
@@ -29,7 +29,7 @@ class Services:
     async def visible_groups(self, p: Principal) -> list[dict]:
         groups = await self.store.list("groups")
         if p.role != "super_admin":
-            groups = [g for g in groups if g["id"] in p.groups]
+            groups = [g for g in groups if can(p, "viewer", g["id"])]
         return sorted((public(g) for g in groups), key=lambda g: g["name"])
 
     async def get_group(self, name: str) -> dict:

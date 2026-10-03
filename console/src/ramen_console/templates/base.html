@@ -4,7 +4,7 @@
 <body>
 <nav class="side"><img src="/static/logo-mark.png" alt="Project Ramen">
 {% if p.role != 'mcp_user' %}{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones and workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
-{% if p.role != 'viewer' or key not in ['users', 'api_keys', 'backups', 'config'] %}{% if p.role == 'super_admin' or key not in ['backups', 'config'] %}<a href="{{ href }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endif %}{% endfor %}{% endif %}
+{% if (p.role == 'super_admin') or (key not in ['api_keys', 'backups', 'config', 'audit'] and (key != 'secrets' or p.role == 'group_admin')) %}<a href="{{ href }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endfor %}{% endif %}
 <div class="who">
 <div class="identity"><span class="email" title="{{ p.name }}">{{ p.name }}</span><span class="role {{ p.role|replace('_', '-') }}">{{ role_label(p.role) }}</span></div>
 <a href="/logout" class="logout">Log out</a>

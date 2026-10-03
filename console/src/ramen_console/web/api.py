@@ -6,7 +6,7 @@ from ..audit import note, write_audit
 from ..errors import invalid, not_found
 from ..rbac import Principal, can, require
 from . import models as m
-from .helpers import respond, svc, tabular
+from .helpers import accounts, respond, svc, tabular
 
 r = APIRouter(prefix="/api/v1")
 viewer, viewer_g = require("viewer"), require("viewer", "group")
@@ -280,6 +280,40 @@ async def revoke_permission(request: Request, group: str, zone: str, permission:
     return respond(request, await svc(request).revoke_sa_permission(group, zone, permission))
 
 
+@r.get("/groups/{group}/members")
+async def members(request: Request, group: str, p: Principal = Depends(viewer_g)):
+    return await accounts(request).list_members(group)
+
+
+@r.post("/groups/{group}/members")
+async def add_member(request: Request, group: str, body: m.MemberAdd, p: Principal = Depends(admin_g)):
+    found = await accounts(request).store.list("users", {"email": body.email.strip().lower()})
+    if not found:
+        from ..errors import not_found
+
+        raise not_found("user")
+    note(
+        request,
+        "member.set",
+        f"{group}/{found[0]['id']}",
+        [f"group:{group}", f"role:{body.role}", f"user:{found[0]['id']}"],
+    )
+    return respond(request, await accounts(request).set_membership(p, group, found[0]["id"], body.role))
+
+
+@r.put("/groups/{group}/members/{uid}")
+async def set_member(request: Request, group: str, uid: str, body: m.MemberIn, p: Principal = Depends(admin_g)):
+    """D41/R4: a person's role in this group. Group admins grant viewer or mcp_user; super admins any group role."""
+    note(request, "member.set", f"{group}/{uid}", [f"group:{group}", f"role:{body.role}", f"user:{uid}"])
+    return respond(request, await accounts(request).set_membership(p, group, uid, body.role))
+
+
+@r.delete("/groups/{group}/members/{uid}")
+async def remove_member(request: Request, group: str, uid: str, p: Principal = Depends(admin_g)):
+    note(request, "member.remove", f"{group}/{uid}", [f"group:{group}", f"user:{uid}"])
+    return respond(request, await accounts(request).set_membership(p, group, uid, None))
+
+
 @r.get("/groups/{group}/secrets")
 async def secrets(
     request: Request,
@@ -287,7 +321,7 @@ async def secrets(
     env: str | None = None,
     zone: str | None = None,
     format: str | None = None,
-    p: Principal = Depends(viewer_g),
+    p: Principal = Depends(admin_g),
 ):
     return tabular(await svc(request).secrets(group, env, zone), format, "secrets")
 

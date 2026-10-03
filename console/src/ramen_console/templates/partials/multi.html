@@ -1,5 +1,7 @@
 {# A checkbox dropdown for a multi-value field (0.5.93 Users page, everywhere since 0.5.94): `options` are (value, text)
-   pairs, `selected` the current values. The hidden empty field makes "none chosen" reach the API as an empty list. #}
-{% macro multi(name, options, selected, id, label='', empty='None') %}
-<div class="field">{% if label %}<span class="lbl">{{ label }}</span>{% endif %}<details class="multi" id="{{ id }}"><summary>{{ selected|join(', ') or empty }}</summary><div class="options"><input type="hidden" name="{{ name }}" value="">{% for v, text in options %}<label class="option"><input type="checkbox" name="{{ name }}" value="{{ v }}"{{ ' checked' if v in selected }}> {{ text }}</label>{% else %}<span class="muted">Nothing to pick yet</span>{% endfor %}</div></details></div>
+   pairs, `selected` the current values. The hidden empty field makes "none chosen" reach the API as an empty list.
+   `single=True` makes it a radio dropdown (one value, no hidden field) so single choices look the same. #}
+{% macro multi(name, options, selected, id, label='', empty='None', single=False) %}
+{% set chosen = [] %}{% for v, text in options %}{% if v in selected %}{% set _ = chosen.append(text) %}{% endif %}{% endfor %}
+<div class="field">{% if label %}<span class="lbl">{{ label }}</span>{% endif %}<details class="multi" id="{{ id }}"><summary>{{ chosen|join(', ') or selected|join(', ') or empty }}</summary><div class="options">{% if not single %}<input type="hidden" name="{{ name }}" value="">{% endif %}{% for v, text in options %}<label class="option"><input type="{{ 'radio' if single else 'checkbox' }}" name="{{ name }}" value="{{ v }}"{{ ' checked' if v in selected }}> {{ text }}</label>{% else %}<span class="muted">Nothing to pick yet</span>{% endfor %}</div></details></div>
 {% endmacro %}

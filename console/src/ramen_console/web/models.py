@@ -123,11 +123,22 @@ class UserIn(ListFields):
     password: str
     role: str = "viewer"
     groups: list[str] = []
+    memberships: dict[str, str] | None = None  # D41: {group: role}; wins over role + groups when given
 
 
 class UserUpdate(ListFields):
     role: str | None = None
     groups: list[str] | None = None
+    memberships: dict[str, str] | None = None
+
+
+class MemberIn(BaseModel):
+    role: str
+
+
+class MemberAdd(BaseModel):
+    email: str
+    role: str
 
 
 class Password(BaseModel):

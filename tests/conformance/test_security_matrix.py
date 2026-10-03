@@ -155,7 +155,8 @@ def test_a_viewer_can_still_read_its_own_group(people, two_groups):
         pytest.param(lambda c: c.put("config_auth", {"magic_link": True}), id="set-auth-config"),
         pytest.param(lambda c: c.get("config_auth"), id="read-auth-config"),
         pytest.param(lambda c: c.put("sa_rules", {"rules": []}), id="set-sa-rules"),
-        pytest.param(lambda c: c.get("requests"), id="list-requests"),
+        pytest.param(lambda c: c.get("api_keys"), id="list-api-keys"),  # 0.5.95 (N19): API keys are super-admin only
+        pytest.param(lambda c: c.get("audit"), id="read-audit"),
     ],
 )
 def test_super_admin_only_actions_are_refused_to_a_group_admin(people, call):

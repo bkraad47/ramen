@@ -250,6 +250,17 @@ class AwsCloud(GcpCloud):
         return {**out, "alb": alb["dns"], "attached": True}
 
     @_guard
+    async def detach_zone(self, group, zone):
+        """Destroy one group's deployment in one zone: its namespace and the zone IAM role (0.6.0)."""
+        ns, iam = ns_name(group, zone), self._iam()
+        await asyncio.to_thread(self.kube.delete_namespace, ns)
+        role = aws_api.Iam.role_name(group, zone)
+        removed = {"namespaces": [ns], "service_accounts": []}
+        if any(r["RoleName"] == role for r in await asyncio.to_thread(iam.list_roles, role)):
+            await asyncio.to_thread(iam.delete_role, role)
+            removed["service_accounts"].append(role)
+        return removed
+
     async def detach_group(self, group):
         """Destroy the group's infra: every `ramen-<group>-*` namespace and IAM role, its WAF IP sets (F4.1)."""
         removed = {"namespaces": [], "service_accounts": []}

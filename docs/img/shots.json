@@ -22,61 +22,61 @@
   },
   "screenshots": {
     "api-keys.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "API keys: client type, the group dropdown, the listing"
     },
     "audit.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Audit: newest 100, search and outcome filter"
     },
     "backups.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Backups: preview, restore, restore and prune"
     },
     "config.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Config: authentication, the permission catalogue, service-account rules"
     },
     "dashboard.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Dashboard: load per zone and group"
     },
     "deploy-job.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "A deploy job with its log"
     },
     "environments.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Environments with the last deploy flattened"
     },
     "group.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "A group: environments, zones, packages, permissions, worker image"
     },
     "key-shown.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "The one-time display of a new agent key"
     },
     "login.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Sign-in page"
     },
     "logs.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Logs: entries on the left, the selected body on the right"
     },
     "oauth-consent.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "OAuth: the consent page a person sees when a client asks"
     },
     "secrets.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Secrets: names only, never values"
     },
     "users.png": {
-      "captured_for": "0.5.95",
+      "captured_for": "0.6.0",
       "page": "Users, permission requests and the password rule"
     }
   },
-  "ui_contract": "0.5.95"
+  "ui_contract": "0.6.0"
 }

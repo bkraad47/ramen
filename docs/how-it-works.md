@@ -1,5 +1,27 @@
 # How it works (and why)
 
+## Why a platform, not a server
+The Model Context Protocol made it easy to give a model a tool. It said nothing about running two hundred of them
+for forty teams. The traditional answer is the one every team reaches for first: a server process per team, a key
+pasted into a client config, a shared secret in an environment variable, and an operator who finds out who can call
+what by reading the config files. It works for one team and breaks at the second.
+
+Ramen's answer: tools are **code in git**, run by a **platform** that knows about organizations.
+
+- **Built on how organizations work.** A *group* is a team. It owns a repo, a bucket prefix, its secrets, its
+  members and the cloud identity its workers run as. People hold a role *per group* — Group Admin, Viewer or MCP
+  User — so one person can run one group and merely use another. A change with real reach, such as granting a
+  service-account permission, needs a second admin to approve it.
+- **Agents and people are first-class callers.** A CI job or an agent platform presents a group key; a person
+  signs in — password, magic link, Microsoft Entra ID, Google Workspace — and the client holds a token in their
+  name. Every worker log line says who called.
+- **A deploy is a release, not a restart.** Canary first, a smoke test, then the stable track; roll back by
+  deploying the previous ref. Secrets reach workers only through a deploy and never through a prompt or a log.
+- **Underneath: gRPC, JSON-RPC 2.0 and a Rust node. On top: Python.** The node owns the transport, the auth, the
+  limits and the metrics; your code owns the tool. You never touch the node.
+
+The rest of this page is the engineering behind those four claims.
+
 ## The problem
 MCP servers are easy to write and hard to run. A team needs a place to put tools that talk to internal systems,
 a way to ship changes without an outage, secrets that never leak into prompts or logs, an audit trail of who called
@@ -8,7 +30,8 @@ what, and a network edge that only trusted ranges can reach. Ramen is that place
 ## The shape
 
 <figure class="ramen-diagram" markdown>
-![One MCP call, end to end: an MCP client posts each JSON-RPC message to /mcp over HTTPS (or a stdio client through ramen-mcp-bridge over gRPC) to the load balancer; the load balancer matches the ramen-group and ramen-zone metadata and forwards to that zone's worker pod, where the Rust node checks the key and source range and hands the message to the Python runtime, which loads the group's code from the group bucket; alongside, the console clones the group git repo, uploads it on deploy and calls the node directly on its pod IP](img/architecture.svg)
+![One MCP call end to end: client, load balancer, the zone's worker pod, Rust node, Python runtime](img/architecture.svg)
+<figcaption>An MCP client posts each JSON-RPC message to /mcp over HTTPS (a stdio client goes through ramen-mcp-bridge over gRPC). The load balancer matches the ramen-group and ramen-zone headers and forwards to that zone's worker pod, where the Rust node checks the credential and source range and hands the message to the Python runtime, which loads the group's code from the bucket. The console clones the group repo, uploads it on deploy and calls the node directly on its pod IP.</figcaption>
 </figure>
 
 A **group** is a tenant: it owns one git repo, one bucket prefix, its secrets, keys and users. An **environment** binds
@@ -21,10 +44,12 @@ a locally installed stdio bridge. That ruled out phones, browsers and hosted age
 run a child process. 0.5.0 keeps what gRPC bought and puts Streamable HTTP back as the front door
 ([contract §16](CONTRACTS.md)):
 
-- **Streamable HTTP is a URL and a header.** `POST /mcp` with `Authorization: Bearer`, one JSON-RPC message per
-  request, is what the MCP specification defines, so every standard client speaks it natively and nothing has to be
-  installed beside the client. Browsers are admitted only from an allow-listed `Origin`; sessions are signed ids
-  bound to the credential; a person can hold a token of their own through OAuth instead of a shared key.
+- **Streamable HTTP is a URL and a header.** The MCP specification defines exactly this: `POST /mcp` with an
+  `Authorization: Bearer` header, one JSON-RPC message per request. Every standard client speaks it natively, so
+  there is nothing extra to install.
+    - Browsers are admitted only from an allow-listed `Origin`.
+    - A session id is signed and tied to the credential that created it, so it is useless under a different key.
+    - A person can hold a token of their own through OAuth instead of a shared key.
 - **gRPC stays for what it is good at inside.** `ramen.v1.Mcp/Call` keeps binary framing, HTTP/2 multiplexing,
   first-class health and deadlines, and typed transport status. Teams that want it internally use it directly; the
   stdio bridge speaks it for clients that only speak stdio.
@@ -77,19 +102,21 @@ Secrets are stored Fernet-encrypted (or in Secret Manager / Secrets Manager) and
 `RAMEN_SECRET_<GROUP>__<NAME>` environment variables on worker pods. Tool code references them as
 `{{$group.NAME}}`; the runtime substitutes at call time and redacts values from errors and logs.
 
-## Why Firestore / DynamoDB and not Postgres
-The console is a single stateless-ish node in front of a managed document store, so there is nothing to back up,
+## Why a managed document store by default
+The console keeps no state of its own; it sits in front of a managed document store, so there is nothing to back up,
 patch or fail over that the cloud does not already handle. Backups of console state are JSON exports tagged with
-the release version, restorable at any time. See [decision D2](architecture/index.md#decisions).
+the release version, restorable at any time. Postgres is an optional third store for deployments that must stay off
+a managed cloud database; the repository interface is the same. See decisions D2 and D37 in the
+[architecture](architecture/index.md#decisions).
 
 ## What "multizone HA" means here
 The load balancer (GKE Gateway / ALB) routes calls whose metadata says `ramen-group: <g>` and `ramen-zone: <z>` to
 that zone's NEG / target group, with a gRPC health check on every backend. Adding a zone adds a namespace, a
 service account and a route; nothing in the data model or the deploy code assumes one zone. Rebalance adjusts
 backend capacity per zone from the console; IP rules become a Cloud Armor policy at the edge (one per group) plus
-a per-zone CIDR check on the node. The node takes the client address from `x-forwarded-for` at a configured
-number of hops counted from the right — the end the proxies append to — so it checks the client rather than the
-load balancer, and a caller cannot choose the address it reads. Get the hop count wrong and it falls back to the
-peer address and denies rather than admits. What stops something reaching a worker directly is the worker
-`NetworkPolicy`, not this list. See
+a per-zone CIDR check on the node. Proxies append to the right-hand end of `x-forwarded-for`, so the node counts
+back from the right by a configured number of hops. That lands on the real client rather than the load balancer,
+and a caller cannot forge it. Get the hop count wrong and the node falls back to the peer address and denies
+rather than admits. What stops traffic from reaching a worker directly is the worker `NetworkPolicy`, not this
+allow-list. See
 [Transport and what secures each hop](wiki/transport.md#the-source-range-allowlist).

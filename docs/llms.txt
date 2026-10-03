@@ -12,7 +12,7 @@ Since 0.3.1 Ramen exposes MCP as JSON-RPC 2.0 over gRPC: one `ramen.v1.Mcp/Call`
 - [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/): binding contracts for the group repo, sidecar protocol, gRPC transport (§11), console API, GCP/AWS deployment, auth/policy, docs
 - [Local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/): docker compose stack, console URL and login, minting rmk_ MCP keys vs rmn_ API keys, bridge config for Claude Desktop / mcp SDK, grpcurl example
 - [GCP how-to](https://bkraad47.github.io/ramen/how-tos/gcp/): Terraform + Helm bring-up on GKE Autopilot (header-routed gRPC through the Gateway), verified on a live GKE Gateway in 0.3.2
-- [AWS how-to](https://bkraad47.github.io/ramen/how-tos/aws/): Terraform/CloudFormation + Helm on EKS (ALB gRPC target groups), untested
+- [AWS how-to](https://bkraad47.github.io/ramen/how-tos/aws/): Terraform/CloudFormation + Helm on EKS (ALB gRPC target groups), applied to a real account since 0.5.6
 - [Security](https://bkraad47.github.io/ramen/how-tos/security/): roles, keys, gRPC parity table, IP rules, CSRF, OAuth+PKCE, audit, 0.3.1 IAM/RBAC narrowing
 - [Secrets](https://bkraad47.github.io/ramen/how-tos/secrets/): `{{$group.NAME}}` references, backends, scoping
 - [DevOps with the API](https://bkraad47.github.io/ramen/how-tos/devops-api/): every console route with curl, API keys, backups, rotation, worker Admin/Metrics + Admin/Reload over grpcurl

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from . import bucket as gcs
-from . import deps
+from . import deps, envfile
 from .executor import Executor
 from .loader import load
 from .log import log
@@ -88,8 +88,9 @@ class Server:
         bucket = Path(params.get("bucket") or self.bucket)
         summary = gcs.sync(uri, bucket) if (uri := os.environ.get("RAMEN_BUCKET_URI")) else None
         deps.install(bucket)
+        env = envfile.apply(bucket)  # 0.6.0: mcp/env.yaml rendered from secrets into this process's environment
         self.exe = Executor(load(bucket))
-        return self.exe.reg.describe() | ({"sync": summary} if summary else {})
+        return self.exe.reg.describe() | {"env": sorted(env)} | ({"sync": summary} if summary else {})
 
     def _exe(self) -> Executor:
         if self.exe is None:

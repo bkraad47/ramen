@@ -146,7 +146,7 @@ RAMEN_MCP_KEY="$KEY" ramen-mcp-bridge --target localhost:8080 --insecure --group
 ```json
 {"mcpServers": {"ramen-stdio": {"command": "ramen-mcp-bridge",
   "args": ["--target", "localhost:8080", "--insecure", "--group", "demo", "--zone", "local"],
-  "env": {"RAMEN_MCP_KEY": "rmk_…"}}}}
+  "env": {"RAMEN_MCP_KEY": "<the key shown once>"}}}}
 ```
 
 ## 5. Call the worker raw over gRPC with `grpcurl`
@@ -232,4 +232,4 @@ docker compose -f deploy/local/docker-compose.yml ps
 | Deploy job `error` with pip output | `mcp/requirements.txt` failed to install; fix and redeploy |
 | Old image versions in `docker compose ps` | `deploy/local/.env` pins `VERSION`; update it and `make up` |
 
-Next: [GCP](gcp.md) · [AWS (untested)](aws.md) · [Secrets](secrets.md) · [Security](security.md) · [Threat model](../threat-model.md)
+Next: [GCP](gcp.md) · [AWS](aws.md) · [Secrets](secrets.md) · [Security](security.md) · [Threat model](../threat-model.md)

@@ -1,44 +1,35 @@
-# Architecture (current: v0.5.4)
+# Architecture (current: v0.6.0)
 
 Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
 
-```
-                         ┌──────────────────────────── console (FastAPI, 1 node) ────────────────────────────┐
-  browser / rmn_ key ──▶ │ auth (password, OAuth/OIDC+PKCE, magic link) · RBAC · groups/envs/zones · secrets │
-                         │ deploy jobs · rebalance · IP rules · logs · audit · backups · config · policy      │
-                         └──────┬──────────────────────┬──────────────────────────────┬─────────────────────┘
-                                │ Store                │ Cloud adapter                │ Secrets backend
-                                ▼                      ▼                              ▼
-                     Firestore | DynamoDB | memory   local | gcp | aws           store | gcp | aws
-                                                       │ namespaces, Deployments, Secrets, Roles, routes,
-                                                       │ NEG/target groups, Cloud Armor / WAF, IAM
-                                                       │ gRPC to pods: Admin/Reload, Admin/Metrics, Health/Check
-                                                       ▼
-   MCP client ─▶ POST /mcp (Streamable HTTP, bearer key or OAuth token) ──────────────────────────────▶ namespace ramen-<group>-<zone>
-   stdio client ─▶ ramen-mcp-bridge ─▶ LB (GKE Gateway | ALB) ─ headers ramen-group, ramen-zone ─▶ (same pods, same guards)
-   (stdio)       (gRPC, TLS)         gRPC health check                                              ├─ worker (stable)   ─┐ ramen-node (Rust, tonic) :8080
-   grpcurl / any gRPC client ────────────────────────────────────────────────────────────────────▶  └─ worker-canary     ─┘  └─ ramen_runtime (Python 3.14)
-                                                                                                                                 ▲ sync on load
-                                                                                                                 bucket gs:// | s3:// | /buckets/<group>
-```
+<figure class="ramen-diagram" markdown>
+![One MCP call end to end: client, load balancer, the zone's worker pod, Rust node, Python runtime](../img/architecture.svg)
+<figcaption>A client posts to /mcp (or a stdio client goes through ramen-mcp-bridge over gRPC); the load balancer routes on the ramen-group and ramen-zone headers to the zone's worker pod; the Rust node checks the credential and source range and hands the message to the Python runtime, which loads the group's code from the bucket. The console keeps state in Firestore, DynamoDB or Postgres, drives the cloud adapter and calls nodes directly on their pod IP.</figcaption>
+</figure>
+
+Store: Firestore, DynamoDB or Postgres. Cloud adapter: `local`, `gcp` or `aws` (namespaces, Deployments, routes,
+NEG or target groups, Cloud Armor or WAF, IAM). Secrets backend: the store, Secret Manager or Secrets Manager.
+The console reaches workers over gRPC on the pod IP (`Admin/Reload`, `Admin/Metrics`, `Health/Check`), never
+through the load balancer.
 
 ## Components
 | Dir | What | Tech | Contract |
 |---|---|---|---|
-| `console/` | Manager UI + `/api/v1`; gRPC client to workers (`ramen_console.grpcclient`) | FastAPI, Jinja2, HTMX (no JS build), argon2, itsdangerous, Fernet, grpcio | [§4, §4a, §11](../CONTRACTS.md) |
+| `console/` | Manager UI + `/api/v1`; roles per group (D41), the OAuth 2.1 authorization server (D34), IdP role mapping (D38), scoped service-account policy (D40); gRPC client to workers (`ramen_console.grpcclient`) | FastAPI, Jinja2, HTMX (no JS build, no `unsafe-eval`), argon2, itsdangerous, Fernet, grpcio | [§4, §4a, §9, §11, §16.3](../CONTRACTS.md) |
 | `node-rs/` | MCP server node: `ramen.v1.Mcp/Call`, `ramen.v1.Admin`, `grpc.health.v1.Health` on one h2c/TLS port; bearer auth, CIDR allow-lists, blocked names, in-flight limit, access log, sidecar supervisor | Rust 1.98, tonic, tokio | [§11](../CONTRACTS.md) |
-| `runtime-py/` | Loads `mcp/` packages from the bucket, validates protos, pip-installs requirements, executes calls, resolves secrets; ships `ramen-mcp-bridge` (stdio ⇄ gRPC) | Python 3.14, jsonschema, grpcio (`[grpc]` extra) | [§1, §2, §11](../CONTRACTS.md) |
+| `runtime-py/` | Loads `mcp/` packages from the bucket, validates protos, pip-installs requirements, renders `mcp/env.yaml` from secrets (0.6.0), executes calls, resolves and redacts secrets | Python 3.14, jsonschema | [§1, §2, §11](../CONTRACTS.md) |
+| [`ramen-mcp-bridge`](https://github.com/bkraad47/ramen-mcp-bridge) (own repo, PyPI) | Stdio MCP server forwarding to `Mcp/Call` over gRPC with a group key or, since 0.2.0, the person's own OAuth token (PKCE + loopback callback against the console) | Python, grpcio | [§11, §16.3](../CONTRACTS.md) |
 | `proto/ramen/v1/` | `mcp.proto`, `admin.proto` — single source for Rust (tonic-build) and Python (grpcio-tools) stubs | protobuf 3 | [§11](../CONTRACTS.md) |
 | `deploy/local` | docker compose: Firestore emulator + console + one worker (gRPC h2c on 8080) | | [§5, §11](../CONTRACTS.md) |
 | `deploy/terraform/gcp`, `deploy/helm/*` | GKE Autopilot, Firestore, GCS, Artifact Registry, static IP, GSA + Workload Identity (custom role, resource-level IAM), GKE Gateway with header routes + gRPC health | Terraform, Helm 4 | [§7, §11](../CONTRACTS.md) |
-| `deploy/terraform/aws`, `deploy/cloudformation` | EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA, ALB controller (gRPC target groups), Fluent Bit (**untested**) | Terraform, CloudFormation | [§8, §11](../CONTRACTS.md) |
+| `deploy/terraform/aws`, `deploy/cloudformation` | EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA, ALB controller (gRPC target groups), Fluent Bit (exercised on the real account, not at volume) | Terraform, CloudFormation | [§8, §11](../CONTRACTS.md) |
 | `tests/` | Black-box conformance + e2e + cloud suites over gRPC, plus the bridge via the official `mcp` stdio client | pytest, grpcio, `mcp` | [§11](../CONTRACTS.md) |
 | `skills/` | Cloud-ops agent skills (deploy, rotate, backup, scale) | agentskills `SKILL.md` | [§10](../CONTRACTS.md) |
 
 ## Data model
 | Collection | Key fields | Notes |
 |---|---|---|
-| `users` | email, role (`super_admin` / `group_admin` / `viewer`), groups | password hash Fernet-encrypted |
+| `users` | email, `memberships: {group: role}` (`group_admin` / `viewer` / `mcp_user`), `super_admin` flag | `role` and `groups` are derived summaries; password hash Fernet-encrypted |
 | `groups` | name, repo_url, ref, mcp_auth, sa_restrictions | one bucket prefix per group |
 | `environments` | group, name, ref, zones[], verbose, blocked[], last_deploy | zone list drives namespaces |
 | `zones` | name, provider (`local` / `gcp` / `aws`), region (cloud zone) | super admin only |
@@ -64,7 +55,7 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 ## Decisions
 | ID | Decision |
 |---|---|
-| D2 | State DB: Firestore on GCP, DynamoDB on AWS, one repository interface. No Postgres. |
+| D2 | State DB: Firestore on GCP, DynamoDB on AWS, one repository interface. No Postgres. *(partly superseded by D37)* |
 | D3 | Worker pod = Rust node + Python runtime sidecar, 1:1, spawned on demand, idle-terminated. |
 | D4 | *(superseded by D19)* Transport: JSON-RPC 2.0 over HTTP (MCP Streamable HTTP), 0.1.0–0.3.0. |
 | D5 | Hierarchy Group → Environment → Zone → Worker. |
@@ -72,8 +63,8 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 | D9 | Semver from 0.1.0; tags `v*` build releases with zips. |
 | D11 | Console: FastAPI + Jinja2 + HTMX, server-rendered. |
 | D14 | Bucket dir = group repo root; no MCP keys = deny all; node config precedence file < env < deploy file. |
-| D17 | Console on GCP: static IP + self-signed cert on the global HTTPS LB; managed cert later. |
-| D18 | v0.3.0 scope: AWS (untested), OAuth polish, SA policy engine, tool blocking, email auth, docs, launch. |
+| D17 | *(superseded by D36)* Console on GCP: static IP + self-signed cert on the global HTTPS LB; managed cert later. |
+| D18 | v0.3.0 scope: AWS (untested at the time; applied to a real account from 0.5.6), OAuth polish, SA policy engine, tool blocking, email auth, docs, launch. |
 | D19 | v0.3.1: MCP transport is JSON-RPC 2.0 over gRPC (`ramen.v1.Mcp/Call`); HTTP MCP endpoint removed; `ramen-mcp-bridge` (stdio) serves standard clients; full security parity on gRPC; LB routes on `ramen-group`/`ramen-zone` metadata; carried security mediums fixed; logo v2. |
 | D21 | v0.4.0: API keys carry an enforced client type — an `agent` key is accepted only by workers over gRPC, a `devops` key only by the console API. |
 | D22 | v0.4.0: the autoscale and rebalance stress test runs on a local kind cluster first, then once on a throwaway GKE project. |
@@ -83,10 +74,17 @@ Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transpor
 | D33 | v0.5.0: sessions are stateless signed ids (HMAC over nonce, expiry and the credential; per-group secret handed to every zone). |
 | D34 | v0.5.0: the console is the OAuth 2.1 authorization server — PKCE S256, pre-registered clients, no dynamic registration. |
 | D35 | v0.5.1: cloud runs get their permissions from a rule the human adds; the agent never writes its own permission file. |
+| D36 | v0.5.5: the GCP console gets a Google-managed certificate on a free `sslip.io` hostname derived from the static IP (supersedes D17); no domain to buy, no CA to export. |
+| D37 | v0.5.5: Postgres is an optional third `RAMEN_STORE` for self-hosted deployments; Firestore and DynamoDB stay the cloud defaults (partly supersedes D2). |
+| D38 | v0.5.92: IdP role mapping is authoritative on every login, keyed by claim value, never by person; no match means no membership. |
+| D39 | v0.5.92: a fourth role, `mcp_user`, who only signs in to approve MCP clients for their groups' zones; no console, no API. |
+| D40 | v0.5.93: a service-account permission carries a scope; empty or `*` means the group's own prefix and secrets, named resources bind on those alone. |
+| D41 | v0.5.95: roles are held per group (`user.memberships`); one person may be a Group Admin of one group and an MCP User of another. |
 
 ## Version history
 [v0.1.0](v0.1.0.md) local core → [v0.2.0](v0.2.0.md) GCP → [v0.3.0](v0.3.0.md) AWS, auth & policy, docs →
 [v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish, docs, and proof → 0.5.x Streamable HTTP
-at the edge, OAuth, the GKE proof, the end-to-end and add-a-tool guides (this page; the changelog has each release).
-Tracker: [Versions](../versions.md). A drawing of one call end to end, and what protects every hop, is in
+at the edge, OAuth, the GKE and AWS runs, per-group roles → 0.6.0 real zone teardown, HTTPS only, `env.yaml`.
+This page describes 0.6.0; the [changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) has each
+release and [Versions](../versions.md) tracks them. A drawing of one call end to end, and what protects every hop, is in
 [Transport and what secures each hop](../wiki/transport.md).

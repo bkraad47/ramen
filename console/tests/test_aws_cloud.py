@@ -256,8 +256,12 @@ async def test_set_ip_rules(cloud, fk):
     acl = web_acl(fk.wafv2)
     assert acl["DefaultAction"] == {"Allow": {}} and [x["Name"] for x in acl["Rules"]] == ["ramen-demo"]
     stmt = acl["Rules"][0]["Statement"]["AndStatement"]["Statements"]
+    # routing is by header since 0.3.1 (there is no /mcp/<group>/ path), so the edge rule must match the header
+    bm = stmt[0]["ByteMatchStatement"]
     assert (
-        stmt[0]["ByteMatchStatement"]["SearchString"] == b"/mcp/demo/"
+        bm["FieldToMatch"] == {"SingleHeader": {"Name": "ramen-group"}}
+        and bm["PositionalConstraint"] == "EXACTLY"
+        and bm["SearchString"] == b"demo"
         and "IPSetReferenceStatement" in stmt[1]["NotStatement"]["Statement"]
     )
     lb = fk.alb()
@@ -402,6 +406,17 @@ async def test_refresh_scale_and_detach(cloud, fk):
     assert ip_set(fk.wafv2, "ramen-demo") is None and ip_set(fk.wafv2, "ramen-demo-v6") is None
     assert [x["Name"] for x in web_acl(fk.wafv2)["Rules"]] == ["ramen-other"]
     assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}
+
+
+async def test_detach_zone_destroys_one_namespace_and_its_role(cloud, fk):
+    for z in ("a", "b"):
+        await cloud.attach_zone("demo", z, SPEC)
+        await cloud.create_service_account("demo", z)
+    r = await cloud.detach_zone("demo", "a")
+    assert r == {"namespaces": ["ramen-demo-a"], "service_accounts": ["ramen-demo-a"]}
+    assert ("Namespace", None, "ramen-demo-a") not in fk.k8s.objs and ("Namespace", None, "ramen-demo-b") in fk.k8s.objs
+    assert (await cloud.detach_group("demo"))["service_accounts"] == [f"arn:aws:iam::{ACCOUNT}:role/ramen/ramen-demo-b"]
+    assert (await cloud.detach_zone("demo", "a"))["service_accounts"] == []
 
 
 @pytest.fixture

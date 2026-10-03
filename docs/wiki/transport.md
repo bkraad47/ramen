@@ -41,12 +41,12 @@ so a crash, a hang or a leak in tool code costs one respawn rather than the pod 
 |---|---|---|
 | Client → edge (HTTP) | `POST https://<edge>/mcp` | TLS at the load balancer; the credential in `Authorization: Bearer`; a browser `Origin` must be on the zone's allowlist (see [Origin](#origin)); a session id is signed and bound to the credential (see [Sessions](#sessions)). The local compose worker is plain `http://` on the laptop only |
 | Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. The key comes from `RAMEN_MCP_KEY` |
-| Edge → node | GKE Gateway, or an AWS ALB (**written, never applied — see below**) → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone (the AWS WAF equivalent has never been applied) |
+| Edge → node | GKE Gateway, or an AWS ALB → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group, applied on a real account since 0.5.6 |
 | Edge → node, without a key | `grpc.health.v1.Health`, and gRPC reflection where it is enabled | neither is key-checked or source-range-checked, so health answers anyone who reaches the edge — by design. Reflection would let them enumerate the services too, so it is switched off on deployed workers (`RAMEN_REFLECTION=0` in the chart and both renderers) and answers `UNIMPLEMENTED` there; it stays on locally |
 | Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` (on by default): ingress to the node port only from the console's namespace and the load-balancer / health-check ranges. This — with the hardened container context — is what actually bounds direct access, and what makes the unauthenticated surface above tolerable |
 | Node (every `Mcp/Call`) | the guard in front of your code | bearer key compared byte-for-byte in constant time with no early exit between keys (the length check in front of that compare is *not* constant time, so a key's length can leak); source range checked against `RAMEN_ALLOWED_CIDRS`; blocked names filtered; 4 MiB message cap; `RAMEN_MAX_INFLIGHT` cap |
 | Node → runtime | JSON-RPC on stdio inside the pod | no network surface; the runtime is a child process of the node |
-| Runtime → bucket | read of the group's prefix, by content hash | the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets. The AWS equivalent (IAM role + IRSA) is **written but has never been applied** |
+| Runtime → bucket | read of the group's prefix, by content hash | the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets. The AWS equivalent is an IAM role with IRSA, applied on a real account since 0.5.6 |
 | Console → node | `Admin/Reload`, `Admin/Metrics`, `Health/Check` on the pod IP | cluster-internal, and plaintext h2c unless the console itself has `RAMEN_WORKER_TLS=1`; `Admin/*` additionally needs `x-ramen-admin-key` and `RAMEN_ADMIN_CIDRS`, and is not routed through the load balancer at all |
 
 ### The bearer key
@@ -188,7 +188,7 @@ and from the load balancer's front-end and health-check ranges — the VPC CIDR 
 container context (non-root, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault`
 seccomp) it is the control that answers "what stops another pod, or the internet, from reaching the node
 directly", and it is what makes the unauthenticated health and reflection surface tolerable. It is also what
-closed SEC-04 from the 0.3.0 security audit.
+closed the direct-access item of the 0.3.0 security audit.
 
 ### The deploy file is a configuration channel
 The node's configuration comes from three places, in order: a `RAMEN_CONFIG` yaml, then the process environment,
@@ -205,8 +205,8 @@ surface, or change how it decides a caller's address.
 Attaching a zone creates its own cloud identity, bound to the zone's Kubernetes service account: on GCP a service
 account with `objectViewer` limited to that group's bucket prefix and `secretAccessor` limited to that group's
 secrets, through Workload Identity. Two zones of two groups on the same cluster therefore cannot read each other's
-code or secrets even if the network is misconfigured. The AWS equivalent is an IAM role with IRSA — written,
-never applied to a real account.
+code or secrets even if the network is misconfigured. The AWS equivalent is an IAM role with IRSA, applied on a real
+account since 0.5.6.
 
 The separation is about *contents*, and one edge is worth naming: the IAM condition that scopes the storage role
 matches the group's object prefix **or the bucket resource itself**, because that is what a bucket listing is
@@ -226,25 +226,26 @@ the runtime has actually loaded the group's code.
 
 ## What is verified, and what is not
 
-- **Verified live in 0.5.1 on one GKE Autopilot cluster through the Gateway load balancer** (`reports/cloud-v0.5.0.md`
-  in the private workspace): `POST /mcp` with an `rmk_` key routed by `ramen-group`/`ramen-zone` to the zone's pods,
-  the 401/403 answers and the session id through the balancer, the OAuth flow from the console's consent page to a
-  `tools/call` with the token, refresh rotation and reuse revocation, the worker's RFC 9728 challenge naming the
-  console (`scripts/oauth_roundtrip.py`, `scripts/cloud_smoke.sh`), harness 218 passed, 0 failed, 15 skipped with stated reasons. Two things the run taught: the
+- **Verified live in 0.5.1 on one GKE Autopilot cluster through the Gateway load balancer**: `POST /mcp` with an
+  `rmk_` key routed by `ramen-group`/`ramen-zone` to the zone's pods, the 401/403 answers and the session id
+  through the balancer, the OAuth flow from the console's consent page to a `tools/call` with the token, refresh
+  rotation and reuse revocation, and the worker's RFC 9728 challenge naming the console
+  (`scripts/oauth_roundtrip.py`, `scripts/cloud_smoke.sh`). The harness ran 218 passed, 0 failed, 15 skipped with
+  stated reasons. Two things the run taught: the
   Gateway takes minutes to program a new route (until then `/mcp` is a `404` from the console), and a console
   rollout answers `503` through the balancer for about a minute.
 - **Verified in 0.5.0 on real node processes:** the whole guard table on both transports (key,
   source range, blocked names, 4 MiB and in-flight caps, protocol errors as JSON-RPC bodies, notifications), the
   HTTP-only checks (Origin, sessions bound to the credential and refused under another key, content negotiation,
   protocol version, the RFC 9728 metadata), a console-minted OAuth token accepted by the node, and the official
-  `mcp` SDK's Streamable HTTP client end to end — in CI on Linux and on a Windows runner that builds the node
-  natively (`tests/conformance/test_transports_local.py`), and — since 0.5.1 — Streamable HTTP over node TLS,
-  which CI found broken after 0.5.0 (see TLS above).
+  `mcp` SDK's Streamable HTTP client end to end. All of it runs in CI on Linux and on a Windows runner that builds
+  the node natively (`tests/conformance/test_transports_local.py`). Since 0.5.1 it also covers Streamable HTTP over
+  node TLS, which CI found broken after 0.5.0 (see TLS above).
 - **Verified live**, on one GKE Autopilot cluster in `us-central1` (0.3.2), with the whole harness green through
   the load balancer (126 passed, 0 failed):
     - header routing on `ramen-group` / `ramen-zone` over h2c, and gRPC health checks;
     - `Mcp/Call` with and without a key (`Unauthenticated` without); `Admin/*` not reachable through the load
-      balancer; the bridge end to end through the official `mcp` SDK stdio client against `<lb>:443` with
+      balancer; the bridge end to end through the official `mcp` SDK stdio client against `<edge>:443` with
       `--tls --ca`;
     - **driven from the console, against the real deployment**: blocking a tool and unblocking it again; setting
       an IP lock (the node answered `PERMISSION_DENIED` outside the range while health stayed reachable, with the
@@ -252,15 +253,17 @@ the runtime has actually loaded the group's code.
       account with its bucket-prefix and per-secret IAM bindings and its Workload Identity binding; secrets; and
       logs.
     - Scope, stated plainly: **one** cluster, one zone, one group, on one day, and the project was deleted the
-      same day. Nothing has run in a cloud since.
+      same day. Later releases repeated the pattern (0.5.1, 0.5.6, 0.5.8, 0.5.95), each on a project or
+      account torn down the same day; nothing stays running between releases.
 - **Verified by tests only**: node TLS, the `RAMEN_MAX_INFLIGHT` and size caps, and `x-forwarded-for` hop
   counting — including a test that a caller-supplied header cannot move the address the node checks, at each
   provider's hop count. Note what that does *not* say: the hop counts above (GCP 2, AWS 1) and
   `RAMEN_REFLECTION=0` landed **after** the 0.3.2 cloud run, so neither has been exercised against a real load
   balancer yet. The next cloud run is what will confirm that GCP really appends two entries.
-- **Not verified at all**: the whole AWS path. The Terraform, CloudFormation and Helm for EKS, ALB gRPC target
-  groups and WAF have never been applied to a real AWS account — treat [the AWS how-to](../how-tos/aws.md) as a
-  design, not a report.
+- **Verified on AWS since 0.5.6**: the Terraform for EKS, DynamoDB, S3, Secrets Manager and the ALB with gRPC
+  target groups has been applied to a real account, and the published bridge was server-tested against it in
+  0.5.8 (which is how the certificate's SAN gap was found). Least exercised there: WAF rule convergence under
+  change, and rebalance weights under load. [The AWS how-to](../how-tos/aws.md) says what each run covered.
 - **By design, not a defect**: the runtime executes your group's code in a process that holds that group's
   secrets in its environment. Tool code in a group can read that group's secrets directly. Isolation between
   groups is the pod, the namespace and the per-zone identity — not the Python process. See
@@ -282,7 +285,7 @@ Clients that only speak stdio use `ramen-mcp-bridge`, a stdio MCP server that fo
 over gRPC — the compatibility path, unchanged since 0.3.1:
 
 ```sh
-RAMEN_MCP_KEY=rmk_… ramen-mcp-bridge --target <host:port> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]
+RAMEN_MCP_KEY=<key> ramen-mcp-bridge --target <host:port> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]
 ```
 
 Every flag has an environment variable behind it (`RAMEN_BRIDGE_TARGET`, `RAMEN_BRIDGE_GROUP`, `RAMEN_BRIDGE_ZONE`,

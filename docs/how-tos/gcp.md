@@ -1,4 +1,4 @@
-# Deploy on GCP (verbose)
+# Deploy on GCP, step by step
 
 Verified end-to-end on a throwaway project (GKE Autopilot regional cluster, ~25 min wall clock, most of it GKE
 and load-balancer provisioning). Binding details: [contract §7](../CONTRACTS.md). Cost while running: roughly the
@@ -23,15 +23,19 @@ cd deploy/terraform/gcp && cp terraform.tfvars.example terraform.tfvars   # set 
 terraform init && terraform apply
 cd ../../..
 ```
-Creates: regional GKE Autopilot cluster `ramen`, Firestore Native `(default)`, Artifact Registry repo `ramen`,
-static IP `ramen-console`, a Certificate Manager Google-managed certificate + map for a free `sslip.io` hostname
-derived from that IP (v0.5.5 I11 — no domain purchase needed; D17 superseded), groups bucket
-`ramen-<project>-groups`, console GSA `ramen-console@<project>` with
-`roles/iam.serviceAccountCreator` + `serviceAccountDeleter` + `serviceAccountUser`, a custom role `ramenConsoleSaIam` (get/list/getIamPolicy/setIamPolicy on `ramen-*` service accounts) and
-resource-level bindings on the bucket and secrets (no `projectIamAdmin` since 0.3.1, §11), Workload Identity binding
-to `ramen-system/console`. Outputs: `cluster_name`, `region`,
-`console_ip`, `public_hostname`, `certificate_map`, `artifact_repo`, `console_gsa`, `groups_bucket`. Nothing
-per-group is created by Terraform.
+Terraform creates:
+
+- a regional GKE Autopilot cluster `ramen` and Firestore Native `(default)`;
+- Artifact Registry repo `ramen` and the groups bucket `ramen-<project>-groups`;
+- static IP `ramen-console` and a Certificate Manager Google-managed certificate + map for a free `sslip.io`
+  hostname derived from that IP (since 0.5.5; no domain to buy);
+- the console GSA `ramen-console@<project>` with `roles/iam.serviceAccountCreator`, `serviceAccountDeleter` and
+  `serviceAccountUser`, the custom role `ramenConsoleSaIam` (get/list/getIamPolicy/setIamPolicy on `ramen-*`
+  service accounts) and resource-level bindings on the bucket and secrets (no `projectIamAdmin` since 0.3.1, §11);
+- the Workload Identity binding to `ramen-system/console`.
+
+Outputs: `cluster_name`, `region`, `console_ip`, `public_hostname`, `certificate_map`, `artifact_repo`,
+`console_gsa`, `groups_bucket`. Nothing per-group is created by Terraform.
 
 ## 3. Images (~5 min)
 ```sh
@@ -56,7 +60,7 @@ kubectl -n ramen-system rollout status deploy/console
 kubectl -n ramen-system get gateway ramen -w            # PROGRAMMED=True after ~5 min; ADDRESS = static IP
                                                           # the managed cert reaches ACTIVE a few minutes later:
                                                           # gcloud certificate-manager certificates describe ramen-console
-curl https://$HOSTNAME/readyz                            # {"ok":true,"store":"firestore","version":"0.5.5"} — real cert, no -k
+curl https://$HOSTNAME/readyz                            # {"ok":true,"store":"firestore","version":"0.6.0"} — real cert, no -k
 ```
 Keep the three generated secrets somewhere safe (a password manager, not the shell history). The chart installs:
 console Deployment (KSA `console`, Workload Identity), Service (NEG), Gateway `ramen`
@@ -98,15 +102,15 @@ which prints PASS/FAIL.
 ## 6. Call it through the load balancer (gRPC, routed by metadata)
 The same static IP serves the console (`/`, HTTP) and every zone's workers (gRPC). The Gateway picks the zone from
 the `ramen-group` / `ramen-zone` metadata; there is no path. The certificate is publicly trusted (Certificate
-Manager, v0.5.5 I11) — no CA export, no `kubectl` step, just the bridge or `grpcurl` against the hostname:
+Manager, since 0.5.5) — no CA export, no `kubectl` step, just the bridge or `grpcurl` against the hostname:
 ```sh
 # MCP clients (Claude Desktop, Cursor, mcp SDK): the bridge as a stdio server
-ramen-mcp-bridge --target $HOSTNAME:443 --tls --key rmk_… --group demo --zone a
+ramen-mcp-bridge --target $HOSTNAME:443 --tls --key "$RAMEN_MCP_KEY" --group demo --zone a
 
 # raw call
 REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64)
 grpcurl -import-path proto -proto ramen/v1/mcp.proto \
-  -H "authorization: Bearer rmk_…" -H 'ramen-group: demo' -H 'ramen-zone: a' \
+  -H "authorization: Bearer $RAMEN_MCP_KEY" -H 'ramen-group: demo' -H 'ramen-zone: a' \
   -d "{\"body\":\"$REQ\"}" $HOSTNAME:443 ramen.v1.Mcp/Call | python3 -c 'import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)["body"]).decode())'
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
 grpc_health_probe -addr $HOSTNAME:443 -tls -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'   # SERVING
@@ -127,7 +131,7 @@ fallback (unset `gateway.certificateMap`) — e.g. a cluster with no public host
   always-on (not configurable off). Point the monitor's GCP log integration at this project; narrow to one zone
   the same way the console's own `logs()` does:
   `resource.type="k8s_container" AND resource.labels.namespace_name="ramen-<group>-<zone>"`.
-- **Service account**: super admin creates/repairs the group+zone GSA; extra roles only through SA rules. Bucket and secret roles are bound on the resource; a **project-wide** role (`logs.write` → `roles/logging.logWriter`, metrics, …) needs the console to hold `roles/resourcemanager.projectIamAdmin`, which Terraform grants only with `console_project_iam = true` (off by default, SEC-08). Without it an approved request is recorded, the zone's `sa_permissions` list it, and the answer carries a `note` saying the role was not bound.
+- **Service account**: super admin creates/repairs the group+zone GSA; extra roles only through SA rules. Bucket and secret roles are bound on the resource; a **project-wide** role (`logs.write` → `roles/logging.logWriter`, metrics, …) needs the console to hold `roles/resourcemanager.projectIamAdmin`, which Terraform grants only with `console_project_iam = true` (off by default). Without it an approved request is recorded, the zone's `sa_permissions` list it, and the answer carries a `note` saying the role was not bound.
 - **Refresh**: super admin re-discovers namespaces, deployments and GSAs into the store.
 - **Secrets backend** is Secret Manager (`ramen-<group>-<env|all>-<zone|all>-<NAME>`).
 
@@ -162,6 +166,10 @@ scripts/gcp_cost_check.sh $PROJECT --expect-empty
 - Gateway-managed backend services report "not ready" for minutes after a rollout: rebalance and IP rules return
   `applied:false` / `attached:false` with a note and retry in the background. Don't loop on them.
 - The LB drains old pods for ~5 s after a rollout; MCP clients should retry once.
+- A dropped zone's namespace can sit in `Terminating` for 10 minutes or more: the NEG finalizer waits for the
+  Gateway-managed backend service, and the Gateway controller is slow to garbage-collect it once the route is gone.
+  If it never clears, `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete the orphan;
+  the namespace finishes within a minute.
 - The console GSA needs `roles/datastore.user` (Firestore) and the WI binding must depend on the cluster.
 - `gcloud auth application-default login` is needed by Terraform even when `gcloud` is logged in.
 - gRPC to the backends needs HTTP/2: the worker Service carries `appProtocol: kubernetes.io/h2c`. If your GKE

@@ -10,7 +10,7 @@ import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from .errors import invalid
 
@@ -111,6 +111,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if self.hsts:
             h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return resp
+
+
+class HttpsOnlyMiddleware(BaseHTTPMiddleware):
+    """0.6.0: when the console is public over HTTPS (RAMEN_COOKIE_SECURE=1), plain http never reaches a page or the
+    API — a GET/HEAD is redirected to https, anything else is refused. The load balancer terminates TLS and says so
+    in X-Forwarded-Proto; the kubelet's probes reach the pod directly, so the probe paths stay plain."""
+
+    EXEMPT = ("/healthz", "/readyz")
+
+    async def dispatch(self, request: Request, call_next):
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip().lower()
+        if proto == "https" or request.url.path in self.EXEMPT:
+            return await call_next(request)
+        if request.method in ("GET", "HEAD"):
+            return RedirectResponse(str(request.url.replace(scheme="https")), 301)
+        return JSONResponse({"detail": "HTTPS required"}, 403)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

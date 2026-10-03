@@ -24,7 +24,7 @@ JAR=$(mktemp); BODY=$(mktemp); trap 'rm -f "$JAR" "$BODY"' EXIT
 STEP=""; fail() { echo "FAIL: ${STEP}${1:+ — $1}" >&2; exit 1; }
 # TLS: verified against RAMEN_SMOKE_CA when given, the system store otherwise; -k only on explicit request (review 0.5.0 M6)
 CURL_TLS=(); [ -n "${RAMEN_SMOKE_CA:-}" ] && CURL_TLS=(--cacert "$RAMEN_SMOKE_CA"); [ "${RAMEN_SMOKE_INSECURE:-0}" = 1 ] && CURL_TLS=(-k)
-C() { curl -s "${CURL_TLS[@]}" -c "$JAR" -b "$JAR" --max-time 60 "$@"; }
+C() { curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -c "$JAR" -b "$JAR" --max-time 60 "$@"; }
 csrf() { awk '$6=="ramen_csrf"{print $7}' "$JAR" | tail -1; }   # cookie sessions must echo the CSRF cookie (CONTRACTS §9)
 api() { C -H 'Content-Type: application/json' -H "X-Ramen-CSRF: $(csrf)" -X "$1" "$CONSOLE/api/v1$2" ${3:+-d "$3"}; }
 jget() { python3 -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')' 2>/dev/null; }
@@ -50,7 +50,7 @@ TLS=(-plaintext)
 if [ "${RAMEN_NODE_TLS:-0}" = 1 ]; then
   TLS=(); [ -n "${RAMEN_SMOKE_CA:-}" ] && TLS=(-cacert "$RAMEN_SMOKE_CA"); [ "${RAMEN_SMOKE_INSECURE:-0}" = 1 ] && TLS=(-insecure)
 fi
-G=(grpcurl "${TLS[@]}" -max-time 60 -import-path "$ROOT/proto" -import-path "$ROOT/tests/proto" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE")
+G=(grpcurl ${TLS[@]+"${TLS[@]}"} -max-time 60 -import-path "$ROOT/proto" -import-path "$ROOT/tests/proto" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE")
 health() { "${G[@]}" -proto grpc/health/v1/health.proto "$NODE" grpc.health.v1.Health/Check 2>/dev/null | jget '.get("status","")'; }
 mcp() {  # mcp <key> <json> → response body; gRPC status text on stderr when non-OK (exit code of grpcurl kept)
   local key=$1 body; body=$(printf '%s' "$2" | b64)
@@ -69,7 +69,7 @@ STEP="bad key";     ERR=$(mcp "not-a-key" '{"jsonrpc":"2.0","id":4,"method":"pin
 HTTP_URL=${RAMEN_MCP_URL:-$([ "${RAMEN_NODE_TLS:-0}" = 1 ] && echo "https://$NODE/mcp" || echo "http://$NODE/mcp")}
 http_mcp() {  # http_mcp <key> <json> → "<status> <body>"
   local key=$1
-  curl -s "${CURL_TLS[@]}" -o "$BODY" -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -o "$BODY" -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H 'Accept: application/json' \
     -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" ${key:+-H "Authorization: Bearer $key"} -d "$2"; echo " $(cat "$BODY")"
 }
 STEP="http tools/call"; R=$(http_mcp "$KEY" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}')
@@ -77,12 +77,12 @@ STEP="http tools/call"; R=$(http_mcp "$KEY" '{"jsonrpc":"2.0","id":5,"method":"t
 OUT=$(echo "${R#* }" | jget '["result"]["content"][0]["text"]'); [ "${OUT%.0}" = 5 ] || fail "http result: $R"
 STEP="http unauth";    R=$(http_mcp "" '{"jsonrpc":"2.0","id":6,"method":"ping"}'); [ "${R%% *}" = 401 ] || fail "no-key POST → ${R%% *}"
 STEP="http bad key";   R=$(http_mcp "not-a-key" '{"jsonrpc":"2.0","id":7,"method":"ping"}'); [ "${R%% *}" = 401 ] || fail "bad-key POST → ${R%% *}"
-STEP="http origin";    R=$(curl -s "${CURL_TLS[@]}" -o /dev/null -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H 'Origin: https://evil.example' -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":8,"method":"ping"}'); [ "$R" = 403 ] || fail "foreign Origin → $R"
-STEP="http session";   SID=$(curl -s "${CURL_TLS[@]}" -D - -o /dev/null -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.5.0"}}}' | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{print $2}')
+STEP="http origin";    R=$(curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -o /dev/null -w '%{http_code}' -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H 'Origin: https://evil.example' -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":8,"method":"ping"}'); [ "$R" = 403 ] || fail "foreign Origin → $R"
+STEP="http session";   SID=$(curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -D - -o /dev/null -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.5.0"}}}' | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{print $2}')
 [ -n "$SID" ] || fail "initialize over HTTP returned no Mcp-Session-Id"
 # Admin/Reload without a key: UNAUTHENTICATED (direct), PERMISSION_DENIED (outside RAMEN_ADMIN_CIDRS) or UNIMPLEMENTED/404
 # through an LB that does not route ramen.v1.Admin at all (CONTRACTS §11: Admin stays cluster-internal) — all three mean "gated".
-STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented' || fail "Admin/Reload without key → ${ERR:-OK}"
+STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented|status code received from server: 464' || fail "Admin/Reload without key → ${ERR:-OK}"   # 464: the ALB has no gRPC route for Admin/* (console catch-all), which is the point
 if [ "${RAMEN_SMOKE_ADMIN:-0}" = 1 ]; then
   STEP="admin reload"; "${G[@]}" -max-time 180 -proto ramen/v1/admin.proto -H "x-ramen-admin-key: $ADMIN_KEY" "$NODE" ramen.v1.Admin/Reload >/dev/null 2>&1 || fail "Admin/Reload with key failed"
 fi

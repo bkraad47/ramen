@@ -33,7 +33,7 @@ uv tool install './runtime-py[grpc]'     # from a checkout; or run it inside the
     ```json
     {"mcpServers": {"ramen-demo": {
       "url": "https://<lb>/mcp/demo/a",
-      "headers": {"Authorization": "Bearer rmk_…"}}}}
+      "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}"}}}}
     ```
 
 === "After (0.3.1)"
@@ -41,7 +41,7 @@ uv tool install './runtime-py[grpc]'     # from a checkout; or run it inside the
     {"mcpServers": {"ramen-demo": {
       "command": "ramen-mcp-bridge",
       "args": ["--target", "<lb>:443", "--tls", "--ca", "/path/ramen-lb.pem",
-               "--key", "rmk_…", "--group", "demo", "--zone", "a"]}}}
+               "--key", "<the key shown once>", "--group", "demo", "--zone", "a"]}}}
     ```
     Locally: `--target localhost:8080 --insecure` (plaintext h2c). `--ca` is only needed while the LB uses the
     self-signed certificate (D17); drop it once a managed certificate is in place.
@@ -66,7 +66,7 @@ Then, per zone: **Deploy (canary)** from the console. The 0.3.1 console re-rende
 namespaced Role/RoleBinding, and rolls the workers. The route flips from `/mcp/<g>/<z>` to header matching in one
 reconcile (a few minutes on the Gateway); old-path clients get 404 from then on.
 
-**AWS (untested path)**: `terraform apply` (narrowed WAF/IAM), push images, `helm upgrade`, then deploy each
+**AWS**: `terraform apply` (narrowed WAF/IAM), push images, `helm upgrade`, then deploy each
 zone; the console re-annotates the zone Ingress with `backend-protocol-version: GRPC`, header conditions and a
 gRPC health check (`success-codes: 0`). If the ALB rejects the gRPC target group, check that the listener is HTTPS
 (gRPC on ALB requires TLS on the listener).
@@ -79,7 +79,7 @@ gRPC health check (`success-codes: 0`). If the ALB rejects the gRPC target group
 grpc_health_probe -addr localhost:8080                                 # local worker → SERVING
 grpc_health_probe -addr <lb>:443 -tls -tls-ca-cert ramen-lb.pem \
   -rpc-header 'ramen-group: demo' -rpc-header 'ramen-zone: a'          # through the LB → SERVING
-ramen-mcp-bridge --target <lb>:443 --tls --ca ramen-lb.pem --key rmk_… --group demo --zone a   # then tools/list from your client
+ramen-mcp-bridge --target <lb>:443 --tls --ca ramen-lb.pem --key "$RAMEN_MCP_KEY" --group demo --zone a   # then tools/list from your client
 ```
 The console's group page shows the same thing: worker rows read `SERVING` and the deploy job's smoke step
 prints the tool list. Logs now carry a `grpc_code` field per call.

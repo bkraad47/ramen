@@ -8,9 +8,9 @@ The console API stays HTTP in 0.3.1; what changed is how the console talks to **
 ## Generate an API key
 API Keys page → name, role, groups → **Create** (shown once), or:
 ```sh
-curl -sk -c c.txt -X POST https://<console>/login -d email=admin@ramen.local -d password='…' -o /dev/null
+curl -sk -c c.txt -X POST https://<edge>/login -d email=admin@ramen.local -d password='…' -o /dev/null
 CSRF="X-Ramen-CSRF: $(awk '$6=="ramen_csrf"{print $7}' c.txt)"   # cookie sessions must echo the CSRF token
-curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://<console>/api/v1/api-keys \
+curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://<edge>/api/v1/api-keys \
   -d '{"name":"ci-deploy","role":"group_admin","groups":["demo"]}'
 # 201 {"id":"…","key":"rmn_…"}
 export RMN=rmn_…
@@ -23,7 +23,7 @@ MCP clients need `rmk_` keys (see [local quickstart](local-quickstart.md#rmk_-vs
 </figure>
 
 ## Cheat sheet
-`C='curl -sk -H "X-Ramen-Api-Key: $RMN" -H "Content-Type: application/json"'`, `U=https://<console>/api/v1`.
+`C='curl -sk -H "X-Ramen-Api-Key: $RMN" -H "Content-Type: application/json"'`, `U=https://<edge>/api/v1`.
 
 | Task | Call |
 |---|---|
@@ -46,8 +46,8 @@ MCP clients need `rmk_` keys (see [local quickstart](local-quickstart.md#rmk_-vs
 | API keys | `POST $U/api-keys {name,role?,groups?}` · `DELETE $U/api-keys/{id}` |
 | Logs | `GET $U/logs?group=&zone=&worker=&tail=500&download=1` (text/plain) |
 | Audit / dashboard | `GET $U/audit` · `GET $U/dashboard` |
-| Backups (super admin) | `POST $U/backups {target:"local"|"bucket"}` → `{id,release_version}` · `GET $U/backups/{id}/download` · `POST $U/backups/{id}/restore {dry_run?,prune?,reconcile?,force?}` |
-| Config (super admin) | `GET $U/config` · `POST $U/config/reload` · `GET|PUT $U/config/sa-rules` · `PUT $U/config/auth` · `POST $U/refresh` |
+| Backups (super admin) | `POST $U/backups {target:"local"\|"bucket"}` → `{id,release_version}` · `GET $U/backups/{id}/download` · `POST $U/backups/{id}/restore {dry_run?,prune?,reconcile?,force?}` |
+| Config (super admin) | `GET $U/config` · `POST $U/config/reload` · `GET\|PUT $U/config/sa-rules` · `PUT $U/config/auth` · `POST $U/refresh` |
 
 ## A CI deploy job
 ```sh

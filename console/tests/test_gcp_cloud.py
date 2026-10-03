@@ -58,6 +58,12 @@ def test_sizes():
 def test_manifests_shape():
     docs = manifests("demo", "a", SPEC, "img", "gs://b/demo", gsa="ramen-demo-a@p1.iam.gserviceaccount.com")
     kinds = [d["kind"] for d in docs]
+    # the canary restarts without a surge pod: zone-pinned pods on a small node cannot hold two canaries at once
+    # (AWS 0.6.0 run: "0/3 nodes are available: 1 Insufficient memory, 2 didn't match node affinity")
+    deps = [d for d in docs if d["kind"] == "Deployment"]
+    strategies = {d["metadata"]["name"]: d["spec"]["strategy"]["rollingUpdate"] for d in deps}
+    assert strategies["worker-canary"] == {"maxUnavailable": 1, "maxSurge": 0}
+    assert strategies["worker"] == {"maxUnavailable": 0, "maxSurge": 1}
     assert kinds == [
         "Namespace",
         "NetworkPolicy",
@@ -262,6 +268,8 @@ async def test_deploy_canary_not_ready_times_out(cloud, fk):
     fk.k8s.ready = False
     res = await cloud.deploy("demo", "prod", "a", config={}, spec=SPEC)
     assert res["ok"] is False and "not ready" in res["error"]
+    # the job log must say *why* (the AWS 0.6.0 run only said "1/1 ready" while the new pod sat Unschedulable)
+    assert "Pending" in res["error"] and "Insufficient cpu" in res["error"]
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
 
 
@@ -699,6 +707,18 @@ async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
     ) not in fk.k8s.objs
     assert list(fk.iam_state["accounts"]) == ["ramen-other-a@p1.iam.gserviceaccount.com"]
     assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}
+
+
+async def test_detach_zone_destroys_one_namespace_and_its_gsa(cloud, fk):
+    """0.6.0: a zone dropped by a group is torn down for real — its namespace and zone GSA — and nothing else."""
+    for z in ("a", "b"):
+        await cloud.attach_zone("demo", z, SPEC)
+        await cloud.create_service_account("demo", z)
+    r = await cloud.detach_zone("demo", "a")
+    assert r == {"namespaces": ["ramen-demo-a"], "service_accounts": ["ramen-demo-a@p1.iam.gserviceaccount.com"]}
+    assert ("Namespace", None, "ramen-demo-a") not in fk.k8s.objs and ("Namespace", None, "ramen-demo-b") in fk.k8s.objs
+    assert (await cloud.detach_group("demo"))["service_accounts"] == ["ramen-demo-b@p1.iam.gserviceaccount.com"]
+    assert (await cloud.detach_zone("demo", "a"))["service_accounts"] == []  # idempotent
 
 
 async def test_set_ip_rules_retries_while_policy_not_ready(cloud, fk, monkeypatch):

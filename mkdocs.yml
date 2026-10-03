@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.5.95
+  version_current: 0.6.0
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -58,27 +58,29 @@ plugins:
 nav:
   - Home: index.md
   - How it works: how-it-works.md
-  - Threat model: threat-model.md
-  - Architecture:
-      - Current (v0.5.4): architecture/index.md
-      - v0.4.0: architecture/v0.4.0.md
-      - v0.3.1: architecture/v0.3.1.md
-      - v0.3.0: architecture/v0.3.0.md
-      - v0.2.0: architecture/v0.2.0.md
-      - v0.1.0: architecture/v0.1.0.md
-  - How-tos:
+  - Features: features.md
+  - Get started:
       - Local quickstart: how-tos/local-quickstart.md
-      - End to end, console to AI client (local and GKE): how-tos/end-to-end.md
-      - Add and deploy a tool (the demo group): how-tos/add-a-tool.md
-      - The console, page by page: how-tos/console.md
-      - GCP (verbose): how-tos/gcp.md
-      - AWS (verbose, untested): how-tos/aws.md
-      - Security: how-tos/security.md
+      - Write and develop an MCP repo: how-tos/develop-mcp-repo.md
+      - Add and deploy a tool: how-tos/add-a-tool.md
+      - End to end, console to AI client: how-tos/end-to-end.md
+  - Connect clients:
+      - Keys, OAuth, password accounts, the bridge: how-tos/mcp-clients.md
       - Sign in with Entra ID / Google Workspace: how-tos/sso.md
-      - Secrets: how-tos/secrets.md
+  - Deploy:
+      - GCP, step by step: how-tos/gcp.md
+      - AWS, step by step: how-tos/aws.md
+      - Configuration: how-tos/configuration.md
       - Changing the state store: how-tos/storage-backend.md
-      - DevOps with the API and keys: how-tos/devops-api.md
       - Migrate 0.3.0 → 0.3.1 (gRPC): how-tos/migrate-0.3.1.md
+  - Operate:
+      - The console, page by page: how-tos/console.md
+      - Service accounts and secrets (GCP, AWS): how-tos/service-accounts.md
+      - Secrets: how-tos/secrets.md
+      - Back up and restore: how-tos/backup-restore.md
+      - DevOps with the API and keys: how-tos/devops-api.md
+      - Security: how-tos/security.md
+      - Threat model: threat-model.md
   - Wiki:
       - Concepts: wiki/concepts.md
       - Transport and security: wiki/transport.md
@@ -86,6 +88,15 @@ nav:
       - Canary deploys: wiki/canary.md
       - Rebalance and load: wiki/rebalance.md
       - Cloud-ops skills: wiki/skills.md
+  - Architecture:
+      - Current (v0.6.0): architecture/index.md
+      - v0.4.0: architecture/v0.4.0.md
+      - v0.3.1: architecture/v0.3.1.md
+      - v0.3.0: architecture/v0.3.0.md
+      - v0.2.0: architecture/v0.2.0.md
+      - v0.1.0: architecture/v0.1.0.md
   - Reference:
       - Interface contracts: CONTRACTS.md
       - Versions: versions.md
+      - Related versions (bridge, demo): related-versions.md
+      - Contributing and modifying: contributing.md

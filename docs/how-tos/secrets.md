@@ -19,7 +19,7 @@ and delete; viewers see names only.
 === "API"
     ```sh
     curl -sk -H "X-Ramen-Api-Key: $RMN" -H 'Content-Type: application/json' \
-      -X POST https://<console>/api/v1/groups/demo/secrets -d '{"name":"OPENAI_API_KEY","value":"sk-…","env":"dev","zone":"a"}'
+      -X POST https://<edge>/api/v1/groups/demo/secrets -d '{"name":"OPENAI_API_KEY","value":"sk-…","env":"dev","zone":"a"}'
     # 201 {"id":"…","name":"OPENAI_API_KEY"}
     ```
 Then **deploy** the environment; secrets reach workers only through a deploy.
@@ -38,8 +38,8 @@ from exception messages and never logged.
 | `RAMEN_SECRETS_BACKEND` | Where values live | Notes |
 |---|---|---|
 | `store` (default, local) | the console store, Fernet-encrypted with `RAMEN_FERNET_KEY` | |
-| `gcp` | Secret Manager `ramen-<group>-<env|all>-<zone|all>-<NAME>` (labels group/env/zone) | store keeps name + `sm://` ref; worker GSA has `secretAccessor` on `ramen-<group>-*` |
-| `aws` (untested) | Secrets Manager `ramen/<group>/<env|all>/<zone|all>/<NAME>` (tags) | store keeps `asm://` ref |
+| `gcp` | Secret Manager `ramen-<group>-<env\|all>-<zone\|all>-<NAME>` (labels group/env/zone) | store keeps name + `sm://` ref; worker GSA has `secretAccessor` on `ramen-<group>-*` |
+| `aws` | Secrets Manager `ramen/<group>/<env\|all>/<zone\|all>/<NAME>` (tags) | store keeps `asm://` ref |
 
 `rmk_` MCP keys are stored through the same backend (`kind: mcp_key`).
 

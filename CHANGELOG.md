@@ -2,6 +2,55 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.6.0] — instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt
+**A zone that goes away is torn down.** Deleting a zone, dropping it from an environment (when no other environment
+of the group still uses it) or deleting an environment now destroys that group's deployment there — the namespace
+with its workers, services and routes, and the zone's service account / IAM role (`Cloud.detach_zone`) — and
+removes the worker record; before, the console only forgot the zone and the cloud kept running it. On GKE the namespace
+can report `Terminating` for a while afterwards: its NEG finalizer waits for the Gateway-managed backend service,
+which the Gateway controller garbage-collects late (the GCP guide says what to do if it never does).
+
+**HTTPS only.** A public console (`RAMEN_COOKIE_SECURE=1`, which the charts set) answers plain http with a 301 to
+https for GET/HEAD and a 403 for anything else; the LB's `X-Forwarded-Proto` marks the real requests; `/healthz`
+and `/readyz` stay plain for the kubelet. The cloud edges already listened on 443 only; the compose stack serves
+TLS on 8443 only.
+
+**Users page dropdowns** open outside their card (the card used to clip them).
+
+**A stuck rollout now says why.** When a canary or stable deployment is not ready in time, the deploy job used to
+report only the replica counts ("1/1 ready", which was the old pod); it now lists the pods that are not running
+with the scheduler's or the container's reason, for example `worker-canary-… Pending (Unschedulable: 0/2 nodes
+are available: 2 Insufficient cpu.)`. Found on the AWS 0.6.0 run, where two small nodes could not fit a second
+zone's canary.
+
+**The canary rolls in place.** `worker-canary` now restarts with `maxSurge: 0` (the stable track keeps its surge
+pod): a canary is one pod pinned to its zone, and a second one on a full node in that zone stayed Pending until
+the deploy timed out. Stable capacity never changes during a canary restart, so nothing is lost.
+
+**AWS edge IP rules blocked nothing.** The WAF rule each group's IP rules add to web ACL `ramen` still matched the
+URI path `/mcp/<group>/` that 0.3.1 removed when routing moved to the `ramen-group` / `ramen-zone` headers, so no
+request ever matched it and the edge never blocked anyone (the node's own `RAMEN_ALLOWED_CIDRS` check still did).
+The rule now matches the `ramen-group` header exactly, pinned by the adapter test. Found while rewriting the AWS
+guide for this release.
+
+**Password-based MCP users** are sent to the login page by a client's authorize request and land on the consent
+page once signed in — pinned by a test; Claude Code, Claude Desktop and the bridge all go through it.
+
+**`mcp/env.yaml` — the group's environment, rendered from secrets.** A flat `KEY: value` file (or `mcp/.env`) in the
+group repo; the worker renders `{{$group.SECRET}}` references from the secrets the deploy handed it and exports
+every key to the Python runtime at load, so tool code reads `os.environ["DB_URL"]`. A reference with no secret
+behind it is skipped with a warning, rendered values are redacted from error messages, and the load result lists
+the keys (`env`). The demo repo ships one.
+
+**The documentation, rebuilt around how people use it.** New pages: *Features, and how each one is managed*;
+*Connect an MCP client* (keys, OAuth, password accounts, the bridge, with the demo repo and the PyPI package
+highlighted); *Write and develop an MCP repo*; *Service accounts and secrets management (GCP and AWS)*; *Back up
+and restore*; *Configuration* (the config file, every variable that matters, verbose logging); *Contributing,
+modifying and using Ramen*; *Related versions* (bridge and demo repo). The landing page and *How it works* open
+with what Ramen is for — redefining how MCPs work, MCP management made easy, built on how organizations work, an
+AI-native approach versus the traditional one — and the navigation is grouped by task (get started, connect,
+deploy, operate, reference). Every page was reviewed for readability and stray characters.
+
 ## [0.5.95] — roles are per group: the roles engine of instructions/v0.5.95.md
 **One role engine, per group (D41).** A person now holds a role *in each group* — `user.memberships:
 {group: role}` with `group_admin`, `viewer` or `mcp_user` — and super admin stays global. Someone can be a Group

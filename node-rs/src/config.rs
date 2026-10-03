@@ -19,6 +19,12 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_LOG_FILE",
     "RAMEN_BLOCKED",
     "RAMEN_ALLOWED_ORIGINS",
+    "RAMEN_REDIS_ITEM_URL",
+    "RAMEN_REDIS_SCOPE_URL",
+    "RAMEN_THROTTLE_ITEM_IP",
+    "RAMEN_THROTTLE_ITEM_TOKEN",
+    "RAMEN_THROTTLE_SCOPE_IP",
+    "RAMEN_THROTTLE_SCOPE_TOKEN",
 ];
 
 #[derive(Clone, Debug)]
@@ -68,6 +74,17 @@ pub struct Config {
     /// The public base this worker is reached at through the load balancer (`RAMEN_PUBLIC_URL`), for the
     /// absolute `resource_metadata` URL RFC 9728 asks for. Unset → a relative path is advertised.
     pub public_url: Option<String>,
+    /// N7: zone-local Redis for the per-tool/resource/prompt throttle (`RAMEN_REDIS_ITEM_URL`); unset disables it.
+    pub redis_item_url: Option<String>,
+    /// N7: one Redis shared by every zone of this group+env, for the group/environment-level throttle
+    /// (`RAMEN_REDIS_SCOPE_URL`); unset disables it.
+    pub redis_scope_url: Option<String>,
+    /// N7: fixed window per minute, 0 = unlimited. Each pair (ip, token) is checked independently; either
+    /// tripping denies the call.
+    pub throttle_item_ip: u64,
+    pub throttle_item_token: u64,
+    pub throttle_scope_ip: u64,
+    pub throttle_scope_token: u64,
 }
 
 impl Config {
@@ -198,6 +215,12 @@ impl Config {
             public_url: get("RAMEN_PUBLIC_URL")
                 .map(|u| u.trim_end_matches('/').to_string())
                 .filter(|u| !u.is_empty()),
+            redis_item_url: get("RAMEN_REDIS_ITEM_URL"),
+            redis_scope_url: get("RAMEN_REDIS_SCOPE_URL"),
+            throttle_item_ip: num("RAMEN_THROTTLE_ITEM_IP", 0)?,
+            throttle_item_token: num("RAMEN_THROTTLE_ITEM_TOKEN", 0)?,
+            throttle_scope_ip: num("RAMEN_THROTTLE_SCOPE_IP", 0)?,
+            throttle_scope_token: num("RAMEN_THROTTLE_SCOPE_TOKEN", 0)?,
         })
     }
 }

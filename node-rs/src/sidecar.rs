@@ -73,6 +73,14 @@ impl Sidecar {
         self.loaded.read().await.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn set_loaded_for_test(&self, result: Value) {
+        *self.loaded.write().await = Some(Loaded {
+            at: now_iso(),
+            result,
+        });
+    }
+
     pub async fn alive(&self) -> bool {
         self.proc
             .lock()

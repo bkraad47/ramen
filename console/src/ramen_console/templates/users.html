@@ -13,4 +13,21 @@
 {% if p.role == 'super_admin' %}<h2>Permission requests</h2><div class="card"><table><tr><th>User</th><th>Request</th><th>Group</th><th>Zone</th><th>Status</th><th>Actions</th></tr>
 {% for q in requests %}<tr><td>{{ q.email }}</td><td>{% if q.type == 'permission' %}Service-account permission <code>{{ q.permission }}</code>{% else %}Role <b>{{ role_label(q.role) }}</b>{% endif %}</td><td>{{ q.group or '' }}</td><td>{{ q.zone or '' }}</td><td>{{ q.status }}{% if q.applied and q.applied.note %} <span class="muted">{{ q.applied.note }}</span>{% endif %}</td><td>{% if q.status == 'pending' %}<button class="sm" hx-post="/api/v1/requests/{{ q.id }}/approve" hx-swap="none">Approve</button>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">None</td></tr>{% endfor %}</table></div>{% endif %}
 <div class="card"><form class="inline" hx-post="/api/v1/users/me/password" hx-ext="json" hx-swap="none"><label>Change my password<input name="password" type="password" required minlength="12" title="{{ password_rule }}"></label><button class="ghost">Update</button></form></div>
+{% if p.role == 'super_admin' %}
+<div class="card"><h2 style="margin-top:0">Server email (SMTP)</h2><p class="muted">Overrides RAMEN_SMTP_* env vars field by field; takes effect immediately. Password is write-only — {{ 'a password is set.' if smtp.password_set else 'no password set.' }}</p>
+<form class="inline" hx-put="/api/v1/config/smtp" hx-ext="json" hx-swap="none">
+<label>Host<input name="host" value="{{ smtp.host }}" placeholder="smtp.example.com"></label>
+<label>Port<input name="port" type="number" min="1" value="{{ smtp.port }}" style="width:6em"></label>
+<label>User<input name="user" value="{{ smtp.user }}"></label>
+<label>Password<input name="password" type="password" placeholder="(unchanged)"></label>
+<label>From<input name="mail_from" value="{{ smtp.mail_from }}" placeholder="ramen@example.com"></label>
+<label>TLS<select name="tls"><option value="1" {{ 'selected' if smtp.tls == '1' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.tls == 'ssl' }}>SSL</option><option value="0" {{ 'selected' if smtp.tls == '0' }}>None</option></select></label>
+<button class="act">Save</button></form></div>
+<div class="card"><h2 style="margin-top:0">Server warning/error emails</h2><p class="muted">These users get a digest email when the server logs a warning or error.</p>
+<form class="inline" hx-put="/api/v1/config/notify" hx-ext="json" hx-swap="none" hx-vals='js:{user_ids: ramenNotifyIds()}'>
+<label>User<select id="notify-pick">{% for u in users %}<option value="{{ u.id }}">{{ u.email }}</option>{% else %}<option value="">No users yet</option>{% endfor %}</select></label>
+<button type="button" class="sm ghost" onclick="ramenAddNotify(this)">Add</button>
+<span class="chips" id="notify-chips">{% for u in users %}{% if u.id in notify_user_ids %}<span class="chip" data-notify="{{ u.id }}">{{ u.email }} <button type="button" class="x" onclick="this.parentElement.remove()">Remove</button></span>{% endif %}{% endfor %}</span>
+<button class="act">Save</button></form></div>
+{% endif %}
 {% endblock %}

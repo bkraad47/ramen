@@ -5,6 +5,15 @@
 <div class="card"><h2 style="margin-top:0">Authentication</h2><p class="muted">Providers: {{ providers|join(', ') or 'none' }} · mail backend: <code>{{ mail }}</code> · break-glass (RAMEN_ADMIN_FORCE_PASSWORD): {{ 'on' if auth.force_password else 'off' }}</p>
 <form class="inline" hx-put="/api/v1/config/auth" hx-ext="json" hx-vals='{"password_login": {{ 'false' if auth.password_login else 'true' }}}' hx-swap="none"><button class="sm {{ 'danger' if auth.password_login else '' }}">Password login: {{ 'on → off' if auth.password_login else 'off → on' }}</button></form>
 <form class="inline" hx-put="/api/v1/config/auth" hx-ext="json" hx-vals='{"magic_link": {{ 'false' if auth.magic_link else 'true' }}}' hx-swap="none"><button class="sm ghost">Magic-link login: {{ 'on → off' if auth.magic_link else 'off → on' }}</button></form></div>
+<div class="card"><h2 style="margin-top:0">Auto-rebalance scheduler</h2><p class="muted">Watches every group × zone for a skewed worker and rebalances it automatically.</p>
+<form class="inline" hx-put="/api/v1/config/scheduler" hx-ext="json" hx-vals='{"enabled": {{ 'false' if scheduler.enabled else 'true' }}}' hx-swap="none"><button class="sm {{ 'danger' if scheduler.enabled else '' }}">Scheduler: {{ 'on → off' if scheduler.enabled else 'off → on' }}</button></form>
+<form class="inline" hx-put="/api/v1/config/scheduler" hx-ext="json" hx-swap="none">
+<label>Check every<input class="sm" type="number" min="1" name="interval_seconds" value="{{ scheduler.interval_seconds }}" style="width:6em"> seconds</label><button class="sm act">Set interval</button></form></div>
+<div class="card"><h2 style="margin-top:0">GitHub App (OIDC-free group repo access)</h2><p class="muted">Once set, a group with a GitHub App installation id needs no stored token — a short-lived installation token is minted per deploy. {{ 'A private key is set.' if github_app.private_key_set else 'No private key set.' }}</p>
+<form class="inline" hx-put="/api/v1/config/github-app" hx-ext="json" hx-swap="none">
+<label>App id<input name="app_id" value="{{ github_app.app_id }}" placeholder="123456"></label>
+<label>Private key (PEM)<textarea name="private_key" rows="3" placeholder="(unchanged)"></textarea></label>
+<button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Service-account permission catalogue</h2><table><tr><th>permission</th><th>GCP</th><th>AWS</th><th></th></tr>{% for q in permissions %}<tr><td><code>{{ q.permission }}</code></td><td>{{ q.gcp|join(', ') }}</td><td>{{ q.aws|join(', ') }}</td><td class="muted">{{ q.desc }}</td></tr>{% endfor %}</table></div>
 <div class="card"><h2 style="margin-top:0">Effective RAMEN_* environment</h2><table>{% for k, v in env.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div>
 <div class="card"><h2 style="margin-top:0">Super-admin service-account rules</h2><p class="muted">Group admins cannot add restrictions that clash with these. Deny wins; when a rule set has allow rules, a permission must match one of them.</p>

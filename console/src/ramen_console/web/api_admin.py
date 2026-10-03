@@ -2,6 +2,8 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
+from .. import alerts, github_app, scheduler
+from .. import mail as mail_mod
 from ..audit import note
 from ..config import apply_config
 from ..errors import forbidden, invalid
@@ -14,7 +16,7 @@ from .helpers import accounts, backups, respond, svc, tabular
 
 r = APIRouter(prefix="/api/v1")
 viewer, admin, super_ = require("viewer"), require("group_admin"), require("super_admin")
-MASK = ("SECRET", "PASSWORD", "KEY", "TOKEN")
+MASK = ("SECRET", "PASSWORD", "KEY", "TOKEN", "DSN")  # N9: a DSN commonly embeds a password (RAMEN_POSTGRES_DSN)
 UNMASKED = {"RAMEN_SECRETS_BACKEND"}
 
 
@@ -43,13 +45,14 @@ async def create_user(request: Request, body: m.UserIn, p: Principal = Depends(a
 
 @r.put("/users/{uid}")
 async def update_user(request: Request, uid: str, body: m.UserUpdate, p: Principal = Depends(super_)):
-    note(request, "user.update", uid)
+    tags = ([f"role:{body.role}"] if body.role else []) + [f"group:{g}" for g in body.groups or []]
+    note(request, "user.update", uid, tags)
     return respond(request, await accounts(request).update_user(uid, body.role, body.groups))
 
 
 @r.delete("/users/{uid}")
 async def delete_user(request: Request, uid: str, p: Principal = Depends(admin)):
-    note(request, "user.delete", uid)
+    note(request, "user.delete", uid, [f"user:{uid}"])
     await accounts(request).delete_user(p, uid)
     return respond(request, {"ok": True})
 
@@ -60,7 +63,7 @@ async def set_password(request: Request, uid: str, body: m.Password, p: Principa
         uid = p.id
     if uid != p.id and p.role != "super_admin":
         raise forbidden("Only super admins reset other passwords")
-    note(request, "user.password", uid)
+    note(request, "user.password", uid, [f"user:{uid}"])
     await accounts(request).set_password(uid, body.password)
     resp = respond(request, {"ok": True})
     return await _reissue_session(request, resp, p) if uid == p.id else resp
@@ -89,7 +92,7 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(admin
 
 @r.delete("/api-keys/{kid}")
 async def delete_key(request: Request, kid: str, p: Principal = Depends(admin)):
-    note(request, "api_key.delete", kid)
+    note(request, "api_key.delete", kid, [f"key:{kid}"])
     await accounts(request).delete_key(p, kid)
     await svc(request).revoke_agent_key(kid)  # an agent key must stop reaching workers on the next deploy
     return respond(request, {"ok": True})
@@ -128,7 +131,7 @@ async def list_requests(request: Request, p: Principal = Depends(super_)):
 
 @r.post("/requests/{rid}/approve")
 async def approve(request: Request, rid: str, p: Principal = Depends(super_)):
-    note(request, "permission.approve", rid)
+    note(request, "permission.approve", rid, [f"request:{rid}"])
     return respond(
         request, await accounts(request).approve_request(rid, p.name, apply=svc(request).apply_sa_permissions)
     )
@@ -136,14 +139,14 @@ async def approve(request: Request, rid: str, p: Principal = Depends(super_)):
 
 @r.post("/requests/{rid}/deny")
 async def deny(request: Request, rid: str, p: Principal = Depends(super_)):
-    note(request, "permission.deny", rid)
+    note(request, "permission.deny", rid, [f"request:{rid}"])
     return respond(request, await accounts(request).deny_request(rid, p.name))
 
 
 @r.post("/requests/{rid}/revoke")
 async def revoke(request: Request, rid: str, p: Principal = Depends(super_)):
     """Takes an approved request back: the cloud roles for a permission, or the role and group for a role grant."""
-    note(request, "permission.revoke", rid)
+    note(request, "permission.revoke", rid, [f"request:{rid}"])
     return respond(
         request, await accounts(request).revoke_request(rid, p.name, revoke=svc(request).revoke_sa_permission)
     )
@@ -157,7 +160,7 @@ async def oauth_clients(request: Request, p: Principal = Depends(super_)):
 
 @r.post("/oauth/clients", status_code=201)
 async def oauth_client_create(request: Request, body: m.OAuthClientIn, p: Principal = Depends(super_)):
-    note(request, "oauth.client.create", body.name)
+    note(request, "oauth.client.create", body.name, [f"client:{body.name}"])
     return respond(
         request, await request.app.state.oauth_server.register_client(body.name, body.redirect_uris, p.name), 201
     )
@@ -165,7 +168,7 @@ async def oauth_client_create(request: Request, body: m.OAuthClientIn, p: Princi
 
 @r.delete("/oauth/clients/{client_id}")
 async def oauth_client_delete(request: Request, client_id: str, p: Principal = Depends(super_)):
-    note(request, "oauth.client.delete", client_id)
+    note(request, "oauth.client.delete", client_id, [f"client:{client_id}"])
     await request.app.state.oauth_server.delete_client(client_id)
     return respond(request, {"ok": True})
 
@@ -187,7 +190,7 @@ async def list_backups(request: Request, format: str | None = None, p: Principal
 
 @r.post("/backups", status_code=201)
 async def create_backup(request: Request, body: m.BackupIn, p: Principal = Depends(super_)):
-    note(request, "backup.create", body.target)
+    note(request, "backup.create", body.target, [f"target:{body.target}"])
     return respond(request, await backups(request).create(body.target, p.name, body.path), 201)
 
 
@@ -265,10 +268,11 @@ async def config(request: Request, p: Principal = Depends(super_)):
 
 @r.post("/config/reload")
 async def reload_config(request: Request, p: Principal = Depends(super_)):
-    note(request, "config.reload", os.environ.get("RAMEN_CONFIG", "-"))
+    note(request, "config.reload", os.environ.get("RAMEN_CONFIG", "-"), ["scope:global"])
     applied = apply_config()
     st = request.app.state
-    st.oauth, st.auth_env, st.mailer = st.oauth.from_env(), st.auth_env.from_env(), st.mailer.from_env()
+    st.oauth, st.auth_env = st.oauth.from_env(), st.auth_env.from_env()
+    st.mailer = await mail_mod.build_mailer(st.store)  # layers config/smtp back over the fresh env read (N2)
     return respond(request, {"applied": sorted(applied)})
 
 
@@ -336,12 +340,67 @@ async def sa_rules(request: Request, p: Principal = Depends(super_)):
 
 @r.put("/config/sa-rules")
 async def set_sa_rules(request: Request, body: m.Rules, p: Principal = Depends(super_)):
-    note(request, "config.sa_rules", "sa_rules")
+    note(request, "config.sa_rules", "sa_rules", [f"rules:{len(body.rules)}"])
     doc = await svc(request).set_sa_rules(body.rules)
     return respond(request, {"rules": doc["rules"]})
 
 
+@r.get("/config/scheduler")
+async def get_scheduler_config(request: Request, p: Principal = Depends(super_)):
+    return await scheduler.get_config(svc(request).store)
+
+
+@r.put("/config/scheduler")
+async def set_scheduler_config(request: Request, body: m.SchedulerConfig, p: Principal = Depends(super_)):
+    """N1: super-admin on/off + check-interval toggle for the auto-rebalance scheduler."""
+    doc = await scheduler.set_config(svc(request).store, **body.model_dump())
+    note(request, "config.scheduler", "scheduler", [f"{k}:{v}" for k, v in doc.items()])
+    return respond(request, doc)
+
+
+@r.get("/config/smtp")
+async def get_smtp_config(request: Request, p: Principal = Depends(super_)):
+    return mail_mod.public_smtp_config(await mail_mod.get_smtp_config(svc(request).store))
+
+
+@r.put("/config/smtp")
+async def set_smtp_config(request: Request, body: m.SmtpConfig, p: Principal = Depends(super_)):
+    """N2: super-admin SMTP credentials (Users page); overrides RAMEN_SMTP_* field by field, takes effect now."""
+    st = request.app.state
+    doc = await mail_mod.set_smtp_config(st.store, **body.model_dump())
+    note(request, "config.smtp", "smtp", [f"host:{doc['host']}", f"tls:{doc['tls']}"])  # never the password
+    st.mailer = mail_mod.Mailer.from_config(doc)
+    return respond(request, mail_mod.public_smtp_config(doc))
+
+
+@r.get("/config/notify")
+async def get_notify_config(request: Request, p: Principal = Depends(super_)):
+    return await alerts.get_notify_config(svc(request).store)
+
+
+@r.put("/config/notify")
+async def set_notify_config(request: Request, body: m.NotifyConfig, p: Principal = Depends(super_)):
+    """N2: which users get emailed a digest of server warnings/errors."""
+    doc = await alerts.set_notify_config(svc(request).store, body.user_ids)
+    note(request, "config.notify", "notify", [f"user_ids:{len(doc['user_ids'])}"])
+    return respond(request, doc)
+
+
+@r.get("/config/github-app")
+async def get_github_app_config(request: Request, p: Principal = Depends(super_)):
+    return github_app.public_app_config(await github_app.get_app_config(svc(request).store))
+
+
+@r.put("/config/github-app")
+async def set_github_app_config(request: Request, body: m.GitHubAppConfig, p: Principal = Depends(super_)):
+    """N5: console-wide GitHub App credentials; a group then only needs `github_app_installation_id`, no
+    stored per-group token, to sync a private repo."""
+    doc = await github_app.set_app_config(svc(request).store, **body.model_dump())
+    note(request, "config.github_app", "github_app", [f"app_id:{doc['app_id']}"])  # never the private key
+    return respond(request, github_app.public_app_config(doc))
+
+
 @r.post("/refresh")
 async def refresh(request: Request, p: Principal = Depends(super_)):
-    note(request, "refresh", "cloud")
+    note(request, "refresh", "cloud", ["scope:cloud"])
     return respond(request, await svc(request).refresh())

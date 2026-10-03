@@ -88,10 +88,21 @@ Cost while running: the Autopilot cluster (pod-based billing, ~$0.05/h for conso
 Autopilot control-plane fee after the free tier), the global HTTPS LB forwarding rule (~$0.025/h), a static IP,
 Artifact Registry storage, Firestore/GCS at negligible usage. Terraform state is local (`terraform.tfstate`, git-ignored).
 
-## AWS bring-up — UNTESTED ON A REAL ACCOUNT
-> **Nothing in this section has been applied to an AWS account** (none was available while building v0.3.0, F10.3 / D18).
-> Every piece was checked only with `terraform validate`, `cfn-lint`, `helm lint`/`template` and unit tests against
-> moto fakes. Expect rough edges the first time; please report them. The GCP path above is the verified reference.
+## AWS bring-up — verified live on a real account (N10, 2026-10-03)
+> `terraform apply` → images → `helm install` → zone/group/deploy → a real `tools/call` through the ALB, all
+> on a throwaway EKS cluster. Found and fixed three bugs along the way (all now covered by tests/docs):
+> `DynamoStore.from_env()` could raise `NoRegionError` under IRSA even with `AWS_REGION` set (botocore's
+> default-session resolution, not visible with a plain `boto3.Session()` — fixed by passing `region_name`
+> explicitly, matching `cloud/aws_api.py`'s existing pattern); the chart never wired `RAMEN_DDB_TABLE` at all
+> (latent: only surfaces when the DynamoDB table name isn't literally `ramen`, now `aws.table` in values.yaml);
+> and `aws.cluster`/`aws.table` must be set explicitly if your cluster/table isn't named `ramen` (the install
+> command below now reads them straight from terraform's outputs instead of assuming the default matches).
+
+Needs: aws CLI (logged in, `aws sts get-caller-identity` works), terraform ≥1.6, helm 4, kubectl, docker with buildx.
+Mirror of the GCP flow: EKS instead of GKE Autopilot, DynamoDB instead of Firestore, S3 instead of GCS, Secrets Manager
+instead of Secret Manager, one ALB (IngressGroup `ramen`, AWS Load Balancer Controller) instead of the GKE Gateway,
+WAFv2 instead of Cloud Armor, IAM roles for service accounts (IRSA) instead of Workload Identity, CloudWatch Logs Insights
+instead of Cloud Logging. The ALB routes gRPC by the `ramen-group`/`ramen-zone` header conditions to GRPC target groups (CONTRACTS §11); traffic splitting uses weighted target groups (stable/canary).
 
 Needs: aws CLI (logged in, `aws sts get-caller-identity` works), terraform ≥1.6, helm 4, kubectl, docker with buildx.
 Mirror of the GCP flow: EKS instead of GKE Autopilot, DynamoDB instead of Firestore, S3 instead of GCS, Secrets Manager
@@ -115,10 +126,13 @@ docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VER
 docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=0.3.0 -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/console:0.3.0 --push console
 
 # 3. console
-aws eks update-kubeconfig --name ramen --region $AWS_REGION
+CLUSTER=$(terraform -chdir=deploy/terraform/aws output -raw cluster_name)
+aws eks update-kubeconfig --name $CLUSTER --region $AWS_REGION
 CERT=$(terraform -chdir=deploy/terraform/aws output -raw certificate_arn)
+TABLE=$(terraform -chdir=deploy/terraform/aws output -raw dynamodb_table)
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set provider=aws,region=$AWS_REGION --set-string aws.account=$ACCOUNT --set aws.certificateArn=$CERT \
+  --set aws.cluster=$CLUSTER --set aws.table=$TABLE \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
@@ -155,13 +169,26 @@ reachable; the group's MCP path is effectively default-deny), patches `RAMEN_ALL
 rolls the workers, then associates the ACL with the ALB (retried in the background while the ALB is being created).
 `logs` runs a Logs Insights query on `/aws/containerinsights/ramen/application` (Fluent Bit) filtered by namespace/pod.
 
-## AWS teardown (untested)
+## AWS teardown — verified live on a real account (N10, 2026-10-03)
 ```sh
 helm uninstall ramen -n ramen-system                    # the controller deletes the ALB (wait ~2 min before destroy)
 kubectl delete ns -l ramen.io/group                     # worker namespaces + their Ingresses
 terraform -chdir=deploy/terraform/aws destroy           # EKS, VPC, bucket (force_destroy), table, ECR (force_delete), roles, cert
 # leftovers the console created outside Terraform, if any: IAM roles under /ramen/, WAFv2 ip sets/web ACL `ramen`, secrets ramen/*
 ```
+Live run found one real gap: the worker IRSA role the console creates (`ramen-demo-a` in this test, path `/ramen/`) sets
+its permissions boundary to `worker_boundary` and attaches an inline policy, but nothing in `terraform destroy` or any
+documented command tears it down — the boundary policy's `DeletePolicy` then fails with `DeleteConflict` since it's
+still attached to that role. Fix until the console grows a teardown path for its own IAM objects: before
+`terraform destroy`, delete each leftover role's inline policy and permissions boundary, then the role itself:
+```sh
+aws iam delete-role-policy --role-name <zone-role> --policy-name ramen-worker
+aws iam delete-role-permissions-boundary --role-name <zone-role>
+aws iam delete-role --role-name <zone-role>
+```
+A leftover Secrets Manager secret (`ramen/<group>/<env>/<zone>/mcp-*`) was also found this run — not cleaned up by
+`terraform destroy` or helm uninstall, since the console, not Terraform, creates it. Delete explicitly:
+`aws secretsmanager delete-secret --secret-id <name> --force-delete-without-recovery`.
 Estimated cost while running (us-east-1, on-demand): EKS control plane ~$0.10/h, 2× t3.small ~$0.04/h, ALB ~$0.025/h + LCU,
 WAF web ACL ~$5/month + $1/rule, CloudWatch Logs ingestion, DynamoDB/S3/ECR at negligible usage. State is local
 (`terraform.tfstate`, git-ignored).

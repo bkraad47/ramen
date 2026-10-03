@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from ramen_console import security
 from ramen_console.app import create_app
-from ramen_console.cloud import gcp_k8s
+from ramen_console.cloud import aws_k8s, gcp_k8s
 from ramen_console.cloud.gcp_api import k8s_name
 from ramen_console.errors import ApiError
 from ramen_console.web.helpers import _csv_safe
@@ -105,6 +105,21 @@ def test_worker_manifests_are_hardened():
         if d["kind"] == "Deployment":
             sc = d["spec"]["template"]["spec"]["containers"][0]["securityContext"]
             assert sc["allowPrivilegeEscalation"] is False and sc["capabilities"] == {"drop": ["ALL"]}
+
+
+def test_worker_pods_are_labelled_for_external_log_monitors():
+    """N3: Cloud Logging / CloudWatch (and anything reading from them, e.g. Datadog) enriches shipped log
+    lines with pod labels automatically; group/zone must be on the pod template itself, not just the
+    Deployment, or an external monitor has no way to filter a worker's logs by group or zone."""
+    for docs in (
+        gcp_k8s.manifests("demo", "a", {"count": 1}, "img", "gs://b/demo"),
+        aws_k8s.manifests("demo", "a", {"count": 1}, "img", "s3://b/demo"),
+    ):
+        deployments = [d for d in docs if d["kind"] == "Deployment"]
+        assert deployments
+        for d in deployments:
+            labels = d["spec"]["template"]["metadata"]["labels"]
+            assert labels.get("ramen.io/group") == "demo" and labels.get("ramen.io/zone") == "a"
 
 
 def test_oidc_requires_verified_email(monkeypatch):

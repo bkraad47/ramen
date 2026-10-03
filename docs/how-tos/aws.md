@@ -83,6 +83,12 @@ grpc_health_probe -addr <alb-dns>:443 -tls -tls-ca-cert ramen-lb.pem -rpc-header
 The raw `grpcurl` form is in [GCP step 6](gcp.md#6-call-it-through-the-load-balancer-grpc-routed-by-metadata)
 (swap `$IP` for the ALB DNS name).
 
+## Day-2: external monitors (Datadog etc.)
+No console needed — the `aws-for-fluent-bit` DaemonSet (installed by Terraform) tails every pod cluster-wide
+into the CloudWatch Container Insights log group `/aws/containerinsights/<cluster>/application`. Point the
+monitor's AWS integration at that log group; narrow to one zone the same way the console's own `logs()` does
+(CloudWatch Logs Insights): `filter kubernetes.namespace_name = "ramen-<group>-<zone>"`.
+
 ## Teardown
 `helm uninstall ramen -n ramen-system` (releases the ALB), then `terraform -chdir=deploy/terraform/aws destroy` or
 `aws cloudformation delete-stack --stack-name ramen`. Check for leftover ALBs, target groups, WAF ACLs and

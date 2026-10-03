@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod server;
 pub mod session;
 pub mod sidecar;
+pub mod throttle;
 pub mod token;
 
 /// Generated from `proto/ramen/v1/*.proto` (see `build.rs`).

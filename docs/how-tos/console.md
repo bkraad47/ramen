@@ -40,6 +40,14 @@ Two permissions are special and the page cannot change that: `bucket.read` and `
 worker needs to load its own code and secrets, so revoking them clears the grant but leaves that baseline access —
 see [Security](security.md#granting-and-taking-back-v041).
 
+**Throttling (N7).** Fixed window per minute, 0 = unlimited; a limit of either kind tripping denies the call with
+`RESOURCE_EXHAUSTED`/429, the same signal as the existing inflight-queue-full case. Two independent Redis instances,
+neither provisioned by ramen — point each URL field at your own (a local container, Memorystore, ElastiCache, …):
+*Item* (per zone, in the zone's own row): throttles repeat calls to the same tool/resource/prompt from one IP or
+token. *Scope* (once, for the whole group): one Redis shared by every zone of the group/environment, throttling
+repeat calls regardless of which zone or item they hit. Both URLs are write-only (stored Fernet-encrypted, never
+echoed back); a Redis outage fails open rather than blocking traffic.
+
 ## Environments
 Every environment across the groups you can see, with the last deploy flattened into the row: the outcome, when it
 ran, and the error if it failed. `Open group` goes to where deploys are started.

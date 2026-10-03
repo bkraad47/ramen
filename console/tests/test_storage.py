@@ -164,3 +164,18 @@ def test_firestore_from_env_constructs(monkeypatch):
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     s = FirestoreStore.from_env()
     assert s._p == "ramen_" and s._c.project == "ramen-local"
+
+
+def test_dynamodb_from_env_passes_region_explicitly(monkeypatch):
+    """N10: found live on a real EKS deploy — a pod using IRSA (WebIdentityTokenFileCredentials) can raise
+    NoRegionError from boto3's default session even with AWS_REGION set, unless region_name is passed
+    explicitly to the client/resource (the pattern cloud/aws_api.py's boto3.client already uses)."""
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    with mock_aws():
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
+        s = DynamoStore.from_env()
+        assert s._res.meta.client.meta.region_name == "us-east-1"

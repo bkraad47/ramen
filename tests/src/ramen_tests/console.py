@@ -52,6 +52,7 @@ ROUTES = {
     # v0.4.0 (CONTRACTS §12.1)
     "env_zone_blocked": "/api/v1/groups/{group}/environments/{env}/zones/{zone}/blocked",  # PUT {blocked:[names]}
     "config_auth": "/api/v1/config/auth",  # GET|PUT {password_login?, magic_link?} (super admin)
+    "config_scheduler": "/api/v1/config/scheduler",  # GET|PUT {enabled?, interval_seconds?} (super admin, N1)
     "auth_reset": "/auth/reset",  # form POST {email} → 200 always
     "auth_reset_token": "/auth/reset/{token}",  # form POST {password} → 303 /login
     "auth_magic": "/auth/magic",  # form POST {email} (auth.magic_link)

@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -11,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__
+from . import __version__, alerts, scheduler
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth.bootstrap import ensure_super_admin
@@ -25,7 +27,7 @@ from .backup import Backups, release_version
 from .cloud import make_cloud
 from .config import apply_config
 from .deploy import Jobs
-from .mail import Mailer
+from .mail import Mailer, build_mailer
 from .oauth_server import OAuthError, OAuthServer
 from .rbac import role_label
 from .secrets import make_secrets_backend
@@ -50,11 +52,26 @@ def _wants_html(request: Request) -> bool:
 def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     apply_config()
     logging.basicConfig(level=os.environ.get("RAMEN_LOG_LEVEL", "INFO"))
+    ramen_logger = logging.getLogger("ramen")
+    if alerts.HANDLER not in ramen_logger.handlers:
+        ramen_logger.addHandler(alerts.HANDLER)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await ensure_super_admin(app.state.store)
-        yield
+        app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
+        tasks = [
+            asyncio.create_task(scheduler.run_forever(app.state.services)),
+            asyncio.create_task(alerts.run_forever(app.state.services, app.state)),
+        ]
+        try:
+            yield
+        finally:
+            for t in tasks:
+                t.cancel()
+            for t in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
 
     app = FastAPI(title="Ramen console", version=__version__, lifespan=lifespan, docs_url="/api/docs")
     st = app.state

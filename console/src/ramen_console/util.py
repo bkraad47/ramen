@@ -32,7 +32,17 @@ def uid() -> str:
 
 def public(
     doc: dict,
-    hidden=("password_hash", "secret_hash", "value", "github_token", "reset_nonce", "magic_nonce", "session_secret"),
+    hidden=(
+        "password_hash",
+        "secret_hash",
+        "value",
+        "github_token",
+        "reset_nonce",
+        "magic_nonce",
+        "session_secret",
+        "redis_scope_url",
+        "redis_item_url",
+    ),
 ) -> dict:
     return {k: v for k, v in doc.items() if k not in hidden}
 

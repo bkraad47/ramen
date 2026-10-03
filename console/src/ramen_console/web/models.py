@@ -20,6 +20,7 @@ class GroupIn(BaseModel):
     repo_url: str = ""
     ref: str = "main"
     github_token: str | None = None
+    github_app_installation_id: str | None = None
 
 
 class GroupUpdate(BaseModel):
@@ -27,6 +28,7 @@ class GroupUpdate(BaseModel):
     ref: str | None = None
     mcp_auth: dict | None = None
     github_token: str | None = None
+    github_app_installation_id: str | None = None
 
 
 class Rules(BaseModel):
@@ -75,6 +77,12 @@ class Cidrs(ListFields):
     cidrs: list[str]
 
 
+class ThrottleIn(BaseModel):
+    redis_url: str | None = None
+    ip_per_min: int | None = None
+    token_per_min: int | None = None
+
+
 class SecretIn(BaseModel):
     name: str
     value: str
@@ -119,6 +127,29 @@ class RequestIn(BaseModel):
 class AuthConfig(BaseModel):
     password_login: bool | None = None
     magic_link: bool | None = None
+
+
+class SchedulerConfig(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+
+
+class SmtpConfig(BaseModel):
+    host: str | None = None
+    port: int | None = None
+    user: str | None = None
+    password: str | None = None
+    mail_from: str | None = None
+    tls: str | None = None
+
+
+class GitHubAppConfig(BaseModel):
+    app_id: str | None = None
+    private_key: str | None = None
+
+
+class NotifyConfig(BaseModel):
+    user_ids: list[str]
 
 
 class ImageIn(BaseModel):

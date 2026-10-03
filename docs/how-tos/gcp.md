@@ -123,6 +123,10 @@ fallback (unset `gateway.certificateMap`) — e.g. a cluster with no public host
   attach is retried in the background.
 - **Rebalance**: capacity scaler per zone. See [Rebalance](../wiki/rebalance.md).
 - **Logs**: Cloud Logging for the namespace (and one pod), downloadable.
+- **External monitors (Datadog etc.)**: no console needed — Autopilot ships every pod's stdout to Cloud Logging
+  always-on (not configurable off). Point the monitor's GCP log integration at this project; narrow to one zone
+  the same way the console's own `logs()` does:
+  `resource.type="k8s_container" AND resource.labels.namespace_name="ramen-<group>-<zone>"`.
 - **Service account**: super admin creates/repairs the group+zone GSA; extra roles only through SA rules. Bucket and secret roles are bound on the resource; a **project-wide** role (`logs.write` → `roles/logging.logWriter`, metrics, …) needs the console to hold `roles/resourcemanager.projectIamAdmin`, which Terraform grants only with `console_project_iam = true` (off by default, SEC-08). Without it an approved request is recorded, the zone's `sa_permissions` list it, and the answer carries a `note` saying the role was not bound.
 - **Refresh**: super admin re-discovers namespaces, deployments and GSAs into the store.
 - **Secrets backend** is Secret Manager (`ramen-<group>-<env|all>-<zone|all>-<NAME>`).

@@ -37,6 +37,19 @@ class Mailer:
             env.get("RAMEN_SMTP_TLS", "1"),
         )
 
+    @classmethod
+    def from_config(cls, doc: dict, env=None) -> Mailer:
+        """N2: a super admin's `config/smtp` doc overrides the env baseline field by field."""
+        base = cls.from_env(env)
+        return cls(
+            doc.get("host") or base.host,
+            doc.get("port") or base.port,
+            doc.get("user") or base.user,
+            doc.get("smtp_password") or base.password,
+            doc.get("mail_from") or base.from_,
+            doc.get("tls") or base.tls,
+        )
+
     @property
     def enabled(self) -> bool:
         return bool(self.host)
@@ -81,6 +94,33 @@ class Mailer:
         except (OSError, smtplib.SMTPException) as e:
             log.warning("mail failed to=%s subject=%r error=%s", to, subject, type(e).__name__)
             return {"ok": False, "backend": self.backend, "error": f"{type(e).__name__}: {e}"}
+
+
+SMTP_DEFAULTS = {"host": "", "port": 587, "user": "", "smtp_password": "", "mail_from": "", "tls": "1"}
+
+
+async def get_smtp_config(store) -> dict:
+    doc = await store.get("config", "smtp") or {}
+    return {k: doc.get(k, v) for k, v in SMTP_DEFAULTS.items()}
+
+
+async def set_smtp_config(store, *, host=None, port=None, user=None, password=None, mail_from=None, tls=None) -> dict:
+    doc = await get_smtp_config(store)
+    updates = {"host": host, "port": port, "user": user, "smtp_password": password, "mail_from": mail_from, "tls": tls}
+    doc.update({k: v for k, v in updates.items() if v is not None})
+    await store.put("config", "smtp", doc)
+    return doc
+
+
+def public_smtp_config(doc: dict) -> dict:
+    """Never hand the password back out, not even to the super admin who just set it."""
+    doc = dict(doc)
+    doc["password_set"] = bool(doc.pop("smtp_password", ""))
+    return doc
+
+
+async def build_mailer(store) -> Mailer:
+    return Mailer.from_config(await get_smtp_config(store))
 
 
 def invite_mail(base: str, email: str, link: str, by: str) -> tuple[str, str]:

@@ -2,7 +2,10 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
+from .. import alerts, github_app
 from .. import deploy as dep
+from .. import mail as mail_mod
+from .. import scheduler as scheduler_mod
 from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
@@ -121,9 +124,14 @@ async def secrets(request: Request, group: str | None = None, p: Principal = Dep
 async def users(request: Request, p: Principal = Depends(admin)):
     a = accounts(request)
     reqs = await a.list_requests() if p.role == "super_admin" else []
-    return render(
-        request, "users.html", users=await a.list_users(p), groups=await svc(request).visible_groups(p), requests=reqs
+    ctx = dict(
+        users=await a.list_users(p), groups=await svc(request).visible_groups(p), requests=reqs, notify_user_ids=[]
     )
+    if p.role == "super_admin":
+        store = svc(request).store
+        ctx["smtp"] = mail_mod.public_smtp_config(await mail_mod.get_smtp_config(store))
+        ctx["notify_user_ids"] = (await alerts.get_notify_config(store))["user_ids"]
+    return render(request, "users.html", **ctx)
 
 
 @r.get("/api-keys")
@@ -218,4 +226,6 @@ async def config(request: Request, p: Principal = Depends(super_)):
         auth=await auth_settings(request),
         mail=request.app.state.mailer.backend,
         permissions=perm.table(),
+        scheduler=await scheduler_mod.get_config(svc(request).store),
+        github_app=github_app.public_app_config(await github_app.get_app_config(svc(request).store)),
     )

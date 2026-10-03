@@ -38,7 +38,9 @@ class Services:
             raise not_found("group")
         return g
 
-    async def create_group(self, name, repo_url="", ref="main", by="", github_token=None) -> dict:
+    async def create_group(
+        self, name, repo_url="", ref="main", by="", github_token=None, github_app_installation_id=None
+    ) -> dict:
         if not NAME_RE.match(name or ""):
             raise invalid("Group name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("groups", name):
@@ -54,6 +56,8 @@ class Services:
         }
         if github_token:  # private GitHub or GitLab repos (I2); encrypted at rest, see storage/encrypted.py
             doc["github_token"] = github_token
+        if github_app_installation_id:  # N5: no stored token at all, a fresh installation token per deploy
+            doc["github_app_installation_id"] = github_app_installation_id
         return public(await self.store.put("groups", name, doc))
 
     async def update_group(self, name, **fields) -> dict:
@@ -394,6 +398,28 @@ class Services:
         w["cidrs"] = cidrs
         await self.store.put("workers", w["id"], w)
         return await self.cloud.set_ip_rules(group, zone, cidrs)
+
+    async def set_item_throttle(self, group, zone, redis_url=None, ip_per_min=None, token_per_min=None) -> dict:
+        """N7: zone-local Redis throttling repeat calls to the same tool/resource/prompt."""
+        w = await self.worker_config(group, zone)
+        if redis_url is not None:
+            w["redis_item_url"] = redis_url
+        if ip_per_min is not None:
+            w["item_ip_per_min"] = ip_per_min
+        if token_per_min is not None:
+            w["item_token_per_min"] = token_per_min
+        return public(await self.store.put("workers", w["id"], w))
+
+    async def set_scope_throttle(self, group, redis_url=None, ip_per_min=None, token_per_min=None) -> dict:
+        """N7: one Redis shared by every zone of the group, throttling repeat calls to the group/environment."""
+        g = await self.get_group(group)
+        if redis_url is not None:
+            g["redis_scope_url"] = redis_url
+        if ip_per_min is not None:
+            g["scope_ip_per_min"] = ip_per_min
+        if token_per_min is not None:
+            g["scope_token_per_min"] = token_per_min
+        return public(await self.store.put("groups", group, g))
 
     async def secrets(self, group, env=None, zone=None, kind="secret") -> list[dict]:
         f = {"group": group, "kind": kind}

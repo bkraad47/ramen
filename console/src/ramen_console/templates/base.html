@@ -31,6 +31,13 @@ function ramenAddRule(){const cur=JSON.parse(document.getElementById('rules').te
  const glob=(document.getElementById('rule-glob').value||'').trim();
  return cur.concat([{effect:document.getElementById('rule-effect').value,
                      permission:glob||document.getElementById('rule-permission').value}])}
+// N2: a dropdown plus Add builds removable chips; the form reads their ids back at submit time.
+function ramenAddNotify(b){const sel=document.getElementById('notify-pick');
+ const chips=document.getElementById('notify-chips');const v=sel.value;if(!v||chips.querySelector('[data-notify="'+v+'"]'))return;
+ const chip=document.createElement('span');chip.className='chip';chip.dataset.notify=v;
+ chip.innerHTML=sel.options[sel.selectedIndex].text+' <button type="button" class="x">Remove</button>';
+ chip.querySelector('button').onclick=()=>chip.remove();chips.appendChild(chip)}
+function ramenNotifyIds(){return Array.from(document.querySelectorAll('#notify-chips [data-notify]')).map(c=>c.dataset.notify)}
 // W3: search and outcome filter act on the rendered audit rows; no re-query.
 function ramenAuditFilter(){const q=(document.getElementById('audit-search').value||'').toLowerCase();
  const out=document.getElementById('audit-outcome').value;

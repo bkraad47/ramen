@@ -2,7 +2,60 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
-## [0.5.5] — Google-managed TLS, a third storage backend, and a round of real bugs found by testing for real
+## [0.5.6] — Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account
+11 user-filed items (`instructions/v0.5.6.md`), worked one at a time with a failing test written first for
+each (`logs/reasoning/2026-10-02-v0.5.6-iterate.md`). Headline: the AWS bring-up path, documented as
+"UNTESTED ON A REAL ACCOUNT" since v0.3.0, finally ran end to end on a real account — and a live GCP
+redeploy for parity — turning up real bugs that no amount of mocked testing had caught.
+
+**Scheduler**: a new health-check node watches every group and auto-rebalances when load skews to one
+worker, independent of the existing on-demand `POST .../rebalance`; a super admin toggles it and sets the
+check interval from the Config page. Proven on a real kind cluster driving sustained one-sided load with no
+manual rebalance call anywhere in the test.
+
+**Email alerts**: super admins set server SMTP credentials and pick which users get notified of server
+warnings/errors; a process-wide log handler batches WARNING+ records into a digest every 30s rather than one
+email per line.
+
+**Logging**: worker pods already stream into GKE Cloud Logging and AWS CloudWatch natively (verified, not
+new code) and already carry group/zone labels for external filtering; Rust's `CallLog::emit` no longer
+hardcodes level "info" for denied/errored calls, and 15 console routes that called `note()` with empty tags
+now carry real identifying data.
+
+**Git auth**: groups can use a GitHub App installation token instead of a stored PAT — minted fresh (~1h)
+per deploy, no long-lived credential to rotate.
+
+**Rust-side validation**: `tools/call` and `prompts/get` arguments are now schema-validated in the node
+itself, before reaching the Python sidecar, matching the console's existing error conventions exactly
+(`isError` for tools, a real `-32602` for prompts).
+
+**Throttling**: two independent Redis-backed limits — per-worker item throttle and cross-zone group-scope
+throttle — enforced in the Rust workers with fixed per-minute windows, failing open on a Redis outage.
+
+**Secrets audit**: swept storage encryption, API response masking, audit tags, git-credential handling and
+backups. Found and fixed a real leak — `RAMEN_POSTGRES_DSN` (which commonly embeds a password) was shown
+unmasked on the Config page because it matched none of the SECRET/PASSWORD/KEY/TOKEN substrings `masked_env`
+checked against.
+
+**AWS — verified live on a real account**: found and fixed 2 real bugs. `storage/dynamodb.py` used an
+implicit boto3 region lookup that raised `NoRegionError` under EKS IRSA credentials even with `AWS_REGION`
+set in the pod env; now passes `region_name` explicitly. The Helm chart's AWS branch never wired
+`RAMEN_DDB_TABLE` at all, so the console silently defaulted to table "ramen" while IAM was scoped to the
+real table name (`AccessDeniedException`); now wired through `values.yaml`/`deployment.yaml`. A live
+teardown (not a dry run) also found Terraform leaving the console's own IAM objects behind (a worker IRSA
+role using the terraform-managed boundary policy, plus a Secrets Manager secret) — deploy/README.md now
+documents explicit cleanup commands for both. Bring-up and teardown sections both dropped "(untested)".
+
+**GCP — re-verified live**: a full live redeploy found 0 new product bugs; confirms parity with the AWS
+proof on the same release.
+
+**HTTPS-only audit**: the edge (browser/client → load balancer) was already HTTPS-only on both clouds with
+no plaintext listener, but the Helm chart never defaulted the console's Secure-cookie/HSTS flag on even
+though every real cloud deploy is always served over HTTPS — fixed, `RAMEN_COOKIE_SECURE` now defaults to
+`1` for both `provider: aws` and `provider: gcp` (kind's plaintext NodePort stack overrides it back to `0`,
+matching how it already runs). Intra-cluster (LB→pod, pod-to-pod) traffic stays the existing documented
+opt-in (`RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`) — confirmed with the user as a deliberate trade-off, not silently
+left open.
 17 user-filed items (`instructions/v0.5.5.md`), worked one at a time with a failing test written first for
 each. Several turned out to already be fixed and just needed a stale note corrected; several surfaced real
 defects that automated testing had not caught because nothing had ever exercised that path for real.

@@ -19,6 +19,12 @@ class DynamoStore(Store):
         kw = {}
         if os.environ.get("RAMEN_DDB_ENDPOINT"):
             kw["endpoint_url"] = os.environ["RAMEN_DDB_ENDPOINT"]
+        # Explicit, not implicit (matches cloud/aws_api.py): a pod using IRSA (WebIdentityTokenFileCredentials)
+        # can fail region resolution for the default session even with AWS_REGION set in the environment —
+        # found live on a real EKS deploy (N10), botocore's legacy endpoint resolver raised NoRegionError.
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        if region:
+            kw["region_name"] = region
         s = cls(os.environ.get("RAMEN_DDB_TABLE", "ramen"), boto3.resource("dynamodb", **kw))
         s.ensure_table()
         return s

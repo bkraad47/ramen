@@ -32,7 +32,7 @@ sleep 5
 curl -s http://localhost:8080/mcp -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -H 'ramen-group: demo' -H 'ramen-zone: local' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
-# Stdio-only clients: the bridge over gRPC (`pip install 'ramen-runtime[grpc]'` or use runtime-py/.venv), key from the environment
+# Stdio-only clients: the bridge over gRPC (`uv tool install ramen-mcp-bridge` — its own package since 0.5.7), key from the environment
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' \
   | RAMEN_MCP_KEY="$KEY" ramen-mcp-bridge --target localhost:8080 --group demo --zone local
 # Or raw gRPC with grpcurl (bytes are base64 in its JSON; the node serves reflection locally):

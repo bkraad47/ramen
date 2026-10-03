@@ -106,14 +106,16 @@ class Services:
         if why:
             raise conflict(f"Permission {permission!r} denied: {why}")
 
-    async def apply_sa_permissions(self, group, zone, permission) -> dict:
-        """Approved request → union with what the zone SA already has → Cloud.apply_sa_permissions."""
+    async def apply_sa_permissions(self, group, zone, permission, scope=("*",)) -> dict:
+        """Approved request → union with what the zone SA already has → Cloud.apply_sa_permissions. The scope (the
+        resource names the request was for) travels with it; a new request for the same permission replaces it."""
         w = await self.worker_config(group, zone)
-        perms = list(w.get("sa_permissions", []))
+        perms, previous = list(w.get("sa_permissions", [])), dict(w.get("sa_scopes") or {})
         if permission not in perms:
             perms.append(permission)
-        result = await self.cloud.apply_sa_permissions(group, zone, perms)
-        w["sa_permissions"] = perms
+        scopes = {**previous, permission: list(scope or ["*"])}
+        result = await self.cloud.apply_sa_permissions(group, zone, perms, scopes, previous)
+        w["sa_permissions"], w["sa_scopes"] = perms, scopes
         if result.get("service_account"):
             w["service_account"] = result["service_account"]
         await self.store.put("workers", w["id"], w)
@@ -142,8 +144,10 @@ class Services:
         if permission not in perms:
             raise not_found(f"permission {permission} in {group}/{zone}")
         perms = [q for q in perms if q != permission]
-        result = await self.cloud.apply_sa_permissions(group, zone, perms)
-        w["sa_permissions"] = perms
+        previous = dict(w.get("sa_scopes") or {})
+        scopes = {k: v for k, v in previous.items() if k != permission}
+        result = await self.cloud.apply_sa_permissions(group, zone, perms, scopes, previous)
+        w["sa_permissions"], w["sa_scopes"] = perms, scopes
         await self.store.put("workers", w["id"], w)
         await self._mark_revoked(group, zone, permission)
         return {"group": group, "zone": zone, "revoked": permission, "permissions": perms, "cloud": result}

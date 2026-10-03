@@ -1,4 +1,4 @@
-:root{--coral:#F26B3A;--bg:#F4F1EC;--ink:#2b2622;--muted:#8a7f76;--card:#fffdfa;--line:#e6dfd5;--blue:#3a7bd5;--green:#3aa76d;--red:#d64545;--grey:#b9b1a8;--role-super-admin:#7a3fb5;--role-group-admin:#1f7a8c;--role-viewer:#8a7f76}
+:root{--coral:#F26B3A;--bg:#F4F1EC;--ink:#2b2622;--muted:#8a7f76;--card:#fffdfa;--line:#e6dfd5;--blue:#3a7bd5;--green:#3aa76d;--red:#d64545;--grey:#b9b1a8;--role-super-admin:#7a3fb5;--role-group-admin:#1f7a8c;--role-viewer:#8a7f76;--role-mcp-user:#3aa76d}
 *{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh}
 a{color:var(--coral)}nav.side{width:248px;background:#fff;border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:100vh;flex-shrink:0;display:flex;flex-direction:column}
 nav.side img{width:56px;height:56px;display:block;margin:0 auto 16px;border-radius:12px}
@@ -7,24 +7,48 @@ nav.side .who{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--lin
 .identity{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .identity .email{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:12px}
 .role{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
-.role.super-admin{background:var(--role-super-admin)}.role.group-admin{background:var(--role-group-admin)}.role.viewer{background:var(--role-viewer)}
+.role.super-admin{background:var(--role-super-admin)}.role.group-admin{background:var(--role-group-admin)}.role.viewer{background:var(--role-viewer)}.role.mcp-user{background:var(--role-mcp-user)}
 nav.side a.logout,.logout{display:block;margin:10px 0 6px;padding:6px 0;color:var(--red);font-weight:600;text-decoration:none}
 nav.side a.logout:hover{background:transparent;color:var(--red);text-decoration:underline}
 .version{color:var(--muted);font-size:11px}
 main{flex:1;padding:24px 32px;max-width:1300px}h1{margin:0 0 16px;font-size:24px}h1 span{color:var(--coral)}h2{font-size:17px;margin:24px 0 8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}
 .dl{float:right;font-size:12px;color:var(--muted)}.dl a{margin-left:8px}
 form.inline{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:3px}
 input,select,textarea{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;min-width:140px}
 select[multiple]{min-height:70px;min-width:160px}
 button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer;text-decoration:none;text-align:center}button.ghost,.btn.ghost{background:#fff;color:var(--coral);border:1px solid var(--coral)}button.danger{background:var(--red)}button.sm,.btn.sm{padding:4px 9px;font-size:12px}
-.zone-actions{display:grid;gap:6px;justify-items:end;width:max-content}
-.zone-actions form.inline{margin:0;gap:4px;flex-wrap:nowrap;align-items:center;justify-content:flex-end}
-.zone-actions form.inline input,.zone-actions form.inline select{min-width:0;width:62px;font-size:12px}
-.zone-actions form.inline input[name=cidrs]{width:150px}
+.zone-table>tr>th.zone-name,.zone-table>tbody>tr>th.zone-name{width:6em;font-size:14px;color:inherit;vertical-align:top;padding-top:14px}
+.zone-actions table{margin:0}
+.zone-actions tr:last-child th,.zone-actions tr:last-child td{border-bottom:0}
+.zone-actions th{font-weight:normal;white-space:nowrap;width:8em;vertical-align:middle}
+.zone-actions td{vertical-align:middle}
+.zone-actions td:last-child{width:190px;text-align:right}
+.zone-actions label{display:inline-flex;margin-right:10px;vertical-align:top}
+.zone-actions input,.zone-actions select{min-width:0;width:110px;font-size:12px}
+.zone-actions input[name=cidrs],.zone-actions input[name=redis_url]{width:220px}
 .act{width:170px;flex:0 0 170px;padding:6px 10px;font-size:12px;display:inline-block;text-align:center}
 .controls input:not([type=hidden]),.controls select{width:180px}
+.controls label{width:180px}
+.controls .act{width:180px;flex:0 0 180px}
+/* settings tables (config scheduler, zone actions): label column, controls, one action column */
+.settings{margin:0}.settings th{font-weight:normal;white-space:nowrap;width:9em;vertical-align:middle}.settings td{vertical-align:middle}
+.settings td:last-child{width:190px;text-align:right}.settings tr:last-child th,.settings tr:last-child td{border-bottom:0}
+.settings form.inline{margin:0}.settings input,.settings select{min-width:0;width:110px;font-size:12px}
+/* users: every row's actions share one 2-column grid (Role|Groups, Save|New password, Reset|Delete); the
+   .row-actions.* selectors outrank the plain .row-actions flex rule below, which would otherwise win by order */
+.row-actions.user-actions{display:grid;grid-template-columns:180px 180px;gap:6px 8px;align-items:end}
+.row-actions.user-actions form.inline{display:contents}.user-actions label{width:180px}
+.user-actions input,.user-actions select{min-width:0;width:180px}.user-actions .act{width:170px;flex:0 0 170px}
+.field{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:3px;width:180px}
+details.multi{position:relative;width:180px}details.multi>summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:#fff;color:var(--ink);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+details.multi>summary::-webkit-details-marker{display:none}details.multi>summary::after{content:" ▾";color:var(--muted)}
+details.multi>.options{position:absolute;z-index:5;top:100%;left:0;min-width:180px;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;box-shadow:0 4px 14px rgba(0,0,0,.08);display:flex;flex-direction:column;gap:4px}
+.option{flex-direction:row;align-items:center;gap:6px;color:var(--ink);font-size:13px;width:auto}.option input[type=checkbox]{width:auto}
+.user-actions .sso{align-self:center;font-size:12px}
+/* backups: four equal actions as a 2x2 block instead of a tall stack */
+.row-actions.actions-grid{display:grid;grid-template-columns:170px 170px;gap:6px 8px}
 .grid{display:grid;gap:8px}.cell{border-radius:10px;padding:10px;color:#fff;min-height:64px;font-size:13px}
 .cell.load-low{background:var(--blue)}.cell.load-even{background:var(--green)}.cell.load-high{background:var(--red)}.cell.load-down{background:var(--grey)}.cell b{display:block}
 .legend-bar{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
@@ -34,7 +58,7 @@ button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;paddin
 .swatch-low{background:var(--blue)}.swatch-even{background:var(--green)}.swatch-high{background:var(--red)}.swatch-down{background:var(--grey)}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--ink)}.badge.ok{background:#dff3e6;color:#1f6b40}.badge.error{background:#fbe0e0;color:#8f1f1f}.badge.running{background:#fde9df;color:#a4451f}
 .once{background:#fff6e5;border:1px solid #f2c48d;padding:10px;border-radius:8px;margin:8px 0;word-break:break-all}
-#toast{position:fixed;right:20px;bottom:20px;background:var(--red);color:#fff;padding:12px 16px;border-radius:10px;display:none;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+#toast{position:fixed;right:20px;bottom:20px;background:var(--red);color:#fff;padding:12px 16px;border-radius:10px;display:none;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.2)}#toast.ok{background:var(--green)}
 pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px}
 .login{margin:auto;width:360px}.login img{width:96px;height:96px;display:block;margin:0 auto 12px;border-radius:18px}.err{color:var(--red);margin:8px 0}.ok{color:#1f6b40;margin:8px 0}
 code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--line)}.muted{color:var(--muted);font-size:13px}
@@ -60,6 +84,6 @@ code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--li
 .chip .x{background:none;border:0;color:var(--coral);cursor:pointer;padding:0;font:inherit}
 /* W3 audit: a scrollable frame with its own filter row */
 .audit-filters{display:flex;gap:10px;align-items:end;margin-bottom:8px;flex-wrap:wrap}
-.audit-filters input[type=search]{min-width:260px}
+.audit-filters input[type=search]{min-width:260px}.audit-filters table.filters{width:100%;margin:0}.audit-filters .filters th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:0 10px 2px 0}.audit-filters .filters td{padding:0 10px 6px 0;vertical-align:middle}.audit-filters .filters input,.audit-filters .filters select{width:100%;min-width:0}.audit-filters .filters .row-actions{display:flex;gap:8px;flex-wrap:nowrap}
 #audit-scroll{max-height:60vh;overflow:auto}
 #audit-scroll thead th{position:sticky;top:0;background:var(--bg);z-index:1}

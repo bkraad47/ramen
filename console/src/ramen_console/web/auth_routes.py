@@ -181,8 +181,13 @@ async def oauth_callback(request: Request, name: str):
     trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
     if not email or (info.get("email_verified") is not True and not trusted):
         raise ApiError(403, "The provider did not return a verified email")
-    role, groups = (await auth_settings(request)).map_role(name, info)
-    user = await request.app.state.accounts.upsert_sso_user(email, role, groups, provider=name)
+    auth = await auth_settings(request)
+    role, groups = auth.map_role(name, info)
+    # the bootstrap super admin is the break-glass account: a provider's rules never demote it
+    authoritative = auth.has_mapping(name) and email != auth.admin_email
+    user = await request.app.state.accounts.upsert_sso_user(
+        email, role, groups, provider=name, authoritative=authoritative
+    )
     return _login_response(request, user)
 
 

@@ -1,9 +1,14 @@
-from pydantic import BaseModel, field_validator
+import json
+from typing import Literal
+
+from pydantic import BaseModel, field_validator, model_validator
 
 
 def _split(v):
     if isinstance(v, str):
         return [s.strip() for s in v.split(",") if s.strip()]
+    if isinstance(v, list):  # a checkbox group posts a hidden "" so an empty choice still reaches the API
+        return [s for s in v if s != ""]
     return v
 
 
@@ -32,7 +37,26 @@ class GroupUpdate(BaseModel):
 
 
 class Rules(BaseModel):
+    """`rules` as a list, or as the JSON string a form's textarea/hidden field posts; `effect` + `glob`/`permission`
+    append one rule to it (the Config page's "Add rule" — no `eval` needed in the browser)."""
+
     rules: list[dict]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_form(cls, data):
+        if not isinstance(data, dict):
+            return data
+        rules = data.get("rules", [])
+        if isinstance(rules, str):
+            try:
+                rules = json.loads(rules or "[]")
+            except ValueError as e:
+                raise ValueError(f"rules is not valid JSON: {e}") from e
+        if data.get("effect"):
+            permission = (data.get("glob") or "").strip() or data.get("permission") or "*"
+            rules = list(rules) + [{"effect": data["effect"], "permission": permission}]
+        return {"rules": rules}
 
 
 class ZoneIn(BaseModel):
@@ -122,11 +146,22 @@ class RequestIn(BaseModel):
     group: str | None = None
     zone: str | None = None
     permission: str | None = None
+    scope: str | None = None  # resource names for a permission request; empty or `*` = the group's own area
 
 
 class AuthConfig(BaseModel):
     password_login: bool | None = None
     magic_link: bool | None = None
+
+
+class RoleMapChange(ListFields):
+    """One edit to a provider's role mapping (D38): name the claim, add/replace a rule, or remove one."""
+
+    claim: str | None = None
+    value: str | None = None
+    role: Literal["super_admin", "group_admin", "viewer", "mcp_user"] | None = None
+    groups: list[str] | None = None
+    remove: str | None = None
 
 
 class SchedulerConfig(BaseModel):
@@ -148,7 +183,7 @@ class GitHubAppConfig(BaseModel):
     private_key: str | None = None
 
 
-class NotifyConfig(BaseModel):
+class NotifyConfig(ListFields):
     user_ids: list[str]
 
 

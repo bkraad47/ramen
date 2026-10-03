@@ -23,6 +23,18 @@ def test_can():
     assert can(p("viewer", []), "viewer")
     assert not can(p("viewer", []), "viewer", "g")
     assert not can(None, "viewer")
+    # an MCP user (0.5.92) ranks below viewer: nothing in the console, only their own groups' workers
+    assert can(p("mcp_user", ["g"]), "mcp_user", "g") and not can(p("mcp_user", ["g"]), "mcp_user", "o")
+    assert not can(p("mcp_user", ["g"]), "viewer", "g") and not can(p("mcp_user", ["g"]), "viewer")
+    assert can(p("viewer", ["g"]), "mcp_user", "g") and can(p("super_admin"), "mcp_user", "g")
+
+
+def test_can_connect():
+    from ramen_console.rbac import can_connect
+
+    assert can_connect(p("mcp_user", ["g"]), "g") and not can_connect(p("mcp_user", ["g"]), "o")
+    assert can_connect(p("viewer", ["g"]), "g") and not can_connect(p("viewer", []), "g")
+    assert can_connect(p("super_admin"), "anything") and not can_connect(None, "g")
 
 
 class Req:

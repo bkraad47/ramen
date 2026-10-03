@@ -305,22 +305,32 @@ class AwsCloud(GcpCloud):
         return await asyncio.to_thread(run)
 
     @_guard
-    async def apply_sa_permissions(self, group, zone, permissions):
+    async def apply_sa_permissions(self, group, zone, permissions, scopes=None, previous=None):
         """Put the mapped IAM actions as inline policy `ramen-sa-permissions` on the zone role (created if missing, §9).
-        s3/secretsmanager actions stay scoped to the group's prefix / secrets path, the rest are unconditional."""
+        Unscoped, s3/secretsmanager actions stay on the group's prefix / secrets path; a scope names the buckets /
+        secrets instead (0.5.93). The rest are unconditional. The policy is replaced whole, so nothing lingers."""
         ns, actions = ns_name(group, zone), perm.mapped(permissions, "aws")
         sa = await self.create_service_account(group, zone)
         applied = await asyncio.to_thread(
-            self._iam().put_sa_permissions, aws_api.Iam.role_name(group, zone), self._bucket(), group, actions
+            self._iam().put_sa_permissions,
+            aws_api.Iam.role_name(group, zone),
+            self._bucket(),
+            group,
+            actions,
+            perm.role_scopes(permissions, scopes, "aws"),
         )
-        return {
+        out = {
             "ok": True,
             "service_account": sa["name"],
             "applied": applied,
             "permissions": list(permissions),
+            "scopes": dict(scopes or {}),
             "ksa": f"{ns}/worker",
             "policy": aws_api.Iam.SA_POLICY if applied else None,
         }
+        if unscoped := perm.unscoped(permissions, scopes):
+            out["unscoped"] = unscoped
+        return out
 
     @_guard
     async def refresh(self):

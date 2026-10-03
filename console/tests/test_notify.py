@@ -33,7 +33,7 @@ async def test_smtp_config_round_trips_and_masks_password(demo, tmp_path):
 
 
 async def test_smtp_password_is_encrypted_at_rest(demo, tmp_path):
-    demo.put("/api/v1/config/smtp", json={"host": f"file://{tmp_path/'m'}", "password": "s3cret"})
+    demo.put("/api/v1/config/smtp", json={"host": f"file://{tmp_path / 'm'}", "password": "s3cret"})
     raw = await demo.app.state.store.inner.get("config", "smtp")
     assert raw["smtp_password"] != "s3cret" and raw["smtp_password"].startswith("enc:")
 
@@ -78,7 +78,7 @@ async def test_flush_is_noop_without_recipients_or_mail(demo):
 
 
 async def test_flush_is_noop_when_mail_enabled_but_no_recipients_selected(demo, tmp_path):
-    demo.put("/api/v1/config/smtp", json={"host": f"file://{tmp_path/'m'}"})
+    demo.put("/api/v1/config/smtp", json={"host": f"file://{tmp_path / 'm'}"})
     logging.getLogger("ramen.somewhere").warning("still nobody will see this")
     assert await alerts.flush_alerts(demo.app.state.services, demo.app.state.mailer) == []
     assert len(alerts.PENDING) == 1

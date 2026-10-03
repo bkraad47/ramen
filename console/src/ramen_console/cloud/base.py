@@ -51,6 +51,10 @@ class Cloud(ABC):
     async def scale(self, group: str, zone: str, spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "note": "no scaling for this adapter"}
 
-    async def apply_sa_permissions(self, group: str, zone: str, permissions: list[str]) -> dict[str, Any]:
-        """Bind the cloud roles mapped from approved permissions to the zone's SA (CONTRACTS §9). Default: no IAM."""
+    async def apply_sa_permissions(
+        self, group: str, zone: str, permissions: list[str], scopes: dict | None = None, previous: dict | None = None
+    ) -> dict[str, Any]:
+        """Bind the cloud roles mapped from approved permissions to the zone's SA (CONTRACTS §9). `scopes` names the
+        resources per permission (`["*"]` = the group's own area), `previous` is what the last apply used so a
+        narrowed scope can be unbound. Default: no IAM."""
         return {"ok": True, "applied": [], "permissions": list(permissions), "note": "no IAM for this adapter"}

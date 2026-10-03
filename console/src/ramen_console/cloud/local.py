@@ -160,7 +160,7 @@ class LocalCloud(Cloud):
     async def rebalance(self, group, zone):
         return {"ok": True, "note": "local adapter: no load balancer to rebalance"}
 
-    async def apply_sa_permissions(self, group, zone, permissions):
+    async def apply_sa_permissions(self, group, zone, permissions, scopes=None, previous=None):
         p = self._bucket(group) / ".ramen" / f"sa_permissions_{zone}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(permissions))
@@ -168,6 +168,7 @@ class LocalCloud(Cloud):
             "ok": True,
             "applied": [],
             "permissions": list(permissions),
+            "scopes": dict(scopes or {}),
             "recorded": str(p),
             "note": "local adapter: recorded only, no cloud IAM",
         }

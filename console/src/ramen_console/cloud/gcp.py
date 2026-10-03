@@ -215,7 +215,15 @@ class GcpCloud(Cloud):
             drained = await asyncio.to_thread(self.kube.wait_terminated, ns, "app=worker", 180)
             note("main: old pods drained" if drained else "main: old pods still terminating after 180s")
             for p in await asyncio.to_thread(self.kube.pods, ns, "app=worker,ramen.io/track=stable"):
-                workers.append({"id": p["metadata"]["name"], "ok": True, "track": "stable", "status": "OK"})
+                w = {"id": p["metadata"]["name"], "ok": True, "track": "stable", "status": "OK"}
+                # Readiness+drain above already proves the rollout; a reload/smoke failure here must not flip
+                # it to failed. Still attempted so the group page's per-zone package list (F5.6) has data for
+                # a stable-only deploy (canary=False), not just a canary one.
+                try:
+                    w["result"] = await self._reload_and_smoke(p, mcp_key, group, zone, note)
+                except Exception as e:  # noqa: BLE001 - logged, not fatal; see comment above
+                    note(f"{w['id']}: package list not refreshed: {type(e).__name__}: {e}")
+                workers.append(w)
             note(f"main: {d.get('status', {}).get('readyReplicas', 0)} ready")
             return {"ok": True, "workers": workers, "namespace": ns, "log": lines}
         except Exception as e:  # noqa: BLE001 - reported in the job, canary torn down
@@ -418,17 +426,74 @@ class GcpCloud(Cloud):
         members = iam.group_members(group)
         return bool(members) and iam.bind_secret(self.c.secretmanager, name, [self.SECRET_ROLE], members)
 
-    def _grant(self, iam, email, group, roles: list[str]) -> tuple[list[str], list[str]]:
-        """Bind roles at the narrowest scope: storage.* on the bucket, secretmanager.* on the group's secrets, the rest
-        on the project (optional privilege, see grant_project_roles). Returns (applied, skipped)."""
+    def _named_secrets(self, iam, group, names: list[str]) -> list[str]:
+        """The group's secrets whose Ramen name is one of `names` (ids are ramen-<group>-<env>-<zone>-<name>)."""
+        return [
+            full
+            for full in iam.group_secrets(self.c.secretmanager, group)
+            if any(full.rsplit("/", 1)[1].endswith(f"-{n}") for n in names)
+        ]
+
+    def _unbind_narrowed(self, iam, email, group, before: dict, wanted: dict) -> None:
+        """0.5.93: resources a role was bound on last time and is not wanted on now — named buckets or secrets that
+        left the scope, or the group-wide binding once a scope names resources. Baseline roles keep their group-wide
+        binding (§13.2); roles no longer needed at all are left to `_revoke_stale`."""
+        member = f"serviceAccount:{email}"
+        for role, names in before.items():
+            now = wanted.get(role)
+            if names == ["*"]:
+                if now is None or now == ["*"] or role in self.BASELINE_ROLES:
+                    continue
+                if role.startswith("roles/storage."):
+                    iam.revoke_bucket_roles(self.c.storage, self.bucket, email, [role])
+                elif role.startswith("roles/secretmanager."):
+                    iam.revoke_secret_roles(self.c.secretmanager, group, email, [role])
+                continue
+            gone = [n for n in names if now is None or now == ["*"] or n not in now]
+            if role.startswith("roles/storage."):
+                for bucket in gone:
+                    if bucket == self.bucket and role in self.BASELINE_ROLES:
+                        continue  # the groups bucket's baseline binding is the worker's own; never shed here
+                    iam.revoke_bucket_roles(self.c.storage, bucket, email, [role])
+            elif role.startswith("roles/secretmanager.") and gone:
+                for full in self._named_secrets(iam, group, gone):
+                    iam.unbind_secret(self.c.secretmanager, full, [role], [member])
+
+    def _grant(self, iam, email, group, roles: list[str], scopes: dict | None = None) -> tuple[list[str], list[str]]:
+        """Bind roles at the narrowest scope: storage.* on the groups bucket (group prefix) or on the named buckets,
+        secretmanager.* on the group's secrets or the named ones, the rest on the project (optional privilege, see
+        grant_project_roles). Returns (applied, skipped)."""
         applied, project = [], []
         for role in roles:
+            names = (scopes or {}).get(role) or ["*"]
             if role.startswith("roles/storage."):
-                applied += iam.grant_bucket_roles(
-                    self.c.storage, self.bucket, email, [(role, self._bucket_condition(group))]
-                )
+                if names == ["*"]:
+                    applied += iam.grant_bucket_roles(
+                        self.c.storage, self.bucket, email, [(role, self._bucket_condition(group))]
+                    )
+                else:
+                    for bucket in names:  # naming the groups bucket itself still means the group's prefix of it
+                        cond = self._bucket_condition(group) if bucket == self.bucket else None
+                        try:
+                            iam.grant_bucket_roles(self.c.storage, bucket, email, [(role, cond)])
+                        except Exception as e:  # noqa: BLE001 - say what to grant, not just "Forbidden"
+                            if http_status(e) not in (403, 404):
+                                raise
+                            raise RuntimeError(
+                                f"bucket {bucket!r}: {'not found' if http_status(e) == 404 else 'no IAM access'} — "
+                                "the console's service account manages IAM only on the groups bucket (SEC-08); "
+                                "to scope a permission to another bucket grant it roles/storage.admin there: "
+                                f"gcloud storage buckets add-iam-policy-binding gs://{bucket} "
+                                "--member=serviceAccount:<console gsa> --role=roles/storage.admin"
+                            ) from e
+                    applied.append(role)
             elif role.startswith("roles/secretmanager."):
-                applied += iam.grant_secret_roles(self.c.secretmanager, group, email, [role])
+                if names == ["*"]:
+                    applied += iam.grant_secret_roles(self.c.secretmanager, group, email, [role])
+                else:
+                    for full in self._named_secrets(iam, group, names):
+                        iam.bind_secret(self.c.secretmanager, full, [role], [f"serviceAccount:{email}"])
+                    applied.append(role)
             else:
                 project.append(role)
         if not project:
@@ -474,24 +539,31 @@ class GcpCloud(Cloud):
         return await asyncio.to_thread(run)
 
     @_guard
-    async def apply_sa_permissions(self, group, zone, permissions):
+    async def apply_sa_permissions(self, group, zone, permissions, scopes=None, previous=None):
         """Grant the mapped IAM roles to the zone GSA (created if missing).
 
-        bucket.* stays scoped to the group prefix, secrets.* to the group's secrets."""
+        Unscoped (`*`), bucket.* stays on the group's prefix of the groups bucket and secrets.* on the group's
+        secrets; a scope names the buckets / secrets instead (0.5.93). Project-wide roles cannot be scoped."""
         ns, iam = ns_name(group, zone), self._iam()
         roles = perm.mapped(permissions, "gcp")
+        wanted = perm.role_scopes(permissions, scopes, "gcp")
+        before = perm.role_scopes(list(previous or {}), previous, "gcp")
 
         def run():
             email, _ = iam.ensure_account(iam.account_id(group, zone), f"ramen worker {group}/{zone}")
-            applied, skipped = self._grant(iam, email, group, roles)
+            self._unbind_narrowed(iam, email, group, before, wanted)
+            applied, skipped = self._grant(iam, email, group, roles, wanted)
             revoked, retained = self._revoke_stale(iam, email, group, roles)
             out = {
                 "ok": True,
                 "service_account": email,
                 "applied": applied,
                 "permissions": list(permissions),
+                "scopes": dict(scopes or {}),
                 "ksa": f"{ns}/worker",
             }
+            if unscoped := perm.unscoped(permissions, scopes):
+                out["unscoped"] = unscoped
             if revoked:
                 out["revoked"] = revoked
             if retained:

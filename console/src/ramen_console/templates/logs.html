@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block title %}Logs{% endblock %}
-{% macro row(e) %}<button class="log-row{{ ' selected' if e.selected }}" type="button" onclick="showEntry({{ e.i }})">
+{% macro row(e) %}<button class="log-row{{ ' selected' if e.selected }}" type="button" data-i="{{ e.i }}">
 <span class="outcome {{ e.outcome }}">{{ 'Success' if e.outcome == 'success' else ('Failure' if e.outcome == 'failure' else '—') }}</span>
 <span class="who">{{ e.consumer or '—' }}</span><br><span class="meta">{{ e.ts or '—' }}{% if e.method %} · {{ e.method }}{% if e.name %} · {{ e.name }}{% endif %}{% endif %}</span></button>
 {% endmacro %}
@@ -16,14 +16,17 @@
 <div id="log-scroll">{% for e in entries %}{{ row(e) }}{% endfor %}</div></div>
 <div class="card"><h2 style="margin-top:0">Entry</h2><div class="log-body"><pre id="log-body">{{ entries[0].body }}</pre></div></div>
 </div>
-<script id="log-data" type="application/json">{{ tojson(entries|map(attribute='body')|list) }}</script>
+{# |safe: autoescape would HTML-encode the quotes inside this script block, so JSON.parse failed and no click
+   could ever show an entry; `</` is escaped so a body can never close the script element early. #}
+<script id="log-data" type="application/json">{{ tojson(entries|map(attribute='body')|list)|replace('</', '<\\/')|safe }}</script>
 <script>
 const bodies = JSON.parse(document.getElementById('log-data').textContent);
-function showEntry(i){
-  document.getElementById('log-body').textContent = bodies[i];
+document.getElementById('log-scroll').addEventListener('click', e => {
+  const row = e.target.closest('.log-row'); if (!row) return;
+  document.getElementById('log-body').textContent = bodies[Number(row.dataset.i)];
   document.querySelectorAll('.log-row').forEach(el => el.classList.remove('selected'));
-  event.currentTarget.classList.add('selected');
-}
+  row.classList.add('selected');
+});
 </script>
 {% else %}<div class="card"><p class="muted">No log entries{% if group and zone %} for {{ group }} in {{ zone }}{% endif %}.</p></div>{% endif %}
 {% endblock %}

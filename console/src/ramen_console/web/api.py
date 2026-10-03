@@ -14,7 +14,7 @@ admin_g, super_ = require("group_admin", "group"), require("super_admin")
 
 
 @r.get("/me")
-async def me(p: Principal = Depends(viewer)):
+async def me(p: Principal = Depends(require("mcp_user"))):
     return p.to_dict()
 
 

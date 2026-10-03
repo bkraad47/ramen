@@ -2,6 +2,153 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.93] — OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser
+Builds on 0.5.91 and 0.5.92 (both deployed to the live GCP console during the same day, never tagged — folded
+in like 0.4.1–0.4.3). The user drove this release page by page on the live console; each report below was
+reproduced in Chromium (Playwright) before it was fixed and verified there again after.
+
+**Service-account permission requests carry a scope.** The group page's request form has a "Scope" field:
+empty or `*` keeps today's least-privilege binding (`bucket.*` on the group's own prefix of the groups bucket,
+`secrets.*` on the group's secrets); naming resources (`bucket-a, bucket-b`, or secret names) binds the
+permission on those alone — GCP binds the role on each named bucket / secret, AWS names them in the inline
+policy's resources. A later request for the same permission replaces its scope; narrowing a scope unbinds what
+left it; revoking the permission drops its scope. Permissions whose cloud roles are project-wide (logs,
+metrics, queues, datastore, kms, ai) record the scope but cannot enforce it, and the apply result lists them
+under `unscoped`. Live on GKE: the console's identity holds `storage.admin` on the groups bucket only (SEC-08), so a scope naming another bucket fails the approval with a message that says which `gcloud storage buckets add-iam-policy-binding` to run; with that grant in place the approve binds on the named bucket and the revoke unbinds it (verified on a throwaway bucket). API: `POST /api/v1/requests {…, "scope": "bucket-a, bucket-b"}`; the request and the zone's
+worker record (`sa_scopes`) carry the parsed list; the page shows it on the request row and the granted badge.
+The "Service-account restrictions" card now explains what the rules do (they gate *requests*: deny wins, allow
+rules whitelist, shell globs, clash with super-admin rules → 409) with an example.
+
+**SMTP and warning-email settings moved from the Users page to Config** (they are super-admin settings; the
+API already required that). The Save button on "Server warning/error emails" never sent a request in a real
+browser: the form built its body with `hx-vals='js:…'`, which htmx evaluates with `Function()`, and the
+console's CSP (`script-src 'self' 'unsafe-inline'`, no `unsafe-eval`) refuses that — silently. The same
+pattern broke "Add rule" on Config, "Save restrictions" on a group page, the dashboard's and audit page's
+`every 60s[window.ramenAuto]` polling filter and the audit page's `hx-on::after-swap`. All of them are plain
+forms or event listeners now (chips carry hidden fields, the rules travel as a JSON string the API parses,
+polling elements carry `data-auto` and a listener drops polls while auto refresh is off), and a test sweeps
+every template for anything that would need eval. The SMTP Save did work — it just said nothing: every
+successful mutation now shows a green "Saved" toast, also after the page refresh a save triggers.
+
+**Audit page: the filter row is a table** — Search, Outcome, row count and the two buttons (Load 500, Auto
+refresh) sit in one aligned row with column headings instead of a free-flowing flex line.
+
+
+**IdP roles map to Ramen roles and MCP groups, on every login (D38).** A super admin names, per sign-in
+provider, the token claim to read (`groups`, `roles`, …) and adds rules: a claim value (an AD group, an
+IdP role) → a Ramen role, optionally plus the MCP groups it may reach. The rules are keyed by the IdP role,
+never by a person: whoever signs in carrying `AD-Developers` gets what that rule says. Once a claim is named
+the mapping is **authoritative** — re-applied at each OIDC login, replacing a role or groups set by hand,
+and a person whose values match no rule becomes a viewer with no groups. Several matching values take the
+highest role and the union of groups (as before). The bootstrap super admin (`RAMEN_ADMIN_EMAIL`) is never
+demoted by a provider. A provider with no claim named keeps today's behaviour (role set at first login,
+then kept). Env rules (`RAMEN_AUTH_OAUTH_<NAME>_ROLE_CLAIM` / `_ROLE_MAP`) still work and merge under the
+store's rules, the store winning per claim value. API: `PUT /api/v1/config/auth/role-map/{provider}` with
+`{claim}`, `{value, role, groups}` or `{remove}` (one change per call; 404 for an unknown provider, 422 for
+an unknown role); `GET /api/v1/config/auth` reports the merged `role_claim` / `role_map`. Nobody is signed
+out by a rule change — it takes effect at each person's next login. Audited as `config.auth
+role-map:<provider>`.
+
+**OAuth clients live on the Config page now**, next to the role mapping, not on the API keys page: both
+are super-admin settings, and together they are the "sign in with your IdP, reach workers with a token
+instead of a shared agent key" story. The registration form is aligned like every other admin form.
+
+**New role `mcp_user` (D39): a person who only connects MCP clients.** Below viewer, scoped to groups like every
+other role: an MCP user may sign in and approve an OAuth client for a zone of their groups (Claude Code,
+Claude Desktop, Cursor, …), and nothing else — every console page and every `/api/v1/*` call answers 403
+("MCP users connect MCP clients to their groups' workers; the console is not available to them"), the
+sidebar has no navigation, and their only page (`/`) names their groups and shows the `claude mcp add-json`
+line to connect. Grantable by a group admin within their own groups (Users page, "MCP User — connects MCP
+clients only"), mappable from an IdP role on the Config page (`mcp_user` + groups), and re-checked at every
+token mint like any other role. `/api/v1/me` answers for them (clients may ask who they are); API keys cannot
+be minted for or by them. The OAuth authorize endpoints now accept any signed-in person whose groups include
+the requested one (`rbac.can_connect`), replacing the viewer check.
+
+**Users page: groups are picked from a checkbox dropdown; SSO users get no password reset.** A user's groups
+were a comma-typed field; the row now has a dropdown of every group with a checkbox per group (the summary
+names the current ones), and clearing every box saves an empty list (a hidden empty `groups` field carries
+it; list fields drop empty strings). A user who signs in through an OAuth/OIDC provider has no password, so
+their row says "Signs in through <provider> — no password to reset" instead of offering a reset, and
+`POST /api/v1/users/{id}/password` (and `/users/me/password`) answers 422 for them.
+
+**Found by pointing Claude Code at the live GCP worker as an OAuth MCP client: the worker's protected-resource
+metadata was not RFC 9728.** Its `resource` field carried the scope string (`mcp:demo:a`); RFC 9728 says it
+is the resource's URL, and Claude Code checks that it equals the server URL it was given — so it refused to
+even start the flow ("Protected resource mcp:…:a does not match expected https://…"). The worker now reports
+`<RAMEN_PUBLIC_URL>/mcp` (or, with no public base, the request's `X-Forwarded-Proto`/`Host`), keeping
+`scopes_supported` as `mcp:<group>:<zone>`; and the console's authorization server accepts that URL as the
+RFC 8707 `resource` indicator (an MCP client sends the server URL it talks to) as well as the scope string
+it took before — anything else is still `invalid_target`. Token audience is unchanged (`mcp:<group>:<zone>`).
+Claude Code is registered as a client with `claude mcp add-json … {"type":"http","url":"https://<host>/mcp",
+"headers":{"ramen-group":…,"ramen-zone":…},"oauth":{"clientId":…,"scopes":"mcp:<group>:<zone>"}}`; its
+loopback callback matches a registered `http://localhost/callback` on any port (RFC 8252). No DCR (D34).
+
+## [0.5.91] — Group page: per-zone package list back, Enable/Disable fixed, every admin page aligned
+Defects the user hit on the live GCP console right after 0.5.8, each reproduced first and verified in a real
+browser (Playwright/chromium against the local compose stack) before shipping. The number was the user's
+choice; a 0.5.9 was built along the way but never tagged — folded into this release, like 0.4.1–0.4.3.
+
+**"Packages per zone" was empty after a deploy.** `GcpCloud.deploy()` (inherited by AWS) only ran
+`Admin/Reload` + the smoke `tools/list` on *canary* pods, so a stable-only deploy (`canary=false`) never
+recorded any worker's `result` and `last_deploy.packages` stayed `{}` — the group page then had nothing to
+list and no Enable/Disable buttons to show. Stable pods are now reloaded the same way (their package list
+is recorded; a reload hiccup there is logged, not treated as a failed rollout — readiness and drain already
+proved it). Regression assertion added to the existing no-canary deploy test.
+
+**Enable/Disable answered `blocked: Field required`.** The console's `json` htmx extension built the request
+body from htmx's FormData, which loses JSON types: a one-item list arrived as a plain string (it only ever
+worked because `ListFields` splits comma strings) and an empty list — exactly what Enable sends when the
+last disabled package is re-enabled — vanished entirely, so the API saw `{}` and rejected it. The extension
+now re-reads `hx-vals` typed via htmx's own `getExpressionVars`, which also covers the three `js:`-computed
+forms (SA restrictions, notify list, SA rules) that had the same latent empty-list gap. Verified in the
+browser: Disable sends `{"blocked":["demo_calculator_tool"]}`, Enable sends `{"blocked":[]}`, both 200.
+
+**Zone actions misaligned.** Three multi-field forms plus three buttons were crammed into one cell of the
+8-column zones table. They now live in their own "Zone actions" table: one row per setting (Workers / IP
+allow-list / Throttle / Zone), inputs and the equal-width `.act` buttons each in their own column, zone name
+as a row header. Every pinned UI contract still holds (one `zone-actions` block per zone, fixed button
+order, `act ghost` classes, visible labels, hidden from viewers). Screenshots recaptured (`ui_contract`
+0.5.9).
+
+**API keys page.** The create-key row had labels and dropdowns of uneven width and "Add" (group picker)
+sitting next to "Generate key" at a different size. Now one *New key* section with a description of both
+key types and the one-time display: name, client type, role and groups all at the `.controls` width, "Add"
+an action-width button on the field row, and the equal-width "Generate key" on its own row below (it submits
+the same form via `form=`). Same API, same pinned contracts (`#group-pick`, chips, `.controls` width rule).
+
+**Logs page: clicking an entry did nothing.** The entries' bodies are embedded as JSON in a
+`<script type="application/json">` for the click handler, and the template's autoescape HTML-encoded the
+quotes inside it (`[&#34;{…`), so `JSON.parse` threw at load, `bodies` never existed, and every click
+failed silently. The JSON is now emitted unescaped (with `</` escaped so a body can't close the script
+early) and the handler is delegated on the list (no inline `onclick`, no implicit `window.event`).
+Regression test pins the embedding. Verified in a real browser: the body pane updates and the highlight
+moves.
+
+**"Packages per zone" listed the same packages once per worker.** Once stable pods reported their package
+list (the first fix above), a canary deploy produced two identical tables per zone — canary pod and stable
+pod — and a scaled zone would have produced one per replica. Every worker in a zone runs the same code, so
+the group page now shows one list per zone and says how many workers reported it. Regression test added.
+
+**Bridge leftovers removed from this repo** (the bridge moved to its own package in 0.5.7):
+`deploy/local/mcp_call.py` still spawned `python -m ramen_runtime.bridge` — it now runs `ramen-mcp-bridge`
+from PATH (`RAMEN_BRIDGE=<cmd>` still overrides); the local and runtime-py READMEs no longer tell you to
+install `ramen-runtime[grpc]`. Also fixed a 0.5.7 regression found while doing it: the `mcp` SDK had been
+dropped from `runtime-py`'s dev extra as "bridge-only", but `deploy/local/mcp_call.py` (what `demo.sh`
+runs) needs it — restored. The remaining `grpcio-health-checking` deps in `console/` and `tests/` are
+their own health probes, not bridge code, and stay.
+
+**Four more pages aligned, with descriptions.** *Config → Auto-rebalance scheduler*: a settings table
+(state badge + toggle, interval + "Set interval") instead of two loose inline forms, and a line on what it
+does. *Backups*: a "New backup" section explaining target/path, the create row's button now the same 180px
+as its fields, and each backup's four actions as a 2×2 block instead of a tall stack. *Users*: every row's
+actions share one grid (Role / Groups (comma) / Save, New password / Reset password, Delete user) with
+labels on the previously bare select and inputs, buttons in one column. *Zones and workers*: a "New zone"
+section (what a zone is, naming, how it gets used), the create row on the shared `.controls` sizing, and
+"Workers per group" now says what a worker is — and that a sidecar reported as stopped is just idle:
+the Python sidecar starts on the first call and is reaped after `RAMEN_SIDECAR_IDLE_SECS` (default 300 s)
+without calls, by design (F3.4/D3); set a very large value on the deploy to keep it warm (0 is clamped to
+1 s, there is no "never"). All pinned contracts kept; screenshots recaptured.
+
 ## [0.5.8] — The published ramen-mcp-bridge package verified live against real AWS and GCP deployments
 A full live bring-up/deploy/teardown round on fresh throwaway AWS and GCP environments, specifically to
 server-test the real `pip install ramen-mcp-bridge` package (v0.5.7's extraction) against real cloud load

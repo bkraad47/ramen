@@ -271,6 +271,10 @@ async def test_deploy_no_canary_and_health_smoke(cloud, fk, http_state):
     assert ("Deployment", "ramen-demo-a", "worker-canary") in fk.k8s.objs
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
     assert "Mcp/Call" not in http_state.paths()
+    # the group page's "Packages per zone" list (F5.6) reads this per worker — a stable-only deploy (no
+    # canary) must still populate it, not just a canary deploy's pod.
+    stable = next(w for w in res["workers"] if w["track"] == "stable")
+    assert stable["result"]["tools"] == [{"name": "calc"}]
     # canary with no MCP keys smokes Health/Check (SERVING) instead of tools/list
     res = await cloud.deploy("demo", "prod", "a", canary=True, config={}, spec=SPEC)
     assert res["ok"] and any("health SERVING" in x for x in res["log"]) and "Mcp/Call" not in http_state.paths()
@@ -849,6 +853,51 @@ async def test_apply_sa_permissions_binds_mapped_roles(cloud, fk):
     assert last["applied"] == []
     assert last["retained"] == ["roles/storage.objectViewer", "roles/secretmanager.secretAccessor"]
     assert [b["role"] for b in fk.storage.buckets["p1-groups"].policy.bindings] == ["roles/storage.objectViewer"]
+
+
+async def test_scoped_permissions_bind_on_the_named_buckets_and_secrets(cloud, fk):
+    """0.5.93: a request's scope names the buckets / secrets a permission is for; `*` is the group's own area."""
+    member = "serviceAccount:ramen-demo-a@p1.iam.gserviceaccount.com"
+    for sid in ("ramen-demo-all-all-db-pass", "ramen-demo-all-all-other"):
+        fk.secretmanager.create_secret(request={"parent": "projects/p1", "secret_id": sid, "secret": {}})
+    scopes = {"bucket.write": ["bucket-a", "bucket-b"], "secrets.read": ["db-pass"], "logs.write": ["sink-a"]}
+    r = await cloud.apply_sa_permissions("demo", "a", ["bucket.write", "secrets.read", "logs.write"], scopes)
+    assert r["ok"] and r["scopes"] == scopes and r["unscoped"] == ["logs.write"]  # project-wide: no resource to name
+    for name in ("bucket-a", "bucket-b"):
+        b = fk.storage.buckets[name].policy.bindings
+        assert [x["role"] for x in b] == ["roles/storage.objectUser"] and member in b[0]["members"]
+        assert not b[0].get("condition")  # the whole named bucket, not a prefix of it
+    groups_bucket = fk.storage.buckets.get("p1-groups")
+    assert not groups_bucket or all(x["role"] != "roles/storage.objectUser" for x in groups_bucket.policy.bindings)
+    secrets = fk.secretmanager.secrets
+    assert any(member in b.members for b in secrets["projects/p1/secrets/ramen-demo-all-all-db-pass"]["policy"])
+    assert not any(member in b.members for b in secrets["projects/p1/secrets/ramen-demo-all-all-other"]["policy"])
+    # back to `*`: the named buckets lose the binding, the groups bucket gets it with the group-prefix condition
+    again = await cloud.apply_sa_permissions("demo", "a", ["bucket.write"], {"bucket.write": ["*"]}, previous=scopes)
+    assert fk.storage.buckets["bucket-a"].policy.bindings == [] and fk.storage.buckets["bucket-b"].policy.bindings == []
+    groups = [x for x in fk.storage.buckets["p1-groups"].policy.bindings if x["role"] == "roles/storage.objectUser"]
+    assert len(groups) == 1 and "p1-groups/objects/demo/" in groups[0]["condition"]["expression"]
+    assert "unscoped" not in again
+    # and dropping the permission unbinds it there too
+    last = await cloud.apply_sa_permissions("demo", "a", [], {}, previous={"bucket.write": ["*"]})
+    assert "roles/storage.objectUser" in last["revoked"]
+
+    # a bucket the console identity cannot administer (or that does not exist) is a clear message, not a bare 403
+    class Locked:
+        def get_iam_policy(self, requested_policy_version=3):
+            raise FakeApiError(403, "storage.buckets.getIamPolicy denied")
+
+    fk.storage.buckets["locked"] = Locked()
+    with pytest.raises(Exception, match="roles/storage.admin") as e:
+        await cloud.apply_sa_permissions("demo", "a", ["bucket.read"], {"bucket.read": ["locked"]})
+    assert "gs://locked" in str(e.value)
+    # naming the groups bucket itself never widens past the group's prefix, and a revoke keeps the baseline binding
+    await cloud.apply_sa_permissions("demo", "a", ["bucket.read"], {"bucket.read": ["p1-groups"]})
+    viewer = [x for x in fk.storage.buckets["p1-groups"].policy.bindings if x["role"] == "roles/storage.objectViewer"]
+    assert len(viewer) == 1 and "objects/demo/" in viewer[0]["condition"]["expression"]
+    await cloud.apply_sa_permissions("demo", "a", [], {}, previous={"bucket.read": ["p1-groups"]})
+    viewer = [x for x in fk.storage.buckets["p1-groups"].policy.bindings if x["role"] == "roles/storage.objectViewer"]
+    assert len(viewer) == 1 and member in viewer[0]["members"]
 
 
 async def test_apply_sa_permissions_without_project_iam_admin(cloud, fk, monkeypatch):

@@ -24,7 +24,11 @@ def render(request: Request, name: str, **ctx):
 
 
 @r.get("/")
-async def dashboard(request: Request, p: Principal = Depends(viewer)):
+async def dashboard(request: Request, p: Principal = Depends(require("mcp_user"))):
+    if p.role == "mcp_user":  # 0.5.92: their only page — which groups they may connect a client to, and how
+        from .auth_routes import base_url
+
+        return render(request, "mcp_user.html", groups=sorted(p.groups), public_url=base_url(request))
     return render(request, "dashboard.html")
 
 
@@ -124,14 +128,9 @@ async def secrets(request: Request, group: str | None = None, p: Principal = Dep
 async def users(request: Request, p: Principal = Depends(admin)):
     a = accounts(request)
     reqs = await a.list_requests() if p.role == "super_admin" else []
-    ctx = dict(
-        users=await a.list_users(p), groups=await svc(request).visible_groups(p), requests=reqs, notify_user_ids=[]
+    return render(
+        request, "users.html", users=await a.list_users(p), groups=await svc(request).visible_groups(p), requests=reqs
     )
-    if p.role == "super_admin":
-        store = svc(request).store
-        ctx["smtp"] = mail_mod.public_smtp_config(await mail_mod.get_smtp_config(store))
-        ctx["notify_user_ids"] = (await alerts.get_notify_config(store))["user_ids"]
-    return render(request, "users.html", **ctx)
 
 
 @r.get("/api-keys")
@@ -141,7 +140,6 @@ async def api_keys(request: Request, p: Principal = Depends(admin)):
         request,
         "api_keys.html",
         keys=await accounts(request).list_keys(p),
-        oauth_clients=(await request.app.state.oauth_server.clients()) if p.role == "super_admin" else None,
         groups=await svc(request).visible_groups(p),
     )
 
@@ -215,15 +213,20 @@ async def backups_page(request: Request, p: Principal = Depends(super_)):
 
 @r.get("/config")
 async def config(request: Request, p: Principal = Depends(super_)):
-    rules = (await svc(request).store.get("config", "sa_rules") or {}).get("rules", [])
+    store = svc(request).store
+    rules = (await store.get("config", "sa_rules") or {}).get("rules", [])
     return render(
         request,
         "config.html",
+        users=await accounts(request).list_users(p),
+        smtp=mail_mod.public_smtp_config(await mail_mod.get_smtp_config(store)),
+        notify_user_ids=(await alerts.get_notify_config(store))["user_ids"],
         env=masked_env(),
         config_file=os.environ.get("RAMEN_CONFIG"),
         rules=rules,
         providers=request.app.state.oauth.providers(),
         auth=await auth_settings(request),
+        oauth_clients=await request.app.state.oauth_server.clients(),
         mail=request.app.state.mailer.backend,
         permissions=perm.table(),
         scheduler=await scheduler_mod.get_config(svc(request).store),

@@ -41,6 +41,7 @@ still installed into the worker image (`/opt/venv/bin/ramen-mcp-bridge`, used th
 `grpc.health.v1` probe for the container `HEALTHCHECK`).
 
 ## Test
-`uv sync --all-extras && uv run pytest --cov` (gate 90%; currently 98%). `tests/test_bridge.py` runs the bridge
-against an in-process grpcio fake, including the official `mcp` stdio client end to end. Fixture: `tests/fixtures/demo` is a copy
+`uv sync --all-extras && uv run pytest --cov` (gate 90%; currently 98%). The `mcp` dev extra is for
+`deploy/local/mcp_call.py` (the local demo's smoke client), not for tests — the bridge and its tests live in
+[ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge) since 0.5.7. Fixture: `tests/fixtures/demo` is a copy
 of [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group).

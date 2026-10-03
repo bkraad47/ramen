@@ -112,8 +112,9 @@ def test_clients_are_pre_registered_by_a_super_admin_only(demo):
         login(ga, "ga@x", PW)
         assert ga.post("/api/v1/oauth/clients", json=CLIENT).status_code == 403
         assert ga.get("/api/v1/oauth/clients").status_code == 403
-    page = demo.get("/api-keys").text
+    page = demo.get("/config").text  # 0.5.92: OAuth clients live on the Config page, not next to API keys
     assert "OAuth clients" in page and CLIENT["name"] in page and cid in page
+    assert "OAuth clients" not in demo.get("/api-keys").text
     assert demo.delete(f"/api/v1/oauth/clients/{cid}").status_code == 200
     assert demo.get("/api/v1/oauth/clients").json() == []
 
@@ -133,6 +134,13 @@ def test_authorize_requires_login_then_consent(demo):
     assert authorize(demo, cid, challenge, redirect="http://evil.example/cb").status_code == 400
     assert authorize(demo, cid, challenge, scope="mcp:demo:nozone").status_code == 400
     assert authorize(demo, cid, challenge, scope="mcp:demo:zone-a mcp:demo:zone-b").status_code == 400
+    # RFC 8707: the resource indicator may be the worker URL (what RFC 9728 clients such as Claude Code send)
+    base = {"response_type": "code", "client_id": cid, "redirect_uri": CLIENT["redirect_uris"][0], "scope": RESOURCE}
+    base |= {"code_challenge": challenge, "code_challenge_method": "S256"}
+    ok = demo.get("/oauth/authorize", params={**base, "resource": "https://lb.example/mcp"}, follow_redirects=False)
+    assert ok.status_code == 200 and "Allow" in ok.text
+    for bad in ("mcp:other:zone-a", "ftp://lb.example/mcp", "lb.example/mcp"):
+        assert demo.get("/oauth/authorize", params={**base, "resource": bad}, follow_redirects=False).status_code == 400
     r = demo.get("/oauth/authorize", params={"client_id": cid, "response_type": "token"}, follow_redirects=False)
     assert r.status_code == 400
     # PKCE is not optional and only S256 counts

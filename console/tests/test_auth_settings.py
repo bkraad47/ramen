@@ -37,6 +37,32 @@ def test_settings_from_env_and_doc():
     assert AuthSettings.from_env({}).password_login and not AuthSettings.from_env({}).magic_link
 
 
+def test_role_map_from_doc_merges_over_env_per_rule():
+    """D38: rules kept in config/auth win per claim value; a provider has a mapping once a claim is named."""
+    s = AuthSettings.from_env(
+        {"RAMEN_AUTH_OAUTH_OIDC_ROLE_CLAIM": "groups", "RAMEN_AUTH_OAUTH_OIDC_ROLE_MAP": "admins=super_admin"}
+    )
+    assert s.has_mapping("oidc") and not s.has_mapping("github")
+    d = s.with_doc(
+        {
+            "role_claim": {"oidc": "roles", "github": "teams"},
+            "role_map": {
+                "oidc": {
+                    "admins": {"role": "group_admin", "groups": ["demo"]},
+                    "devs": {"role": "viewer", "groups": ["demo"]},
+                },
+                "github": {"ops": {"role": "viewer", "groups": ["other"]}},
+            },
+        }
+    )
+    assert d.role_claim == {"oidc": "roles", "github": "teams"}
+    assert d.role_map["oidc"] == {"admins": ("group_admin", ["demo"]), "devs": ("viewer", ["demo"])}
+    assert d.has_mapping("github") and d.map_role("github", {"teams": ["Ops"]}) == ("viewer", ["other"])
+    assert d.map_role("oidc", {"roles": "admins"}) == ("group_admin", ["demo"])
+    assert s.role_map["oidc"]["admins"] == ("super_admin", [])  # the env settings are not mutated
+    assert s.with_doc({"role_map": {"oidc": {"x": {"role": "king"}}}}).role_map["oidc"].get("x") is None
+
+
 def test_role_parsing_errors():
     assert parse_role("group_admin: a , b") == ("group_admin", ["a", "b"]) and parse_role("") == ("viewer", [])
     with pytest.raises(ValueError):

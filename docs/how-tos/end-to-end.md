@@ -105,7 +105,7 @@ A client that can only start a local process (stdio) uses the bridge instead —
 [local quickstart](local-quickstart.md#stdio-only-clients-the-bridge).
 
 ### 7. Per-user access with OAuth (optional)
-A shared `rmk_` key is the group; a token is a person. **API keys → OAuth clients → Register client**: the client's
+A shared `rmk_` key is the group; a token is a person. **Config → OAuth clients → Register client**: the client's
 name and the exact redirect URI it uses (`http://127.0.0.1:<port>/callback` for a desktop app; any port on
 loopback is accepted). The client sends the person to `/oauth/authorize`; they sign in to the console as usual and
 see this:

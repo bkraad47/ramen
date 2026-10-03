@@ -50,6 +50,41 @@ PERMISSIONS: dict[str, dict] = {
 }
 
 
+SCOPED = ("bucket.", "secrets.")  # the families bound on resources (SEC-08), so a request may name which ones
+
+
+def parse_scope(text) -> list[str]:
+    """`"bucket-a", bucket-b` → ["bucket-a", "bucket-b"]; empty, blank or anything containing `*` → ["*"]."""
+    names = [s.strip().strip("'\"").strip() for s in (text or "").split(",")]
+    names = [n for n in names if n]
+    return ["*"] if not names or "*" in names else list(dict.fromkeys(names))
+
+
+def scoped(permission: str) -> bool:
+    return permission.startswith(SCOPED)
+
+
+def unscoped(permissions: list[str], scopes: dict | None) -> list[str]:
+    """Permissions whose request named resources although their roles are project-wide: the scope is kept on record
+    but cannot be enforced, and the result says so."""
+    return [p for p in permissions if not scoped(p) and (scopes or {}).get(p) not in (None, ["*"])]
+
+
+def role_scopes(permissions: list[str], scopes: dict | None, provider: str) -> dict[str, list[str]]:
+    """Per cloud role/action, the resource names it is bound for: `["*"]` when any contributing permission is
+    unscoped, else the union of the names."""
+    out: dict[str, list[str]] = {}
+    for p in permissions:
+        names = list((scopes or {}).get(p) or ["*"])
+        for r in PERMISSIONS.get(p, {}).get(provider, []):
+            cur = out.get(r)
+            if cur == ["*"] or "*" in names:
+                out[r] = ["*"]
+            else:
+                out[r] = list(dict.fromkeys([*(cur or []), *names]))
+    return out
+
+
 def all_roles(provider: str) -> list[str]:
     """Every cloud role/action the catalogue can grant: what a set-semantics apply considers unbinding (§13.2)."""
     out: list[str] = []

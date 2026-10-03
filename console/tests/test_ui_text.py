@@ -114,7 +114,12 @@ def test_the_group_page_key_form_says_generate_key(demo):
 
 # --- U6: the sidebar identity block ------------------------------------------
 def test_role_labels_are_written_for_people():
-    assert ROLE_LABELS == {"super_admin": "Super Admin", "group_admin": "Group Admin", "viewer": "Viewer"}
+    assert ROLE_LABELS == {
+        "super_admin": "Super Admin",
+        "group_admin": "Group Admin",
+        "viewer": "Viewer",
+        "mcp_user": "MCP User",
+    }
     assert role_label("viewer") == "Viewer"
     assert role_label("something_else") == "Something Else"
 
@@ -132,7 +137,7 @@ def test_each_role_has_its_own_colour_token():
     root = re.search(r":root\{(.*?)\}", css, re.S).group(1)
     tokens = {f"--role-{r.replace('_', '-')}" for r in ROLE_LABELS}
     assert tokens <= set(re.findall(r"--[a-z-]+", root))
-    assert len({re.search(rf"{t}:\s*(#[0-9A-Fa-f]+)", css).group(1).lower() for t in tokens}) == 3
+    assert len({re.search(rf"{t}:\s*(#[0-9A-Fa-f]+)", css).group(1).lower() for t in tokens}) == len(ROLE_LABELS)
 
 
 def test_log_out_sits_below_the_identity_row_and_is_red(demo):

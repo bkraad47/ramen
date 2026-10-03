@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 from .accounts import Accounts
 from .errors import ApiError, invalid, not_found
-from .rbac import Principal, can
+from .rbac import Principal, can_connect
 from .services import Services
 from .util import now, uid
 
@@ -152,14 +152,16 @@ class OAuthServer:
         ):
             raise OAuthError("invalid_request", "PKCE with S256 is required")
         group, zone = scope_parts(q.get("scope") or "")
+        # RFC 8707: an MCP client names the worker URL it talks to (what the worker's metadata calls `resource`);
+        # the scope's mcp:<group>:<zone> is also accepted. Anything else is a request for a different resource.
         resource = q.get("resource") or f"mcp:{group}:{zone}"
-        if resource != f"mcp:{group}:{zone}":
-            raise OAuthError("invalid_target", "resource must be the scope's mcp:<group>:<zone>")
+        if resource != f"mcp:{group}:{zone}" and not re.fullmatch(r"https?://[^\s?#]+", resource):
+            raise OAuthError("invalid_target", "resource must be the worker URL or the scope's mcp:<group>:<zone>")
         if not await self.store.get("groups", group) or zone not in {
             z for e in await self.svc.environments(group) for z in e.get("zones", [])
         }:
             raise OAuthError("invalid_scope", f"{group}/{zone} is not a deployed zone")
-        if not can(p, "viewer", group):
+        if not can_connect(p, group):
             raise OAuthError("access_denied", f"you have no access to group {group}", 403)
         return {
             "client": client,
@@ -242,8 +244,8 @@ class OAuthServer:
         user = await self.store.get("users", rec["user"])
         if not user or user.get("login_disabled") or self.accounts.epoch_of(user) != rec["epoch"]:
             raise OAuthError("invalid_grant", "the user's sessions were revoked; sign in again")
-        if not can(
-            Principal(user["id"], user["email"], user["role"], list(user.get("groups", []))), "viewer", rec["group"]
+        if not can_connect(
+            Principal(user["id"], user["email"], user["role"], list(user.get("groups", []))), rec["group"]
         ):
             raise OAuthError("invalid_grant", f"the user no longer has access to group {rec['group']}")
         return user

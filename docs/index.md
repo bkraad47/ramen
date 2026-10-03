@@ -7,23 +7,62 @@ hide: [toc]
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Ramen",
-  "alternateName": "Project Ramen",
-  "applicationCategory": "DeveloperApplication",
-  "applicationSubCategory": "MCP server (Model Context Protocol)",
-  "operatingSystem": "Kubernetes (GKE, EKS), Docker",
-  "softwareVersion": "0.6.0",
-  "license": "https://opensource.org/licenses/BSD-3-Clause",
-  "url": "https://bkraad47.github.io/ramen/",
-  "codeRepository": "https://github.com/bkraad47/ramen",
-  "downloadUrl": "https://github.com/bkraad47/ramen/releases",
-  "programmingLanguage": ["Rust", "Python"],
-  "description": "Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.14 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles, OAuth, IP rules and audit.",
-  "keywords": "MCP, Model Context Protocol, MCP server, self-hosted, Kubernetes, GKE, EKS, gRPC, JSON-RPC, agent tools, Rust, Python, canary deploy, multi-zone, high availability, OAuth",
-  "author": {"@type": "Person", "name": "Raad", "url": "https://github.com/bkraad47"},
-  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
-  "isAccessibleForFree": true
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://bkraad47.github.io/ramen/#app",
+      "name": "Ramen",
+      "alternateName": "Project Ramen",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "MCP server (Model Context Protocol)",
+      "operatingSystem": "Kubernetes (GKE, EKS), Docker",
+      "softwareVersion": "0.6.0",
+      "license": "https://opensource.org/licenses/BSD-3-Clause",
+      "url": "https://bkraad47.github.io/ramen/",
+      "downloadUrl": "https://github.com/bkraad47/ramen/releases",
+      "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
+      "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
+      "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
+      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE and EKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.14 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "author": {
+        "@type": "Person",
+        "name": "Raad",
+        "url": "https://github.com/bkraad47"
+      },
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "isAccessibleForFree": true
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "@id": "https://github.com/bkraad47/ramen#code",
+      "name": "ramen",
+      "codeRepository": "https://github.com/bkraad47/ramen",
+      "programmingLanguage": [
+        "Rust",
+        "Python"
+      ],
+      "runtimePlatform": [
+        "Kubernetes",
+        "Docker"
+      ],
+      "license": "https://opensource.org/licenses/BSD-3-Clause",
+      "version": "0.6.0",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "targetProduct": {
+        "@id": "https://bkraad47.github.io/ramen/#app"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "Raad",
+        "url": "https://github.com/bkraad47"
+      }
+    }
+  ]
 }
 </script>
 
@@ -48,7 +87,7 @@ hide: [toc]
 
 Ramen is a multizone, highly available MCP server for GCP and AWS Kubernetes. Your team keeps **a git repo of
 tools, resources and prompts in plain Python**. Ramen turns it into a fleet of MCP workers behind a cloud load
-balancer, with canary deploys, secrets, a role per group, an OAuth front door for Claude and Cursor, and a log line
+balancer, with canary deploys, secrets, a role per group, an OAuth front door for Claude Code and the bridge, and a log line
 that says who called what. Underneath it is gRPC, JSON-RPC 2.0 and a Rust node. **You code in Python.**
 
 <div class="ramen-grid ramen-repos" markdown>

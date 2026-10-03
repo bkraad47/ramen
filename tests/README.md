@@ -63,7 +63,8 @@ Cloud: same command with `RAMEN_CONSOLE_URL=https://console.<host> RAMEN_NODE_UR
 (omit `RAMEN_TLS_INSECURE` with a real cert). A node deliberately deployed with an excluding `RAMEN_ALLOWED_CIDRS` is asserted with `RAMEN_EXPECT_CIDR_DENIED=1`.
 
 ## Scripts (`../scripts`)
-- `check_versions.py [--tag vX.Y.Z]` — VERSION == Cargo.toml == pyprojects == Helm chart versions/tags == mkdocs `version_current` == Dockerfile ARG defaults == compose/.env defaults (CONTRACTS §6).
+- `check_versions.py [--tag vX.Y.Z]` — VERSION == Cargo.toml == pyprojects == Helm chart versions/tags == mkdocs `version_current` == Dockerfile ARG defaults == compose/.env defaults == `docs/llms.txt` == landing JSON-LD (CONTRACTS §6).
+- `check_docs_links.py` — every site URL in README.md / docs/llms.txt / docs/index.md has a page under docs/; README relative links exist. Offline.
 - `wait_ready.sh <url|host:port> [timeout] [interval] [--any]` — poll for HTTP 200, or (gRPC target) `grpc.health.v1` SERVING (`--any`: answers at all; `RAMEN_NODE_TLS=1`). grpcurl or a python with grpcio.
 - `coverage_report.py [--artifacts dir] [--allow-missing] [--no-fail]` — one markdown table, ≥90% verdict, exit 1 otherwise.
 - `gcp_test_project.sh create|delete` — throwaway `ramen-test-<yymmdd>` project (`DRY_RUN=1` prints only).

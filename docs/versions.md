@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.6.0` **(current)** | — | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
+| `0.6.0` **(current)** | 2026-10-03 | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
 | `0.5.95` | 2026-10-03 | roles are per group: the roles engine of instructions/v0.5.95.md | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.95) |
 | `0.5.94` | 2026-10-03 | group page zones and blocked packages as checkbox dropdowns | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.94) |
 | `0.5.93` | 2026-10-03 | OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.93) |

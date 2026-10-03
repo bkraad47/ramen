@@ -11,7 +11,7 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 <a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a>
 </p>
 
-**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [Add and deploy a tool](https://bkraad47.github.io/ramen/how-tos/add-a-tool/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
+**Docs: https://bkraad47.github.io/ramen/** · [Get started](https://bkraad47.github.io/ramen/get-started/) · [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/) · [Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [Deploy on AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
 > **Streamable HTTP is the front door.** Every worker serves `POST /mcp` — a URL and a bearer header, nothing to
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. Phones,
@@ -57,23 +57,24 @@ JSON-RPC 2.0 and a Rust node; **you code in Python**. The longer argument is
 > **Start here** · the demo group repo **[ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group)**
 > (point a group at it and press Deploy) · the stdio bridge **[ramen-mcp-bridge on PyPI](https://pypi.org/project/ramen-mcp-bridge/)**
 > (`pip install ramen-mcp-bridge`; signs you in with `--oauth` or carries a group key) · HTTP clients such as
-> Claude Code, Claude Desktop and Cursor need neither: [Connect an MCP client](https://bkraad47.github.io/ramen/how-tos/mcp-clients/).
-> Features and how each is managed: [bkraad47.github.io/ramen/features](https://bkraad47.github.io/ramen/features/).
+> Claude Code, Claude Desktop and Cursor need neither: [Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/).
+> Every feature and where it is managed: [How it works](https://bkraad47.github.io/ramen/how-it-works/).
 
 ## Quickstart (local, 5 commands)
 
-Needs Docker (compose v2), `uv`, `git`, `make`. First run ≈ 3–5 min (image builds).
+Needs Docker with compose v2, `uv`, `git` and `make`. The first run builds two images and takes three to five minutes.
 
 ```sh
 git clone https://github.com/bkraad47/ramen && cd ramen
 make up       # Firestore emulator + console https://localhost:8443 + one worker (localhost:8080: Streamable HTTP + gRPC)
-make demo     # zone → group `demo` (demo repo) → generate rmk_ key → canary deploy → tools/call over http://localhost:8080/mcp
-#   … demo_calculator_tool({"var1": 2, "var2": 3, "func": "add"}) -> 5      ← success line
+make demo     # zone, group `demo` from the demo repo, an rmk_ key, a canary deploy, then a tools/call
+#   PASS: demo_calculator_tool(2,3,add) -> 5      <- the success line
 open https://localhost:8443    # self-signed cert; login admin@ramen.local / changeme-ramen
 make down     # stop and remove volumes
 ```
 
-`make demo` is idempotent (existing zone/group/env answer `… exists`; a fresh key is generated each run).
+`make demo` is safe to re-run: an existing zone, group or environment answers "exists" and a fresh key is
+generated each time.
 Then connect your own client with an **`rmk_` MCP key** (Groups → demo → *Generate key* → Deploy). It is a URL and
 a header — put the key in `RAMEN_MCP_KEY` and drop this into any `mcpServers` config:
 
@@ -96,17 +97,17 @@ pip install ramen-mcp-bridge                # its own package (github.com/bkraad
 RAMEN_MCP_KEY=<the key shown once> ramen-mcp-bridge --target localhost:8080 --insecure --group demo --zone local
 ```
 
-> `rmk_…` **MCP keys** go to workers (`Authorization: Bearer`, on HTTP or as gRPC metadata) and are generated on
-> the **group page**. `rmn_…` **API keys** go to the console (`X-Ramen-Api-Key`) for automation and are generated
+> `rmk_` **MCP keys** go to workers (`Authorization: Bearer`, on HTTP or as gRPC metadata) and are generated on
+> the **group page**. `rmn_` **API keys** go to the console (`X-Ramen-Api-Key`) for automation and are generated
 > on the **API keys** page. They are not interchangeable. For a token scoped to one *person* rather than a shared
 > key, register an OAuth client on the Config page: the worker's `401` tells an OAuth-capable client where to
 > sign in. Full walkthrough with the `mcp` SDK and a raw `grpcurl` call:
-> [local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/)
+> [Get started](https://bkraad47.github.io/ramen/get-started/)
 > (also in [`deploy/local/README.md`](deploy/local/README.md)).
 
 ## Screenshots
 
-| Login | Dashboard (load per zone × group) |
+| Login | Dashboard, load per zone and group |
 |---|---|
 | ![login](docs/img/login.png) | ![dashboard](docs/img/dashboard.png) |
 
@@ -157,13 +158,13 @@ probe it, and reports `SERVING` only once the runtime has loaded the group's cod
 **What is verified, in four lines.**
 - Both transports through every guard, on real node processes, in CI on Linux and on a Windows runner that builds
   the node natively (0.5.0).
-- The GCP path live through the Gateway load balancer: gRPC in 0.3.2, Streamable HTTP, OAuth and the bridge in
-  0.5.1, per-group roles in 0.5.95, each on a throwaway project deleted the same day.
-- The AWS path applied to a real account since 0.5.6; the published bridge server-tested against it in 0.5.8.
-- Not yet exercised on a real load balancer: node TLS, the size and in-flight caps, and `x-forwarded-for` hop
-  counting (tests only). By design, a
-  group's code runs in a process that holds that group's secrets; isolation between groups is the pod, the
-  namespace and the per-zone identity.
+- The GCP path live through the Gateway load balancer on a throwaway project every release, most recently 0.6.0
+  with two zones, OAuth, the Redis throttle and a real teardown.
+- The AWS path applied to a real account in 0.5.6, 0.5.8 and 0.6.0, each emptied the same day; the published
+  bridge server-tested against it in 0.5.8.
+- Covered by tests only, never on a real load balancer: node TLS, and the size and in-flight caps.
+- By design, a group's code runs in a process that holds that group's secrets. Isolation between groups is the
+  pod, the namespace and the per-zone identity.
 
 Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/ramen/wiki/transport/).
 
@@ -171,24 +172,24 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 
 | Target | Status | Guide |
 |---|---|---|
-| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on throwaway projects: 0.3.0 infrastructure, 0.3.2 gRPC header routing over h2c end to end through the Gateway (harness 126 passed, 0 failed), 0.5.1 Streamable HTTP and OAuth through the same Gateway (harness 218 passed, 0 failed, 15 skipped with stated reasons), each on one cluster in `us-central1` | [docs](https://bkraad47.github.io/ramen/how-tos/gcp/) · [`deploy/README.md`](deploy/README.md) |
-| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/how-tos/aws/) |
+| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on a throwaway project every release, most recently 0.6.0: two zones, OAuth, the Redis throttle shared across zones, real zone teardown | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
+| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
 Bring-up on GCP is `terraform apply` → `make push` → `helm upgrade --install` → add a zone and a group in the
 console → Deploy. About 25 minutes, mostly waiting for GKE and the load balancer. The load balancer gets a
 publicly-trusted certificate automatically (a free `sslip.io` hostname derived from the static IP — no domain to
-buy, since 0.5.5). Clients then use `https://<public_hostname>/mcp` with `Authorization: Bearer rmk_…` and the
+buy, since 0.5.5). Clients then use `https://<public_hostname>/mcp` with `Authorization: Bearer rmk_` and the
 `ramen-group` / `ramen-zone` headers (the same address serves the console and, by those headers, every zone);
 stdio-only clients point the bridge at `<public_hostname>:443 --tls` — no `--ca`, nothing to import.
 
 ## Write your own tools
 
-Full guide with the demo repo, `env.yaml` and local development: [Write and develop an MCP repo](https://bkraad47.github.io/ramen/how-tos/develop-mcp-repo/).
+Full guide with the demo repo, `env.yaml` and local development: [The MCP repo, structure and local development](https://bkraad47.github.io/ramen/wiki/mcp-repo/).
 
 A group repo is any git repo with `mcp/tools/<name>/<name>.py` + `<name>.json` (and `resources/`, `prompts/`,
 `requirements.txt`). Start from [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group); the
-contract is in [Protos](https://bkraad47.github.io/ramen/wiki/protos/). Secrets are referenced as
+contract is in [the MCP repo page](https://bkraad47.github.io/ramen/wiki/mcp-repo/). Secrets are referenced as
 `{{$group.NAME}}` and substituted by the runtime at call time. Nothing about the transport leaks into tool code.
 
 ## Repository
@@ -209,7 +210,7 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Changes: [CHANGELOG.md](CHAN
 ## Develop
 
 ```sh
-make test            # runtime-py (pytest, ≥90% cov) + node-rs (fmt, clippy, test) + console (pytest, ≥90% cov)
+make test            # runtime-py and console (pytest, 90% coverage gate) plus node-rs (fmt, clippy, test)
 make test-harness    # tests/: conformance + e2e (skips without a running stack)
 make proto           # regenerate Python stubs from proto/ (Rust stubs build via tonic-build)
 make demo-worker     # node + runtime locally without Docker
@@ -218,7 +219,7 @@ uv run --project docs --group docs mkdocs serve   # docs at http://127.0.0.1:800
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) — use it, fork it, change it, with attribution; renaming it as a new commercial product of your own is not acceptable. Related repositories and which versions go together: [Related versions](https://bkraad47.github.io/ramen/related-versions/).
+See [CONTRIBUTING.md](CONTRIBUTING.md) — use it, fork it, change it, with attribution; renaming it as a new commercial product of your own is not acceptable. Related repositories and which versions go together: [Releases](https://bkraad47.github.io/ramen/release/).
 
 ## License
 BSD-3-Clause © 2026 Raad. See [LICENSE](LICENSE).

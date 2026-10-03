@@ -5,7 +5,7 @@ description: Bring Ramen up on a GCP project (GKE Autopilot, Firestore, GCS, Art
 
 # Deploy Ramen on GCP
 
-Verified path (v0.2.0+). Full narrative: `docs/how-tos/gcp.md`; binding contract: `docs/CONTRACTS.md` §7.
+Verified path (v0.2.0+). Full narrative: `docs/wiki/deploy-gcp.md`; binding contract: `docs/CONTRACTS.md` §7.
 Takes ~25 min wall clock; most of it is GKE and load-balancer provisioning. Never skip waits.
 
 ## Inputs

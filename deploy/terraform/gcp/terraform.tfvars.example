@@ -1,4 +1,4 @@
 # cp terraform.tfvars.example terraform.tfvars && edit
-project = "ramen-test-260927"
+project = "<your project id>"
 region  = "us-central1"
-# groups_bucket = "ramen-ramen-test-260927-groups"   # default: ramen-<project>-groups
+# groups_bucket = "ramen-<project>-groups"   # default: ramen-<project>-groups

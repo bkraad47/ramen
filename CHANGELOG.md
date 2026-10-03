@@ -2,6 +2,20 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+- **The documentation site, reorganized around what a reader came for.** Home is an introduction with the three
+  repositories and the reasons to use Ramen; *Get started* is one page with a picture per step (run it locally,
+  connect an MCP repo, connect a client with a key, with OAuth, or through the bridge); *How it works* holds the
+  architecture and a table of every feature with where it is managed; the *Wiki* is one page per subject (deploy
+  on GCP, deploy on AWS, groups and zones and regions, the MCP repo, secrets, users and access, connect with
+  OAuth, connect with a password, API keys and the API, throttling with Redis, Entra ID and Workspace, backups,
+  configuration); *Changelog* and *Release* are short pages, and the contracts, threat model, transport and
+  architecture pages move under *Reference*. The repeated and stale how-to pages are gone.
+- **Every screenshot is now a live capture** from a real GCP deployment of this release rather than a seeded
+  console, including the zones page and what an MCP user sees. The architecture drawing was redrawn wider so its
+  labels no longer overlap each other.
+- The deploy guides now say what the console's own service account may do on each cloud, and what each zone's
+  identity starts with.
+
 ## [0.6.0] — instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt
 **A zone that goes away is torn down.** Deleting a zone, dropping it from an environment (when no other environment
 of the group still uses it) or deleting an environment now destroys that group's deployment there — the namespace

@@ -1,7 +1,7 @@
 # deploy/local — the compose stack
 
 Firestore emulator + console + one worker (group `demo`, zone `local`). Run from the repo root.
-Long version with screenshots: https://bkraad47.github.io/ramen/how-tos/local-quickstart/
+Long version with screenshots: https://bkraad47.github.io/ramen/get-started/
 
 ```sh
 make up        # copies .env.example → .env once; docker compose up -d --build (first run 3–5 min)

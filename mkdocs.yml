@@ -1,5 +1,5 @@
 site_name: Ramen
-site_description: Multizone, highly available, enterprise-grade MCP server for GCP and AWS Kubernetes. JSON-RPC 2.0 over gRPC; Rust MCP node + Python 3.14 runtime workers, managed from a FastAPI console.
+site_description: Multizone, highly available MCP server for GCP and AWS Kubernetes. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, secrets, roles and OAuth. Rust node, Python runtime, FastAPI console.
 site_url: https://bkraad47.github.io/ramen/
 repo_url: https://github.com/bkraad47/ramen
 repo_name: bkraad47/ramen
@@ -57,46 +57,36 @@ plugins:
   - search
 nav:
   - Home: index.md
+  - Get started: get-started.md
   - How it works: how-it-works.md
-  - Features: features.md
-  - Get started:
-      - Local quickstart: how-tos/local-quickstart.md
-      - Write and develop an MCP repo: how-tos/develop-mcp-repo.md
-      - Add and deploy a tool: how-tos/add-a-tool.md
-      - End to end, console to AI client: how-tos/end-to-end.md
-  - Connect clients:
-      - Keys, OAuth, password accounts, the bridge: how-tos/mcp-clients.md
-      - Sign in with Entra ID / Google Workspace: how-tos/sso.md
-  - Deploy:
-      - GCP, step by step: how-tos/gcp.md
-      - AWS, step by step: how-tos/aws.md
-      - Configuration: how-tos/configuration.md
-      - Changing the state store: how-tos/storage-backend.md
-      - Migrate 0.3.0 → 0.3.1 (gRPC): how-tos/migrate-0.3.1.md
-  - Operate:
-      - The console, page by page: how-tos/console.md
-      - Service accounts and secrets (GCP, AWS): how-tos/service-accounts.md
-      - Secrets: how-tos/secrets.md
-      - Back up and restore: how-tos/backup-restore.md
-      - DevOps with the API and keys: how-tos/devops-api.md
-      - Security: how-tos/security.md
-      - Threat model: threat-model.md
   - Wiki:
-      - Concepts: wiki/concepts.md
-      - Transport and security: wiki/transport.md
-      - Protos (group repo contract): wiki/protos.md
-      - Canary deploys: wiki/canary.md
-      - Rebalance and load: wiki/rebalance.md
-      - Cloud-ops skills: wiki/skills.md
-  - Architecture:
-      - Current (v0.6.0): architecture/index.md
-      - v0.4.0: architecture/v0.4.0.md
-      - v0.3.1: architecture/v0.3.1.md
-      - v0.3.0: architecture/v0.3.0.md
-      - v0.2.0: architecture/v0.2.0.md
-      - v0.1.0: architecture/v0.1.0.md
+      - Overview: wiki/index.md
+      - Deploy on GCP: wiki/deploy-gcp.md
+      - Deploy on AWS: wiki/deploy-aws.md
+      - Groups, zones and regions: wiki/groups-zones.md
+      - The MCP repo, structure and local development: wiki/mcp-repo.md
+      - Secrets at runtime: wiki/secrets.md
+      - Users and access: wiki/users-access.md
+      - Connect a client with OAuth: wiki/connect-oauth.md
+      - Connect a client with a password: wiki/connect-password.md
+      - API keys and the API: wiki/api-keys.md
+      - Throttling with Redis: wiki/throttling.md
+      - Entra ID and Google Workspace (untested): wiki/sso.md
+      - Backups: wiki/backups.md
+      - Configuration: wiki/configuration.md
+  - Changelog: changelog.md
+  - Release: release.md
   - Reference:
+      - Transport, hop by hop: wiki/transport.md
+      - Threat model: threat-model.md
+      - Cloud-ops agent skills: wiki/skills.md
       - Interface contracts: CONTRACTS.md
-      - Versions: versions.md
-      - Related versions (bridge, demo): related-versions.md
       - Contributing and modifying: contributing.md
+      - Version tracker: versions.md
+      - Architecture (v0.6.0): architecture/index.md
+      - Architecture history:
+          - v0.4.0: architecture/v0.4.0.md
+          - v0.3.1: architecture/v0.3.1.md
+          - v0.3.0: architecture/v0.3.0.md
+          - v0.2.0: architecture/v0.2.0.md
+          - v0.1.0: architecture/v0.1.0.md

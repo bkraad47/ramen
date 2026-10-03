@@ -49,6 +49,15 @@
 .md-typeset .ramen-badges a { display: inline-flex; align-items: center; line-height: 0; }
 .md-typeset .ramen-badges img { height: 20px; width: auto; display: block; margin: 0; border-radius: 3px; }
 
+/* Badge table on the home page: one row, every badge the same height, no ragged sizes. */
+.md-typeset table.ramen-badge-table { display: table; width: auto; margin: 0 auto 1rem; border: 0; background: transparent; box-shadow: none; }
+.md-typeset .ramen-badge-table td { border: 0; padding: .2rem .35rem; text-align: center; vertical-align: middle; }
+.md-typeset .ramen-badge-table img { height: 20px; width: auto; display: block; margin: 0; border-radius: 3px; }
+.md-typeset .ramen-badge-table a { display: inline-block; line-height: 0; }
+.ramen-repos h3 a { color: var(--ramen-coral-light); }
+.ramen-cta { text-align: center; margin: 1.2rem 0; }
+.ramen-caption { color: var(--md-default-fg-color--light); font-size: .8rem; line-height: 1.5; margin: .4rem 0 1.2rem; }
+
 .ramen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .8rem; margin: 1rem 0; }
 .ramen-grid > div { border: 1px solid var(--md-default-fg-color--lightest); border-radius: 10px; padding: .8rem 1rem; background: rgba(255, 255, 255, .04); }
 .ramen-grid h3 { margin: 0 0 .3rem; font-size: 1rem; }

@@ -5,7 +5,7 @@ is asked in return.
 
 ## Use and modify
 - **Run it, fork it, adapt it** to your organization: different clouds, your own console pages, your own policy
-  catalogue. The group repo contract ([Protos](wiki/protos.md)) and the [interface contracts](CONTRACTS.md) are the
+  catalogue. The group repo contract ([the MCP repo](wiki/mcp-repo.md)) and the [interface contracts](CONTRACTS.md) are the
   stable surfaces to build against.
 - **Keep the reference.** The license requires the copyright notice to stay with the code; beyond the letter of
   the license, the request is simple: say where it came from. A fork that keeps "based on Project Ramen" in its README and docs
@@ -31,8 +31,8 @@ is asked in return.
 | [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge) | the stdio bridge, [on PyPI](https://pypi.org/project/ramen-mcp-bridge/) | its own `v0.x.y`; the worker image pins one |
 | [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group) | the demo group repo every guide deploys | `main`; environments pin a ref |
 
-[Related versions](related-versions.md) tracks which versions go together.
+[Releases](release.md) tracks which versions go together.
 
 ## Reporting a security issue
-Mail the maintainer (see the repository profile) rather than opening a public issue; the
-[threat model](threat-model.md) says what is in scope.
+Open a private GitHub security advisory on the repository rather than a public issue. The
+[threat model](threat-model.md#reporting) says what is in scope and what to expect.

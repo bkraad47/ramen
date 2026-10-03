@@ -1,37 +1,36 @@
 # Ramen
 
-> Multizone, highly available, enterprise-grade MCP (Model Context Protocol) server for GCP and AWS Kubernetes. A Rust MCP node and a Python 3.14 runtime run tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, IP rules and audit. BSD-3-Clause. Version 0.4.0.
+> Multizone, highly available, enterprise-grade MCP (Model Context Protocol) server for GCP and AWS Kubernetes. A git repo of Python tools, resources and prompts becomes a fleet of MCP workers behind a cloud load balancer. A Rust node speaks Streamable HTTP (`POST /mcp`) and JSON-RPC 2.0 over gRPC on one port; a Python 3.14 runtime runs the code; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth, IP rules, throttling and audit. BSD-3-Clause. Version 0.6.0.
 
-Since 0.3.1 Ramen exposes MCP as JSON-RPC 2.0 over gRPC: one `ramen.v1.Mcp/Call` per message (`bytes body`), metadata `authorization: Bearer rmk_<key>` plus `ramen-group` / `ramen-zone` for load-balancer routing, `grpc.health.v1.Health` on the same port (worker `localhost:8080` h2c locally; `<lb>:443` TLS in the cloud). Standard MCP clients (Claude Desktop, Cursor, the mcp SDK) connect through the stdio bridge `ramen-mcp-bridge --target <host:port> --key <rmk_> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]`. The HTTP `/mcp` endpoint of 0.1.0–0.3.0 is removed. Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json` (proto: type, name, description, callable, input, output, error). Deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll the stable track.
+Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth token, plus `ramen-group` and `ramen-zone` headers the load balancer routes on. Standard MCP clients (Claude Code, Claude Desktop, Cursor, the mcp SDK) connect directly over HTTP; stdio-only clients use `ramen-mcp-bridge` (PyPI), which carries a key or signs the person in with `--oauth`. Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json`; deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll stable.
 
 ## Docs
 
-- [Landing page](https://bkraad47.github.io/ramen/): value proposition, 5-command local quickstart, badges
-- [How it works and why](https://bkraad47.github.io/ramen/how-it-works/): design rationale (Rust node + Python runtime, git→bucket→worker, canary, keys, secrets)
-- [Architecture (current)](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions D1–D23
-- [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/): binding contracts for the group repo, sidecar protocol, gRPC transport (§11), console API, GCP/AWS deployment, auth/policy, docs
-- [Local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/): docker compose stack, console URL and login, minting rmk_ MCP keys vs rmn_ API keys, bridge config for Claude Desktop / mcp SDK, grpcurl example
-- [GCP how-to](https://bkraad47.github.io/ramen/how-tos/gcp/): Terraform + Helm bring-up on GKE Autopilot (header-routed gRPC through the Gateway), verified on a live GKE Gateway in 0.3.2
-- [AWS how-to](https://bkraad47.github.io/ramen/how-tos/aws/): Terraform/CloudFormation + Helm on EKS (ALB gRPC target groups), applied to a real account since 0.5.6
-- [Security](https://bkraad47.github.io/ramen/how-tos/security/): roles, keys, gRPC parity table, IP rules, CSRF, OAuth+PKCE, audit, 0.3.1 IAM/RBAC narrowing
-- [Secrets](https://bkraad47.github.io/ramen/how-tos/secrets/): `{{$group.NAME}}` references, backends, scoping
-- [DevOps with the API](https://bkraad47.github.io/ramen/how-tos/devops-api/): every console route with curl, API keys, backups, rotation, worker Admin/Metrics + Admin/Reload over grpcurl
-- [Migrate 0.3.0 → 0.3.1](https://bkraad47.github.io/ramen/how-tos/migrate-0.3.1/): HTTP MCP endpoint removed; bridge config before/after, edge rollout order, verification
-- [Concepts](https://bkraad47.github.io/ramen/wiki/concepts/): group, environment, zone, worker, roles
-- [Transport and what secures each hop](https://bkraad47.github.io/ramen/wiki/transport/): JSON-RPC 2.0 over gRPC, why the node is Rust, per-hop protection (bearer key with constant-time compare, CIDR allowlist, TLS at the edge and optional node TLS, blocked names, per-zone cloud identity), which hops are plaintext h2c by default, and what is verified versus untested
-- [Protos](https://bkraad47.github.io/ramen/wiki/protos/): group repo contract with examples, plus the gRPC transport section (mcp.proto, metadata, status codes)
-- [Canary deploys](https://bkraad47.github.io/ramen/wiki/canary/)
-- [Rebalance and load](https://bkraad47.github.io/ramen/wiki/rebalance/)
-- [Cloud-ops agent skills](https://bkraad47.github.io/ramen/wiki/skills/): deploy-gcp, deploy-aws, rotate-keys, backup-restore, scale-zone
-- [Versions](https://bkraad47.github.io/ramen/versions/): version tracker generated from the changelog
+- [Home](https://bkraad47.github.io/ramen/): what Ramen is, the three repos, why
+- [Get started](https://bkraad47.github.io/ramen/get-started/): run locally, connect an MCP repo, connect Claude with a key or OAuth, the bridge
+- [How it works](https://bkraad47.github.io/ramen/how-it-works/): the architecture and every feature with where it is managed
+- [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/): Terraform, images, Helm, first zone and group, the console's service account and access controls, teardown
+- [Deploy on AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/): the same on EKS with DynamoDB, S3, Secrets Manager and an ALB
+- [Groups, zones and regions](https://bkraad47.github.io/ramen/wiki/groups-zones/): the model, deploying, scaling, rebalance, blocked packages, IP rules
+- [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/): layout, the JSON contract, resources and prompts, secrets in code, local testing, worker images
+- [Secrets](https://bkraad47.github.io/ramen/wiki/secrets/): scopes, `{{$group.NAME}}`, `mcp/env.yaml`, backends
+- [Users and access](https://bkraad47.github.io/ramen/wiki/users-access/): roles per group, the Users page, service-account permissions, audit and logs
+- [Connect with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/): registering a client, Claude Code, Claude Desktop, Cursor, the bridge
+- [Connect with a password](https://bkraad47.github.io/ramen/wiki/connect-password/): a password account through the same flow
+- [API keys and the API](https://bkraad47.github.io/ramen/wiki/api-keys/): `rmk_` versus `rmn_`, the OpenAPI page at `/api/docs`, a cheat sheet
+- [Throttling with Redis](https://bkraad47.github.io/ramen/wiki/throttling/): per-IP and per-token limits shared across zones
+- [Entra ID and Google Workspace](https://bkraad47.github.io/ramen/wiki/sso/): OIDC sign-in and claim-to-role rules (untested against a real tenant)
+- [Backups](https://bkraad47.github.io/ramen/wiki/backups/): create, preview, restore, prune, reconcile
+- [Configuration](https://bkraad47.github.io/ramen/wiki/configuration/): the config file, the state store, every variable that matters, restricting actions
+- [Changelog](https://bkraad47.github.io/ramen/changelog/), [Releases](https://bkraad47.github.io/ramen/release/), [Version tracker](https://bkraad47.github.io/ramen/versions/)
+- [Transport, hop by hop](https://bkraad47.github.io/ramen/wiki/transport/): what protects each hop, what is verified and what is not
+- [Threat model](https://bkraad47.github.io/ramen/threat-model/)
+- [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/)
+- [Architecture](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions
 
 ## Code
 
-- [Repository](https://github.com/bkraad47/ramen): console/ (FastAPI), node-rs/ (Rust, tonic), runtime-py/ (Python, ramen-mcp-bridge), proto/ramen/v1/ (mcp.proto, admin.proto), deploy/ (compose, Helm, Terraform, CloudFormation), skills/, tests/
-- [Releases](https://github.com/bkraad47/ramen/releases): tagged v<semver>, zips attached by GitHub Actions
-- [Demo group repo](https://github.com/bkraad47/ramen-demo-mcp-group): one tool, one resource, one prompt to connect right away
-
-## Optional
-
-- [Changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md)
-- [Architecture v0.1.0](https://bkraad47.github.io/ramen/architecture/v0.1.0/), [v0.2.0](https://bkraad47.github.io/ramen/architecture/v0.2.0/), [v0.3.0](https://bkraad47.github.io/ramen/architecture/v0.3.0/), [v0.3.1](https://bkraad47.github.io/ramen/architecture/v0.3.1/), [v0.4.0](https://bkraad47.github.io/ramen/architecture/v0.4.0/)
+- [ramen](https://github.com/bkraad47/ramen): console/ (FastAPI), node-rs/ (Rust, tonic), runtime-py/ (Python), proto/, deploy/ (compose, Helm, Terraform, CloudFormation), skills/, tests/
+- [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge): the stdio bridge, `pip install ramen-mcp-bridge`
+- [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group): the demo group repo, one tool, one resource, one prompt, an `env.yaml`
+- [Releases](https://github.com/bkraad47/ramen/releases)

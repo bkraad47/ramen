@@ -99,7 +99,9 @@ def test_permission_request_approve_and_rules(admin, world):
         )
         r = ok(c.post("requests", {"group": g, "zone": z, "permission": "bucket.read"}), 201).json()
         assert r["status"] == "pending" and r["type"] == "permission"
-        assert c.get("requests").status_code == 403
+        # 0.5.95 (R4): a group admin sees their groups' requests but never decides their own
+        assert any(q["id"] == r["id"] for q in ok(c.get("requests")).json())
+        assert c.post("request_approve", id=r["id"]).status_code == 409
         assert any(q["id"] == r["id"] for q in ok(admin.get("requests")).json())
         a = ok(admin.post("request_approve", id=r["id"])).json()
         assert a["status"] == "approved" and a["applied"]["permissions"] == ["bucket.read"]

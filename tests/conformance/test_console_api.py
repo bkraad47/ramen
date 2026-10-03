@@ -78,7 +78,7 @@ def test_viewer_reads_but_cannot_mutate(world):
     assert ok(v.me()).json()["role"] == "viewer"
     assert [g["name"] for g in items(ok(v.get("groups")))] == [ga]
     ok(v.get("group", group=ga))
-    ok(v.get("secrets", group=ga))
+    denied(v.get("secrets", group=ga))  # 0.5.95 (N18): secrets are for super and group admins only
     denied(v.get("group", group=gb))
     denied(v.put("group", {"ref": "main"}, group=ga))
     denied(v.post("rebalance", group=ga, zone=zone))
@@ -199,11 +199,13 @@ def test_audit_entries_created(admin, world, admin_creds):
     assert any(f"group:{ga}" in e.get("tags", []) for e in mine)
 
 
-def test_audit_scoped_to_group(world):
+def test_audit_is_super_admin_only_and_names_the_group(admin, world):
+    """0.5.95 (N19): the audit log is a super-admin page; a group admin's actions still land in it, tagged."""
     g, ga = world["gadmin_c"], world["ga"]
-    g.put("group", {"ref": "main"}, group=ga)
-    mine = items(ok(g.audit()))
-    assert mine and all(f"group:{ga}" in e.get("tags", []) for e in mine)
+    ok(g.put("group", {"ref": "main"}, group=ga))
+    denied(g.audit())
+    rows = items(ok(admin.audit()))
+    assert any(f"group:{ga}" in e.get("tags", []) and e.get("user") == world["gadmin"] for e in rows)
 
 
 def test_backup_contains_release_version(admin):

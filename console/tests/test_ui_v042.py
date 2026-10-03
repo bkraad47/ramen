@@ -38,16 +38,15 @@ def test_the_api_key_form_fields_share_one_width_class(demo):
 def test_create_user_groups_are_the_same_dropdown_picker(demo):
     page = demo.get("/users").text
     assert '<select name="groups" multiple' not in page and "multiple size=" not in page
-    assert 'id="group-pick"' in page and 'id="group-chips"' in page
+    assert 'id="new-groups"' in page and '<input type="checkbox" name="groups" value="demo">' in page  # 0.5.94 picker
 
 
 def test_create_user_form_is_collapsed_behind_a_button(demo):
     page = demo.get("/users").text
     assert "<details" in page and "Create user" in page
     details_start = page.index("<details")
-    details_end = page.index("</details>")
-    box = page[details_start:details_end]
-    assert 'name="email"' in box and 'name="password"' in box and 'name="role"' in box and 'id="group-pick"' in box
+    box = page[details_start : page.index("</form>", details_start)]  # the form holds dropdowns of their own
+    assert 'name="email"' in box and 'name="password"' in box and 'name="role"' in box and 'id="new-groups"' in box
 
 
 # --- v0.5.5 I5: a super admin gets a "Reset password" control on each user's row (the API already existed and was
@@ -63,7 +62,7 @@ def test_super_admin_sees_a_reset_password_control_per_row(demo, app):  # noqa: 
         make_user(demo, "ga@x", "group_admin", ["demo"])
         login(ga, "ga@x", PW)
         page = ga.get("/users").text
-        assert "Reset password" not in page  # only a super admin may reset someone else's (api_admin.py:61-62)
+        assert "Reset password" in page  # 0.5.95 (R4): a group admin resets passwords of their groups' members
 
 
 # --- W2 dashboard refreshes every minute, and the toggle can stop it ----------------------------------------------
@@ -155,7 +154,7 @@ def test_environments_flattens_the_last_deploy_and_sizes_its_actions(demo):
 def test_users_row_puts_delete_user_right_of_save(demo):
     make_user(demo, "someone@x", "viewer", ["demo"])
     cell = cell_of(demo.get("/users").text, "Delete user")
-    assert "Save" in cell and cell.index("Save") < cell.index("Delete user")
+    assert "Reset password" in cell and cell.index("Reset password") < cell.index("Delete user")
     assert "row-actions" in cell
     assert ">Delete<" not in cell  # the bare label is gone
 

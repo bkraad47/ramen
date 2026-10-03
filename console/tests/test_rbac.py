@@ -20,7 +20,7 @@ def test_can():
     assert can(p("viewer", ["g"]), "viewer")
     assert not can(p("viewer", ["g"]), "viewer", "o")
     assert not can(p("viewer", ["g"]), "group_admin", "g")
-    assert can(p("viewer", []), "viewer")
+    assert not can(p("viewer", []), "viewer")  # D41: no membership anywhere, nothing to see
     assert not can(p("viewer", []), "viewer", "g")
     assert not can(None, "viewer")
     # an MCP user (0.5.92) ranks below viewer: nothing in the console, only their own groups' workers

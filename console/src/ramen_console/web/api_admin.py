@@ -21,7 +21,7 @@ UNMASKED = {"RAMEN_SECRETS_BACKEND"}
 
 
 @r.get("/users")
-async def users(request: Request, format: str | None = None, p: Principal = Depends(admin)):
+async def users(request: Request, format: str | None = None, p: Principal = Depends(viewer)):
     return tabular(await accounts(request).list_users(p), format, "users")
 
 
@@ -29,7 +29,9 @@ async def users(request: Request, format: str | None = None, p: Principal = Depe
 async def create_user(request: Request, body: m.UserIn, p: Principal = Depends(admin)):
     note(request, "user.create", body.email, [f"group:{g}" for g in body.groups])
     st = request.app.state
-    doc = await st.accounts.create_user(p, body.email, body.password, body.role, body.groups)
+    doc = await st.accounts.create_user(
+        p, body.email, body.password, body.role, body.groups, memberships=body.memberships
+    )
     if st.mailer.enabled:
         from .auth_routes import base_url
 
@@ -46,8 +48,9 @@ async def create_user(request: Request, body: m.UserIn, p: Principal = Depends(a
 @r.put("/users/{uid}")
 async def update_user(request: Request, uid: str, body: m.UserUpdate, p: Principal = Depends(super_)):
     tags = ([f"role:{body.role}"] if body.role else []) + [f"group:{g}" for g in body.groups or []]
+    tags += [f"{g}:{r}" for g, r in (body.memberships or {}).items()]
     note(request, "user.update", uid, tags)
-    return respond(request, await accounts(request).update_user(uid, body.role, body.groups))
+    return respond(request, await accounts(request).update_user(uid, body.role, body.groups, body.memberships))
 
 
 @r.delete("/users/{uid}")
@@ -61,8 +64,10 @@ async def delete_user(request: Request, uid: str, p: Principal = Depends(admin))
 async def set_password(request: Request, uid: str, body: m.Password, p: Principal = Depends(viewer)):
     if uid == "me":
         uid = p.id
-    if uid != p.id and p.role != "super_admin":
-        raise forbidden("Only super admins reset other passwords")
+    if uid != p.id:
+        target = await accounts(request).store.get("users", uid)
+        if not target or not await accounts(request).can_manage(p, target):
+            raise forbidden("You may reset passwords of members of groups you administer (never a super admin's)")
     note(request, "user.password", uid, [f"user:{uid}"])
     await accounts(request).set_password(uid, body.password)
     resp = respond(request, {"ok": True})
@@ -70,12 +75,12 @@ async def set_password(request: Request, uid: str, body: m.Password, p: Principa
 
 
 @r.get("/api-keys")
-async def keys(request: Request, format: str | None = None, p: Principal = Depends(admin)):
+async def keys(request: Request, format: str | None = None, p: Principal = Depends(super_)):
     return tabular(await accounts(request).list_keys(p), format, "api-keys")
 
 
 @r.post("/api-keys", status_code=201)
-async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(admin)):
+async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(super_)):
     """`devops` keys drive this API; `agent` keys are mirrored as the named groups' MCP keys so the next deploy
     hands them to the workers, exactly as the group page's key form does (D21)."""
     note(request, "api_key.create", body.name, [f"client_type:{body.client_type}"])
@@ -91,7 +96,7 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(admin
 
 
 @r.delete("/api-keys/{kid}")
-async def delete_key(request: Request, kid: str, p: Principal = Depends(admin)):
+async def delete_key(request: Request, kid: str, p: Principal = Depends(super_)):
     note(request, "api_key.delete", kid, [f"key:{kid}"])
     await accounts(request).delete_key(p, kid)
     await svc(request).revoke_agent_key(kid)  # an agent key must stop reaching workers on the next deploy
@@ -99,7 +104,7 @@ async def delete_key(request: Request, kid: str, p: Principal = Depends(admin)):
 
 
 @r.post("/requests", status_code=201)
-async def request_permission(request: Request, body: m.RequestIn, p: Principal = Depends(viewer)):
+async def request_permission(request: Request, body: m.RequestIn, p: Principal = Depends(require("mcp_user"))):
     """Role request {role, group?} or SA permission request {group, zone, permission} (CONTRACTS §9)."""
     tags = [f"group:{body.group}"] if body.group else []
     if body.permission:
@@ -128,30 +133,31 @@ async def policy_permissions(p: Principal = Depends(viewer)):
 
 
 @r.get("/requests")
-async def list_requests(request: Request, p: Principal = Depends(super_)):
-    return await accounts(request).list_requests()
+async def list_requests(request: Request, p: Principal = Depends(admin)):
+    return await accounts(request).list_requests(p)
 
 
 @r.post("/requests/{rid}/approve")
-async def approve(request: Request, rid: str, p: Principal = Depends(super_)):
+async def approve(request: Request, rid: str, p: Principal = Depends(admin)):
+    """A super admin, or a group admin of the request's group who is not the requester (R4)."""
     note(request, "permission.approve", rid, [f"request:{rid}"])
     return respond(
-        request, await accounts(request).approve_request(rid, p.name, apply=svc(request).apply_sa_permissions)
+        request, await accounts(request).approve_request(rid, p.name, apply=svc(request).apply_sa_permissions, p=p)
     )
 
 
 @r.post("/requests/{rid}/deny")
-async def deny(request: Request, rid: str, p: Principal = Depends(super_)):
+async def deny(request: Request, rid: str, p: Principal = Depends(admin)):
     note(request, "permission.deny", rid, [f"request:{rid}"])
-    return respond(request, await accounts(request).deny_request(rid, p.name))
+    return respond(request, await accounts(request).deny_request(rid, p.name, p=p))
 
 
 @r.post("/requests/{rid}/revoke")
-async def revoke(request: Request, rid: str, p: Principal = Depends(super_)):
+async def revoke(request: Request, rid: str, p: Principal = Depends(admin)):
     """Takes an approved request back: the cloud roles for a permission, or the role and group for a role grant."""
     note(request, "permission.revoke", rid, [f"request:{rid}"])
     return respond(
-        request, await accounts(request).revoke_request(rid, p.name, revoke=svc(request).revoke_sa_permission)
+        request, await accounts(request).revoke_request(rid, p.name, revoke=svc(request).revoke_sa_permission, p=p)
     )
 
 
@@ -177,7 +183,7 @@ async def oauth_client_delete(request: Request, client_id: str, p: Principal = D
 
 
 @r.get("/audit")
-async def audit(request: Request, limit: int = 200, format: str | None = None, p: Principal = Depends(viewer)):
+async def audit(request: Request, limit: int = 200, format: str | None = None, p: Principal = Depends(super_)):
     rows = await svc(request).store.list("audit")
     if p.role != "super_admin":
         mine = {f"group:{g}" for g in p.groups}

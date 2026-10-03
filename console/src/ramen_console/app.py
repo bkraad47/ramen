@@ -59,6 +59,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await ensure_super_admin(app.state.store)
+        await app.state.accounts.migrate_memberships()  # 0.5.95 (D41): per-group roles on pre-existing users
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),

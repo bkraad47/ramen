@@ -236,8 +236,14 @@ def test_secrets_never_leak(demo):
     make_user(demo, "v@x", "viewer", ["demo"])
     with TestClient(demo.app) as v:
         login(v, "v@x", PW)
-        r = v.get("/api/v1/groups/demo/secrets")
+        assert v.get("/api/v1/groups/demo/secrets").status_code == 403  # N18 (0.5.95): admins only
+        make_user(demo, "ga2@x", "group_admin", ["demo"])
+    with TestClient(demo.app) as ga2:
+        login(ga2, "ga2@x", PW)
+        r = ga2.get("/api/v1/groups/demo/secrets")
         assert r.status_code == 200 and SECRET_VALUE not in r.text
+    with TestClient(demo.app) as v:
+        login(v, "v@x", PW)
         assert v.post("/api/v1/groups/demo/secrets", json={"name": "X", "value": "y"}).status_code == 403
         assert v.delete(f"/api/v1/groups/demo/secrets/{sid}").status_code == 403
     assert demo.delete(f"/api/v1/groups/demo/secrets/{sid}").status_code == 200
@@ -420,11 +426,10 @@ def test_api_keys(demo):
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
         login(ga, "ga@x", PW)
+        # N19 (0.5.95): API keys are a super-admin matter; group admins mint MCP (agent) keys on their group page
         assert ga.post("/api/v1/api-keys", json={"name": "esc", "role": "super_admin"}).status_code == 403
-        assert ga.post("/api/v1/api-keys", json={"name": "esc", "groups": ["other"]}).status_code == 403
-        own = ga.post("/api/v1/api-keys", json={"name": "mine"}).json()
-        assert own["role"] == "group_admin" and own["groups"] == ["demo"]
-        assert [k["name"] for k in ga.get("/api/v1/api-keys").json()] == ["mine"]
+        assert ga.post("/api/v1/api-keys", json={"name": "mine"}).status_code == 403
+        assert ga.get("/api/v1/api-keys").status_code == 403
         assert ga.delete(f"/api/v1/api-keys/{kid}").status_code == 403
     assert demo.delete(f"/api/v1/api-keys/{kid}").status_code == 200
     assert demo.delete(f"/api/v1/api-keys/{kid}").status_code == 404
@@ -474,12 +479,13 @@ def test_audit(demo):
     with TestClient(demo.app) as ga:
         login(ga, "ga@x", PW)
         ga.put("/api/v1/groups/demo", json={"ref": "x"})
-        mine = ga.get("/api/v1/audit").json()
-        assert mine and all("group:demo" in x["tags"] for x in mine)
+        assert ga.get("/api/v1/audit").status_code == 403  # N19 (0.5.95): the audit log is a super-admin page
+        assert ga.get("/audit", follow_redirects=False).status_code == 403
     with TestClient(demo.app) as o:
         login(o, "o@x", PW)
-        theirs = o.get("/api/v1/audit").json()
-        assert theirs and all("group:other" in x["tags"] and "group:demo" not in x["tags"] for x in theirs)
+        assert o.get("/api/v1/audit").status_code == 403
+    rows = demo.get("/api/v1/audit").json()
+    assert any("group:demo" in x["tags"] and x["user"] == "ga@x" for x in rows)
 
 
 def test_backups(demo, tmp_path):

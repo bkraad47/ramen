@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 from .accounts import Accounts
 from .errors import ApiError, invalid, not_found
-from .rbac import Principal, can_connect
+from .rbac import Principal, can_connect, principal_from
 from .services import Services
 from .util import now, uid
 
@@ -63,14 +63,15 @@ def redirect_ok(uri: str) -> bool:
 
 def redirect_matches(registered: list[str], uri: str) -> bool:
     """Exact match, except that a registered plain-http loopback URI matches any port (RFC 8252 §7.3: a native app
-    binds whatever port is free). Scheme, host, path and query must still be identical."""
+    binds whatever port is free) and any loopback name — `localhost`, `127.0.0.1` and `::1` are the same
+    interface (0.5.95: Claude Code registers `localhost`, the bridge binds `127.0.0.1`). Path and query must match."""
     if uri in registered:
         return True
     u = urlparse(uri)
     if u.scheme != "http" or u.hostname not in LOOPBACK:
         return False
     return any(
-        (r := urlparse(reg)).scheme == "http" and r.hostname == u.hostname and (r.path, r.query) == (u.path, u.query)
+        (r := urlparse(reg)).scheme == "http" and r.hostname in LOOPBACK and (r.path, r.query) == (u.path, u.query)
         for reg in registered
     )
 
@@ -244,9 +245,7 @@ class OAuthServer:
         user = await self.store.get("users", rec["user"])
         if not user or user.get("login_disabled") or self.accounts.epoch_of(user) != rec["epoch"]:
             raise OAuthError("invalid_grant", "the user's sessions were revoked; sign in again")
-        if not can_connect(
-            Principal(user["id"], user["email"], user["role"], list(user.get("groups", []))), rec["group"]
-        ):
+        if not can_connect(principal_from(user), rec["group"]):
             raise OAuthError("invalid_grant", f"the user no longer has access to group {rec['group']}")
         return user
 

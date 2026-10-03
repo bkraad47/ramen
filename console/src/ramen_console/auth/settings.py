@@ -89,19 +89,33 @@ class AuthSettings:
             self.force_password and bool(email) and email.strip().lower() == self.admin_email
         )
 
-    def map_role(self, provider: str, claims: dict) -> tuple[str, list[str]]:
-        """Role + groups for a new SSO user: `role_claim` value(s) looked up in `role_map`, else viewer/no groups."""
+    def map_memberships(self, provider: str, claims: dict) -> tuple[bool, dict[str, str]]:
+        """(super admin?, {group: role}) for an SSO user from the `role_claim` value(s) looked up in `role_map`
+        (D41: each matching rule adds its groups at its role; the highest role wins per group)."""
         claim, table = self.role_claim.get(provider), self.role_map.get(provider, {})
         values = claims.get(claim) if claim else None
         values = values if isinstance(values, list) else [values] if values is not None else []
-        best: tuple[str, list[str]] | None = None
+        super_, memberships = False, {}
         for v in values:
             hit = table.get(str(v).lower())
-            if hit and (best is None or ROLES.index(hit[0]) < ROLES.index(best[0])):
-                best = (hit[0], list(hit[1]))
-            elif hit:
-                best[1].extend(g for g in hit[1] if g not in best[1])
-        return best or ("viewer", [])
+            if not hit:
+                continue
+            role, groups = hit
+            if role == "super_admin":
+                super_ = True
+                continue
+            for g in groups:
+                if g not in memberships or ROLES.index(role) < ROLES.index(memberships[g]):
+                    memberships[g] = role
+        return super_, memberships
+
+    def map_role(self, provider: str, claims: dict) -> tuple[str, list[str]]:
+        """The old summary of `map_memberships`: (highest role, every group) — viewer/no groups when nothing matches."""
+        super_, m = self.map_memberships(provider, claims)
+        if super_:
+            return "super_admin", []
+        best = min(m.values(), key=ROLES.index) if m else "viewer"
+        return best, sorted(m)
 
     def public(self) -> dict:
         return {

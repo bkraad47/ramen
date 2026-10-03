@@ -207,7 +207,10 @@ def test_http_protected_resource_metadata_appears_only_with_an_issuer(plain):
         n.wait_serving()
         r = n.http_client().get("/.well-known/oauth-protected-resource")
         assert r.status_code == 200
-        assert r.json()["resource"] == "mcp:demo:local"
+        # RFC 9728 (0.5.93): `resource` is this node's MCP URL (what Claude Code compares with the URL it was given),
+        # taken from the request when no public base is configured; the scope rides in scopes_supported
+        assert r.json()["resource"].startswith("http://127.0.0.1:") and r.json()["resource"].endswith("/mcp")
+        assert r.json()["scopes_supported"] == ["mcp:demo:local"]
         assert r.json()["authorization_servers"] == ["https://console.example"]
         r = n.http_client().post(PING, key=None)
         assert 'resource_metadata="/.well-known/oauth-protected-resource"' in r.headers.get("WWW-Authenticate", "")

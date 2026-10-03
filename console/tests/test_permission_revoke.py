@@ -81,14 +81,20 @@ def test_revoking_a_role_grant_lowers_the_user_and_ends_their_session(demo):
     assert after["role"] == "viewer" and after["groups"] == []
 
 
-def test_only_a_super_admin_may_deny_or_revoke(demo):
+def test_group_admins_of_the_group_may_revoke_but_not_strip_a_binding_directly(demo):
+    """0.5.95 (R4): an admin of the request's group (not the requester) may deny or revoke it; taking a bound
+    permission off the zone directly stays a super-admin call."""
     rid = grant(demo, "bucket.read")
     make_user(demo, "ga@x", "group_admin", ["demo"])
+    make_user(demo, "o@x", "group_admin", ["other"])
+    with TestClient(demo.app) as o:
+        login(o, "o@x", PW)
+        assert o.post(f"/api/v1/requests/{rid}/revoke").status_code == 403
     with TestClient(demo.app) as ga:
         login(ga, "ga@x", PW)
-        assert ga.post(f"/api/v1/requests/{rid}/revoke").status_code == 403
-        assert ga.post(f"/api/v1/requests/{rid}/deny").status_code == 403
         assert ga.delete("/api/v1/groups/demo/zones/zone-a/permissions/bucket.read").status_code == 403
+        assert ga.post(f"/api/v1/requests/{rid}/deny").status_code == 409  # approved, not pending
+        assert ga.post(f"/api/v1/requests/{rid}/revoke").status_code == 200
 
 
 def test_revocation_is_audited_and_visible_on_the_group_page(demo):

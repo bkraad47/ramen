@@ -444,6 +444,10 @@ def test_api_keys_cannot_authorize_and_loopback_clients_may_pick_a_port(demo):
     # RFC 8252 §7.3: a native app registered on http://127.0.0.1:9999/callback may come back on any port
     assert authorize(demo, cid, challenge, redirect="http://127.0.0.1:43111/callback").status_code == 200
     assert authorize(demo, cid, challenge, redirect="http://127.0.0.1:43111/other").status_code == 400
+    # ...and on any loopback name (0.5.95): localhost, 127.0.0.1 and ::1 are one interface
+    assert authorize(demo, cid, challenge, redirect="http://localhost:43111/callback").status_code == 200
+    assert authorize(demo, cid, challenge, redirect="http://[::1]:43111/callback").status_code == 200
+    assert authorize(demo, cid, challenge, redirect="http://10.0.0.5:43111/callback").status_code == 400
     assert authorize(demo, cid, challenge, redirect="https://127.0.0.1:43111/callback").status_code == 400
     # a redirect URI that already carries a query keeps it
     other = demo.post(

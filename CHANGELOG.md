@@ -2,6 +2,46 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.95] — roles are per group: the roles engine of instructions/v0.5.95.md
+**One role engine, per group (D41).** A person now holds a role *in each group* — `user.memberships:
+{group: role}` with `group_admin`, `viewer` or `mcp_user` — and super admin stays global. Someone can be a Group
+Admin of one group, a Viewer of three and an MCP User of two more. `rbac.can(p, role, group)` reads the
+membership of that group; without a group it asks for that rank anywhere (page-level gates); `require()` is the
+single gate for every page and `/api/v1/*` route, and a person with no membership anywhere (an MCP user not yet
+approved into a group) gets 403 everywhere except their own page, `/api/v1/me` and the OAuth consent flow,
+which refuses them per group. User documents from before carry `role` + `groups` and read as that role in each
+listed group (migrated in place at startup); `role` and `groups` remain on every user as derived summaries, so
+the API shape, API keys and the old readers keep working. Tokens are minted only for a group the person is in.
+
+**Who may do what** (the table in the instructions, now enforced and pinned by `tests/test_roles_engine.py`
+incl. a role × route matrix): Config, API keys, Backups and Audit are super-admin only (pages, nav and API;
+group admins mint MCP agent keys on their group page instead); only super admins delete groups (no button
+otherwise); secrets are seen and edited by super and group admins only; group admins scale workers of their
+group, manage who is a viewer / MCP user there (`PUT|DELETE /api/v1/groups/{g}/members/{uid}`,
+`POST /api/v1/groups/{g}/members {email, role}` — only a super admin hands out Group Admin), reset passwords of
+their groups' members (never a super admin's), and approve, deny or revoke service-account requests of their
+group — **never their own**: another admin of the group or a super admin must; viewers see the users of their
+groups (read-only), the group's MCP key names, workers and logs; the Service-account permissions and
+restrictions cards are shown to admins only. Anyone signed in may file a request.
+
+**Users page** maps people per group and role: one table per group with a role dropdown (radio) per member, a
+Remove button and an Add-member form for the groups the viewer administers; the Users table below keeps the
+account-level actions (reset password, delete) for the people the viewer may manage; the Create-user form
+takes the role and the groups from dropdowns and grants that role in each. Requests of the admin's groups are
+listed with Approve/Deny only for requests they did not file.
+
+**IdP rules build memberships per group** (D38 + D41): each matching rule adds its groups at its role, the
+highest role wins per group, `super_admin` rules make a super admin. New how-to `docs/how-tos/sso.md`: Microsoft
+Entra ID and Google Workspace as OIDC providers with the claims to map (untested against a real tenant — says
+so). The group page gained a collapsed "How MCP users sign in" card (HTTP and bridge).
+
+**The stdio bridge signs people in too** (`ramen-mcp-bridge` 0.2.0, instructions note 23): `--oauth <console>
+--client-id <id>` runs the console's authorization-code + PKCE flow with a loopback callback (RFC 8252), opens the
+browser on the console's sign-in page (so Entra ID / Google Workspace apply), keeps the refresh token in a 0600
+file, refreshes before expiry and after an UNAUTHENTICATED call, and signs every gRPC call with the person's
+token — the worker's log then names the account. The group page's "How MCP users sign in" card shows the line. A registered loopback redirect (`http://localhost/callback`) now matches any loopback name and port — `127.0.0.1`,
+`localhost`, `::1` are one interface (RFC 8252) — so one client registration serves Claude Code and the bridge.
+
 ## [0.5.94] — group page zones and blocked packages as checkbox dropdowns
 **Group page: Environments → Zones and Packages → "Blocked everywhere" are checkbox dropdowns**, the same
 control the Users page got in 0.5.93 (`partials/multi.html`): the new-environment form picks zones from the

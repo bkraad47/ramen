@@ -135,11 +135,11 @@ routes on, so keep them in every client config.
 
 ### Stdio-only clients: the bridge
 A client that can only start a local process uses `ramen-mcp-bridge`, a stdio MCP server that forwards every
-JSON-RPC message to the worker's `Mcp/Call` over gRPC and sends the key and the routing metadata for you. Install it
-once (it is the console script of `ramen-runtime[grpc]`; the worker image has it too):
+JSON-RPC message to the worker's `Mcp/Call` over gRPC and sends the key and the routing metadata for you. It's
+its own package/repo (github.com/bkraad47/ramen-mcp-bridge); the worker image has it too. Install it once:
 
 ```sh
-uv tool install './runtime-py[grpc]'          # → ~/.local/bin/ramen-mcp-bridge
+pip install ramen-mcp-bridge                  # → ramen-mcp-bridge on PATH
 RAMEN_MCP_KEY="$KEY" ramen-mcp-bridge --target localhost:8080 --insecure --group demo --zone local
 # stdin/stdout is now an MCP server; Ctrl-C to stop. --insecure = plaintext h2c (local only); use --tls --ca <pem> against a load balancer.
 ```

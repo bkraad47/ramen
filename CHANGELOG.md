@@ -2,6 +2,29 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.7] — The MCP bridge becomes its own pip-installable package
+`ramen-mcp-bridge` moves out of `runtime-py` into its own standalone, public repo
+and package — [github.com/bkraad47/ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge),
+`pip install ramen-mcp-bridge` — finishing what F2.4 deferred back in v0.5.5 ("code stays in runtime-py for
+now"). No behavior change to the bridge itself: same CLI, same flags, same env vars, same wire protocol.
+
+**Package**: own minimal dependencies (`grpcio`, `grpcio-health-checking`, `protobuf` — not `jsonschema`,
+`mcp`, `boto3`, `google-cloud-storage`, none of which the bridge needs); own vendored proto (just
+`mcp.proto`, not the unrelated `admin.proto` the console's Admin RPCs use); `requires-python` loosened from
+`>=3.14` to `>=3.10` since nothing in the bridge actually needs 3.14 — the one thing that did, an
+`except ValueError, AttributeError:` relying on Python 3.14's new bare-tuple exception syntax (PEP 758), was
+parenthesized for portability with no behavior change. GitHub Actions release workflow publishes to PyPI via
+Trusted Publishing (OIDC) on a `v*` tag — no stored API token.
+
+**ramen (this repo)**: `runtime-py` loses `bridge.py`, its test, the vendored `ramen_proto` package, the
+`grpc` extra, and the `ramen-mcp-bridge` entry point — none of it was used by anything else there. The
+worker image (`node-rs/Dockerfile`) still installs `ramen-mcp-bridge` (used only as a generic
+`grpc.health.v1` probe for its `HEALTHCHECK`), now from the new repo instead of a local extra. CI jobs that
+needed a working bridge binary (`node-conformance`, `client-windows`, `e2e`) now install it from the new
+repo too. The dead `ramen-bridge/` staging folder (mirrored by hand into the old docs-only `ramen-mcp-grpc`
+repo) is removed — that repo was found already deleted outside this session when checked mid-task, so there
+was nothing left to redirect.
+
 ## [0.5.6] — Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account
 11 user-filed items (`instructions/v0.5.6.md`), worked one at a time with a failing test written first for
 each (`logs/reasoning/2026-10-02-v0.5.6-iterate.md`). Headline: the AWS bring-up path, documented as

@@ -459,7 +459,8 @@ async def http_session(node: HttpNode, key: str | None = None, timeout: float = 
 
 # -- bridge (stdio) ---------------------------------------------------------------------------------------------------
 def bridge_command() -> list[str] | None:
-    """RAMEN_BRIDGE_CMD (shell words) > `ramen-mcp-bridge` on PATH > ../runtime-py/.venv/bin/ramen-mcp-bridge."""
+    """RAMEN_BRIDGE_CMD (shell words) > `ramen-mcp-bridge` on PATH > ../../ramen-mcp-bridge/.venv (v0.5.7: the
+    bridge moved to its own repo/package, submoduled alongside `ramen` at the ramen-master root)."""
     if E.env("RAMEN_BRIDGE_CMD"):
         return shlex.split(E.env("RAMEN_BRIDGE_CMD"))
     exe = shutil.which("ramen-mcp-bridge")
@@ -467,13 +468,13 @@ def bridge_command() -> list[str] | None:
         return [exe]
     from .sidecar import venv_bin  # noqa: PLC0415 - avoids an import cycle at module load
 
-    venv = E.RAMEN_DIR / "runtime-py" / ".venv"
+    venv = E.RAMEN_DIR.parent / "ramen-mcp-bridge" / ".venv"
     exe = venv_bin(venv, "ramen-mcp-bridge")
     if exe:
         return [str(exe)]
     py = venv_bin(venv, "python")
     if py:
-        return [str(py), "-m", "ramen_runtime.bridge"]
+        return [str(py), "-m", "ramen_mcp_bridge.bridge"]
     return None
 
 

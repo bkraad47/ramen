@@ -1,6 +1,6 @@
 """CONTRACTS §11 bridge: `ramen-mcp-bridge` as a stdio MCP server driven by the official `mcp` SDK client — the path
 Claude Desktop / Cursor use. Needs RAMEN_NODE_URL + RAMEN_MCP_KEY (or the e2e-minted key) and the bridge
-(RAMEN_BRIDGE_CMD, `ramen-mcp-bridge` on PATH, or ../runtime-py/.venv)."""
+(RAMEN_BRIDGE_CMD, `ramen-mcp-bridge` on PATH, or ../../ramen-mcp-bridge/.venv — its own repo since v0.5.7)."""
 
 import asyncio
 import io
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.conformance
 @pytest.fixture(scope="module", autouse=True)
 def _bridge_present():
     if not bridge_command():
-        pytest.skip("ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../runtime-py/.venv)")
+        pytest.skip("ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../../ramen-mcp-bridge/.venv)")
 
 
 def test_bridge_flags_follow_contract():

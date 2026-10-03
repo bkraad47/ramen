@@ -86,18 +86,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: ramen-node, path: bin }
       - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
-      - name: runtime-py venv (sidecar + ramen-mcp-bridge)
+      - name: runtime-py venv (sidecar)
         run: |
           (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
           echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
-          echo "RAMEN_BRIDGE_CMD=$PWD/runtime-py/.venv/bin/ramen-mcp-bridge" >> "$GITHUB_ENV"
+      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+        run: |
+          uv venv .bridge-venv
+          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
+          echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: both transports on real nodes (§16.5)
         working-directory: tests
         run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py
 
   client-windows:
     # §16.4 / X7: the client flow on the platform where fresh-machine setups break — the node built natively, the
-    # runtime and bridge installed from a wheel, RAMEN_MCP_KEY from the environment, both transports, the SDK client.
+    # runtime synced and the bridge installed from its own repo, RAMEN_MCP_KEY from the environment, both
+    # transports, the SDK client.
     needs: [rust]
     runs-on: windows-latest
     timeout-minutes: 30
@@ -113,12 +119,17 @@ jobs:
       - name: build the node on Windows
         working-directory: node-rs
         run: cargo build --release
-      - name: runtime-py venv (sidecar + ramen-mcp-bridge) and its own tests, bridge env var included
+      - name: runtime-py venv (sidecar)
         working-directory: runtime-py
         run: |
           uv sync --all-extras
           uv pip install pip   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
-          uv run pytest -q tests/test_bridge.py
+      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+        run: |
+          uv venv .bridge-venv
+          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
+          echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: conformance on both transports, key from RAMEN_MCP_KEY
         working-directory: tests
         env:
@@ -160,13 +171,18 @@ jobs:
       - run: uv python install 3.14
       - uses: actions/download-artifact@v4
         with: { path: artifacts, pattern: "coverage-*" }
-      - name: Runtime venv for sidecar conformance + ramen-mcp-bridge
+      - name: Runtime venv for sidecar conformance
         run: |
           if [ -f runtime-py/pyproject.toml ]; then
             (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
             echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
-            echo "RAMEN_BRIDGE_CMD=$PWD/runtime-py/.venv/bin/ramen-mcp-bridge" >> "$GITHUB_ENV"
           fi
+      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+        run: |
+          uv venv .bridge-venv
+          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
+          echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: grpcurl (wait_ready gRPC health mode)
         run: |
           curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin grpcurl

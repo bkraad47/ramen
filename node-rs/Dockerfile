@@ -1,4 +1,5 @@
-# Worker image: ramen-node (Rust, gRPC) + ramen_runtime (Python 3.14, gcp+aws+grpc extras incl. ramen-mcp-bridge) in one container.
+# Worker image: ramen-node (Rust, gRPC) + ramen_runtime (Python 3.14, gcp+aws extras) + ramen-mcp-bridge
+# (its own repo since v0.5.7; used here only as a generic gRPC health-check CLI for HEALTHCHECK) in one container.
 # Build context = ramen repo root (needs node-rs/, runtime-py/ and proto/):
 #   docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .                       # native
 #   docker buildx build --platform linux/amd64 -f node-rs/Dockerfile -t <ar>/worker:<v> --push . # GKE
@@ -18,12 +19,14 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.14-slim
-ARG VERSION=0.5.6
+ARG VERSION=0.5.7
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,grpc]'
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws]' \
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge @ git+https://github.com/bkraad47/ramen-mcp-bridge@main'
+ # ^ swap to a pinned 'ramen-mcp-bridge==X.Y.Z' once PyPI trusted publishing is set up and a release is tagged.
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080

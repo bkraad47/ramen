@@ -41,10 +41,10 @@ grpcurl / gRPC client ───────────────────�
   over stdio JSON-RPC, 1:1, idle-terminated (D3).
 - **runtime-py/** Loads `mcp/{tools,resources,prompts}` from the bucket (`gs://`/`s3://` sync on load), validates
   protos, pip-installs `requirements.txt`, executes callables, resolves `{{$group.NAME}}` from
-  `RAMEN_SECRET_<GROUP>__<NAME>`, redacts secrets. Ships **`ramen-mcp-bridge`** (`[grpc]` extra, also in the
-  worker image): a stdio MCP server that forwards each message to `Mcp/Call` with the key and routing metadata —
-  for clients that only speak stdio; standard clients (Claude Desktop, Cursor, the `mcp` SDK) connect straight to
-  `POST /mcp` instead.
+  `RAMEN_SECRET_<GROUP>__<NAME>`, redacts secrets. **`ramen-mcp-bridge`** is its own package/repo (v0.5.7; also
+  installed in the worker image): a stdio MCP server that forwards each message to `Mcp/Call` with the key and
+  routing metadata — for clients that only speak stdio; standard clients (Claude Desktop, Cursor, the `mcp` SDK)
+  connect straight to `POST /mcp` instead.
 - **deploy/** compose (local), Helm `ramen` (console + Gateway/ALB Ingress + reduced ClusterRole) and
   `ramen-worker` (one zone namespace: Service `appProtocol: kubernetes.io/h2c`, header-matched HTTPRoute /
   gRPC-annotated Ingress, gRPC health policy, Role/RoleBinding), Terraform GCP (GKE Autopilot, Firestore, GCS, AR,

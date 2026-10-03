@@ -34,29 +34,11 @@ Errors: `-32002` not loaded, `-32004` unknown package, `-32602` bad params, `-32
 
 ## ramen-mcp-bridge (CONTRACTS §11)
 Workers speak JSON-RPC over gRPC (`ramen.v1.Mcp/Call`). Standard MCP clients (Claude Desktop, Cursor, the `mcp`
-SDK) connect through this stdio bridge, installed by the `grpc` extra (`pip install 'ramen-runtime[grpc]'`, also in
-the worker image at `/opt/venv/bin/ramen-mcp-bridge`):
-```sh
-ramen-mcp-bridge --target <host:port> --key rmk_… --group <g> --zone <z> [--tls|--insecure] [--ca ca.pem] [--timeout 120]
-ramen-mcp-bridge --target <host:port> --health [ramen.v1.Admin]     # grpc.health.v1 probe: exit 0 when SERVING
-```
-Every flag has an env fallback `RAMEN_BRIDGE_TARGET|KEY|GROUP|ZONE|TLS|CA|TIMEOUT`; prefer `RAMEN_BRIDGE_KEY` to
-`--key` on a shared machine, since `ps` shows every other user your command line. Input is newline-delimited JSON-RPC
-(what the MCP stdio transport uses) or `Content-Length:` framed; replies use the same framing. Each message is sent
-as one `Mcp/Call` with metadata `authorization: Bearer <key>`, `ramen-group`, `ramen-zone` (the LB routes on the
-last two; omitted when empty). Notifications produce no output. A gRPC status becomes a JSON-RPC error for requests
-(`UNAUTHENTICATED` → `-32001`, other statuses → `-32000`, message `<CODE>: <details>`), never for notifications.
-Plaintext h2c is the default; `--tls` (or `--ca`) switches to TLS. Two sharp edges: `--insecure` **overrides**
-`--tls`/`--ca` rather than conflicting with them, so a stale `--insecure` in an `mcpServers` entry silently keeps
-the connection in cleartext; and `--ca` replaces the trust store with that PEM (hostname verification still
-applies) rather than pinning a certificate — against a self-signed load-balancer certificate `--tls` alone fails
-with `CERTIFICATE_VERIFY_FAILED`, so `--ca` is required in practice. Claude Desktop / Cursor config:
-```json
-{"mcpServers": {"ramen-demo": {"command": "ramen-mcp-bridge",
-  "args": ["--target", "localhost:8080", "--key", "rmk_…", "--group", "demo", "--zone", "local"]}}}
-```
-Stubs: `src/ramen_proto/ramen/v1/*_pb2*.py` are generated from `../proto` by `./gen_proto.sh` (dev extra,
-grpcio-tools); regenerate after any proto change. The same script vendors the package elsewhere (`./gen_proto.sh <src_dir>`).
+SDK) connect through a stdio bridge for clients that can't speak gRPC directly. Since v0.5.7 the bridge is its
+own package and repo — [github.com/bkraad47/ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge)
+(`pip install ramen-mcp-bridge`), not part of `ramen-runtime` — see that repo's README for install/use. It's
+still installed into the worker image (`/opt/venv/bin/ramen-mcp-bridge`, used there only as a generic
+`grpc.health.v1` probe for the container `HEALTHCHECK`).
 
 ## Test
 `uv sync --all-extras && uv run pytest --cov` (gate 90%; currently 98%). `tests/test_bridge.py` runs the bridge

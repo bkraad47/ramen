@@ -18,10 +18,11 @@ see `deploy/local/mcp-client-config.example.json`'s `_DEPLOYED` block.
 
 ```sh
 claude mcp add ramen --scope project -- \
-  /path/to/ramen/runtime-py/.venv/bin/ramen-mcp-bridge \
+  ramen-mcp-bridge \
   --target localhost:18082 --key 'rmk_…' --group demo --zone b --insecure
 claude mcp list          # ramen: … - ✓ Connected
 claude -p "Use the ramen MCP server to multiply 6 by 7 with demo_calculator_tool."
 ```
 
-`ramen-mcp-bridge` comes from `pip install 'ramen-runtime[grpc]'` or `runtime-py/.venv/bin/`.
+`ramen-mcp-bridge` comes from `pip install ramen-mcp-bridge` (its own package/repo since v0.5.7) or
+`../../../ramen-mcp-bridge/.venv/bin/` in a `ramen-master` checkout.

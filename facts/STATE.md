@@ -9,7 +9,7 @@ overwritten as the code changes. Read `docs/CONTRACTS.md` first, this file secon
 | Path | What | Language |
 |---|---|---|
 | `node-rs/` | `ramen-node`: gRPC + Streamable HTTP on one port, one set of guards (CONTRACTS §11, §16) | Rust |
-| `runtime-py/` | `ramen_runtime`: loads a group's `mcp/` packages, runs tool/resource/prompt calls, pip-installs `requirements.txt`; also `ramen-mcp-bridge` (stdio ⇄ gRPC, for stdio-only MCP clients) | Python 3.14 |
+| `runtime-py/` | `ramen_runtime`: loads a group's `mcp/` packages, runs tool/resource/prompt calls, pip-installs `requirements.txt` | Python 3.14 |
 | `console/` | FastAPI + Jinja2 + HTMX manager UI + `/api/v1`: groups, environments, zones, secrets, deploys, backups, audit | Python 3.14 |
 | `tests/` | Cross-component conformance/e2e/cloud/kind suites — see `tests/README.md` | Python 3.14 |
 | `deploy/` | `terraform/{gcp,aws}`, `helm/{ramen,ramen-worker}`, `local/` (docker compose), `kind/`, `cloudformation/` | Terraform, Helm, YAML |

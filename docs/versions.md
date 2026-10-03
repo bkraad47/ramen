@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.6` **(current)** | — | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
+| `0.5.6` **(current)** | 2026-10-03 | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
 | `0.5.4` | 2026-09-30 | honest deploy pictures, aligned environment buttons, docs brought current | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.4) |
 | `0.5.3` | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
 | `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |

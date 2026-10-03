@@ -277,7 +277,7 @@ def test_bridge_health_mode(plain):
 
 async def test_bridge_end_to_end_on_local_node(plain):
     if not bridge_command():
-        pytest.skip("ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../runtime-py/.venv)")
+        pytest.skip("ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../../ramen-mcp-bridge/.venv)")
     async with bridge_session(plain.node) as s:
         assert "demo_calculator_tool" in {t.name for t in (await s.list_tools()).tools}
         r = await s.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})

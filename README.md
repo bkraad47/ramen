@@ -79,7 +79,7 @@ curl -s http://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H '
 
 Clients that only speak stdio use the bridge, which forwards to the same worker over gRPC:
 ```sh
-uv tool install './runtime-py[grpc]'        # installs ramen-mcp-bridge (also present in the worker image)
+pip install ramen-mcp-bridge                # its own package (github.com/bkraad47/ramen-mcp-bridge); also in the worker image
 RAMEN_MCP_KEY=rmk_… ramen-mcp-bridge --target localhost:8080 --insecure --group demo --zone local
 ```
 
@@ -185,7 +185,7 @@ contract is in [Protos](https://bkraad47.github.io/ramen/wiki/protos/). Secrets 
 |---|---|
 | [`console/`](console/) | FastAPI + Jinja2 + HTMX manager UI and `/api/v1`; gRPC client to workers |
 | [`node-rs/`](node-rs/) | Rust MCP server node (tonic: `ramen.v1.Mcp`, `ramen.v1.Admin`, `grpc.health.v1.Health`; auth, CIDRs, sidecar supervisor) |
-| [`runtime-py/`](runtime-py/) | Python 3.14 runtime (loads protos, pip installs, runs calls, resolves secrets) and `ramen-mcp-bridge` |
+| [`runtime-py/`](runtime-py/) | Python 3.14 runtime (loads protos, pip installs, runs calls, resolves secrets) |
 | [`proto/`](proto/) | `ramen/v1/mcp.proto`, `admin.proto` — the transport contract, single source for Rust and Python stubs |
 | [`deploy/`](deploy/) | compose, Helm charts, Terraform (GCP, AWS), CloudFormation |
 | [`skills/`](skills/) | Cloud-ops agent skills: deploy-gcp, deploy-aws, rotate-keys, backup-restore, scale-zone |

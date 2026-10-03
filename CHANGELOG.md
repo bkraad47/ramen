@@ -2,6 +2,12 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.94] — group page zones and blocked packages as checkbox dropdowns
+**Group page: Environments → Zones and Packages → "Blocked everywhere" are checkbox dropdowns**, the same
+control the Users page got in 0.5.93 (`partials/multi.html`): the new-environment form picks zones from the
+zones that exist, and the per-environment block list offers every package the zones reported on their last
+deploy (plus anything already blocked), so a name is never typed. Clearing every box still saves an empty list.
+
 ## [0.5.93] — OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser
 Builds on 0.5.91 and 0.5.92 (both deployed to the live GCP console during the same day, never tagged — folded
 in like 0.4.1–0.4.3). The user drove this release page by page on the live console; each report below was

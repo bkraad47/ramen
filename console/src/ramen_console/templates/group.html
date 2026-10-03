@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Group {{ group.name }}{% endblock %}
+{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Group {{ group.name }}{% endblock %}{% from "partials/multi.html" import multi %}
 {% block body %}
 <div class="card"><b>Repo:</b> <code>{{ group.repo_url or '—' }}</code> @ <code>{{ group.ref }}</code> · MCP auth: <span class="badge">{{ group.mcp_auth.mode }}</span>
 {% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}" hx-ext="json" hx-swap="none">
@@ -17,7 +17,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 
 <h2>Environments</h2>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/environments" hx-ext="json" hx-swap="none">
-<label>Name<input name="name" required></label><label>Ref<input name="ref" placeholder="{{ group.ref }}"></label><label>Zones (comma)<input name="zones" placeholder="{{ zones|map(attribute='id')|join(',') }}"></label><button>Add environment</button></form>{% endif %}
+<label>Name<input name="name" required></label><label>Ref<input name="ref" placeholder="{{ group.ref }}"></label>{% set zone_opts = [] %}{% for z in zones %}{% set _ = zone_opts.append((z.id, z.id)) %}{% endfor %}{{ multi('zones', zone_opts, [], 'env-zones', 'Zones', 'Pick zones') }}<button>Add environment</button></form>{% endif %}
 <div class="card"><table><tr><th>Environment</th><th>Ref</th><th>Zones</th><th>Verbose</th><th>Last deploy</th><th></th></tr>
 {% for e in envs %}<tr><td>{{ e.name }}</td><td>{{ e.ref }}</td><td>{{ e.zones|join(', ') }}</td>
 <td>{% if can_admin %}<div class="row-actions"><button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'Verbose: off' if e.verbose else 'Verbose: on' }}</button></div>{% else %}{{ 'On' if e.verbose else 'Off' }}{% endif %}</td>
@@ -46,9 +46,11 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 
 <h2>Packages per zone (tools, resources and prompts)</h2>
 {% for e in envs %}<div class="card"><b>{{ e.name }}</b> · Blocked across the environment: {% for n in e.blocked or [] %}<span class="badge error">{{ n }}</span>{% if can_admin %} <button class="sm ghost" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or [])|reject("equalto", n)|list}) }}' hx-swap="none">Unblock</button>{% endif %}{% else %}<span class="muted">None</span>{% endfor %}
-{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-swap="none"><label>Blocked everywhere (comma)<input name="blocked" value="{{ (e.blocked or [])|join(',') }}" placeholder="tool_a,resource_b"></label><button class="sm ghost">Save list</button></form>{% endif %}
-<p class="muted">Disabled names disappear from list calls and answer <code>-32601</code>; a change takes effect on the next deploy.</p>
 {% set packages = (e.last_deploy and e.last_deploy.packages) or {} %}
+{% set names = [] %}{% for n in e.blocked or [] %}{% set _ = names.append(n) %}{% endfor %}{% for wkey, p in packages.items() %}{% for kind in ['tools', 'resources', 'prompts'] %}{% for it in p.get(kind, []) %}{% set n = it.name or it.uri %}{% if n not in names %}{% set _ = names.append(n) %}{% endif %}{% endfor %}{% endfor %}{% endfor %}
+{% set name_opts = [] %}{% for n in names|sort %}{% set _ = name_opts.append((n, n)) %}{% endfor %}
+{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-swap="none">{{ multi('blocked', name_opts, e.blocked or [], 'blocked-' ~ e.name, 'Blocked everywhere', 'Nothing blocked') }}<button class="sm ghost">Save list</button></form>{% endif %}
+<p class="muted">Disabled names disappear from list calls and answer <code>-32601</code>; a change takes effect on the next deploy. The list offers every package the zones reported on their last deploy.</p>
 {% for z in e.zones %}{% set zb = (e.blocked_zones or {}).get(z, []) %}
 <div class="pkg-zone"><h3>Zone {{ z }}</h3>
 {% set ns = namespace(found=false, pk=none, n=0) %}

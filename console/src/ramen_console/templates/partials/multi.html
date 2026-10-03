@@ -1,0 +1,5 @@
+{# A checkbox dropdown for a multi-value field (0.5.93 Users page, everywhere since 0.5.94): `options` are (value, text)
+   pairs, `selected` the current values. The hidden empty field makes "none chosen" reach the API as an empty list. #}
+{% macro multi(name, options, selected, id, label='', empty='None') %}
+<div class="field">{% if label %}<span class="lbl">{{ label }}</span>{% endif %}<details class="multi" id="{{ id }}"><summary>{{ selected|join(', ') or empty }}</summary><div class="options"><input type="hidden" name="{{ name }}" value="">{% for v, text in options %}<label class="option"><input type="checkbox" name="{{ name }}" value="{{ v }}"{{ ' checked' if v in selected }}> {{ text }}</label>{% else %}<span class="muted">Nothing to pick yet</span>{% endfor %}</div></details></div>
+{% endmacro %}

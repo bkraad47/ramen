@@ -80,6 +80,17 @@ def test_packages_per_zone_are_listed_once_even_when_several_workers_report_them
     page = demo.get("/groups/demo").text
     assert page.count("<code>calc</code>") == 1, page.count("<code>calc</code>")
     assert "3 workers" in page  # says how many reported it, instead of repeating the list
+    # 0.5.94: zones and the environment-wide block list are checkbox dropdowns, never typed
+    assert "Zones (comma)" not in page and "Blocked everywhere (comma)" not in page
+    assert '<input type="checkbox" name="zones" value="zone-a">' in page
+    assert '<input type="checkbox" name="zones" value="zone-b">' in page
+    assert '<input type="checkbox" name="blocked" value="calc">' in page
+    assert page.count('type="hidden" name="blocked" value=""') == 1  # one block form, for the one environment
+    r = demo.put("/api/v1/groups/demo/environments/prod/blocked", json={"blocked": ["", "calc"]})
+    assert r.status_code == 200
+    page = demo.get("/groups/demo").text
+    assert '<input type="checkbox" name="blocked" value="calc" checked>' in page
+    assert demo.put("/api/v1/groups/demo/environments/prod/blocked", json={"blocked": ""}).status_code == 200
 
 
 def test_group_page_block_toggles(demo):

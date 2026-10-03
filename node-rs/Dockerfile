@@ -19,7 +19,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.14-slim
-ARG VERSION=0.5.93
+ARG VERSION=0.5.94
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen

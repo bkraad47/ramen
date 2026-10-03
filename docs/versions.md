@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.5` **(current)** | — | Google-managed TLS, a third storage backend, and a round of real bugs found by testing for real | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.5) |
+| `0.5.6` **(current)** | — | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
 | `0.5.4` | 2026-09-30 | honest deploy pictures, aligned environment buttons, docs brought current | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.4) |
 | `0.5.3` | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
 | `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
@@ -20,7 +20,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## 0.5.5 — Google-managed TLS, a third storage backend, and a round of real bugs found by testing for real
+## 0.5.6 — Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account
 
 - (nothing yet)
 

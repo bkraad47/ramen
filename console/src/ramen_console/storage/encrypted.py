@@ -8,8 +8,10 @@ SENSITIVE: dict[str, set[str]] = {
     "users": {"password_hash"},
     "secrets": {"value"},
     "api_keys": {"secret_hash"},
-    "groups": {"github_token", "session_secret"},
+    "groups": {"github_token", "session_secret", "redis_scope_url"},
     "environments": {"github_token"},
+    "config": {"smtp_password", "github_app_private_key"},
+    "workers": {"redis_item_url"},
 }
 PREFIX = "enc:"
 

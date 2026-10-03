@@ -5,12 +5,13 @@ region: us-central1          # GCP region, or AWS region (e.g. us-east-1) when p
 aws:                         # provider=aws only (terraform -chdir=deploy/terraform/aws output)
   account: ""                # AWS account id (required): ECR image + groups bucket ramen-<account>-groups defaults
   cluster: ramen             # EKS cluster name (RAMEN_EKS_CLUSTER; CloudWatch log group /aws/containerinsights/<cluster>/application)
+  table: ramen               # DynamoDB state table (RAMEN_DDB_TABLE; terraform var.table, defaults match unless overridden)
   certificateArn: ""         # ACM certificate for the ALB HTTPS listener (terraform output certificate_arn; self-signed import)
   albGroup: ramen            # ALB IngressGroup shared by the console Ingress ("/") and every worker Ingress (gRPC, header rules; CONTRACTS §11)
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.5.5
+  tag: 0.5.6
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:

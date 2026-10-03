@@ -55,6 +55,8 @@ pub struct App {
     pub sessions: Sessions,
     /// §16.3: HS256 key for console-issued access tokens, derived from the same secret.
     pub token_key: ring::hmac::Key,
+    /// N7: item/scope rate limiting. Redis connections are startup-fixed like `sessions`/`sem_max`.
+    pub throttle: crate::throttle::Throttle,
 }
 
 pub type Shared = Arc<App>;
@@ -82,6 +84,7 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         );
     }
     let token_key = sessions.derived_key("oauth");
+    let throttle = crate::throttle::Throttle::connect(&cfg).await;
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),
         sem_max: cfg.max_inflight,
@@ -93,6 +96,7 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         health,
         sessions,
         token_key,
+        throttle,
     })
 }
 
@@ -187,13 +191,20 @@ impl CallLog {
         }
     }
     pub fn emit(&self, cfg: &Config, status: &str, code: Code, extra: Value) {
+        // N4: the line's own `level` must match its `status` — a denied/failed call is not "info", or a
+        // level-based filter (alerting, external log monitors) silently misses every one of them.
+        let level = match status {
+            "ok" => "info",
+            "denied" => "warn",
+            _ => "error",
+        };
         let mut line = json!({"ip": self.ip, "group": cfg.group, "zone": cfg.zone, "env": cfg.env, "method": self.method, "name": self.name,
                               "status": status, "grpc_code": code_name(code), "ms": self.t0.elapsed().as_millis() as u64, "key_id": self.key_id,
                               "transport": self.transport});
         if let Value::Object(m) = extra {
             line.as_object_mut().unwrap().extend(m);
         }
-        emit("info", "mcp", line);
+        emit(level, "mcp", line);
     }
     pub fn deny(&self, cfg: &Config, st: Status) -> Status {
         self.emit(cfg, "denied", st.code(), Value::Null);
@@ -300,6 +311,17 @@ pub async fn dispatch_body(
     let params = rpc.get("params").cloned().unwrap_or(json!({}));
     log.method = Some(method.clone());
     log.name = mcp::target_name(&method, &params);
+    if !app
+        .throttle
+        .allow(cfg, log.ip, log.key_id.as_deref(), log.name.as_deref())
+        .await
+    {
+        app.metrics.record(false);
+        return Err(log.deny(
+            cfg,
+            Status::resource_exhausted("throttled: rate limit exceeded"),
+        ));
+    }
     let Ok(_permit) = app.sem.try_acquire() else {
         app.metrics.record(false);
         return Err(log.deny(
@@ -430,5 +452,52 @@ mod tests {
     fn code_names_are_grpc_style() {
         assert_eq!(code_name(Code::Ok), "OK");
         assert_eq!(code_name(Code::PermissionDenied), "PERMISSIONDENIED");
+    }
+
+    fn cfg(pairs: &[(&str, &str)]) -> Config {
+        Config::from_map(
+            &pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn call_log_level_matches_status() {
+        // Holding TEST_LOCK only keeps another test from redirecting FILE out from under this one (the
+        // documented v0.5.5 flake); it does not stop another thread's own emit() from also mirroring into
+        // whatever path FILE currently points at. So each line carries a nonce and is found by that, not by
+        // file position — any interleaved line from an unrelated concurrent test is just ignored.
+        let _guard = crate::log::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let p = std::env::temp_dir().join(format!("ramen-grpc-log-{}.log", std::process::id()));
+        crate::log::set_file(Some(p.clone()));
+        let c = cfg(&[]);
+        for (status, want_level) in [("ok", "info"), ("denied", "warn"), ("error", "error")] {
+            let nonce = format!("clm-{status}-{:?}", std::time::Instant::now());
+            CallLog::new("127.0.0.1".parse().unwrap(), "grpc").emit(
+                &c,
+                status,
+                Code::Ok,
+                json!({"nonce": nonce}),
+            );
+            let text = std::fs::read_to_string(&p).unwrap();
+            let line = text
+                .lines()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .find(|v| v["nonce"] == nonce)
+                .unwrap_or_else(|| panic!("no emitted line carried nonce {nonce}"));
+            assert_eq!(line["status"], status);
+            assert_eq!(
+                line["level"], want_level,
+                "status {status} must log at level {want_level}"
+            );
+        }
+        crate::log::set_file(None);
+        let _ = std::fs::remove_file(&p);
     }
 }

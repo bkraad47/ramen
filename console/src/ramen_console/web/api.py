@@ -28,7 +28,9 @@ async def create_group(request: Request, body: m.GroupIn, p: Principal = Depends
     note(request, "group.create", body.name, [f"group:{body.name}"])
     return respond(
         request,
-        await svc(request).create_group(body.name, body.repo_url, body.ref, p.name, body.github_token),
+        await svc(request).create_group(
+            body.name, body.repo_url, body.ref, p.name, body.github_token, body.github_app_installation_id
+        ),
         201,
     )
 
@@ -118,13 +120,13 @@ async def get_zone(request: Request, zone: str, p: Principal = Depends(viewer)):
 
 @r.post("/zones", status_code=201)
 async def create_zone(request: Request, body: m.ZoneIn, p: Principal = Depends(super_)):
-    note(request, "zone.create", body.name)
+    note(request, "zone.create", body.name, [f"zone:{body.name}"])
     return respond(request, await svc(request).create_zone(body.name, body.provider, body.region), 201)
 
 
 @r.delete("/zones/{zone}")
 async def delete_zone(request: Request, zone: str, p: Principal = Depends(super_)):
-    note(request, "zone.delete", zone)
+    note(request, "zone.delete", zone, [f"zone:{zone}"])
     await svc(request).delete_zone(zone)
     return respond(request, {"ok": True})
 
@@ -221,8 +223,10 @@ async def job(request: Request, jid: str, p: Principal = Depends(viewer)):
 
 @r.get("/groups/{group}/zones/{zone}/workers")
 async def workers(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
+    from ..util import public
+
     s = svc(request)
-    cfg = await s.worker_config(group, zone)
+    cfg = public(await s.worker_config(group, zone))
     return {**cfg, "live": await s.cloud.workers(group, zone)}
 
 
@@ -242,6 +246,20 @@ async def rebalance(request: Request, group: str, zone: str, p: Principal = Depe
 async def ip_rules(request: Request, group: str, zone: str, body: m.Cidrs, p: Principal = Depends(admin_g)):
     note(request, "ip_rules", f"{group}/{zone}", [f"group:{group}"])
     return respond(request, await svc(request).set_ip_rules(group, zone, body.cidrs))
+
+
+@r.put("/groups/{group}/zones/{zone}/item-throttle")
+async def item_throttle(request: Request, group: str, zone: str, body: m.ThrottleIn, p: Principal = Depends(admin_g)):
+    """N7: zone-local Redis throttling repeat calls to the same tool/resource/prompt."""
+    note(request, "throttle.item", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}"])
+    return respond(request, await svc(request).set_item_throttle(group, zone, **body.model_dump()))
+
+
+@r.put("/groups/{group}/throttle")
+async def scope_throttle(request: Request, group: str, body: m.ThrottleIn, p: Principal = Depends(admin_g)):
+    """N7: one Redis shared by every zone of the group, throttling repeat calls to the group/environment."""
+    note(request, "throttle.scope", group, [f"group:{group}"])
+    return respond(request, await svc(request).set_scope_throttle(group, **body.model_dump()))
 
 
 @r.post("/groups/{group}/zones/{zone}/service-account")

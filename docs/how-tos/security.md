@@ -67,9 +67,14 @@ The worker exposes one port with `ramen.v1.Mcp`, `ramen.v1.Admin` and `grpc.heal
 | Health | `/healthz`, `/readyz` unauthenticated | `Health/Check` unauthenticated; `NOT_SERVING` until code is loaded |
 | Access log | one JSON line per call | same fields plus `grpc_code` |
 
-TLS: the load balancer terminates it (GKE Gateway / ALB, self-signed until a domain exists — D17). To encrypt
-inside the cluster too, set `RAMEN_TLS_CERT` + `RAMEN_TLS_KEY` (PEM) on the workers and the port switches to h2;
-the GCP Gateway then uses `HTTP2` instead of h2c. Clients: the bridge's `--tls [--ca <pem>]`; `--insecure` is
+TLS: the load balancer terminates it (GKE Gateway / ALB, HTTPS-only — no plaintext listener exists on either
+cloud; self-signed until a domain exists — D17). This is a deliberate trust boundary, not a gap: LB→pod and
+pod-to-pod traffic inside the cluster is plaintext h2c by default (confirmed during the v0.5.6 N12 HTTPS audit
+— re-checked rather than assumed, since "ensure all communication is over https only" could be read either
+way). Enforcing TLS for every internal hop by default would mean auto-provisioning and rotating a cert per
+zone and changing the LB backend protocol on both clouds — treated as out of scope for N12 (asked and
+confirmed with the user) in favor of keeping it the existing opt-in: set `RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`
+(PEM) on the workers and the port switches to h2; the GCP Gateway then uses `HTTP2` instead of h2c. Clients: the bridge's `--tls [--ca <pem>]`; `--insecure` is
 plaintext and is for the local compose stack only — and note that `--insecure` **overrides** `--tls`/`--ca`
 rather than conflicting with them, so a leftover `--insecure` in an `mcpServers` entry quietly downgrades the
 connection. `--ca` replaces the trust store with that PEM; it is not certificate pinning, and because the
@@ -96,7 +101,11 @@ then that zone's node still checks the key and the CIDR. Sending someone else's 
   zone's node CIDRs. With the hop count right the node check is a real check on the client address; what bounds
   direct access to a pod is the worker `NetworkPolicy`. Changing rules rolls the zone's pods.
 - Worker pods carry a NetworkPolicy (ingress only on the node port) and a restrictive `securityContext`.
-- Console sessions: signed cookie (`ramen_session`, 12 h, `SameSite=Lax`, `Secure` with `RAMEN_COOKIE_SECURE=1`).
+- Console sessions: signed cookie (`ramen_session`, 12 h, `SameSite=Lax`, `Secure` with `RAMEN_COOKIE_SECURE=1`
+  — the Helm chart defaults this to `1` for both cloud providers since the Gateway/ALB are HTTPS-only at the
+  edge with no plaintext listener either way; `deploy/kind/values.yaml` overrides it back to `0` since kind
+  has no real Gateway (plaintext NodePort). The app-level default (no chart involved, e.g. local compose) stays
+  `0` so a plaintext dev stack still gets its cookie back).
 - CSRF: per-session `ramen_csrf` token on HTML forms / `X-Ramen-CSRF` header; JSON API with an API key is exempt.
 
 ## What changed in 0.3.1

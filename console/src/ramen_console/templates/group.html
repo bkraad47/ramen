@@ -3,7 +3,17 @@
 <div class="card"><b>Repo:</b> <code>{{ group.repo_url or '—' }}</code> @ <code>{{ group.ref }}</code> · MCP auth: <span class="badge">{{ group.mcp_auth.mode }}</span>
 {% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}" hx-ext="json" hx-swap="none">
 <label>Repo URL<input name="repo_url" value="{{ group.repo_url }}"></label><label>Ref<input name="ref" value="{{ group.ref }}"></label>
-<label>Fallback GitHub token (stored encrypted, never shown)<input name="github_token" type="password" placeholder="Prefer a GITHUB_TOKEN secret"></label><button>Save</button></form>{% endif %}</div>
+<label>Fallback GitHub token (stored encrypted, never shown)<input name="github_token" type="password" placeholder="Prefer a GITHUB_TOKEN secret"></label>
+<label>GitHub App installation id (skips the token above)<input name="github_app_installation_id" value="{{ group.github_app_installation_id or '' }}" placeholder="123456"></label><button>Save</button></form>{% endif %}</div>
+
+<h2>Throttling</h2>
+<div class="card"><p class="muted">Fixed window per minute, 0 = unlimited. Throttles repeat calls to the same group/environment, shared by
+every zone below. Redis URL is stored encrypted and never shown again.</p>
+{% if can_admin %}<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/throttle" hx-ext="json" hx-swap="none">
+<label>Scope Redis URL<input name="redis_url" type="password" placeholder="{{ 'unchanged' if group.redis_scope_url else 'redis://host:6379' }}"></label>
+<label>Per-IP /min<input class="sm" type="number" min="0" name="ip_per_min" value="{{ group.scope_ip_per_min or 0 }}" style="width:6em"></label>
+<label>Per-token /min<input class="sm" type="number" min="0" name="token_per_min" value="{{ group.scope_token_per_min or 0 }}" style="width:6em"></label>
+<button class="act">Save group/environment limits</button></form>{% endif %}</div>
 
 <h2>Environments</h2>
 {% if can_admin %}<form class="inline" hx-post="/api/v1/groups/{{ group.id }}/environments" hx-ext="json" hx-swap="none">
@@ -25,6 +35,7 @@
 <td>{% if can_admin %}<div class="zone-actions">
 <form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/workers" hx-ext="json" hx-swap="none"><label>Count<input name="count" type="number" min="1" value="{{ w.count }}"></label>{% if p.role == 'super_admin' %}<label>Size<select name="size">{% for s in ['s', 'm', 'l'] %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select></label><label>Allowed sizes<input name="allowed_sizes" placeholder="s,m" value="{{ (w.allowed_sizes or [])|join(',') }}"></label>{% elif w.allowed_sizes %}<label>Size<select name="size">{% for s in w.allowed_sizes %}<option value="{{ s }}" {{ 'selected' if s == w.size }}>{{ s }}</option>{% endfor %}</select></label>{% endif %}<button class="act ghost">Scale workers</button></form>
 <form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/ip-rules" hx-ext="json" hx-swap="none"><label>CIDRs<input name="cidrs" placeholder="10.0.0.0/8" value="{{ (w.cidrs or [])|join(',') }}"></label><button class="act ghost">IP rules</button></form>
+<form class="inline" hx-put="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/item-throttle" hx-ext="json" hx-swap="none"><label>Item Redis URL<input name="redis_url" type="password" placeholder="{{ 'unchanged' if w.redis_item_url else 'redis://host:6379' }}"></label><label>Per-IP /min<input class="sm" type="number" min="0" name="ip_per_min" value="{{ w.item_ip_per_min or 0 }}" style="width:6em"></label><label>Per-token /min<input class="sm" type="number" min="0" name="token_per_min" value="{{ w.item_token_per_min or 0 }}" style="width:6em"></label><button class="act ghost">Item throttle</button></form>
 <button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/service-account" hx-swap="none" {{ 'disabled title="Only a super admin may create a service account"' if p.role != 'super_admin' }}>Create service account</button>
 <button class="act ghost" hx-post="/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/rebalance" hx-swap="none">Rebalance</button>
 <a class="btn ghost act" href="/logs?group={{ group.id }}&zone={{ z.id }}">View logs</a>

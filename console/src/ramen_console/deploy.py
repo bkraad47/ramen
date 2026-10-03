@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 
+from . import github_app
 from .services import Services
 from .util import now, uid
 
@@ -49,7 +50,9 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         zones = [zone] if zone else env.get("zones", [])
         results = {}
         _, token, _ = await svc.secrets_for(group, env_name, None)
-        token = await svc.secrets_backend.resolve(token or g.get("github_token"))
+        token = await github_app.resolve_token(svc.store, g) or await svc.secrets_backend.resolve(
+            token or g.get("github_token")
+        )
         job["log"].append(f"{now()} syncing repo {g['repo_url']}")
         await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
         for z in zones:
@@ -61,6 +64,21 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
             }
             if mcp:
                 cfg["RAMEN_MCP_KEYS"] = ",".join(mcp)
+            # N7: item throttle is zone-local (this zone's own worker_config); scope throttle is one Redis
+            # shared by every zone of the group, so the limit holds across the whole group/environment.
+            w = await svc.worker_config(group, z)
+            if w.get("redis_item_url"):
+                cfg["RAMEN_REDIS_ITEM_URL"] = w["redis_item_url"]
+            if w.get("item_ip_per_min"):
+                cfg["RAMEN_THROTTLE_ITEM_IP"] = str(w["item_ip_per_min"])
+            if w.get("item_token_per_min"):
+                cfg["RAMEN_THROTTLE_ITEM_TOKEN"] = str(w["item_token_per_min"])
+            if g.get("redis_scope_url"):
+                cfg["RAMEN_REDIS_SCOPE_URL"] = g["redis_scope_url"]
+            if g.get("scope_ip_per_min"):
+                cfg["RAMEN_THROTTLE_SCOPE_IP"] = str(g["scope_ip_per_min"])
+            if g.get("scope_token_per_min"):
+                cfg["RAMEN_THROTTLE_SCOPE_TOKEN"] = str(g["scope_token_per_min"])
             # §16.2 / §16.3: stateless session ids and console-issued tokens need the group's secret on every pod;
             # the issuer is the console's public URL, which only RAMEN_PUBLIC_URL can state from a background job.
             cfg["RAMEN_SESSION_SECRET"] = await svc.session_secret(group)

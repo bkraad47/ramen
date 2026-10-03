@@ -19,6 +19,7 @@ jobs:
       - run: uv python install 3.14
       - name: Build site
         run: |
+          python3 scripts/check_docs_links.py
           uv run --project docs --group docs mkdocs build --strict
           test -f site/llms.txt
       - uses: actions/configure-pages@v5

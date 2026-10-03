@@ -23,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/check_versions.py
+      - run: python3 scripts/check_docs_links.py
 
   python:
     runs-on: ubuntu-latest

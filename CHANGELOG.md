@@ -15,6 +15,11 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   labels no longer overlap each other.
 - The deploy guides now say what the console's own service account may do on each cloud, and what each zone's
   identity starts with.
+- Discoverability for 0.6.0: `llms.txt` and the landing page's JSON-LD (now a `SoftwareApplication` +
+  `SoftwareSourceCode` graph) describe the release as it is, link only pages that exist, and say plainly that
+  Claude Desktop and Cursor connect with a group key (no dynamic client registration, so no OAuth on their own).
+  `scripts/check_docs_links.py` (CI and the pages build) fails on a site link in README/llms.txt/landing page with
+  no page behind it; `check_versions.py` now also checks the version in `llms.txt` and the JSON-LD.
 
 ## [0.6.0] — instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt
 **A zone that goes away is torn down.** Deleting a zone, dropping it from an environment (when no other environment

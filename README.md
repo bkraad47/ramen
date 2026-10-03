@@ -57,7 +57,8 @@ JSON-RPC 2.0 and a Rust node; **you code in Python**. The longer argument is
 > **Start here** · the demo group repo **[ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group)**
 > (point a group at it and press Deploy) · the stdio bridge **[ramen-mcp-bridge on PyPI](https://pypi.org/project/ramen-mcp-bridge/)**
 > (`pip install ramen-mcp-bridge`; signs you in with `--oauth` or carries a group key) · HTTP clients such as
-> Claude Code, Claude Desktop and Cursor need neither: [Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/).
+> Claude Code, Claude Desktop and Cursor need neither: they connect with a group key, and Claude Code can also
+> [sign you in with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/).
 > Every feature and where it is managed: [How it works](https://bkraad47.github.io/ramen/how-it-works/).
 
 ## Quickstart (local, 5 commands)

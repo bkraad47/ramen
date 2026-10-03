@@ -29,6 +29,9 @@ TEXT = {
     "console/Dockerfile": r"^ARG RAMEN_VERSION=(\S+)",
     "deploy/local/.env.example": r"^VERSION=(\S+)",
     "deploy/local/docker-compose.yml": r"\$\{VERSION:-([^}]+)\}",
+    # what LLM agents and search engines read: llms.txt summary line and the landing page's JSON-LD
+    "docs/llms.txt": r"\bVersion (\d+\.\d+\.\d+\S*?)\.?$",
+    "docs/index.md": r"\"(?:softwareVersion|version)\":\s*\"([^\"]+)\"",
 }
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
 # §14 W9: these derive __version__ from distribution metadata. A literal here is drift waiting to happen.

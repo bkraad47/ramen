@@ -50,17 +50,18 @@ management plane. Verification status is the section at the end, and it is the p
 - **A compromised console is a compromised platform.** It holds the Fernet key, mints tokens and binds cloud IAM.
   Its own hardening (narrow IAM, per-namespace RBAC, CSRF, rate limits, argon2) is real, but it is the crown jewel.
 - **Plaintext hops that are plaintext by default**: load balancer → node is h2c unless node TLS is configured;
-  the local compose stack is plain HTTP on a laptop; the stdio bridge is h2c unless `--tls`.
+  the local compose worker is plain h2c on a laptop, though the compose console is TLS on 8443; the stdio bridge
+  is h2c unless `--tls`.
 - **The key's length can leak** through the length check in front of the constant-time compare.
 - **Denial of service at the edge** beyond the per-node caps: that is the load balancer's and the cloud's job.
 - **The cloud provider** (A6).
 
 ## What is verified, and what is not
-Kept current in [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not) and the
-`reports/` directory of the private workspace. In short, as of 0.5.1: both transports and every guard above are
-proven on real node processes in CI on Linux and Windows; the gRPC path was proven live on one GKE cluster in 0.3.2
-and 0.4.0, and the HTTP path, sessions and OAuth on one GKE cluster in 0.5.1; the AWS path has **never** been applied
-to a real account; there has been no third-party penetration test. An independent agent reviews each release's new
+The record is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not), kept with the
+`reports/` directory of the private workspace. In short, as of 0.6.0: both transports and every guard above are
+proven on real node processes in CI on Linux and Windows; the GCP path was proven live on throwaway GKE projects in
+0.3.2, 0.4.0, 0.5.1, 0.5.95 and 0.6.0, and the AWS path on a real account in 0.5.6, 0.5.8 and 0.6.0, each emptied the
+same day; there has been no third-party penetration test. An independent agent reviews each release's new
 surface against the code (`reports/security-v<version>.md`), which is the closest thing to an audit this project
 has had.
 

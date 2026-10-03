@@ -1,25 +1,5 @@
 {
-  "live": {
-    "gke": {
-      "captured_for": "0.5.1",
-      "date": "2026-09-29",
-      "screenshots": {
-        "api-keys.png": "API keys: client type, the group dropdown, the listing",
-        "audit.png": "Audit: newest 100, search and outcome filter",
-        "backups.png": "Backups: preview, restore, restore and prune",
-        "config.png": "Config: authentication, the permission catalogue, service-account rules",
-        "dashboard.png": "Dashboard: load per zone and group",
-        "deploy-job.png": "A deploy job with its log",
-        "environments.png": "Environments with the last deploy flattened",
-        "group.png": "A group: environments, zones, packages, permissions, worker image",
-        "key-shown.png": "The one-time display of a new agent key",
-        "logs.png": "Logs: entries on the left, the selected body on the right",
-        "oauth-consent.png": "OAuth: the consent page a person sees when a client asks",
-        "secrets.png": "Secrets: names only, never values",
-        "users.png": "Users, permission requests and the password rule"
-      }
-    }
-  },
+  "captured_from": "live GCP console, project ramen-test-261004, 2026-10-04 (live captures replace the seeded set)",
   "screenshots": {
     "api-keys.png": {
       "captured_for": "0.6.0",
@@ -65,6 +45,10 @@
       "captured_for": "0.6.0",
       "page": "Logs: entries on the left, the selected body on the right"
     },
+    "mcp-user.png": {
+      "captured_for": "0.6.0",
+      "page": "What an MCP user sees: the groups they may connect to and the client command"
+    },
     "oauth-consent.png": {
       "captured_for": "0.6.0",
       "page": "OAuth: the consent page a person sees when a client asks"
@@ -76,6 +60,10 @@
     "users.png": {
       "captured_for": "0.6.0",
       "page": "Users, permission requests and the password rule"
+    },
+    "zones.png": {
+      "captured_for": "0.6.0",
+      "page": "Zones and workers: the zones and the live workers per group"
     }
   },
   "ui_contract": "0.6.0"

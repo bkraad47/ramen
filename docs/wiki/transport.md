@@ -165,7 +165,7 @@ publishes `/.well-known/oauth-protected-resource` and answers a missing credenti
 practical notes: the metadata URL is absolute only when the deploy set `RAMEN_PUBLIC_URL` on the worker (the console
 does so for a cloud zone; a pod cannot know its public address on its own), and behind a load balancer that routes
 on `ramen-group`/`ramen-zone` a client must send those headers on the metadata request too, or the balancer has no
-zone to send it to. Details and what the console checks before minting: [Security](../how-tos/security.md).
+zone to send it to. Details and what the console checks before minting: [the threat model](../threat-model.md).
 
 ### The unauthenticated surface
 Three things run ahead of every guard — no key, no source-range check: `grpc.health.v1.Health`, deliberately, so
@@ -226,6 +226,16 @@ the runtime has actually loaded the group's code.
 
 ## What is verified, and what is not
 
+This section is the single record. The home page, [How it works](../how-it-works.md) and the
+[threat model](../threat-model.md) each carry one sentence and point here.
+
+- **Verified live in 0.6.0 on both clouds**, each with two zones of one group behind one load balancer: a canary
+  deploy to both zones, `POST /mcp` through the edge on each, the per-token Redis throttle counting across zones,
+  `mcp/env.yaml` rendered from a secret into the runtime's environment, the bridge with a group key and the bridge
+  signing a person in with `--oauth`, and dropping a zone taking its namespace and its cloud identity with it.
+  GCP ran on Firestore and then again on in-cluster Postgres; AWS ran on DynamoDB with Secrets Manager, and needed
+  `RAMEN_PUBLIC_URL` set before its workers would accept console-minted tokens. Both were torn down the same day.
+
 - **Verified live in 0.5.1 on one GKE Autopilot cluster through the Gateway load balancer**: `POST /mcp` with an
   `rmk_` key routed by `ramen-group`/`ramen-zone` to the zone's pods, the 401/403 answers and the session id
   through the balancer, the OAuth flow from the console's consent page to a `tools/call` with the token, refresh
@@ -253,21 +263,22 @@ the runtime has actually loaded the group's code.
       account with its bucket-prefix and per-secret IAM bindings and its Workload Identity binding; secrets; and
       logs.
     - Scope, stated plainly: **one** cluster, one zone, one group, on one day, and the project was deleted the
-      same day. Later releases repeated the pattern (0.5.1, 0.5.6, 0.5.8, 0.5.95), each on a project or
+      same day. Later releases repeated the pattern (0.5.1, 0.5.6, 0.5.8, 0.5.95, 0.6.0), each on a project or
       account torn down the same day; nothing stays running between releases.
 - **Verified by tests only**: node TLS, the `RAMEN_MAX_INFLIGHT` and size caps, and `x-forwarded-for` hop
   counting — including a test that a caller-supplied header cannot move the address the node checks, at each
   provider's hop count. Note what that does *not* say: the hop counts above (GCP 2, AWS 1) and
-  `RAMEN_REFLECTION=0` landed **after** the 0.3.2 cloud run, so neither has been exercised against a real load
-  balancer yet. The next cloud run is what will confirm that GCP really appends two entries.
+  `RAMEN_REFLECTION=0` landed **after** the 0.3.2 cloud run. Since then every cloud run has served real traffic
+  through a load balancer at those hop counts without a source-range false denial, which exercises them
+  incidentally; no run has yet tested a forged `x-forwarded-for` against a real edge.
 - **Verified on AWS since 0.5.6**: the Terraform for EKS, DynamoDB, S3, Secrets Manager and the ALB with gRPC
-  target groups has been applied to a real account, and the published bridge was server-tested against it in
-  0.5.8 (which is how the certificate's SAN gap was found). Least exercised there: WAF rule convergence under
-  change, and rebalance weights under load. [The AWS how-to](../how-tos/aws.md) says what each run covered.
+  target groups has been applied to a real account in 0.5.6, 0.5.8 and 0.6.0, and the published bridge was
+  server-tested against it in 0.5.8, which is how the certificate's name gap was found. Least exercised there:
+  WAF rule convergence under change, and rebalance weights under load. [Deploy on AWS](deploy-aws.md) says what each run covered.
 - **By design, not a defect**: the runtime executes your group's code in a process that holds that group's
   secrets in its environment. Tool code in a group can read that group's secrets directly. Isolation between
   groups is the pod, the namespace and the per-zone identity — not the Python process. See
-  [Security](../how-tos/security.md).
+  [the threat model](../threat-model.md).
 
 ## Connecting
 
@@ -300,4 +311,4 @@ this repository. That is fine for `make up` on a machine you control and is not 
 Anything that speaks gRPC can skip the bridge and call `ramen.v1.Mcp/Call` directly. Locally, server reflection
 is on, so `grpcurl` works without a local copy of the proto; against a deployed worker it is
 [switched off](#the-unauthenticated-surface), so pass `-import-path proto -proto ramen/v1/mcp.proto` there. See the
-[local quickstart](../how-tos/local-quickstart.md) and [Protos](protos.md).
+[Get started](../get-started.md) and [the MCP repo](mcp-repo.md).

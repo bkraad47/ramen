@@ -48,11 +48,15 @@ through the load balancer.
   status, grpc_code, ms, key_id`); `RAMEN_VERBOSE=1` logs bodies.
 - **Deploy**: console job → clone repo (token via git header) → upload bucket → write zone Secret/env file
   (`RAMEN_MCP_KEYS`, `RAMEN_SECRET_*`, `RAMEN_BLOCKED`, `RAMEN_ALLOWED_CIDRS`) → canary restart → `Health/Check`
-  `SERVING` → `Admin/Reload` → `tools/list` smoke → stable restart. See [Canary](../wiki/canary.md).
+  `SERVING` → `Admin/Reload` → `tools/list` smoke → stable restart. See [Deploying](../wiki/groups-zones.md#deploying).
 - **Rebalance / IP rules**: console → cloud API (backend capacity, Cloud Armor / WAF) + node env → worker roll.
-  Load comes from `Admin/Metrics`. See [Rebalance](../wiki/rebalance.md).
+  Load comes from `Admin/Metrics`. See [Rebalance](../wiki/groups-zones.md#rebalance).
 
 ## Decisions
+
+Only the decisions that still shape the code are listed. The gaps are ids that were superseded, or that never
+left the private workspace.
+
 | ID | Decision |
 |---|---|
 | D2 | State DB: Firestore on GCP, DynamoDB on AWS, one repository interface. No Postgres. *(partly superseded by D37)* |
@@ -76,8 +80,8 @@ through the load balancer.
 | D35 | v0.5.1: cloud runs get their permissions from a rule the human adds; the agent never writes its own permission file. |
 | D36 | v0.5.5: the GCP console gets a Google-managed certificate on a free `sslip.io` hostname derived from the static IP (supersedes D17); no domain to buy, no CA to export. |
 | D37 | v0.5.5: Postgres is an optional third `RAMEN_STORE` for self-hosted deployments; Firestore and DynamoDB stay the cloud defaults (partly supersedes D2). |
-| D38 | v0.5.92: IdP role mapping is authoritative on every login, keyed by claim value, never by person; no match means no membership. |
-| D39 | v0.5.92: a fourth role, `mcp_user`, who only signs in to approve MCP clients for their groups' zones; no console, no API. |
+| D38 | v0.5.93: IdP role mapping is authoritative on every login, keyed by claim value, never by person; no match means no membership. |
+| D39 | v0.5.93: a fourth role, `mcp_user`, who only signs in to approve MCP clients for their groups' zones; no console, no API. |
 | D40 | v0.5.93: a service-account permission carries a scope; empty or `*` means the group's own prefix and secrets, named resources bind on those alone. |
 | D41 | v0.5.95: roles are held per group (`user.memberships`); one person may be a Group Admin of one group and an MCP User of another. |
 

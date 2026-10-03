@@ -33,16 +33,45 @@ def tag_date(version: str) -> str:
         return "—"
 
 
+def has_tag(version: str) -> bool:
+    """Whether `v<version>` exists here. Several releases were folded forward and never tagged, and a link to a
+    tag that does not exist is a 404 on the version page."""
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", f"v{version}^{{commit}}"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        )
+        return True
+    except subprocess.CalledProcessError, FileNotFoundError:
+        return False
+
+
 def parse(text: str) -> list[dict]:
+    """One entry per `## [version]` heading. An item is a `- ` bullet or a release note written as a **bold**
+    paragraph, and it runs to the next blank line — the changelog wraps at 110 columns, so taking only the first
+    physical line of each item left every recent release reading as a half sentence."""
     entries: list[dict] = []
     cur: dict | None = None
-    for line in text.splitlines():
-        m = HEAD_RE.match(line.strip())
+    open_item: int | None = None
+    for raw in text.splitlines():
+        m = HEAD_RE.match(raw.strip())
         if m:
             cur = {"version": m["ver"], "title": (m["title"] or "").strip(), "items": []}
             entries.append(cur)
-        elif cur is not None and line.strip().startswith("- "):
-            cur["items"].append(line.strip()[2:])
+            open_item = None
+            continue
+        if cur is None:
+            continue
+        line = raw.strip()
+        if not line:
+            open_item = None
+        elif line.startswith("- ") or (open_item is None and line.startswith("**")):
+            cur["items"].append(line[2:] if line.startswith("- ") else line)
+            open_item = len(cur["items"]) - 1
+        elif open_item is not None:
+            cur["items"][open_item] += " " + line
     return entries
 
 
@@ -53,11 +82,12 @@ def render(entries: list[dict], current: str) -> str:
         if v.lower() == "unreleased":
             continue
         arch = f"architecture/v{v}.md"
-        links = [f"[release]({REPO}/releases/tag/v{v})"]
+        tagged = has_tag(v)
+        links = [f"[release]({REPO}/releases/tag/v{v})"] if tagged else ["folded forward, never tagged"]
         if (ROOT / "docs" / arch).exists():
             links.append(f"[architecture]({arch})")
         status = " **(current)**" if v == current else ""
-        rows.append(f"| `{v}`{status} | {tag_date(v)} | {e['title'] or '—'} | {' · '.join(links)} |")
+        rows.append(f"| `{v}`{status} | {tag_date(v) if tagged else '—'} | {e['title'] or '—'} | {' · '.join(links)} |")
     body = [
         "# Versions",
         "",

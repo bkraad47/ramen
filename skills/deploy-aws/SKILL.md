@@ -7,7 +7,7 @@ description: Bring Ramen up on AWS (EKS, DynamoDB, S3, Secrets Manager, ECR, ALB
 
 The AWS artifacts were built against `docs/CONTRACTS.md` §8 and unit-tested with moto; **they have never been
 applied to a real account**. This skill therefore runs everything in plan/dry-run mode first, requires a human OK
-before `apply`, and refuses to call the job done without the validator. Narrative: `docs/how-tos/aws.md`.
+before `apply`, and refuses to call the job done without the validator. Narrative: `docs/wiki/deploy-aws.md`.
 
 ## Inputs
 - AWS credentials with admin on the target account (`aws sts get-caller-identity` works), `REGION` (default `us-east-1`), first zone `AWS_AZ` (default `us-east-1a`).
@@ -22,7 +22,7 @@ before `apply`, and refuses to call the job done without the validator. Narrativ
 5. Console: `aws eks update-kubeconfig --name ramen --region $REGION`; generate `ADMIN_PW`, `FERNET`, `ADMIN_KEY` as in deploy-gcp; `helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace --set provider=aws,region=$REGION,image.console=<ecr_console>:<v>,image.worker=<ecr_worker>:<v>,console.roleArn=<console_role_arn>,console.certificateArn=<acm_arn> --set console.secrets.RAMEN_ADMIN_PASSWORD=$ADMIN_PW,console.secrets.RAMEN_FERNET_KEY=$FERNET,console.secrets.RAMEN_ADMIN_KEY=$ADMIN_KEY`. If the chart rejects a value, read `deploy/helm/ramen/values.yaml` — the AWS keys are documented there — and do not guess.
 6. Wait: `kubectl -n ramen-system rollout status deploy/console`; `kubectl -n ramen-system get ingress console` until ADDRESS is set (ALB controller, 3–5 min); `curl -k https://<alb-dns>/readyz` → `{"ok":true,...}`. If the Ingress never gets an address, check `kubectl -n kube-system logs deploy/aws-load-balancer-controller` — the most likely first-contact failure is the controller's IAM policy.
 7. First zone/group/env/key/deploy through the API exactly as in `deploy-gcp` step 6, with `provider:"aws"`, `region:"$AWS_AZ"`. Expect the first deploy to surface IRSA/S3 permission errors in the job log; fix the role policy in Terraform (path `/ramen/`), re-apply, redeploy.
-8. Record every deviation you had to make in `docs/how-tos/aws.md` under "Known unknowns" (as a PR), so the next run is shorter.
+8. Record every deviation you had to make in `docs/wiki/deploy-aws.md` under "Gotchas" (as a PR), so the next run is shorter.
 
 ## Validate
 (read-only sub-agent; `CONSOLE=https://<alb-dns>`, `rmk_` key, viewer `rmn_` key)

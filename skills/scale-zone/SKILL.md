@@ -5,7 +5,7 @@ description: Add a new zone to a Ramen group, change worker count or size in a z
 
 # Scale a zone
 
-Hierarchy: Group → Environment → Zone → Worker (`docs/wiki/concepts.md`). Zones are global objects created by a
+Hierarchy: Group → Environment → Zone → Worker (`docs/wiki/groups-zones.md`). Zones are global objects created by a
 super admin; environments attach them. Group admins change **count**; only super admins change **size**
 (`s` 250m/512Mi, `m` 500m/1Gi, `l` 1 CPU/2Gi) and the allowed-size list. `U=$RAMEN_CONSOLE_URL/api/v1`, `H='X-Ramen-Api-Key: $RMN'`.
 

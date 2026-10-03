@@ -12,6 +12,10 @@ Code, Cursor, a CI bot) can load to operate Ramen safely. Each skill is a folder
 | [`backup-restore`](https://github.com/bkraad47/ramen/tree/main/skills/backup-restore) | Versioned JSON backups to local/bucket and restores |
 | [`scale-zone`](https://github.com/bkraad47/ramen/tree/main/skills/scale-zone) | Add a zone, scale counts/sizes, rebalance, remove a zone |
 
+Point an agent at one by handing it the file. In Claude Code, `@skills/deploy-gcp/SKILL.md` in a prompt, or copy
+the folder into your own `.claude/skills/`. Cursor and other agents take the same file as context. Nothing in a
+skill is Ramen-specific tooling: each is plain Markdown with numbered steps.
+
 ## Validation sub-agent convention
 Every skill ends with a **Validate** section. The convention is that the agent running the skill spawns a cheaper,
 read-only sub-agent with only that section and the URLs/keys it needs; the sub-agent reports PASS/FAIL with the

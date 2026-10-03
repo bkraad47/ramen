@@ -1,11 +1,12 @@
-"""The guides the README promises exist, are in the docs nav, and are linked from the README (0.5.3)."""
+"""The guides the README promises exist, are in the docs nav, and are linked from the README (0.5.3; slugs of the 0.6.0 docs reorganization)."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDES = {
-    "how-tos/end-to-end": "End to end, console",
-    "how-tos/add-a-tool": "Add and deploy a tool",
+    "get-started": "Get started",
+    "wiki/mcp-repo": "The MCP repo",
+    "wiki/connect-oauth": "Connect a client with OAuth",
 }
 
 

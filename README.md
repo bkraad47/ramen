@@ -22,7 +22,9 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 transports on real node processes on Linux and Windows. One GKE cluster has proved the gRPC path end to end
 (0.3.2, 0.4.0) and the HTTP path with OAuth through the same load balancer (0.5.1, with a publicly trusted
 certificate since 0.5.5). The AWS path has been applied to a real account since 0.5.6, and the published bridge
-was server-tested against it in 0.5.8. Everything below is written so those lines stay findable.
+was server-tested against it in 0.5.8. 0.6.0 itself was deployed on both, two zones each, on 2026-10-03:
+canary deploys, `POST /mcp` through the load balancer, per-token throttling shared across zones through Redis,
+OAuth sign-in through the bridge, and zone teardown. Everything below is written so those lines stay findable.
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a

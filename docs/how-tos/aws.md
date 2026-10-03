@@ -158,7 +158,9 @@ terraform -chdir=deploy/terraform/aws destroy        # or: aws cloudformation de
 ```
 Check for leftovers afterwards: ALBs and target groups, the WAF web ACL and IP sets, CloudWatch log groups, IAM
 roles under `/ramen/`, Secrets Manager entries under `ramen/`. These are the pieces most likely to survive a
-partial failure. Deleting the group from the console first is what removes the per-zone roles and secrets.
+partial failure. Deleting the group from the console first is what removes the per-zone roles and secrets. The
+web ACL `ramen` is created by the console, not by Terraform, so `terraform destroy` leaves it behind (it is
+billed monthly): `aws wafv2 delete-web-acl --scope REGIONAL --name ramen --id <id> --lock-token <token>`.
 
 ## Gotchas we hit
 - **Hostname verification** (0.5.8): `curl -k` and `grpcurl -insecure` skip it, a real gRPC client does not. The

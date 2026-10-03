@@ -1,5 +1,5 @@
 # helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace -f my-values.yaml
-provider: gcp                # gcp | aws (CONTRACTS §7 / §8). provider=aws is UNTESTED on a real account.
+provider: gcp                # gcp | aws (CONTRACTS §7 / §8). provider=aws verified live on a real account (v0.5.6 N10).
 project: ""                  # GCP project id (required on gcp)
 region: us-central1          # GCP region, or AWS region (e.g. us-east-1) when provider=aws
 aws:                         # provider=aws only (terraform -chdir=deploy/terraform/aws output)
@@ -11,7 +11,7 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.5.7
+  tag: 0.5.8
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:

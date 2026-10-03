@@ -2,7 +2,7 @@ Zone {{ .Values.group }}/{{ .Values.zone }} → namespace {{ include "rw.ns" . }
 Deploy env lives in Secret ramen-deploy (RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, ...); the console calls Admin/Reload after changing it.
 gRPC (CONTRACTS §11): send metadata ramen-group={{ .Values.group }} ramen-zone={{ .Values.zone }} authorization="Bearer rmk_..." to
 {{- if eq .Values.provider "aws" }}
-  https://<alb address>:443 (UNTESTED provider; IngressGroup {{ .Values.aws.albGroup }}; kubectl -n ramen-system get ingress console)
+  https://<alb address>:443 (IngressGroup {{ .Values.aws.albGroup }}; kubectl -n ramen-system get ingress console)
 {{- else }}
   https://<console_ip>:443 (Gateway {{ .Values.route.gateway }} in {{ .Values.route.gatewayNamespace }})
 {{- end }}

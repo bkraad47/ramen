@@ -2,6 +2,38 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+## [0.5.8] — The published ramen-mcp-bridge package verified live against real AWS and GCP deployments
+A full live bring-up/deploy/teardown round on fresh throwaway AWS and GCP environments, specifically to
+server-test the real `pip install ramen-mcp-bridge` package (v0.5.7's extraction) against real cloud load
+balancers — not just a local kind-equivalent process. Found and fixed one real bug.
+
+**AWS — a genuine TLS hostname-verification bug, found only because the bridge checks strictly**: the
+self-signed console certificate's SAN only ever covered the placeholder `ramen-console.local`, never the
+real ALB hostname (which isn't known until after the ALB exists — the terraform resource that creates the
+cert runs first). `curl -k` and `grpcurl -insecure` both skip hostname verification entirely, so this never
+surfaced before; a real gRPC client doing the documented `--ca ramen-lb.pem` flow fails with
+`Hostname Verification Check failed`. Fixed in `deploy/terraform/aws/main.tf`: the cert's SAN now also
+covers `*.<region>.elb.amazonaws.com` (every AWS ALB hostname is exactly one label under that), which
+matches any ALB this terraform creates without needing to know the literal hostname in advance. The ACM
+certificate updates in place (same ARN), so no Helm/chart changes were needed. Verified live: the real
+published bridge completed `initialize` → `tools/list` → `tools/call` through the fixed ALB.
+
+**GCP — 0 new bugs.** The bridge completed the same full flow against the GKE Gateway's publicly-trusted
+managed cert without any fix needed — confirms the AWS issue was specific to AWS's self-signed-cert path,
+not a bridge-side gap.
+
+**Stale docs found and fixed along the way** (both genuinely outdated since v0.5.6 N10 first proved AWS
+live, just never updated): the Helm charts' own `NOTES.txt` and `values.yaml`/`Chart.yaml` comments still
+said "UNTESTED provider (no AWS account)"; `deploy/README.md`'s AWS infra row still said `**UNTESTED**`
+(the CloudFormation alternative row correctly still says so — that path genuinely hasn't been tried); and a
+dangling reference to the `ramen-bridge/` folder removed in v0.5.7 pointed nowhere.
+
+Both throwaway environments were stood up fresh for this round (AWS's tiny fixed 2-node EKS cluster hit the
+same single-node-per-zone capacity crunch during rolling restarts as v0.5.6 N10 — not a regression, just the
+cluster being small on purpose; GCP's Autopilot cluster auto-provisions and had no such issue). Per the
+request, only AWS was torn down and verified fully clean afterward (same checklist as N10); GCP was left
+running for live inspection.
+
 ## [0.5.7] — The MCP bridge becomes its own pip-installable package
 `ramen-mcp-bridge` moves out of `runtime-py` into its own standalone, public repo
 and package — [github.com/bkraad47/ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge),

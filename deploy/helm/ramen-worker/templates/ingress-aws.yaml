@@ -1,6 +1,6 @@
 {{- if eq .Values.provider "aws" }}
 {{- $canary := int .Values.aws.canaryWeight }}
-# CONTRACTS §8 + §11 (UNTESTED on a real account): gRPC on the shared ALB. Listener rule = the two routing headers
+# CONTRACTS §8 + §11 (verified live, v0.5.6 N10): gRPC on the shared ALB. Listener rule = the two routing headers
 # (ramen-group / ramen-zone) + path /ramen.v1.Mcp/*; target groups speak gRPC (backend-protocol-version GRPC) and are
 # health-checked with grpc.health.v1 code 0. One weighted forward action → stable/canary target groups.
 apiVersion: networking.k8s.io/v1

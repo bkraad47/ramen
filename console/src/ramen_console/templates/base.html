@@ -3,8 +3,8 @@
 <link rel="icon" href="/static/favicon.png" type="image/png"><link rel="stylesheet" href="/static/ramen.css"><script src="/static/htmx.min.js"></script></head>
 <body>
 <nav class="side"><img src="/static/logo-mark.png" alt="Project Ramen">
-{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones and workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
-{% if p.role != 'viewer' or key not in ['users', 'api_keys', 'backups', 'config'] %}{% if p.role == 'super_admin' or key not in ['backups', 'config'] %}<a href="{{ href }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endif %}{% endfor %}
+{% if p.role != 'mcp_user' %}{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones and workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
+{% if p.role != 'viewer' or key not in ['users', 'api_keys', 'backups', 'config'] %}{% if p.role == 'super_admin' or key not in ['backups', 'config'] %}<a href="{{ href }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endif %}{% endfor %}{% endif %}
 <div class="who">
 <div class="identity"><span class="email" title="{{ p.name }}">{{ p.name }}</span><span class="role {{ p.role|replace('_', '-') }}">{{ role_label(p.role) }}</span></div>
 <a href="/logout" class="logout">Log out</a>
@@ -13,10 +13,24 @@
 <div id="toast"></div>
 <script>
 document.body.addEventListener('htmx:configRequest',e=>{const m=document.cookie.match(/(?:^|; )ramen_csrf=([^;]+)/);if(m)e.detail.headers['X-Ramen-CSRF']=decodeURIComponent(m[1])});
-htmx.defineExtension('json',{onEvent:(n,e)=>{if(n==='htmx:configRequest')e.detail.headers['Content-Type']='application/json'},
- encodeParameters:(xhr,params)=>{xhr.overrideMimeType('text/json');const o={};params.forEach((v,k)=>{if(k in o)o[k]=[].concat(o[k],v);else o[k]=v});return JSON.stringify(o)}});
+htmx.defineExtension('json',{init:a=>{window.ramenHx=a},onEvent:(n,e)=>{if(n==='htmx:configRequest')e.detail.headers['Content-Type']='application/json'},
+ encodeParameters:(xhr,params,elt)=>{xhr.overrideMimeType('text/json');const o={};params.forEach((v,k)=>{if(k in o)o[k]=[].concat(o[k],v);else o[k]=v});
+ // hx-vals carries real JSON types; FormData flattens them: a one-item list arrived as a string and an empty list
+ // vanished entirely (Enable on the last disabled package sent {} → "blocked: Field required"). Re-read them typed.
+ try{if(elt&&window.ramenHx)Object.assign(o,window.ramenHx.getExpressionVars(elt))}catch(_){}
+ return JSON.stringify(o)}});
 document.body.addEventListener('htmx:responseError',e=>{const t=document.getElementById('toast');t.textContent=e.detail.xhr.responseText||('Error '+e.detail.xhr.status);t.style.display='block';setTimeout(()=>t.style.display='none',6000)});
 document.body.addEventListener('htmx:sendError',()=>{const t=document.getElementById('toast');t.textContent='Network error';t.style.display='block'});
+// A successful mutation says so: now, or after the refresh the response asks for (the message rides sessionStorage).
+function ramenSaved(){const t=document.getElementById('toast');t.textContent='Saved';t.classList.add('ok');t.style.display='block';setTimeout(()=>{t.style.display='none';t.classList.remove('ok')},2500)}
+// beforeOnLoad, not afterRequest: htmx reloads the page for HX-Refresh before afterRequest fires, and a flag set
+// after unload has begun is lost.
+document.body.addEventListener('htmx:beforeOnLoad',e=>{const d=e.detail,x=d.xhr,v=((d.requestConfig||{}).verb||'get').toLowerCase();if(!x||v==='get'||x.status<200||x.status>=300)return;
+ if(x.getResponseHeader('HX-Refresh')==='true'){try{sessionStorage.setItem('ramenFlash','1')}catch(_){}}else ramenSaved()});
+// W2: polling elements carry data-auto; once loaded, their polls are dropped while auto refresh is off. A trigger
+// filter like every 60s[window.ramenAuto] would need eval, which the CSP forbids.
+document.body.addEventListener('htmx:beforeRequest',e=>{const el=e.detail.elt;if(el&&el.dataset&&'auto' in el.dataset){if(el.dataset.loaded&&!window.ramenAuto){e.preventDefault();return}el.dataset.loaded='1'}});
+try{if(sessionStorage.getItem('ramenFlash')){sessionStorage.removeItem('ramenFlash');ramenSaved()}}catch(_){}
 // W2: the dashboard's every-60s trigger is filtered by this flag, so the toggle really stops the polling.
 window.ramenAuto=true;
 function ramenToggleAuto(b){window.ramenAuto=!window.ramenAuto;b.textContent='Auto refresh: '+(window.ramenAuto?'on':'off')}
@@ -27,18 +41,14 @@ function ramenAddGroup(b){const sel=b.parentElement.querySelector('#group-pick')
  chip.innerHTML='<input type="hidden" name="groups">'+sel.options[sel.selectedIndex].text+' <button type="button" class="x">Remove</button>';
  chip.querySelector('input').value=v;chip.querySelector('button').onclick=()=>chip.remove();chips.appendChild(chip)}
 // W5: a rule is added by sending the current list plus the new row; the API takes the whole list.
-function ramenAddRule(){const cur=JSON.parse(document.getElementById('rules').textContent||'[]');
- const glob=(document.getElementById('rule-glob').value||'').trim();
- return cur.concat([{effect:document.getElementById('rule-effect').value,
-                     permission:glob||document.getElementById('rule-permission').value}])}
 // N2: a dropdown plus Add builds removable chips; the form reads their ids back at submit time.
 function ramenAddNotify(b){const sel=document.getElementById('notify-pick');
  const chips=document.getElementById('notify-chips');const v=sel.value;if(!v||chips.querySelector('[data-notify="'+v+'"]'))return;
  const chip=document.createElement('span');chip.className='chip';chip.dataset.notify=v;
- chip.innerHTML=sel.options[sel.selectedIndex].text+' <button type="button" class="x">Remove</button>';
- chip.querySelector('button').onclick=()=>chip.remove();chips.appendChild(chip)}
-function ramenNotifyIds(){return Array.from(document.querySelectorAll('#notify-chips [data-notify]')).map(c=>c.dataset.notify)}
+ chip.textContent=sel.options[sel.selectedIndex].text+' ';const h=document.createElement('input');h.type='hidden';h.name='user_ids';h.value=v;chip.appendChild(h);
+ const x=document.createElement('button');x.type='button';x.className='x';x.textContent='Remove';x.onclick=()=>chip.remove();chip.appendChild(x);chips.appendChild(chip)}
 // W3: search and outcome filter act on the rendered audit rows; no re-query.
+document.body.addEventListener('htmx:afterSwap',e=>{if(e.detail.target&&e.detail.target.id==='audit-scroll')ramenAuditFilter()});  // hx-on would need eval
 function ramenAuditFilter(){const q=(document.getElementById('audit-search').value||'').toLowerCase();
  const out=document.getElementById('audit-outcome').value;
  document.querySelectorAll('#audit-scroll tbody tr').forEach(tr=>{const t=tr.textContent.toLowerCase();

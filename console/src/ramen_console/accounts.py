@@ -98,11 +98,16 @@ class Accounts:
         }
         return public(await self.store.put("users", uid(), doc))
 
-    async def upsert_sso_user(self, email, role="viewer", groups=(), provider="oauth") -> dict:
-        """Link by verified email (existing role kept) or create with the mapped role/groups."""
+    async def upsert_sso_user(self, email, role="viewer", groups=(), provider="oauth", authoritative=False) -> dict:
+        """Link by verified email or create with the mapped role/groups. With `authoritative` (D38: the provider
+        has a role mapping) the mapped role/groups replace the stored ones on every login."""
         found = await self.store.list("users", {"email": email})
         if found:
-            return found[0]
+            u = found[0]
+            if not authoritative or (u["role"], list(u.get("groups") or [])) == (role, list(groups)):
+                return u
+            u.update({"role": role, "groups": list(groups)})
+            return await self.store.put("users", u["id"], u)
         doc = {
             "email": email,
             "role": role,
@@ -163,6 +168,8 @@ class Accounts:
         u = await self.store.get("users", uid_)
         if not u:
             raise not_found("user")
+        if (provider := u.get("provider") or "password") != "password":
+            raise invalid(f"{u['email']} signs in through {provider} and has no password to reset")
         check_password(password)
         u["password_hash"] = hash_password(password)
         u.pop("login_disabled", None)  # §13.1: a reset is how a restored account gets back in
@@ -211,8 +218,8 @@ class Accounts:
             raise forbidden("Not your key")
         await self.store.delete("api_keys", kid)
 
-    async def request_permission(self, p: Principal, role=None, group=None, zone=None, permission=None) -> dict:
-        """Role request (viewer → admin) or SA permission request (group+zone+permission, CONTRACTS §9)."""
+    async def request_permission(self, p: Principal, role=None, group=None, zone=None, permission=None, scope=None):
+        """Role request (viewer → admin) or SA permission request (group+zone+permission[+scope], CONTRACTS §9)."""
         if permission:
             doc = {
                 "kind": "permission_request",
@@ -222,6 +229,7 @@ class Accounts:
                 "group": group,
                 "zone": zone,
                 "permission": permission,
+                "scope": list(scope or ["*"]),
                 "status": "pending",
                 "created": now(),
             }
@@ -250,7 +258,9 @@ class Accounts:
         if r["status"] != "pending":
             raise conflict("Request already handled")
         if r.get("type") == "permission":
-            r["applied"] = await apply(r["group"], r["zone"], r["permission"]) if apply else None
+            r["applied"] = (
+                await apply(r["group"], r["zone"], r["permission"], r.get("scope") or ["*"]) if apply else None
+            )
             r.update(status="approved", approved_by=by, approved=now())
             return await self.store.put("activity", rid, r)
         u = await self.store.get("users", r["user"])

@@ -3,11 +3,12 @@ from fnmatch import fnmatch
 
 from fastapi import HTTPException, Request
 
-ROLES = ("super_admin", "group_admin", "viewer")
+ROLES = ("super_admin", "group_admin", "viewer", "mcp_user")
 RANK = {r: i for i, r in enumerate(reversed(ROLES))}
 # How a role is written for a person (U6/U10); the key is also the CSS token suffix on `.role-*`.
-ROLE_LABELS = {"super_admin": "Super Admin", "group_admin": "Group Admin", "viewer": "Viewer"}
+ROLE_LABELS = {"super_admin": "Super Admin", "group_admin": "Group Admin", "viewer": "Viewer", "mcp_user": "MCP User"}
 AGENT_KEY_REFUSED = "Agent key cannot call the console API"
+MCP_USER_REFUSED = "MCP users connect MCP clients to their groups' workers; the console is not available to them"
 
 
 def role_label(role: str) -> str:
@@ -46,6 +47,11 @@ def can(p: Principal | None, role: str, group: str | None = None) -> bool:
     return group in p.groups if group else True
 
 
+def can_connect(p: Principal | None, group: str) -> bool:
+    """May this person's OAuth client reach `group`'s workers? Any role, as long as the group is theirs (0.5.92)."""
+    return can(p, "mcp_user", group)
+
+
 def require(role: str, group_param: str | None = None):
     async def dep(request: Request) -> Principal:
         p = getattr(request.state, "principal", None)
@@ -59,6 +65,8 @@ def require(role: str, group_param: str | None = None):
         if p.kind == "apikey" and p.client_type == "agent":  # D21: agent keys belong to workers, not the console
             raise HTTPException(403, AGENT_KEY_REFUSED)
         group = request.path_params.get(group_param) if group_param else None
+        if p.role == "mcp_user" and role != "mcp_user":
+            raise HTTPException(403, MCP_USER_REFUSED)
         if not can(p, role, group):
             raise HTTPException(403, f"Requires {role_label(role)}" + (f" on group {group}" if group else ""))
         return p

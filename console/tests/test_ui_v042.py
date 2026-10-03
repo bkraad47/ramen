@@ -104,7 +104,7 @@ def test_audit_filter_row_bottom_aligns_and_load_500_is_a_button(demo):
 def test_audit_page_auto_refreshes_behind_the_same_toggle_as_the_dashboard(demo):
     page = demo.get("/audit").text
     assert 'onclick="ramenToggleAuto(this)"' in page
-    assert re.search(r'hx-get="/ui/audit\?limit=\d+"[^>]*hx-trigger="load, every 60s\[window.ramenAuto\]"', page)
+    assert re.search(r'hx-get="/ui/audit\?limit=\d+"[^>]*data-auto hx-trigger="load, every 60s"', page)
     demo.post("/api/v1/groups", json={"name": "fresh", "repo_url": "x", "ref": "main"})
     partial = demo.get("/ui/audit?limit=100").text
     assert "group:fresh" in partial and "<table" in partial

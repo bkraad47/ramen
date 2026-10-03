@@ -57,6 +57,31 @@ def test_blocked_list_and_deploy_config(demo, tmp_path):
     assert audit and "blocked:calc" in [t for a in audit for t in a["tags"]]
 
 
+def test_packages_per_zone_are_listed_once_even_when_several_workers_report_them(demo):
+    """A canary deploy records the canary pod and the stable pod(s); every worker in a zone runs the same
+    code, so the group page must show one package list per zone, not one per worker (0.5.91)."""
+    import asyncio
+
+    store = demo.app.state.store
+    pk = {"tools": [{"name": "calc", "inputSchema": {"type": "object"}}], "resources": [], "prompts": [], "errors": []}
+
+    async def seed():
+        env = await store.get("environments", "demo:prod")
+        env["last_deploy"] = {
+            "status": "ok",
+            "at": "2026-10-03T00:00:00+00:00",
+            "job": "j1",
+            "error": None,
+            "packages": {"zone-a worker-canary-1": pk, "zone-a worker-stable-1": pk, "zone-a worker-stable-2": pk},
+        }
+        await store.put("environments", env["id"], env)
+
+    asyncio.run(seed())
+    page = demo.get("/groups/demo").text
+    assert page.count("<code>calc</code>") == 1, page.count("<code>calc</code>")
+    assert "3 workers" in page  # says how many reported it, instead of repeating the list
+
+
 def test_group_page_block_toggles(demo):
     make_user(demo, "v@x", "viewer", ["demo"])
     job = wait_job(demo, demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": False}).json()["id"])

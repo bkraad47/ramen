@@ -3,31 +3,14 @@
 <div class="card"><details><summary class="btn">Create user</summary>
 <form class="inline" hx-post="/api/v1/users" hx-ext="json" hx-swap="none">
 <label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>
-<label>Role<select name="role"><option value="viewer">Viewer</option>{% if p.role == 'super_admin' %}<option value="group_admin">Group Admin</option><option value="super_admin">Super Admin</option>{% endif %}</select></label>
+<label>Role<select name="role"><option value="viewer">Viewer</option><option value="mcp_user">MCP User — connects MCP clients only</option>{% if p.role == 'super_admin' %}<option value="group_admin">Group Admin</option><option value="super_admin">Super Admin</option>{% endif %}</select></label>
 {{ group_picker(groups) }}
 <button>Create user</button></form></details></div>
-{% macro act(r) %}<div class="row-actions">{% if p.role == 'super_admin' %}<form class="inline" hx-put="/api/v1/users/{{ r.id }}" hx-ext="json" hx-swap="none"><select name="role">{% for role in ['viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}" {{ 'selected' if role == r.role }}>{{ role_label(role) }}</option>{% endfor %}</select><input name="groups" value="{{ r.groups|join(',') }}"><button class="sm act">Save</button></form>
-<form class="inline" hx-post="/api/v1/users/{{ r.id }}/password" hx-ext="json" hx-swap="none"><input name="password" type="password" minlength="12" required placeholder="New password" title="{{ password_rule }}"><button class="sm ghost act">Reset password</button></form>{% endif %}
-<button class="sm danger act" hx-delete="/api/v1/users/{{ r.id }}" hx-confirm="Delete the user {{ r.email }}?" hx-swap="none">Delete user</button></div>{% endmacro %}
+{% macro act(r) %}<div class="row-actions user-actions">{% if p.role == 'super_admin' %}<form class="inline" hx-put="/api/v1/users/{{ r.id }}" hx-ext="json" hx-swap="none"><label>Role<select name="role">{% for role in ['mcp_user', 'viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}" {{ 'selected' if role == r.role }}>{{ role_label(role) }}</option>{% endfor %}</select></label><div class="field"><span class="lbl">Groups</span><details class="multi"><summary>{{ r.groups|join(', ') or 'No groups' }}</summary><div class="options"><input type="hidden" name="groups" value="">{% for g in groups %}<label class="option"><input type="checkbox" name="groups" value="{{ g.id }}"{{ ' checked' if g.id in r.groups }}> {{ g.name }}</label>{% else %}<span class="muted">No groups yet</span>{% endfor %}</div></details></div><button class="act">Save</button></form>
+{% if (r.provider or 'password') == 'password' %}<form class="inline" hx-post="/api/v1/users/{{ r.id }}/password" hx-ext="json" hx-swap="none"><label>New password<input name="password" type="password" minlength="12" required placeholder="12+ characters" title="{{ password_rule }}"></label><button class="ghost act reset">Reset password</button></form>{% else %}<span class="muted sso">Signs in through {{ r.provider }} — no password to reset</span><span></span>{% endif %}{% endif %}
+<button class="danger act delete" hx-delete="/api/v1/users/{{ r.id }}" hx-confirm="Delete the user {{ r.email }}?" hx-swap="none">Delete user</button></div>{% endmacro %}
 {{ table(users, ['email', 'role', 'groups', 'provider', 'created'], '/api/v1/users', 'Users', act) }}
 {% if p.role == 'super_admin' %}<h2>Permission requests</h2><div class="card"><table><tr><th>User</th><th>Request</th><th>Group</th><th>Zone</th><th>Status</th><th>Actions</th></tr>
 {% for q in requests %}<tr><td>{{ q.email }}</td><td>{% if q.type == 'permission' %}Service-account permission <code>{{ q.permission }}</code>{% else %}Role <b>{{ role_label(q.role) }}</b>{% endif %}</td><td>{{ q.group or '' }}</td><td>{{ q.zone or '' }}</td><td>{{ q.status }}{% if q.applied and q.applied.note %} <span class="muted">{{ q.applied.note }}</span>{% endif %}</td><td>{% if q.status == 'pending' %}<button class="sm" hx-post="/api/v1/requests/{{ q.id }}/approve" hx-swap="none">Approve</button>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">None</td></tr>{% endfor %}</table></div>{% endif %}
 <div class="card"><form class="inline" hx-post="/api/v1/users/me/password" hx-ext="json" hx-swap="none"><label>Change my password<input name="password" type="password" required minlength="12" title="{{ password_rule }}"></label><button class="ghost">Update</button></form></div>
-{% if p.role == 'super_admin' %}
-<div class="card"><h2 style="margin-top:0">Server email (SMTP)</h2><p class="muted">Overrides RAMEN_SMTP_* env vars field by field; takes effect immediately. Password is write-only — {{ 'a password is set.' if smtp.password_set else 'no password set.' }}</p>
-<form class="inline" hx-put="/api/v1/config/smtp" hx-ext="json" hx-swap="none">
-<label>Host<input name="host" value="{{ smtp.host }}" placeholder="smtp.example.com"></label>
-<label>Port<input name="port" type="number" min="1" value="{{ smtp.port }}" style="width:6em"></label>
-<label>User<input name="user" value="{{ smtp.user }}"></label>
-<label>Password<input name="password" type="password" placeholder="(unchanged)"></label>
-<label>From<input name="mail_from" value="{{ smtp.mail_from }}" placeholder="ramen@example.com"></label>
-<label>TLS<select name="tls"><option value="1" {{ 'selected' if smtp.tls == '1' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.tls == 'ssl' }}>SSL</option><option value="0" {{ 'selected' if smtp.tls == '0' }}>None</option></select></label>
-<button class="act">Save</button></form></div>
-<div class="card"><h2 style="margin-top:0">Server warning/error emails</h2><p class="muted">These users get a digest email when the server logs a warning or error.</p>
-<form class="inline" hx-put="/api/v1/config/notify" hx-ext="json" hx-swap="none" hx-vals='js:{user_ids: ramenNotifyIds()}'>
-<label>User<select id="notify-pick">{% for u in users %}<option value="{{ u.id }}">{{ u.email }}</option>{% else %}<option value="">No users yet</option>{% endfor %}</select></label>
-<button type="button" class="sm ghost" onclick="ramenAddNotify(this)">Add</button>
-<span class="chips" id="notify-chips">{% for u in users %}{% if u.id in notify_user_ids %}<span class="chip" data-notify="{{ u.id }}">{{ u.email }} <button type="button" class="x" onclick="this.parentElement.remove()">Remove</button></span>{% endif %}{% endfor %}</span>
-<button class="act">Save</button></form></div>
-{% endif %}
 {% endblock %}

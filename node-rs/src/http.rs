@@ -366,7 +366,9 @@ async fn delete_mcp(State(app): State<Shared>, req: Request) -> Response {
 }
 
 /// RFC 9728 (§16.3): unauthenticated, tells an OAuth client which authorization server to use for this worker.
-async fn protected_resource(State(app): State<Shared>) -> Response {
+/// `resource` is this endpoint's URL — RFC 9728 clients (Claude Code among them) refuse metadata whose
+/// `resource` is not the URL they are talking to; the scope stays `mcp:<group>:<zone>`.
+async fn protected_resource(State(app): State<Shared>, headers: HeaderMap) -> Response {
     let cfg = app.cfg.read().await;
     match &cfg.oauth_issuer {
         None => (
@@ -375,13 +377,31 @@ async fn protected_resource(State(app): State<Shared>) -> Response {
         )
             .into_response(),
         Some(issuer) => axum::Json(json!({
-            "resource": token::resource(&cfg.group, &cfg.zone),
+            "resource": format!("{}{MCP_PATH}", public_base(&cfg, &headers)),
             "authorization_servers": [issuer],
             "bearer_methods_supported": ["header"],
             "scopes_supported": [token::resource(&cfg.group, &cfg.zone)],
         }))
         .into_response(),
     }
+}
+
+/// The base URL clients reach this worker at: `RAMEN_PUBLIC_URL` when the deploy set it, else what the request says.
+fn public_base(cfg: &Config, headers: &HeaderMap) -> String {
+    if let Some(base) = &cfg.public_url {
+        return base.clone();
+    }
+    let hv = |n: &str| {
+        headers
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let proto = hv("x-forwarded-proto").unwrap_or_else(|| "http".into());
+    let host = hv("x-forwarded-host")
+        .or_else(|| hv("host"))
+        .unwrap_or_else(|| "localhost".into());
+    format!("{proto}://{host}")
 }
 
 #[cfg(test)]
@@ -889,7 +909,21 @@ mod tests {
         );
         let r = http(addr, "GET", PROTECTED_RESOURCE_PATH, &[], "").await;
         assert_eq!(r.status, 200);
-        assert_eq!(r.json()["resource"], "mcp:demo:a");
+        // RFC 9728: `resource` is the URL the client talks to (no public base: taken from the request)
+        assert_eq!(r.json()["resource"], format!("http://{addr}/mcp"));
+        assert_eq!(r.json()["scopes_supported"][0], "mcp:demo:a");
+        let r = http(
+            addr,
+            "GET",
+            PROTECTED_RESOURCE_PATH,
+            &[
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Host", "lb.example"),
+            ],
+            "",
+        )
+        .await;
+        assert_eq!(r.json()["resource"], "https://lb.example/mcp");
         assert_eq!(
             r.json()["authorization_servers"][0],
             "https://console.example"
@@ -1021,6 +1055,16 @@ mod tests {
                 "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource\", scope=\"mcp:demo:a\""
             )
         );
+        // ...and the metadata's `resource` is that base plus the MCP path, whatever Host the request carries
+        let r = http(
+            addr,
+            "GET",
+            PROTECTED_RESOURCE_PATH,
+            &[("Host", "other")],
+            "",
+        )
+        .await;
+        assert_eq!(r.json()["resource"], "https://mcp.example/mcp");
         let _ = stop.send(());
 
         // L2: a foreign origin is refused before the credential is looked at (a bad key gets the same 403)

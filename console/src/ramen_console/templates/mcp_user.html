@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Connect an MCP client{% endblock %}
+{% block body %}
+<div class="card"><p>You are an <b>MCP User</b>: this console is not available to you, but an MCP client you sign in with — Claude Code, Claude Desktop, Cursor, or anything that speaks MCP's OAuth flow — may reach the workers of {% if groups %}your group{{ 's' if groups|length != 1 }} {% for g in groups %}<code>{{ g }}</code>{{ ', ' if not loop.last }}{% endfor %}{% else %}<b>no group yet</b> (ask an admin to add you to one){% endif %}. Every call the client makes is logged under your account, not a shared key.</p>
+<p class="muted">The client sends you here to sign in and approve it once per group and zone; afterwards it refreshes its own token. Tokens are limited to the group and zone you approved, and stop working when your access is removed.</p></div>
+{% if groups %}<h2>How to connect</h2>
+<div class="card"><p>Ask an admin for the console's <b>OAuth client id</b> for your client (Config → OAuth clients), then point the client at a zone of one of your groups:</p>
+<pre>claude mcp add-json ramen-{{ groups[0] }} '{"type":"http","url":"{{ public_url }}/mcp",
+  "headers":{"ramen-group":"{{ groups[0] }}","ramen-zone":"&lt;zone&gt;"},
+  "oauth":{"clientId":"&lt;client id&gt;","scopes":"mcp:{{ groups[0] }}:&lt;zone&gt;"}}'</pre>
+<p class="muted">Then run <code>/mcp</code> in Claude Code (or open the server in your client) and approve it in the browser window it opens. The zone names come from the admin who deployed the group.</p></div>{% endif %}
+{% endblock %}

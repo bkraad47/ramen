@@ -9,7 +9,7 @@ sees the secrets it was scoped to.
 ## Identities and roles
 | Actor | Auth | Scope |
 |---|---|---|
-| Console user | email + argon2 password, OAuth/OIDC provider button (PKCE S256 + `nonce` since 0.3.1), optional magic link | `super_admin` / `group_admin` (groups) / `viewer` (groups) |
+| Console user | email + argon2 password, OAuth/OIDC provider button (PKCE S256 + `nonce` since 0.3.1), optional magic link | `super_admin` / `group_admin` (groups) / `viewer` (groups) / `mcp_user` (groups; only signs in and approves an OAuth MCP client, no console) |
 | Automation | `rmn_` API key in `X-Ramen-Api-Key` (console HTTP API) | role + groups ≤ creator's |
 | MCP client | `rmk_` MCP key in gRPC metadata `authorization: Bearer` (the bridge's `--key`) | one group's workers |
 | Console → worker | metadata `x-ramen-admin-key` (`RAMEN_ADMIN_KEY`) on `ramen.v1.Admin/*` | separate `RAMEN_ADMIN_CIDRS` |
@@ -172,7 +172,7 @@ the same functions, with the HTTP headers turned into the metadata map the gRPC 
   origin refused — so a page on a foreign site cannot use a victim's browser to reach a worker (DNS rebinding). A
   group may allow its own web origins from its deploy file.
 - **Per-user access through OAuth.** The console is the authorization server: a super admin registers a *client*
-  (name and exact redirect URIs; no secret, PKCE S256 is the proof) on the API keys page, the client sends the user
+  (name and exact redirect URIs; no secret, PKCE S256 is the proof) on the Config page, the client sends the user
   to `/oauth/authorize`, the user signs in as usual and approves *this client* for *this group and zone*, and
   `/oauth/token` mints an HS256 access token the worker verifies with a key derived from the same zone secret.
   Claims: issuer (the console's `RAMEN_PUBLIC_URL`), the user id and email, audience and scope

@@ -62,15 +62,27 @@ class AuthSettings:
         return s
 
     def with_doc(self, doc: dict | None) -> AuthSettings:
+        """Store doc over env: toggles replace, role rules (D38) merge per provider with the doc's rule winning."""
         doc = doc or {}
+        role_claim = {**self.role_claim, **{p: str(c) for p, c in (doc.get("role_claim") or {}).items() if c}}
+        role_map = {p: dict(t) for p, t in self.role_map.items()}
+        for provider, rules in (doc.get("role_map") or {}).items():
+            table = role_map.setdefault(provider, {})
+            for value, rule in (rules or {}).items():
+                if (rule or {}).get("role") in ROLES:
+                    table[str(value).lower()] = (rule["role"], [str(g) for g in rule.get("groups") or []])
         return AuthSettings(
             password_login=bool(doc.get("password_login", self.password_login)),
             magic_link=bool(doc.get("magic_link", self.magic_link)),
             force_password=self.force_password,
             admin_email=self.admin_email,
-            role_claim=self.role_claim,
-            role_map=self.role_map,
+            role_claim=role_claim,
+            role_map=role_map,
         )
+
+    def has_mapping(self, provider: str) -> bool:
+        """True once a claim is named for the provider: its rules then decide role and groups on every login."""
+        return bool(self.role_claim.get(provider))
 
     def can_password(self, email: str) -> bool:
         return self.password_login or (

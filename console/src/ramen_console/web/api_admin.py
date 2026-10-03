@@ -114,8 +114,11 @@ async def request_permission(request: Request, body: m.RequestIn, p: Principal =
         note(request, "permission.request", f"{body.role}:{body.group}", tags)
     else:
         raise invalid("A request needs a role or a permission")
+    scope = perm.parse_scope(body.scope)
     return respond(
-        request, await accounts(request).request_permission(p, body.role, body.group, body.zone, body.permission), 201
+        request,
+        await accounts(request).request_permission(p, body.role, body.group, body.zone, body.permission, scope),
+        201,
     )
 
 
@@ -310,6 +313,41 @@ async def set_auth_config(request: Request, body: m.AuthConfig, p: Principal = D
         {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
     )
     return await _reissue_session(request, resp, p)
+
+
+@r.put("/config/auth/role-map/{provider}")
+async def set_role_map(request: Request, provider: str, body: m.RoleMapChange, p: Principal = Depends(super_)):
+    """D38: a provider's IdP role → Ramen role + MCP groups rules, re-applied on every login. One change per call:
+    `claim` names the token claim to read, `value`+`role`(+`groups`) adds or replaces a rule, `remove` drops one.
+    Nobody is signed out: the rules take effect at each person's next login."""
+    from ..errors import not_found
+    from .auth_routes import auth_settings
+
+    st = request.app.state
+    if provider not in st.oauth.providers():
+        raise not_found(f"Unknown OAuth provider {provider!r}")
+    doc = await st.store.get("config", "auth") or {}
+    claims, rules = doc.setdefault("role_claim", {}), doc.setdefault("role_map", {}).setdefault(provider, {})
+    tags = []
+    if body.claim is not None:
+        claims[provider] = body.claim.strip()
+        tags.append(f"claim:{claims[provider]}")
+    if body.value:
+        if not body.role:
+            raise invalid("A rule needs a role")
+        rules[body.value.strip().lower()] = {"role": body.role, "groups": body.groups or []}
+        tags.append(f"rule:{body.value.strip().lower()}={body.role}:{','.join(body.groups or [])}")
+    if body.remove:
+        rules.pop(body.remove.strip().lower(), None)
+        tags.append(f"remove:{body.remove.strip().lower()}")
+    if not tags:
+        raise invalid("Nothing to change: give claim, value+role or remove")
+    note(request, "config.auth", f"role-map:{provider}", tags)
+    await st.store.put("config", "auth", doc)
+    return respond(
+        request,
+        {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
+    )
 
 
 async def _reissue_session(request: Request, resp, p: Principal):

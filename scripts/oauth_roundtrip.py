@@ -134,6 +134,12 @@ def main() -> int:
         r.status_code == 200 and r.json()["authorization_servers"] == [console],
         r.text[:120],
     )
+    meta = r.json() if r.status_code == 200 else {}
+    step(  # RFC 9728: what Claude Code compares with the URL it was given (0.5.92)
+        "metadata resource is this MCP URL",
+        meta.get("resource") == a.mcp_url and meta.get("scopes_supported") == [f"mcp:{a.group}:{a.zone}"],
+        f"resource={meta.get('resource')!r}",
+    )
     r = call(tok2["access_token"], a.zone, ping)
     step(
         "worker accepts the token",

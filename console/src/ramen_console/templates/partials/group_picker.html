@@ -1,6 +1,6 @@
 {# W1 (§14): a dropdown plus Add, chosen groups shown as removable chips that post as repeated `groups` fields. #}
-{% macro group_picker(groups, label='Groups') %}
+{% macro group_picker(groups, label='Groups', add_class='sm ghost') %}
 <label>{{ label }}<select id="group-pick">{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% else %}<option value="">No groups yet</option>{% endfor %}</select></label>
-<button type="button" class="sm ghost" onclick="ramenAddGroup(this)">Add</button>
+<button type="button" class="{{ add_class }}" onclick="ramenAddGroup(this)">Add</button>
 <span class="chips" id="group-chips"></span>
 {% endmacro %}

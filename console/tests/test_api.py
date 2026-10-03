@@ -443,7 +443,16 @@ def test_logs(demo, tmp_path):
         .headers["content-disposition"]
         .startswith("attachment")
     )
-    assert "b" in demo.get("/logs?group=demo&zone=zone-a").text
+    page = demo.get("/logs?group=demo&zone=zone-a").text
+    assert "b" in page
+    # 0.5.91: the bodies are embedded as real JSON for the click handler — autoescape used to HTML-encode the
+    # quotes inside the script block, JSON.parse failed, and no click could show an entry. Rows carry data-i,
+    # the handler is delegated (no inline onclick, no implicit window.event).
+    data = page.split('<script id="log-data" type="application/json">', 1)[1].split("</script>", 1)[0]
+    assert data.startswith('["') and "&#34;" not in data and "&quot;" not in data
+    import re  # noqa: PLC0415 - only this test needs it
+
+    assert 'data-i="0"' in page and not re.search(r'<button class="log-row[^>]*onclick=', page)
     assert demo.get("/api/v1/logs?group=nope&zone=zone-a").status_code == 404
 
 
@@ -542,6 +551,8 @@ def test_oauth_routes(demo, monkeypatch):
 
     demo.app.state.oauth = OAuthRegistry.from_env()
 
+    claims = {"email": "sso@x", "email_verified": True}
+
     class FakeClient:
         async def authorize_redirect(self, request, redirect_uri):
             from starlette.responses import RedirectResponse
@@ -549,7 +560,7 @@ def test_oauth_routes(demo, monkeypatch):
             return RedirectResponse("https://issuer/authorize?redirect_uri=" + redirect_uri)
 
         async def authorize_access_token(self, request):
-            return {"userinfo": {"email": "sso@x", "email_verified": True}}
+            return {"userinfo": dict(claims)}
 
     monkeypatch.setattr(demo.app.state.oauth, "client", lambda name: FakeClient() if name == "oidc" else None)
     with TestClient(demo.app) as anon:
@@ -563,6 +574,52 @@ def test_oauth_routes(demo, monkeypatch):
         r = anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
         assert r.status_code == 303
         assert anon.get("/auth/oauth/nope/callback").status_code == 404
+    # D38: with no mapping the role set by an admin survives every login
+    uid = next(u["id"] for u in demo.get("/api/v1/users").json() if u["email"] == "sso@x")
+    assert demo.put(f"/api/v1/users/{uid}", json={"role": "group_admin", "groups": ["other"]}).status_code == 200
+    with TestClient(demo.app) as anon:
+        anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
+        assert anon.get("/api/v1/me").json()["role"] == "group_admin"
+    # ... once the super admin maps the provider's claim, every login re-applies the rules
+    rm = "/api/v1/config/auth/role-map/oidc"
+    assert demo.put(rm, json={"claim": "roles"}).status_code == 200
+    assert demo.put(rm, json={"value": "AD-Admins", "role": "super_admin"}).status_code == 200
+    assert demo.put(rm, json={"value": "ad-devs", "role": "viewer", "groups": "demo, other"}).status_code == 200
+    assert demo.put(rm, json={"value": "x", "role": "king"}).status_code == 422
+    assert demo.put("/api/v1/config/auth/role-map/nope", json={"claim": "roles"}).status_code == 404
+    cfg = demo.get("/api/v1/config/auth").json()
+    assert cfg["role_claim"] == {"oidc": "roles"}
+    assert cfg["role_map"]["oidc"] == {
+        "ad-admins": {"role": "super_admin", "groups": []},
+        "ad-devs": {"role": "viewer", "groups": ["demo", "other"]},
+    }
+    claims["roles"] = ["AD-Devs"]
+    with TestClient(demo.app) as anon:
+        anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
+        me = anon.get("/api/v1/me").json()
+        assert me["role"] == "viewer" and sorted(me["groups"]) == ["demo", "other"]
+    claims["roles"] = ["ad-admins"]
+    with TestClient(demo.app) as anon:
+        anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
+        assert anon.get("/api/v1/me").json()["role"] == "super_admin"
+    claims["roles"] = []  # no rule matches: viewer without groups, never a leftover admin
+    with TestClient(demo.app) as anon:
+        anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
+        me = anon.get("/api/v1/me").json()
+        assert me["role"] == "viewer" and me["groups"] == []
+    # the bootstrap super admin is never demoted by a provider
+    claims["email"] = "root@ramen.local"
+    with TestClient(demo.app) as anon:
+        anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
+        assert anon.get("/api/v1/me").json()["role"] == "super_admin"
+    assert demo.put(rm, json={"remove": "ad-devs"}).status_code == 200
+    assert "ad-devs" not in demo.get("/api/v1/config/auth").json()["role_map"]["oidc"]
+    page = demo.get("/config").text
+    assert "OAuth role mapping" in page and "ad-admins" in page and 'name="claim"' in page
+    make_user(demo, "ga@x", "group_admin", ["demo"])
+    with TestClient(demo.app) as ga:
+        login(ga, "ga@x", PW)
+        assert ga.put(rm, json={"claim": "roles"}).status_code == 403
 
 
 def test_probes(client, monkeypatch):

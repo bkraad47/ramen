@@ -622,6 +622,21 @@ async def test_apply_sa_permissions_puts_scoped_inline_policy(cloud, fk):
     ]
 
 
+async def test_scoped_permissions_name_their_resources(cloud, fk):
+    """0.5.93: s3 and secretsmanager statements name the scoped buckets / secrets; project-wide actions stay `*`."""
+    scopes = {"bucket.read": ["bucket-a", "bucket-b"], "secrets.read": ["db-pass"], "logs.write": ["sink-a"]}
+    r = await cloud.apply_sa_permissions("demo", "a", ["bucket.read", "secrets.read", "logs.write"], scopes)
+    assert r["scopes"] == scopes and r["unscoped"] == ["logs.write"]
+    st = _policy(fk, "ramen-demo-a", "ramen-sa-permissions")["Statement"]
+    by_res = {json.dumps(s["Resource"]): s for s in st}
+    lst = by_res[json.dumps(["arn:aws:s3:::bucket-a", "arn:aws:s3:::bucket-b"])]
+    assert lst["Action"] == ["s3:ListBucket"] and "Condition" not in lst
+    assert by_res[json.dumps(["arn:aws:s3:::bucket-a/*", "arn:aws:s3:::bucket-b/*"])]["Action"] == ["s3:GetObject"]
+    sm = by_res[json.dumps([f"arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:ramen/demo/*/db-pass-*"])]
+    assert sm["Action"] == ["secretsmanager:GetSecretValue"]
+    assert by_res[json.dumps("*")]["Action"] == ["logs:CreateLogStream", "logs:PutLogEvents"]
+
+
 async def test_set_ip_rules_enforces_at_the_node_when_waf_is_unreachable(cloud, fk):
     """The node list is the control that gates a call; a WAF failure must not leave the zone unlocked
     (found on kind as D1, same shape as the GCP adapter)."""

@@ -86,7 +86,7 @@ RAMEN_MCP_KEY=rmk_… ramen-mcp-bridge --target localhost:8080 --insecure --grou
 > `rmk_…` **MCP keys** go to workers (`Authorization: Bearer`, on HTTP or as gRPC metadata) and are generated on
 > the **group page**. `rmn_…` **API keys** go to the console (`X-Ramen-Api-Key`) for automation and are generated
 > on the **API keys** page. They are not interchangeable. For a token scoped to one *person* rather than a shared
-> key, register an OAuth client on the API keys page: the worker's `401` tells an OAuth-capable client where to
+> key, register an OAuth client on the Config page: the worker's `401` tells an OAuth-capable client where to
 > sign in. Full walkthrough with the `mcp` SDK and a raw `grpcurl` call:
 > [local quickstart](https://bkraad47.github.io/ramen/how-tos/local-quickstart/)
 > (also in [`deploy/local/README.md`](deploy/local/README.md)).

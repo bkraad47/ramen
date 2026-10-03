@@ -11,7 +11,8 @@ from .auth_routes import base_url
 from .pages import render
 
 r = APIRouter()
-viewer = require("viewer")
+# 0.5.92: any signed-in person, MCP users included, may authorize a client for their groups
+viewer = require("mcp_user")
 
 
 def server(request: Request) -> OAuthServer:

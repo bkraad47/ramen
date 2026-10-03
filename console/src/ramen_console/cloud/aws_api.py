@@ -432,41 +432,57 @@ class Iam:
 
     SA_POLICY = "ramen-sa-permissions"
 
-    def sa_permissions_policy(self, bucket, group, actions: list[str]) -> dict | None:
+    def sa_permissions_policy(self, bucket, group, actions: list[str], scopes: dict | None = None) -> dict | None:
         """Approved-permission actions (policy/permissions.py, provider aws): s3:* scoped to the group prefix,
-        secretsmanager:* to the group's secrets path (as gcp.py conditions its bindings), the rest unconditional."""
+        secretsmanager:* to the group's secrets path (as gcp.py conditions its bindings), the rest unconditional.
+        `scopes` (action → resource names, 0.5.93) names whole buckets / secrets instead of the group's area."""
+        names = lambda a: tuple((scopes or {}).get(a) or ["*"])  # noqa: E731 - one statement per distinct scope
         s3 = [a for a in actions if a.startswith("s3:")]
         sm = [a for a in actions if a.startswith("secretsmanager:")]
         other = [a for a in actions if not (a.startswith("s3:") or a.startswith("secretsmanager:"))]
         stmts = []
-        if "s3:ListBucket" in s3:
-            stmts.append(
-                {
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket"],
-                    "Resource": f"arn:aws:s3:::{bucket}",
-                    "Condition": {"StringLike": {"s3:prefix": [f"{group}/*", f"{group}/"]}},
-                }
-            )
-        if objs := [a for a in s3 if a != "s3:ListBucket"]:
-            stmts.append({"Effect": "Allow", "Action": objs, "Resource": f"arn:aws:s3:::{bucket}/{group}/*"})
-        if sm:
-            stmts.append(
-                {
-                    "Effect": "Allow",
-                    "Action": sm,
-                    "Resource": f"arn:aws:secretsmanager:{self.region}:{self.account()}:secret:ramen/{group}/*",
-                }
-            )
+        for scope in dict.fromkeys(names(a) for a in s3):
+            mine = [a for a in s3 if names(a) == scope]
+            objs = [a for a in mine if a != "s3:ListBucket"]
+            if scope == ("*",):
+                if "s3:ListBucket" in mine:
+                    stmts.append(
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3:ListBucket"],
+                            "Resource": f"arn:aws:s3:::{bucket}",
+                            "Condition": {"StringLike": {"s3:prefix": [f"{group}/*", f"{group}/"]}},
+                        }
+                    )
+                if objs:
+                    stmts.append({"Effect": "Allow", "Action": objs, "Resource": f"arn:aws:s3:::{bucket}/{group}/*"})
+            else:
+                if "s3:ListBucket" in mine:
+                    stmts.append(
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3:ListBucket"],
+                            "Resource": [f"arn:aws:s3:::{b}" for b in scope],
+                        }
+                    )
+                if objs:
+                    stmts.append(
+                        {"Effect": "Allow", "Action": objs, "Resource": [f"arn:aws:s3:::{b}/*" for b in scope]}
+                    )
+        for scope in dict.fromkeys(names(a) for a in sm):
+            mine = [a for a in sm if names(a) == scope]
+            base = f"arn:aws:secretsmanager:{self.region}:{self.account()}:secret:ramen/{group}/"
+            resource = base + "*" if scope == ("*",) else [f"{base}*/{n}-*" for n in scope]
+            stmts.append({"Effect": "Allow", "Action": mine, "Resource": resource})
         if other:
             stmts.append({"Effect": "Allow", "Action": other, "Resource": "*"})
         return {"Version": "2012-10-17", "Statement": stmts} if stmts else None
 
-    def put_sa_permissions(self, name, bucket, group, actions: list[str]) -> list[str]:
+    def put_sa_permissions(self, name, bucket, group, actions: list[str], scopes: dict | None = None) -> list[str]:
         """Replace inline policy `ramen-sa-permissions` on the role (put_role_policy overwrites: idempotent).
 
         No actions = remove the policy."""
-        doc = self.sa_permissions_policy(bucket, group, actions)
+        doc = self.sa_permissions_policy(bucket, group, actions, scopes)
         if doc is None:
             try:
                 self.iam.delete_role_policy(RoleName=name, PolicyName=self.SA_POLICY)

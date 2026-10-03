@@ -89,3 +89,27 @@ def test_permission_request_lifecycle(demo, tmp_path):
     assert "Service-account permission" in users_page and "bucket.read" in users_page
     assert demo.post(f"/api/v1/requests/{rid}/approve").status_code == 409
     assert demo.get("/config").status_code == 200 and "kms.decrypt" in demo.get("/config").text
+
+
+def test_requests_carry_a_scope(demo):
+    """0.5.93: `scope` names the buckets/secrets a permission is for; empty or `*` is the group's own area."""
+    from ramen_console.policy.permissions import parse_scope
+
+    assert parse_scope(None) == ["*"] and parse_scope(" ") == ["*"] and parse_scope("bucket-a, *") == ["*"]
+    assert parse_scope('"bucket-a", bucket-b ,') == ["bucket-a", "bucket-b"]
+    body = {"group": "demo", "zone": "zone-a", "permission": "bucket.read", "scope": '"bucket-a", "bucket-b"'}
+    r = demo.post("/api/v1/requests", json=body)
+    assert r.status_code == 201 and r.json()["scope"] == ["bucket-a", "bucket-b"]
+    r2 = demo.post("/api/v1/requests", json={"group": "demo", "zone": "zone-a", "permission": "secrets.read"})
+    assert r2.json()["scope"] == ["*"]
+    a = demo.post(f"/api/v1/requests/{r.json()['id']}/approve").json()["applied"]
+    assert a["scopes"] == {"bucket.read": ["bucket-a", "bucket-b"]}
+    demo.post(f"/api/v1/requests/{r2.json()['id']}/approve")
+    w = demo.get("/api/v1/groups/demo/zones/zone-a/workers").json()
+    assert w["sa_permissions"] == ["bucket.read", "secrets.read"]
+    assert w["sa_scopes"] == {"bucket.read": ["bucket-a", "bucket-b"], "secrets.read": ["*"]}
+    page = demo.get("/groups/demo").text
+    assert 'name="scope"' in page and "bucket-a, bucket-b" in page
+    assert demo.delete("/api/v1/groups/demo/zones/zone-a/permissions/bucket.read").status_code == 200
+    w = demo.get("/api/v1/groups/demo/zones/zone-a/workers").json()
+    assert w["sa_permissions"] == ["secrets.read"] and w["sa_scopes"] == {"secrets.read": ["*"]}

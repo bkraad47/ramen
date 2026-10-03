@@ -9,7 +9,8 @@ Poll `GET /api/v1/jobs/{id}`; the group page polls it every 2 s and shows *refre
 2. **Write config**: the zone Secret `ramen-deploy` (cloud) or `<bucket>/.ramen/env-<zone>` (local) with
    `RAMEN_MCP_KEYS` (every `rmk_` key generated for the group), `RAMEN_SECRET_<GROUP>__<NAME>` for secrets scoped to this env/zone,
    `RAMEN_BLOCKED`, `RAMEN_VERBOSE`, group/env/zone labels and `RAMEN_ALLOWED_CIDRS`.
-3. **Canary**: scale `worker-canary` to 1, rollout restart, wait for the pod to be ready
+3. **Canary**: scale `worker-canary` to 1, rollout restart, wait for the pod to be ready. The canary rolls in
+   place (no surge pod), so a full node in its zone cannot leave a second canary Pending; stable is untouched.
    (`RAMEN_DEPLOY_TIMEOUT_SECS`, 300 s).
 4. **Reload + smoke** (gRPC to the canary pod, [§11](../CONTRACTS.md)): `ramen.v1.Admin/Reload` with metadata
    `x-ramen-admin-key` (pip install if `requirements.txt` changed, `runtime.load`), then `tools/list` through

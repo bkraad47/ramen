@@ -11,18 +11,18 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 <a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a>
 </p>
 
-**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [Add and deploy a tool](https://bkraad47.github.io/ramen/how-tos/add-a-tool/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide (untested)](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
+**Docs: https://bkraad47.github.io/ramen/** · [End to end, console → AI client](https://bkraad47.github.io/ramen/how-tos/end-to-end/) · [Add and deploy a tool](https://bkraad47.github.io/ramen/how-tos/add-a-tool/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [Transport and security](https://bkraad47.github.io/ramen/wiki/transport/) · [GCP guide](https://bkraad47.github.io/ramen/how-tos/gcp/) · [AWS guide](https://bkraad47.github.io/ramen/how-tos/aws/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
 > **Streamable HTTP is the front door.** Every worker serves `POST /mcp` — a URL and a bearer header, nothing to
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. Phones,
 > browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
 > Per-user access through OAuth (the console is the authorization server), live-verified on GKE since 0.5.1.
 
-**What is true today, before the pitch.** The local stack and CI prove both transports on real node processes on
-Linux and Windows. One GKE cluster has proved the gRPC path end to end (0.3.2, 0.4.0) and, separately, the HTTP
-path + OAuth end to end through the same load balancer (0.5.1: harness 218 passed, 0 failed, 15 skipped with
-stated reasons — publicly-trusted TLS via a Google-managed cert since 0.5.5, no self-signed warning). The AWS
-path has **never** been applied to a real account. Everything below is written so those lines stay findable.
+**What is true today, before the pitch.** Current release **0.6.0**. The local stack and CI prove both
+transports on real node processes on Linux and Windows. One GKE cluster has proved the gRPC path end to end
+(0.3.2, 0.4.0) and the HTTP path with OAuth through the same load balancer (0.5.1, with a publicly trusted
+certificate since 0.5.5). The AWS path has been applied to a real account since 0.5.6, and the published bridge
+was server-tested against it in 0.5.8. Everything below is written so those lines stay findable.
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a
@@ -33,19 +33,32 @@ zones, secrets, canary deploys, rebalancing, IP rules, logs, audit and backups �
 - **Canary by default.** Roll a canary, smoke-test `tools/list`, then roll stable. Failure leaves stable untouched.
 - **Multi-zone from day one.** Group → Environment → Zone → Worker; the LB routes on `ramen-group` / `ramen-zone`
   metadata, so one client config works for every zone.
-- **Enterprise controls.** Super admin / group admin / viewer, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
+- **Enterprise controls.** A role per group (Group Admin, Viewer or MCP User) plus global super admins, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
   zone at the node, one Cloud Armor policy per group at the edge), secrets that are never displayed, an audit
   line for every action.
 - **Transport: Streamable HTTP at the edge, gRPC inside.** `POST /mcp` for any client that can make an HTTP
   request; `ramen.v1.Mcp/Call` for teams that want gRPC internally. One set of guards serves both — the same
   functions, spelled `401 / 403 / 429` on one and `UNAUTHENTICATED / PERMISSION_DENIED / RESOURCE_EXHAUSTED` on the
   other — so the two paths cannot drift.
-- **Cheaper, and here is the number.** A worker is one Rust node plus one Python runtime that loads *every* tool of
+- **Cheaper: one Deployment per zone, not one per tool.** A worker is one Rust node plus one Python runtime that loads *every* tool of
   the group. A team with thirty small tools runs them on **one Deployment per zone** (two pods with a canary),
   behind one load balancer. Container-per-MCP-server designs run thirty. Autoscaling adds pods for load, not for
   tool count.
 - **Secure, in one sentence.** User code never runs in the process that holds the keys and does the auth: the Rust
   node checks every call and hands the message to a separate Python process it can kill and respawn.
+
+## Built on how organizations work
+
+Groups own tools in git, environments pin a ref and a set of zones, people hold a role per group, agents and
+clients sign in as themselves, and every deploy is a canary, a smoke test and a rollout. Underneath it is gRPC,
+JSON-RPC 2.0 and a Rust node; **you code in Python**. The longer argument is
+[How it works and why](https://bkraad47.github.io/ramen/how-it-works/).
+
+> **Start here** · the demo group repo **[ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group)**
+> (point a group at it and press Deploy) · the stdio bridge **[ramen-mcp-bridge on PyPI](https://pypi.org/project/ramen-mcp-bridge/)**
+> (`pip install ramen-mcp-bridge`; signs you in with `--oauth` or carries a group key) · HTTP clients such as
+> Claude Code, Claude Desktop and Cursor need neither: [Connect an MCP client](https://bkraad47.github.io/ramen/how-tos/mcp-clients/).
+> Features and how each is managed: [bkraad47.github.io/ramen/features](https://bkraad47.github.io/ramen/features/).
 
 ## Quickstart (local, 5 commands)
 
@@ -80,7 +93,7 @@ curl -s http://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H '
 Clients that only speak stdio use the bridge, which forwards to the same worker over gRPC:
 ```sh
 pip install ramen-mcp-bridge                # its own package (github.com/bkraad47/ramen-mcp-bridge); also in the worker image
-RAMEN_MCP_KEY=rmk_… ramen-mcp-bridge --target localhost:8080 --insecure --group demo --zone local
+RAMEN_MCP_KEY=<the key shown once> ramen-mcp-bridge --target localhost:8080 --insecure --group demo --zone local
 ```
 
 > `rmk_…` **MCP keys** go to workers (`Authorization: Bearer`, on HTTP or as gRPC metadata) and are generated on
@@ -116,44 +129,41 @@ both or on neither.
 
 **Why the node is Rust.** A worker runs two processes with one job each. `ramen-node` (Rust + tonic) owns what must
 not be slowed down or broken by user code: the gRPC surface, key checking, source-range checking, the blocked-name
-filter, concurrency bounds, deadlines, health and the access log — a small static binary with no interpreter and no
-user code in its address space. `ramen_runtime` (Python 3.14) owns what users write: `pip install`, validation,
+filter, concurrency bounds, deadlines, health and the access log. It is a small static binary with no interpreter
+and no user code in its address space. `ramen_runtime` (Python 3.14) owns what users write: `pip install`, validation,
 secret substitution, the call. They talk over newline-delimited JSON-RPC on stdin/stdout ([§2](docs/CONTRACTS.md)),
 so there is no extra socket to secure, and the runtime is killed after an idle timeout — a crash or leak in tool
 code costs one respawn, not the process holding the keys.
 
 | Hop | What protects it |
 |---|---|
-| client → edge (HTTP) | `https://<edge>/mcp`, the credential in `Authorization: Bearer` — an `rmk_` key, or a console-issued OAuth token for one user; a browser origin must be on the zone's `RAMEN_ALLOWED_ORIGINS` list (empty by default: every `Origin` refused, so a DNS-rebinding page cannot reach a worker); sessions are signed ids bound to the credential, so a stolen `Mcp-Session-Id` is useless under another key; the local compose worker is plain `http://` on a laptop, and nothing else should be |
-| client → bridge → edge (stdio) | a child process on the client's own machine; the bridge speaks gRPC to the edge, **plaintext h2c unless you ask for TLS** (`--tls`, or `--ca <pem>` to pin the certificate); the key comes from `RAMEN_MCP_KEY` |
-| edge → node | TLS terminates at the load balancer; LB → node is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`, which also needs `RAMEN_WORKER_TLS=1` on the console). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; the AWS ALB and WAF equivalents are written but have never been applied |
-| every `Mcp/Call` | bearer key compared byte-for-byte in constant time, folded over every configured key with no early exit (the length check in front of that compare is not constant time, so a key's length can leak), empty key set denies all (`UNAUTHENTICATED`); `RAMEN_ALLOWED_CIDRS` source check (`PERMISSION_DENIED`) against the `RAMEN_TRUST_PROXY_HOPS`-th `x-forwarded-for` entry counted from the right (GCP 2, AWS 1, `0` = the peer address), which is the entry a proxy appended and therefore not one a caller can choose — a wrong count falls back to the peer and denies; note the allowlist itself defaults to `0.0.0.0/0` + `::/0` when unset, so set IP rules to make it a real gate; blocked names filtered from `*/list` and answered `-32601`; 4 MiB cap; `RAMEN_MAX_INFLIGHT` cap |
-| edge → node, without a key | `grpc.health.v1.Health` answers with no key and no source-range check — by design, so load balancers and Kubernetes can probe it. gRPC server reflection would also expose the service list, so it is switched off on deployed workers (`RAMEN_REFLECTION=0` in the chart and both renderers) and answers `UNIMPLEMENTED` there; it stays on locally |
-| anything else → the pod | the worker `NetworkPolicy` (on by default) admits the node port only from the console namespace and the load-balancer / health-check ranges; with the hardened container context (non-root, no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp) this is what bounds direct access, and what closed SEC-04 |
+| client → edge (HTTP) | TLS at the load balancer; the credential in `Authorization: Bearer` (an `rmk_` key or a per-user OAuth token); browser origins only from the zone's allowlist; session ids signed and bound to the credential |
+| client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC to the edge; plaintext unless `--tls` (`--ca <pem>` pins the certificate) |
+| edge → node | TLS ends at the load balancer; h2c to the node unless the node has its own certificate; Cloud Armor (GCP) or WAF (AWS) IP rules, one policy per group |
+| every `Mcp/Call` | constant-time key compare; source range against the right `x-forwarded-for` entry; blocked names; 4 MiB and in-flight caps |
+| edge → node, without a key | only `grpc.health.v1.Health`; reflection is off on deployed workers |
+| anything else → the pod | the worker `NetworkPolicy` plus a hardened container context |
 | node → runtime | stdio inside the pod; no network surface |
-| runtime → bucket | the zone's own cloud identity — on GCP a service account with `objectViewer` on that group's bucket prefix and `secretAccessor` on that group's secrets, via Workload Identity. IAM + IRSA on AWS is written but has never been applied |
-| console → node | cluster-internal, straight to the pod IP, plaintext h2c unless the console has `RAMEN_WORKER_TLS=1`; `Admin/*` also needs `x-ramen-admin-key` + `RAMEN_ADMIN_CIDRS` and is **not** routed through the load balancer. An IP lock must still include the console's own range, because a deploy smoke-tests `tools/list` as an ordinary `Mcp/Call` |
+| runtime → bucket | the zone's own cloud identity (GCP service account with Workload Identity, AWS IAM role with IRSA), scoped to the group's prefix and secrets |
+| console → node | cluster-internal, never through the load balancer; `Admin/*` needs an admin key and an admin CIDR |
 
-`grpc.health.v1.Health` is deliberately unauthenticated so load balancers and Kubernetes can probe it, and reports
-`SERVING` only once the runtime has loaded the group's code.
+Five details behind that table matter in practice. The origin allowlist is empty by default, so every browser
+`Origin` is refused until you add one. The source-range check reads the `x-forwarded-for` entry a proxy appended
+(hop count 2 on GCP, 1 on AWS), and a wrong count denies rather than admits. The allowlist itself defaults to
+everything until you set IP rules. An IP lock must include the console's own range, because a deploy smoke-tests
+`tools/list` as an ordinary call. `grpc.health.v1.Health` is deliberately unauthenticated so load balancers can
+probe it, and reports `SERVING` only once the runtime has loaded the group's code.
 
-**Verified in 0.5.0 on real node processes, and in 0.5.1 live on GKE through the load balancer** (Streamable HTTP with the key, the OAuth flow from consent to a tool call with the token, refresh rotation and reuse revocation, the RFC 9728 discovery; harness 218 passed, 0 failed, 15 skipped with stated reasons): both transports through every guard (key, source
-range, blocked names, size and in-flight caps, protocol errors as JSON-RPC bodies), the HTTP-only checks (Origin,
-sessions bound to the credential, content negotiation, protocol version, the RFC 9728 metadata), console-issued
-OAuth tokens accepted by the node, and the official `mcp` SDK's Streamable HTTP client end to end — in CI on Linux
-**and on a Windows runner that builds the node natively**, which is where fresh-machine client setups usually break.
-**Verified live** on one GKE Autopilot cluster in `us-central1` (0.3.2), whole harness green through the load
-balancer (126 passed, 0 failed): header routing on `ramen-group` / `ramen-zone` over h2c, gRPC health checks,
-`Mcp/Call` with and without a key, `Admin/*` unreachable through the load balancer, the bridge end to end through
-the official `mcp` SDK stdio client with `--tls --ca`, and — driven from the console against the real deployment —
-tool blocking and unblocking, an IP lock and its restore, canary, rebalance, the per-zone service account's bucket
-and secret IAM bindings, secrets and logs. Scope: one cluster, one zone, one group, one day, then deleted; nothing
-has run in a cloud since. **Tested but not run in a cloud:** node TLS, the size and in-flight caps,
-`x-forwarded-for` hop counting (including that a caller-supplied header cannot move the address the node checks).
-The hop counts and `RAMEN_REFLECTION=0` landed after that cloud run, so neither has met a real load balancer yet.
-**Not verified at all:** the entire AWS path — EKS, ALB gRPC target groups and WAF have never been applied to a real
-account. **By design:** the runtime executes a group's code in a process that holds that group's secrets in its
-environment; isolation between groups is the pod, the namespace and the per-zone identity, not the Python process.
+**What is verified, in four lines.**
+- Both transports through every guard, on real node processes, in CI on Linux and on a Windows runner that builds
+  the node natively (0.5.0).
+- The GCP path live through the Gateway load balancer: gRPC in 0.3.2, Streamable HTTP, OAuth and the bridge in
+  0.5.1, per-group roles in 0.5.95, each on a throwaway project deleted the same day.
+- The AWS path applied to a real account since 0.5.6; the published bridge server-tested against it in 0.5.8.
+- Not yet exercised on a real load balancer: node TLS, the size and in-flight caps, and `x-forwarded-for` hop
+  counting (tests only). By design, a
+  group's code runs in a process that holds that group's secrets; isolation between groups is the pod, the
+  namespace and the per-zone identity.
 
 Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/ramen/wiki/transport/).
 
@@ -162,7 +172,7 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 | Target | Status | Guide |
 |---|---|---|
 | **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on throwaway projects: 0.3.0 infrastructure, 0.3.2 gRPC header routing over h2c end to end through the Gateway (harness 126 passed, 0 failed), 0.5.1 Streamable HTTP and OAuth through the same Gateway (harness 218 passed, 0 failed, 15 skipped with stated reasons), each on one cluster in `us-central1` | [docs](https://bkraad47.github.io/ramen/how-tos/gcp/) · [`deploy/README.md`](deploy/README.md) |
-| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | **built + unit-tested only, never applied to a real account** | [docs](https://bkraad47.github.io/ramen/how-tos/aws/) |
+| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/how-tos/aws/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
 Bring-up on GCP is `terraform apply` → `make push` → `helm upgrade --install` → add a zone and a group in the
@@ -173,6 +183,8 @@ buy, since 0.5.5). Clients then use `https://<public_hostname>/mcp` with `Author
 stdio-only clients point the bridge at `<public_hostname>:443 --tls` — no `--ca`, nothing to import.
 
 ## Write your own tools
+
+Full guide with the demo repo, `env.yaml` and local development: [Write and develop an MCP repo](https://bkraad47.github.io/ramen/how-tos/develop-mcp-repo/).
 
 A group repo is any git repo with `mcp/tools/<name>/<name>.py` + `<name>.json` (and `resources/`, `prompts/`,
 `requirements.txt`). Start from [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group); the
@@ -197,12 +209,16 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Changes: [CHANGELOG.md](CHAN
 ## Develop
 
 ```sh
-make test            # runtime-py (pytest, ≥90 % cov) + node-rs (fmt, clippy, test) + console (pytest, ≥90 % cov)
+make test            # runtime-py (pytest, ≥90% cov) + node-rs (fmt, clippy, test) + console (pytest, ≥90% cov)
 make test-harness    # tests/: conformance + e2e (skips without a running stack)
 make proto           # regenerate Python stubs from proto/ (Rust stubs build via tonic-build)
 make demo-worker     # node + runtime locally without Docker
 uv run --project docs --group docs mkdocs serve   # docs at http://127.0.0.1:8000
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — use it, fork it, change it, with attribution; renaming it as a new commercial product of your own is not acceptable. Related repositories and which versions go together: [Related versions](https://bkraad47.github.io/ramen/related-versions/).
 
 ## License
 BSD-3-Clause © 2026 Raad. See [LICENSE](LICENSE).

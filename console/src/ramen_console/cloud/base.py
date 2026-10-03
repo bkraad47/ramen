@@ -48,6 +48,11 @@ class Cloud(ABC):
     async def attach_zone(self, group: str, zone: str, spec: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"ok": True, "note": "no zone provisioning for this adapter"}
 
+    async def detach_zone(self, group: str, zone: str) -> dict[str, Any]:
+        """Destroy one group's deployment in one zone — namespace, workers, the zone identity (0.6.0: a zone that
+        is deleted or taken off every environment is really gone, not just forgotten). Default: nothing to do."""
+        return {"ok": True, "note": "no zone provisioning for this adapter"}
+
     async def scale(self, group: str, zone: str, spec: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "note": "no scaling for this adapter"}
 

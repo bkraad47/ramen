@@ -7,7 +7,7 @@ Code, Cursor, a CI bot) can load to operate Ramen safely. Each skill is a folder
 | Skill | Purpose |
 |---|---|
 | [`deploy-gcp`](https://github.com/bkraad47/ramen/tree/main/skills/deploy-gcp) | Terraform + images + Helm bring-up on GKE, then first zone/group/deploy through the API |
-| [`deploy-aws`](https://github.com/bkraad47/ramen/tree/main/skills/deploy-aws) | Same for EKS (untested path; the skill says so and demands a dry run) |
+| [`deploy-aws`](https://github.com/bkraad47/ramen/tree/main/skills/deploy-aws) | Same for EKS (the skill demands a dry run first) |
 | [`rotate-keys`](https://github.com/bkraad47/ramen/tree/main/skills/rotate-keys) | Rotate `rmk_` MCP keys, `rmn_` API keys, the admin key and the Fernet key without downtime |
 | [`backup-restore`](https://github.com/bkraad47/ramen/tree/main/skills/backup-restore) | Versioned JSON backups to local/bucket and restores |
 | [`scale-zone`](https://github.com/bkraad47/ramen/tree/main/skills/scale-zone) | Add a zone, scale counts/sizes, rebalance, remove a zone |

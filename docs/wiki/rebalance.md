@@ -14,7 +14,7 @@ statement.
 |---|---|
 | local | records the action; nothing to balance |
 | gcp | sets the zone backend's `capacityScaler` on the Gateway-managed backend service (0.5 when `high`, 1.0 otherwise), discovered by NEG name `ramen-<group>-<zone>`; then aligns replicas with the HPA minimum. While the Gateway is still reconciling it answers `applied:false` with a note and retries in the background. Backends are health-checked over gRPC, so a worker that has not loaded code yet takes no traffic. |
-| aws | adjusts stable/canary target-group weights through the Ingress `actions` annotation (**untested**) |
+| aws | adjusts stable/canary target-group weights through the Ingress `actions` annotation (applied on a real account since 0.5.6; weights not yet exercised under load) |
 
 ## Scaling
 `PUT /api/v1/groups/{group}/zones/{zone}/workers {"count": n, "size": "s|m|l", "allowed_sizes": [...]}`.

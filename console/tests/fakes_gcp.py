@@ -83,7 +83,20 @@ class FakeK8s:
                 out.append(
                     {
                         "metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
-                        "status": {"phase": "Running" if self.ready else "Pending", "podIP": ip},
+                        "status": {"phase": "Running", "podIP": ip}
+                        if self.ready
+                        else {
+                            "phase": "Pending",
+                            "podIP": ip,
+                            "conditions": [
+                                {
+                                    "type": "PodScheduled",
+                                    "status": "False",
+                                    "reason": "Unschedulable",
+                                    "message": "0/2 nodes are available: 2 Insufficient cpu.",
+                                }
+                            ],
+                        },
                     }
                 )
         return out

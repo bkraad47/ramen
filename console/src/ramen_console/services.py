@@ -177,9 +177,29 @@ class Services:
             "zones", name, {"name": name, "provider": provider, "region": region, "created": now()}
         )
 
+    async def detach_zone(self, group, zone) -> dict:
+        """Tear one group's deployment in one zone down for real (0.6.0): the cloud namespace, workers and zone
+        identity, then the worker record. Errors from the cloud abort, so nothing is forgotten while it still runs."""
+        result = await self.cloud.detach_zone(group, zone)
+        if w := await self.store.get("workers", f"{group}:{zone}"):
+            await self.store.delete("workers", w["id"])
+        return result
+
+    async def _zone_users(self, zone, except_env: str | None = None) -> set[str]:
+        """Groups with an environment (other than `except_env`) still attached to `zone`."""
+        return {
+            e["group"]
+            for e in await self.store.list("environments")
+            if zone in e.get("zones", []) and e["id"] != except_env
+        }
+
     async def delete_zone(self, name) -> None:
         if not await self.store.get("zones", name):
             raise not_found("zone")
+        groups = await self._zone_users(name)
+        groups |= {w["group"] for w in await self.store.list("workers", {"zone": name})}
+        for g in sorted(groups):
+            await self.detach_zone(g, name)
         for e in await self.store.list("environments"):
             if name in e.get("zones", []):
                 e["zones"] = [z for z in e["zones"] if z != name]
@@ -298,11 +318,17 @@ class Services:
         e = await self.get_env(group, name)
         if fields.get("blocked") is not None:
             fields["blocked"] = clean_blocked(fields["blocked"])
+        before = list(e.get("zones", []))
         if fields.get("zones") is not None:
             await self._check_zones(fields["zones"])
-            await self._attach_zones(group, fields["zones"], already=e.get("zones", []))
+            await self._attach_zones(group, fields["zones"], already=before)
         e.update({k: v for k, v in fields.items() if v is not None})
-        return await self.store.put("environments", e["id"], e)
+        saved = await self.store.put("environments", e["id"], e)
+        if fields.get("zones") is not None:  # a zone no environment of the group uses any more is torn down (0.6.0)
+            for z in sorted(set(before) - set(fields["zones"])):
+                if group not in await self._zone_users(z):
+                    await self.detach_zone(group, z)
+        return saved
 
     async def set_zone_blocked(self, group, env, zone, names) -> dict:
         """U5: `environments[].blocked_zones[zone]` adds to the environment-wide `blocked` list (§9)."""
@@ -330,6 +356,9 @@ class Services:
     async def delete_env(self, group, name) -> None:
         e = await self.get_env(group, name)
         await self.store.delete("environments", e["id"])
+        for z in sorted(e.get("zones", [])):  # 0.6.0: its zones are torn down unless another environment uses them
+            if group not in await self._zone_users(z):
+                await self.detach_zone(group, z)
 
     async def rebalance(self, group, zone):
         if not await self.store.get("groups", group):

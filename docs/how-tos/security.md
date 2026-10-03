@@ -97,7 +97,7 @@ then that zone's node still checks the key and the CIDR. Sending someone else's 
   fall back to the peer address, so a wrong count **fails closed**: behind a load balancer the peer is the proxy,
   so a client-range allowlist denies instead of admitting.
 - IP rules from the console become a **Cloud Armor** policy at the edge (GCP; one policy per group, so changing
-  one zone's rules changes the whole group's edge) or the **WAFv2** equivalent (AWS, never applied) *and* the
+  one zone's rules changes the whole group's edge) or the **WAFv2** equivalent on AWS *and* the
   zone's node CIDRs. With the hop count right the node check is a real check on the client address; what bounds
   direct access to a pod is the worker `NetworkPolicy`. Changing rules rolls the zone's pods.
 - Worker pods carry a NetworkPolicy (ingress only on the node port) and a restrictive `securityContext`.

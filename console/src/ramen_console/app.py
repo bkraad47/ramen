@@ -33,6 +33,7 @@ from .rbac import role_label
 from .secrets import make_secrets_backend
 from .security import (
     PASSWORD_RULE,
+    HttpsOnlyMiddleware,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     redact_tokens_in_access_log,
@@ -103,6 +104,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     app.add_middleware(AuthAuditMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, hsts=st.cookie_secure)
+    if st.cookie_secure:  # 0.6.0: only https reaches a public console
+        app.add_middleware(HttpsOnlyMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
     redact_tokens_in_access_log()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")

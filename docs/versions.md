@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.5.95` **(current)** | 2026-10-03 | roles are per group: the roles engine of instructions/v0.5.95.md | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.95) |
+| `0.6.0` **(current)** | — | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
+| `0.5.95` | 2026-10-03 | roles are per group: the roles engine of instructions/v0.5.95.md | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.95) |
 | `0.5.94` | 2026-10-03 | group page zones and blocked packages as checkbox dropdowns | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.94) |
 | `0.5.93` | 2026-10-03 | OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.93) |
 | `0.5.91` | — | Group page: per-zone package list back, Enable/Disable fixed, every admin page aligned | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.91) |
@@ -25,6 +26,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.6.0 — instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt
+
+- (nothing yet)
 
 ## 0.5.95 — roles are per group: the roles engine of instructions/v0.5.95.md
 

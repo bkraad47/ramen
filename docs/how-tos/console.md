@@ -1,7 +1,7 @@
 # The console, page by page
 
 The console is the whole management surface: everything below is also an API call
-([DevOps with the API and keys](devops-api.md)), so nothing here is a dead end. Sign in at `https://<console>/`
+([DevOps with the API and keys](devops-api.md)), so nothing here is a dead end. Sign in at `https://<edge>/`
 with the bootstrap super admin (`RAMEN_ADMIN_EMAIL` / `RAMEN_ADMIN_PASSWORD`) or your identity provider.
 
 What each role sees: a **Viewer** reads their groups; a **Group Admin** changes their groups; a **Super Admin** sees

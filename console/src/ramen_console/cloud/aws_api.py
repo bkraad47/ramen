@@ -207,7 +207,7 @@ class Alb:
 # WAFv2 ------------------------------------------------------------------------
 class Waf:
     """One web ACL `ramen` (default allow: the console path stays open) with one rule per group that blocks
-    `/mcp/<group>/` unless the source IP is in IPSet `ramen-<group>` (v4) / `ramen-<group>-v6`."""
+    requests carrying `ramen-group: <group>` unless the source IP is in IPSet `ramen-<group>` (v4) / `-v6`."""
 
     def __init__(self, wafv2):
         self.api = wafv2
@@ -280,10 +280,11 @@ class Waf:
                     "Statements": [
                         {
                             "ByteMatchStatement": {
-                                "FieldToMatch": {"UriPath": {}},
-                                "PositionalConstraint": "STARTS_WITH",
-                                "SearchString": f"/mcp/{group}/".encode(),
-                                "TextTransformations": [{"Priority": 0, "Type": "NONE"}],
+                                # the ALB routes on the ramen-group / ramen-zone headers (no path since 0.3.1)
+                                "FieldToMatch": {"SingleHeader": {"Name": "ramen-group"}},
+                                "PositionalConstraint": "EXACTLY",
+                                "SearchString": group.encode(),
+                                "TextTransformations": [{"Priority": 0, "Type": "LOWERCASE"}],
                             }
                         },
                         {"NotStatement": {"Statement": allowed}},

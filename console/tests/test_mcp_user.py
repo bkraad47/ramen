@@ -57,3 +57,24 @@ def test_mcp_user_is_grantable_within_scope_and_mappable(demo, monkeypatch):
     assert r.status_code == 200 and r.json()["role_map"]["oidc"]["ad-mcp-users"]["role"] == "mcp_user"
     page = demo.get("/config").text
     assert "MCP User" in page and 'value="mcp_user"' in page
+
+
+def test_a_password_mcp_user_is_sent_to_login_and_lands_on_consent(demo):
+    """0.6.0 (A2): an MCP client's authorize request from a signed-out, password-based MCP user goes to the login
+    page and, once signed in, straight to the consent page — the same path Claude Code and the bridge trigger."""
+    from urllib.parse import unquote
+
+    make_user(demo, "pwmcp@x", "mcp_user", ["demo"])
+    cid = register(demo)
+    verifier, challenge = pkce()
+    with TestClient(demo.app) as anon:
+        r = authorize(anon, cid, challenge)
+        assert r.status_code == 303 and r.headers["location"].startswith("/login?next=%2Foauth%2Fauthorize")
+        next_ = unquote(r.headers["location"].split("next=", 1)[1])
+        r = anon.post("/login", data={"email": "pwmcp@x", "password": PW, "next": next_}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].startswith("/oauth/authorize?")
+        page = anon.get(r.headers["location"])
+        assert page.status_code == 200 and "Allow" in page.text and "zone-a" in page.text
+        code = consent(anon, cid, challenge)
+    tok = exchange(demo, cid, code, verifier)
+    assert tok.status_code == 200 and tok.json()["scope"] == "mcp:demo:zone-a"

@@ -4,7 +4,7 @@ import json
 
 import jsonschema
 
-from . import prompts, secrets
+from . import envfile, prompts, secrets
 from .loader import Registry
 
 
@@ -30,7 +30,7 @@ class Executor:
             where = "/".join(str(p) for p in e.absolute_path) or "arguments"
             msg = f"invalid arguments: {where}: {e.message}"
         except Exception as e:  # noqa: BLE001 - user code; message only, no traceback
-            msg = secrets.redact(f"{type(e).__name__}: {e}", used)
+            msg = secrets.redact(f"{type(e).__name__}: {e}", used + envfile.rendered_values())
         return {"content": [{"type": "text", "text": msg}], "isError": True}
 
     def read_resource(self, uri: str) -> dict:

@@ -364,6 +364,18 @@ class GcpCloud(Cloud):
             await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
 
     @_guard
+    async def detach_zone(self, group, zone):
+        """Destroy one group's deployment in one zone: its namespace (workers, services, routes go with it) and the
+        zone GSA (0.6.0). Nothing else of the group is touched."""
+        ns, iam = ns_name(group, zone), self._iam()
+        await asyncio.to_thread(self.kube.delete_namespace, ns)
+        email = f"{iam.account_id(group, zone)}@{self.project}.iam.gserviceaccount.com"
+        removed = {"namespaces": [ns], "service_accounts": []}
+        if email in await asyncio.to_thread(iam.list_service_accounts, f"ramen-{group}-{zone}@"):
+            await asyncio.to_thread(iam.delete_service_account, email)
+            removed["service_accounts"].append(email)
+        return removed
+
     async def detach_group(self, group):
         """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA (F4.1)."""
         prefix = f"ramen-{group}-"

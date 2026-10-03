@@ -37,7 +37,7 @@ environment is that repo at a ref, deployed to a set of zones.
 **API keys**: name it after the client (`claude-desktop`), client type **Agent — language model to worker**, add the
 group `demo`, **Generate key**. The `rmk_` key is shown once. Put it in your shell, not in a file:
 ```sh
-export RAMEN_MCP_KEY='rmk_…'
+export RAMEN_MCP_KEY='<the key shown once>'
 ```
 
 ![The one-time display of a new agent key](../img/key-shown.png){ .ramen-shot }
@@ -67,7 +67,7 @@ cloud unchanged).
       "mcpServers": {
         "ramen-demo": {
           "url": "http://localhost:8080/mcp",
-          "headers": {"Authorization": "Bearer rmk_…", "ramen-group": "demo", "ramen-zone": "local"}
+          "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "local"}
         }
       }
     }
@@ -78,7 +78,7 @@ cloud unchanged).
     *Settings → MCP → Add new global MCP server* opens `~/.cursor/mcp.json`; the same object works:
     ```json
     {"mcpServers": {"ramen-demo": {"url": "http://localhost:8080/mcp",
-      "headers": {"Authorization": "Bearer rmk_…", "ramen-group": "demo", "ramen-zone": "local"}}}}
+      "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "local"}}}}
     ```
 
 === "curl (what the clients do)"
@@ -128,7 +128,7 @@ access log with one line per call, naming the transport and the key id or `user:
 
 The same eight steps against a cluster. The pictures in this part are live captures from the GKE run that verified
 0.5.0 (`scripts/shots.py --base https://<console_ip> …`), not a seeded console; the URLs in them predate v0.5.5's
-Google-managed certificate (I11) and still show a raw IP. Bring-up is [GCP (verbose)](gcp.md) §1–4 — throwaway
+Google-managed certificate (since 0.5.5) and still show a raw IP. Bring-up is [GCP, step by step](gcp.md) §1–4 — throwaway
 project, Terraform, images, the console chart with `--set gateway.certificateMap=$CERTMAP --set
 console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME` (that URL becomes the OAuth issuer the workers trust; `$HOSTNAME` is
 the free sslip.io hostname `terraform output public_hostname` gives you, or your own domain). From here on it is
@@ -136,7 +136,7 @@ the console.
 
 ### 1. Sign in
 `https://<public_hostname>/`, the admin password you passed to Helm. The certificate is issued by a public CA
-(Google Certificate Manager, D17 superseded by v0.5.5 I11) — no warning, no CA export step, no kubectl needed.
+(Google Certificate Manager, since 0.5.5) — no warning, no CA export step, no kubectl needed.
 
 ### 2. A zone
 **Zones and workers → Add zone**: name `a`, provider `gcp`, region `us-central1-a`. A zone is a GKE namespace with
@@ -167,7 +167,7 @@ namespace:
   "mcpServers": {
     "ramen-demo": {
       "url": "https://<public_hostname>/mcp",
-      "headers": {"Authorization": "Bearer rmk_…", "ramen-group": "demo", "ramen-zone": "a"}
+      "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "a"}
     }
   }
 }
@@ -208,7 +208,7 @@ ok   token for another zone is refused — HTTP 404
 **Logs** reads Cloud Logging for the namespace; **Audit** is the same page.
 
 ![Logs on GKE: the worker's entries from Cloud Logging](../img/gke/logs.png){ .ramen-shot } Tear down with
-[GCP (verbose)](gcp.md#teardown) — `terraform destroy`, delete the project, `gcp_cost_check.sh --expect-empty`.
+[GCP, step by step](gcp.md#teardown) — `terraform destroy`, delete the project, `gcp_cost_check.sh --expect-empty`.
 
 ## What this guide has been run against
 See the [transport wiki's verified list](../wiki/transport.md#what-is-verified-and-what-is-not); the private

@@ -160,6 +160,13 @@ class LocalCloud(Cloud):
     async def rebalance(self, group, zone):
         return {"ok": True, "note": "local adapter: no load balancer to rebalance"}
 
+    async def detach_zone(self, group, zone):
+        removed = []
+        for p in (self._bucket(group) / ".ramen").glob(f"*_{zone}.json"):
+            p.unlink()
+            removed.append(str(p))
+        return {"ok": True, "removed": removed, "note": "local adapter: the compose worker is not managed per zone"}
+
     async def apply_sa_permissions(self, group, zone, permissions, scopes=None, previous=None):
         p = self._bucket(group) / ".ramen" / f"sa_permissions_{zone}.json"
         p.parent.mkdir(parents=True, exist_ok=True)

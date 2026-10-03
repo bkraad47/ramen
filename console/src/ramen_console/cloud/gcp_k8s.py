@@ -97,7 +97,14 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_pro
         "spec": {
             "replicas": int(spec.get("count", 1)) if track == "stable" else 0,
             "selector": {"matchLabels": {"app": "worker", "ramen.io/track": track}},
-            "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}},
+            # stable rolls with a surge pod so capacity never dips; the canary (one pod, pinned to the zone) rolls
+            # in place, because a surge pod on a full node in that zone stays Pending and the deploy times out
+            "strategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": (
+                    {"maxUnavailable": 0, "maxSurge": 1} if track == "stable" else {"maxUnavailable": 1, "maxSurge": 0}
+                ),
+            },
             "template": {"metadata": {"labels": labels}, "spec": pod},
         },
     }
@@ -462,9 +469,35 @@ class Kube:
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"deployment {ns}/{name} not ready after {self.wait_secs}s "
-                    f"({st.get('readyReplicas', 0)}/{want} ready)"
+                    f"({st.get('readyReplicas', 0)}/{want} ready{self._stuck_pods(ns, name)})"
                 )
             time.sleep(self.poll)
+
+    def _stuck_pods(self, ns, name) -> str:
+        """Why the rollout is stuck, from the pods themselves: a Pending pod's scheduler message, a waiting
+        container's reason. The replica counts alone said "1/1 ready" while the new pod sat Unschedulable."""
+        notes = []
+        try:
+            track = "canary" if name.endswith("-canary") else "stable"
+            for p in self.pods(ns, f"app=worker,ramen.io/track={track}"):
+                st = p.get("status") or {}
+                if st.get("phase") == "Running" and not any(
+                    (c.get("state") or {}).get("waiting") for c in st.get("containerStatuses") or []
+                ):
+                    continue
+                why = [
+                    f"{c.get('reason')}: {c.get('message')}"
+                    for c in st.get("conditions") or []
+                    if c.get("status") == "False" and c.get("reason")
+                ] + [
+                    f"{(c.get('state') or {}).get('waiting', {}).get('reason')}"
+                    for c in st.get("containerStatuses") or []
+                    if (c.get("state") or {}).get("waiting")
+                ]
+                notes.append(f"{p['metadata']['name']} {st.get('phase')}" + (f" ({'; '.join(why)})" if why else ""))
+        except Exception:  # a diagnostic must never mask the timeout itself
+            return ""
+        return f"; pods: {', '.join(notes)}" if notes else ""
 
     def pods(self, ns, selector="app=worker") -> list[dict]:
         items = self.c.to_dict(self.c.core.list_namespaced_pod(ns, label_selector=selector)).get("items", [])

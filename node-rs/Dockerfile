@@ -25,8 +25,7 @@ RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucke
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws]' \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge @ git+https://github.com/bkraad47/ramen-mcp-bridge@main'
- # ^ swap to a pinned 'ramen-mcp-bridge==X.Y.Z' once PyPI trusted publishing is set up and a release is tagged.
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.1.0'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080

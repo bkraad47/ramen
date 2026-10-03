@@ -90,10 +90,10 @@ jobs:
         run: |
           (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
           echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
-      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+      - name: install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)
         run: |
           uv venv .bridge-venv
-          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          uv pip install --python .bridge-venv ramen-mcp-bridge
           BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
           echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: both transports on real nodes (§16.5)
@@ -124,10 +124,10 @@ jobs:
         run: |
           uv sync --all-extras
           uv pip install pip   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
-      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+      - name: install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)
         run: |
           uv venv .bridge-venv
-          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          uv pip install --python .bridge-venv ramen-mcp-bridge
           BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
           echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: conformance on both transports, key from RAMEN_MCP_KEY
@@ -177,10 +177,10 @@ jobs:
             (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
             echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
           fi
-      - name: install ramen-mcp-bridge from its own repo (v0.5.7: no longer in runtime-py; from GitHub until PyPI trusted publishing is set up)
+      - name: install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)
         run: |
           uv venv .bridge-venv
-          uv pip install --python .bridge-venv git+https://github.com/bkraad47/ramen-mcp-bridge@main
+          uv pip install --python .bridge-venv ramen-mcp-bridge
           BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
           echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
       - name: grpcurl (wait_ready gRPC health mode)

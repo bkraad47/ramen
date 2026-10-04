@@ -27,6 +27,15 @@ def granted(admin, world) -> dict:
     return {"request": r["id"], "applied": cloud}
 
 
+@pytest.fixture(scope="module")
+def revoked(admin, granted) -> dict:
+    """One revoke for every test below: they ran in file order and the GCP-only test did it, so on AWS (no
+    RAMEN_GCP_PROJECT) the record and double-revoke tests saw an unrevoked grant (0.6.1 EKS run)."""
+    r = ok(admin.delete("zone_permission", group=GROUP, zone=ZONE, permission=PERMISSION)).json()
+    assert r["permissions"] == [] and r["revoked"] == PERMISSION
+    return r
+
+
 def _member(gcp_project, granted) -> str:
     email = granted["applied"].get("service_account") or gcp.gsa(gcp_project, GROUP, ZONE)
     return f"serviceAccount:{email}"
@@ -42,10 +51,9 @@ def test_the_approved_permission_is_bound_on_the_project(admin, gcp_project, gra
     assert ok(admin.get("workers", group=GROUP, zone=ZONE)).json()["sa_permissions"] == [PERMISSION]
 
 
-def test_revoking_unbinds_the_role_and_keeps_the_baseline(admin, gcp_project, granted):
+def test_revoking_unbinds_the_role_and_keeps_the_baseline(admin, gcp_project, granted, revoked):
     member = _member(gcp_project, granted)
-    r = ok(admin.delete("zone_permission", group=GROUP, zone=ZONE, permission=PERMISSION)).json()
-    assert r["permissions"] == [] and r["revoked"] == PERMISSION
+    r = revoked
     assert ROLE in (r["cloud"].get("revoked") or []), r["cloud"]
 
     poll(
@@ -65,7 +73,7 @@ def test_revoking_unbinds_the_role_and_keeps_the_baseline(admin, gcp_project, gr
     assert ok(admin.get("workers", group=GROUP, zone=ZONE)).json()["sa_permissions"] == []
 
 
-def test_the_request_record_and_the_audit_follow_the_grant(admin, granted):
+def test_the_request_record_and_the_audit_follow_the_grant(admin, granted, revoked):
     assert [q["status"] for q in items(ok(admin.get("requests"))) if q["id"] == granted["request"]] == ["revoked"]
     assert any(
         e.get("action") == "permission.revoke" and f"permission:{PERMISSION}" in (e.get("tags") or [])
@@ -73,5 +81,5 @@ def test_the_request_record_and_the_audit_follow_the_grant(admin, granted):
     )
 
 
-def test_revoking_twice_is_a_404(admin, granted):
+def test_revoking_twice_is_a_404(admin, granted, revoked):
     assert admin.delete("zone_permission", group=GROUP, zone=ZONE, permission=PERMISSION).status_code == 404

@@ -54,7 +54,10 @@ def test_out_of_range_client_is_rejected_then_restored(admin, world, node_grpc, 
         try:
             assert node_grpc.health() in ("SERVING", "NOT_SERVING"), "health probes must stay reachable"
         except grpc.RpcError as e:
-            raise AssertionError(f"health must not be CIDR-gated: {e.code().name}") from e
+            # the node must not gate health; an edge rule may (AWS WAF blocks the group's traffic from outside the
+            # list by design, and answers 403 → "Received http2 header with status: 403", not the node's message)
+            if e.code() != S.PERMISSION_DENIED or (e.details() or "") == "permission denied":
+                raise AssertionError(f"health must not be CIDR-gated by the node: {e.code().name}") from e
     finally:
         _apply(admin, OPEN)
     poll(lambda: _mcp(node_grpc, mcp_key_opt) == before, timeout=420, what="node open again")

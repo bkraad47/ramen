@@ -55,8 +55,8 @@ With `token_per_min` at 3, a burst on one key starts answering `429` after two o
 deploy's own smoke test spends one of the window, and a call through another zone is a `429` as well. Both 0.6.0
 cloud runs showed that.
 
-The Redis URLs are dialed when a node starts, so changing a URL takes effect on the next deploy. The limit
-numbers are read on every call.
+The URL and both limits reach the workers in their deploy config, so any change takes effect on the next deploy;
+until then the workers keep counting against the old limits.
 
 Separate from these: the node bounds in-flight calls per pod with `RAMEN_MAX_INFLIGHT`, and the console limits
 failed sign-ins per address with `RAMEN_LOGIN_RATE_LIMIT`.

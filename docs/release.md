@@ -14,7 +14,7 @@ pip install ramen-mcp-bridge==0.2.2
 
 | Ramen | Bridge on PyPI | Demo repo | Notes |
 |---|---|---|---|
-| next (unreleased) | 0.2.2 | `main` with `mcp/env.yaml` and `.github/workflows/ramen-deploy.yml` | the worker image installs bridge 0.2.2: Windows token file in `%LOCALAPPDATA%` (0.2.1), `--ca` also verifies the console during `--oauth` (0.2.2) |
+| 0.6.1 | 0.2.2 | `main` with `mcp/env.yaml` and `.github/workflows/ramen-deploy.yml` | the worker image installs bridge 0.2.2: Windows token file in `%LOCALAPPDATA%` (0.2.1), `--ca` also verifies the console during `--oauth` (0.2.2) |
 | 0.6.0 | 0.2.0 | `main` with `mcp/env.yaml` | `env.yaml` is new and optional; the worker image installs bridge 0.2.0 |
 | 0.5.95 | 0.2.0 | `main` | the bridge gained `--oauth` |
 | 0.5.93 | 0.1.0 | `main` | OAuth role mapping, `mcp_user`, scoped permissions |

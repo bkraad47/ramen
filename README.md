@@ -18,13 +18,14 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 > browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
 > Per-user access through OAuth (the console is the authorization server), live-verified on GKE since 0.5.1.
 
-**What is true today, before the pitch.** Current release **0.6.0**. The local stack and CI prove both
+**What is true today, before the pitch.** Current release **0.6.1**. The local stack and CI prove both
 transports on real node processes on Linux and Windows. One GKE cluster has proved the gRPC path end to end
 (0.3.2, 0.4.0) and the HTTP path with OAuth through the same load balancer (0.5.1, with a publicly trusted
 certificate since 0.5.5). The AWS path has been applied to a real account since 0.5.6, and the published bridge
-was server-tested against it in 0.5.8. 0.6.0 itself was deployed on both, two zones each, on 2026-10-03:
-canary deploys, `POST /mcp` through the load balancer, per-token throttling shared across zones through Redis,
-OAuth sign-in through the bridge, and zone teardown. Everything below is written so those lines stay findable.
+was server-tested against it in 0.5.8. 0.6.1 itself was deployed on both, two zones each, on 2026-10-04/05:
+canary deploys (the stable track waits for the canary), `POST /mcp` over HTTP/1.1 and HTTP/2 through the load
+balancer, per-token throttling shared across zones through Redis, OAuth sign-in through the bridge, the base URI,
+and zone teardown. Everything below is written so those lines stay findable.
 
 Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a
@@ -161,9 +162,9 @@ probe it, and reports `SERVING` only once the runtime has loaded the group's cod
 **What is verified, in four lines.**
 - Both transports through every guard, on real node processes, in CI on Linux and on a Windows runner that builds
   the node natively (0.5.0).
-- The GCP path live through the Gateway load balancer on a throwaway project every release, most recently 0.6.0
+- The GCP path live through the Gateway load balancer on a throwaway project every release, most recently 0.6.1
   with two zones, OAuth, the Redis throttle and a real teardown.
-- The AWS path applied to a real account in 0.5.6, 0.5.8 and 0.6.0, each emptied the same day; the published
+- The AWS path applied to a real account in 0.5.6, 0.5.8, 0.6.0 and 0.6.1, each emptied the same day; the published
   bridge server-tested against it in 0.5.8.
 - Covered by tests only, never on a real load balancer: node TLS, and the size and in-flight caps.
 - By design, a group's code runs in a process that holds that group's secrets. Isolation between groups is the
@@ -175,7 +176,7 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 
 | Target | Status | Guide |
 |---|---|---|
-| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on a throwaway project every release, most recently 0.6.0: two zones, OAuth, the Redis throttle shared across zones, real zone teardown | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
+| **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on a throwaway project every release, most recently 0.6.1: two zones, OAuth, the Redis throttle shared across zones, real zone teardown | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
 | **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC and HTTP/1.1 target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 

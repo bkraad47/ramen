@@ -71,3 +71,37 @@ def test_cloud_smoke_login_survives_a_base64_password(tmp_path):
     args = calls.read_text().splitlines()
     assert "password=p+w/=" in args and args[args.index("password=p+w/=") - 1] == "--data-urlencode"
     assert "email=a@b" in args and args[args.index("email=a@b") - 1] == "--data-urlencode"
+
+
+def test_cloud_smoke_deploy_poll_rides_out_a_non_json_answer(tmp_path):
+    """0.6.1 GKE run: one poll of the deploy job got a non-JSON answer through the load balancer and the smoke
+    failed with an empty error while the job went on to succeed."""
+    n = tmp_path / "polls"
+    curl = tmp_path / "bin" / "curl"
+    curl.parent.mkdir()
+    curl.write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done\n'
+        'case "$url" in\n'
+        "  */login) echo 303 ;;\n"
+        '  */mcp-keys) echo \'{"key":"rmk_x"}\' ;;\n'
+        '  */deploy) echo \'{"id":"j1"}\' ;;\n'
+        f"  */jobs/j1) echo x >> {n}; c=$(wc -l < {n});\n"
+        "     if [ $c -eq 1 ]; then echo '<html>502</html>'; elif [ $c -eq 2 ]; then echo '{\"status\":\"running\"}';\n"
+        '     else echo \'{"status":"ok"}\'; fi ;;\n'
+        '  */workers) echo \'{"live":[{"load":0}]}\' ;;\n'
+        "  *) echo '{}' ;;\n"
+        "esac\n"
+    )
+    curl.chmod(0o755)
+    e = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "RAMEN_SMOKE_POLL": "0"}
+    e.pop("RAMEN_NODE_URL", None)
+    r = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "cloud_smoke.sh"), "https://c", "a@b", "pw", "k"],
+        env=e,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "PASS (console only" in r.stdout

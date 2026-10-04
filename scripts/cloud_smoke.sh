@@ -6,7 +6,7 @@
 #      and the LB against; the self-signed cert the deploy made), RAMEN_SMOKE_INSECURE (1: skip TLS verification — a
 #      laptop against a fresh cluster whose cert is not yet at hand; never in CI), RAMEN_SMOKE_GROUP (demo),
 #      RAMEN_SMOKE_ZONE (a), RAMEN_ZONE_PROVIDER (gcp), RAMEN_ZONE_REGION (us-central1-a), RAMEN_SMOKE_ENV (dev),
-#      RAMEN_DEMO_REPO, RAMEN_DEPLOY_TIMEOUT (600), RAMEN_SMOKE_ADMIN (1: also assert Admin/Reload; needs the worker's
+#      RAMEN_DEMO_REPO, RAMEN_DEPLOY_TIMEOUT (600), RAMEN_SMOKE_POLL (5 s), RAMEN_SMOKE_ADMIN (1: also assert Admin/Reload; needs the worker's
 #      RAMEN_ADMIN_CIDRS to include this host — through an LB it usually does not).
 # admin_key is the worker RAMEN_ADMIN_KEY: Admin/Reload must be UNAUTHENTICATED/PERMISSION_DENIED without it.
 # Needs grpcurl (brew/apt) + python3 + curl.
@@ -38,11 +38,11 @@ STEP="env $ENVN";   api POST "/groups/$GROUP/environments" "{\"name\":\"$ENVN\",
 STEP="mcp key";     R=$(api POST "/groups/$GROUP/mcp-keys" "{\"name\":\"smoke-$(date +%s)\"}"); KEY=$(echo "$R" | jget '["key"]'); [ -n "$KEY" ] || fail "no key: ${R:0:200}"
 STEP="deploy";      JOB=$(api POST "/groups/$GROUP/environments/$ENVN/deploy" '{"canary":true}' | jget '["id"]'); [ -n "$JOB" ] || fail "no job id"
 deadline=$(( $(date +%s) + TIMEOUT )); S=running
-while [ "$S" = running ]; do
-  [ "$(date +%s)" -lt "$deadline" ] || fail "job $JOB still running after ${TIMEOUT}s"
-  sleep 5; J=$(api GET "/jobs/$JOB"); S=$(echo "$J" | jget '.get("status","")')
+while [ "$S" = running ]; do  # a non-JSON answer (LB blip) is not a verdict: poll again
+  [ "$(date +%s)" -lt "$deadline" ] || fail "job $JOB still ${S:-unanswered} after ${TIMEOUT}s: ${J:0:200}"
+  sleep "${RAMEN_SMOKE_POLL:-5}"; J=$(api GET "/jobs/$JOB"); S=$(echo "$J" | jget '.get("status","")') || S=running
 done
-[ "$S" = ok ] || fail "job $JOB: $(echo "$J" | jget '.get("error")')"
+[ "$S" = ok ] || fail "job $JOB $S: $(echo "$J" | jget '.get("error")')"
 STEP="workers";     W=$(api GET "/groups/$GROUP/zones/$ZONE/workers"); echo "$W" | jget '["live"][0]["load"]' >/dev/null || fail "no live worker: $W"
 [ -n "$NODE" ] || { echo "PASS (console only; pass node_target for the MCP call)"; exit 0; }
 command -v grpcurl >/dev/null || fail "grpcurl not installed"

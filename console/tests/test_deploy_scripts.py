@@ -105,3 +105,16 @@ def test_cloud_smoke_deploy_poll_rides_out_a_non_json_answer(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert "PASS (console only" in r.stdout
+
+
+def test_eks_default_version_is_in_standard_support():
+    """0.6.1 AWS run: the default 1.31 had left EKS standard support (2025-11-26), so every new cluster paid the
+    extended-support control plane ($0.60/h, not the $0.10/h the guide quotes). Terraform and CloudFormation agree."""
+    import re
+
+    tf = (ROOT / "deploy/terraform/aws/variables.tf").read_text()
+    cf = (ROOT / "deploy/cloudformation/ramen.yaml").read_text()
+    v_tf = re.search(r'variable "kubernetes_version" \{[^}]*default\s*=\s*"([\d.]+)"', tf).group(1)
+    v_cf = re.search(r'KubernetesVersion:[^\n]*\n(?:[^\n]*\n)*?\s*Default:\s*"([\d.]+)"', cf).group(1)
+    assert v_tf == v_cf
+    assert tuple(map(int, v_tf.split("."))) >= (1, 35), "standard support of 1.34 ends 2026-12-02"

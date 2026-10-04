@@ -64,6 +64,8 @@ class AwsCloud(GcpCloud):
         super().__init__("", region, bucket, image, admin_key, clients, rpc, timeout, wait_secs, poll, chart)
         self.kube = AwsKube(clients, poll=poll, wait_secs=wait_secs)
         self.cluster, self.alb_group, self.boundary = cluster, alb_group, boundary
+        # the controller reconciles an Ingress change into the ALB rule within seconds (7 s measured on EKS)
+        self.split_drain_secs = float(os.environ.get("RAMEN_ALB_SPLIT_DRAIN_SECS", "15"))
         self.log_group = log_group or aws_api.log_group_name(cluster)
 
     @classmethod
@@ -125,6 +127,15 @@ class AwsCloud(GcpCloud):
         return "python", manifests(
             group, zone, spec, image, self.bucket_uri(group), role, self.alb_group, stable, canary
         )
+
+    async def _canary_out(self, ns, note) -> None:
+        """Take the canary out of the ALB split before its pods change, then give the ALB time to apply it: an empty
+        target group with weight answers 503 (0.6.1 EKS run). `deploy` sets the split again at the end."""
+        if parse_weights(await asyncio.to_thread(self.kube.read, "Ingress", ns, "worker")).get("worker-canary", 0) <= 0:
+            return
+        await asyncio.to_thread(self._set_weights, ns, 100, 0)
+        note("alb: canary taken out of the traffic split")
+        await asyncio.sleep(self.split_drain_secs)
 
     def _set_weights(self, ns, stable, canary) -> dict:
         if self.kube.read("Ingress", ns, "worker") is None:

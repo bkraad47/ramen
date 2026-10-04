@@ -36,6 +36,7 @@ def fk():
 @pytest.fixture
 def cloud(fk, http_state, monkeypatch):
     monkeypatch.setattr(aws_api.time, "sleep", lambda s: None)
+    monkeypatch.setenv("RAMEN_ALB_SPLIT_DRAIN_SECS", "0")
     return AwsCloud(
         region="us-east-1",
         bucket=BUCKET,
@@ -153,6 +154,47 @@ async def test_attach_zone_idempotent_keeps_weights(cloud, fk):
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 1
     assert parse_weights(obj(fk, "Ingress", "ramen-demo-a", "worker")) == {"worker": 70, "worker-canary": 30}
     assert ("patch", "Ingress", "ramen-demo-a", "worker") in fk.k8s.calls
+
+
+def _trace(cloud, monkeypatch):
+    """Order of split changes and canary pod changes during a deploy."""
+    ev = []
+    real_w, real_r, real_rs = cloud._set_weights, cloud.kube.set_replicas, cloud.kube.restart
+    monkeypatch.setattr(cloud, "_set_weights", lambda ns, s, c: ev.append(("split", s, c)) or real_w(ns, s, c))
+    monkeypatch.setattr(cloud.kube, "set_replicas", lambda ns, n, r: ev.append(("replicas", n, r)) or real_r(ns, n, r))
+    monkeypatch.setattr(cloud.kube, "restart", lambda ns, n: ev.append(("restart", n)) or real_rs(ns, n))
+    return ev
+
+
+async def test_canary_leaves_the_split_before_its_pods_change(cloud, fk, http_state, monkeypatch):
+    """0.6.1 EKS run: a stable-only deploy scaled the canary to 0 while the ALB still sent it 50%, and the weights
+    moved only when the job ended: 19 of 400 probes got 503 for ~45 s. The canary rolls in place (maxSurge 0), so a
+    canary deploy empties its target group too. The canary now leaves the split first and gets its share back only
+    after it passed."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    cfg = {"RAMEN_MCP_KEYS": "rmk_1"}
+    for ing in ("worker", "worker-http"):
+        fk.k8s.objs[("Ingress", "ramen-demo-a", ing)]["metadata"]["annotations"][ACTION] = weights(50, 50)
+    obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] = 1
+    ev = _trace(cloud, monkeypatch)
+    assert (await cloud.deploy("demo", "prod", "a", canary=False, config=cfg, spec=SPEC))["ok"]
+    assert ev.index(("split", 100, 0)) < ev.index(("replicas", "worker-canary", 0))
+
+    for ing in ("worker", "worker-http"):
+        fk.k8s.objs[("Ingress", "ramen-demo-a", ing)]["metadata"]["annotations"][ACTION] = weights(50, 50)
+    obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] = 1
+    ev.clear()
+    assert (await cloud.deploy("demo", "prod", "a", canary=True, config=cfg, spec=SPEC))["ok"]
+    assert ev.index(("split", 100, 0)) < ev.index(("restart", "worker-canary")) and ev[-1][0] == "split"
+    assert ev[-1][2] > 0
+
+    for ing in ("worker", "worker-http"):
+        fk.k8s.objs[("Ingress", "ramen-demo-a", ing)]["metadata"]["annotations"][ACTION] = weights(50, 50)
+    ev.clear()
+    http_state.smoke_ok = False
+    assert not (await cloud.deploy("demo", "prod", "a", canary=True, config=cfg, spec=SPEC))["ok"]
+    assert ev[0] == ("split", 100, 0) and ("split", 50, 50) not in ev
+    assert parse_weights(obj(fk, "Ingress", "ramen-demo-a", "worker-http")) == {"worker": 100, "worker-canary": 0}
 
 
 async def test_deploy_canary_success_sets_split(cloud, fk, http_state):

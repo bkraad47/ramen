@@ -70,6 +70,7 @@ nav:
       - Connect a client with OAuth: wiki/connect-oauth.md
       - Connect a client with a password: wiki/connect-password.md
       - API keys and the API: wiki/api-keys.md
+      - Deploy from GitHub Actions: wiki/deploy-github-actions.md
       - Throttling with Redis: wiki/throttling.md
       - Entra ID and Google Workspace (untested): wiki/sso.md
       - Backups: wiki/backups.md

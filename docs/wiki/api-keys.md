@@ -20,7 +20,9 @@ old pods keep accepting it until they drain, so treat a leaked key as live for a
 
 ## The API and its Swagger page
 
-Everything the console does is a JSON route under `/api/v1`. The OpenAPI UI is at **`https://<edge>/api/docs`**.
+Everything the console does is a JSON route under `/api/v1`. The OpenAPI UI is at **`https://<edge>/api/docs`**
+(on the console's root: behind a path-prefix proxy it cannot load its schema, see
+[Configuration](configuration.md#the-public-address-base-uri)).
 Authenticate with an API key, or with a session cookie plus the CSRF header:
 
 ```sh
@@ -73,4 +75,6 @@ for i in $(seq 1 150); do
 done; echo timeout; exit 1
 ```
 
-Keep `rmn_` keys in CI secrets. An agent operator can use the [cloud-ops skills](skills.md) instead.
+Keep `rmn_` keys in CI secrets. [Deploy from GitHub Actions](deploy-github-actions.md) is the complete version of
+this job: the key, the repo secret, a workflow that fails on a failed deploy, rotation. An agent operator can use
+the [cloud-ops skills](skills.md) instead.

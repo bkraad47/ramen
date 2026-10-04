@@ -176,7 +176,7 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 | Target | Status | Guide |
 |---|---|---|
 | **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on a throwaway project every release, most recently 0.6.0: two zones, OAuth, the Redis throttle shared across zones, real zone teardown | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
-| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
+| **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC and HTTP/1.1 target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
 Bring-up on GCP is `terraform apply` → `make push` → `helm upgrade --install` → add a zone and a group in the

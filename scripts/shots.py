@@ -40,7 +40,11 @@ PAGES = {
     "backups.png": ("/backups", "Backups: preview, restore, restore and prune", False),
     "users.png": ("/users", "Users, permission requests and the password rule", False),
     "environments.png": ("/environments", "Environments with the last deploy flattened", False),
-    "config.png": ("/config", "Config: authentication, the permission catalogue, service-account rules", True),
+    "config.png": (
+        "/config",
+        "Config: the public address (base URI), authentication, the permission catalogue, service-account rules",
+        True,
+    ),
     # §17.2: the two moments the end-to-end guide needs that a plain page load does not show
     "key-shown.png": ("/api-keys", "The one-time display of a new agent key", False),
     "oauth-consent.png": (

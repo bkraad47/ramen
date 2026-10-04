@@ -3,17 +3,18 @@
 | | Where | Latest |
 |---|---|---|
 | **Ramen** | [GitHub releases](https://github.com/bkraad47/ramen/releases), tagged `v<version>` with zips built by CI | [v0.6.0](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
-| **ramen-mcp-bridge** | [PyPI](https://pypi.org/project/ramen-mcp-bridge/) and [GitHub](https://github.com/bkraad47/ramen-mcp-bridge) | [0.2.0](https://pypi.org/project/ramen-mcp-bridge/0.2.0/) |
+| **ramen-mcp-bridge** | [PyPI](https://pypi.org/project/ramen-mcp-bridge/) and [GitHub](https://github.com/bkraad47/ramen-mcp-bridge) | [0.2.2](https://pypi.org/project/ramen-mcp-bridge/0.2.2/) |
 | **ramen-demo-mcp** | [GitHub](https://github.com/bkraad47/ramen-demo-mcp-group), the demo group repo | `main` |
 
 ```sh
-pip install ramen-mcp-bridge==0.2.0
+pip install ramen-mcp-bridge==0.2.2
 ```
 
 ## Which versions go together
 
 | Ramen | Bridge on PyPI | Demo repo | Notes |
 |---|---|---|---|
+| next (unreleased) | 0.2.2 | `main` with `mcp/env.yaml` and `.github/workflows/ramen-deploy.yml` | the worker image installs bridge 0.2.2: Windows token file in `%LOCALAPPDATA%` (0.2.1), `--ca` also verifies the console during `--oauth` (0.2.2) |
 | 0.6.0 | 0.2.0 | `main` with `mcp/env.yaml` | `env.yaml` is new and optional; the worker image installs bridge 0.2.0 |
 | 0.5.95 | 0.2.0 | `main` | the bridge gained `--oauth` |
 | 0.5.93 | 0.1.0 | `main` | OAuth role mapping, `mcp_user`, scoped permissions |

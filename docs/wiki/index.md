@@ -13,10 +13,11 @@ One page per subject. [Get started](../get-started.md) is the short path; these 
 | [Connect a client with OAuth](connect-oauth.md) | Registering a client, Claude Code, the bridge, what the token is, what goes wrong |
 | [Connect a client with a password](connect-password.md) | The account side of the same flow |
 | [API keys and the API](api-keys.md) | The two kinds of key, the OpenAPI page, a cheat sheet, a CI deploy |
+| [Deploy from GitHub Actions](deploy-github-actions.md) | An API key for CI, the repo secret, a workflow that deploys on push and waits for the job, rotation |
 | [Throttling with Redis](throttling.md) | Per-address and per-token limits, scope and item, shared across zones |
 | [Entra ID and Google Workspace](sso.md) | OIDC sign-in and claim-to-role rules. Untested against a real tenant |
 | [Backups](backups.md) | What an export holds and what it does not, preview, restore, prune, reconcile |
-| [Configuration](configuration.md) | The config file, the state store, every variable that matters, restricting actions |
+| [Configuration](configuration.md) | The config file, the public address (base URI) and path-prefix proxies, the state store, every variable that matters, restricting actions |
 
 Reference material sits one level deeper: [transport hop by hop](transport.md), the
 [threat model](../threat-model.md), the [cloud-ops skills](skills.md) and the

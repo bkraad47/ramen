@@ -34,9 +34,72 @@ smtp:
   from: ramen@example.com
 ```
 
-What the Config page edits is stored in the console store and layered over the file: authentication toggles,
-OAuth role rules, OAuth clients, SMTP and the warning-email list, the GitHub App, the auto-rebalance scheduler,
-the service-account rules and the permission catalogue.
+What the Config page edits is stored in the console store and layered over the file: the public address (base
+URI), authentication toggles, OAuth role rules, OAuth clients, SMTP and the warning-email list, the GitHub App, the
+auto-rebalance scheduler, the service-account rules and the permission catalogue.
+
+## The public address (base URI)
+
+The **Public address (base URI)** card near the top of the Config page holds the address people and MCP clients reach the
+console at: `https://ops.example.com` or, behind a proxy that serves it under a path, `https://ops.example.com/ramen`.
+A super admin sets it there or with `PUT /api/v1/config/base-uri {"base_uri": "..."}` (`GET` reads it). Every
+change is audited as `config.base_uri`.
+
+When it is set, every link the console generates goes through it: page links, forms and htmx calls, static
+assets, redirects (sign-in, `next=`, sign-out, password reset, the https-only redirect), links in mail, the OAuth
+metadata and issuer, the upstream sign-in callback, the client snippets on the group page, and the address the
+console hands to workers on deploy. Requests still arrive at the console's root; only what it writes changes.
+
+| Precedence | Source |
+|---|---|
+| 1 | the base URI on the Config page |
+| 2 | `RAMEN_PUBLIC_URL` |
+| 3 | the address the request arrived on |
+
+The value must be an absolute `http` or `https` URL with an optional path, and no query, fragment, credentials or
+spaces; a trailing slash is dropped. Anything else is a `422` with the reason, audited as `error:invalid`. An
+empty value unsets it. A save applies at once on the replica that took it and within five seconds on the others.
+
+- **Workers learn it on their next deploy.** It becomes their `RAMEN_PUBLIC_URL` and `RAMEN_OAUTH_ISSUER`, so after
+  changing it, deploy every environment, or tokens minted under the new issuer are refused by workers still
+  holding the old one.
+- **A wrong value breaks every link**, the Config page's included. Recover from the console's root, where requests
+  still land, with an API key or a session from before the change:
+
+  ```sh
+  curl -s -H "X-Ramen-Api-Key: $RMN" -H 'Content-Type: application/json' \
+    -X PUT https://<console root>/api/v1/config/base-uri -d '{"base_uri":""}'
+  ```
+
+- **The Swagger page at `/api/docs` does not follow a prefix.** It fetches `/openapi.json` from the host's root,
+  which a prefix proxy sends elsewhere. Open it on the console's root, or read `<base URI>/openapi.json` directly.
+
+### Behind a reverse proxy or a path prefix
+
+A host-only base URI (`https://ops.example.com`) needs nothing more than a proxy that forwards everything. A base
+URI with a path, say `https://<host>/ramen`, needs a proxy that does four things:
+
+1. **`/ramen/*` → the console, prefix stripped**: `/ramen/login` arrives as `/login`.
+2. **`/ramen/*` with the `ramen-group` and `ramen-zone` headers → that zone's workers, prefix stripped.** The
+   worker's resource is `<base URI>/mcp` and its metadata `<base URI>/.well-known/oauth-protected-resource`, so
+   `/ramen/mcp` and `/ramen/.well-known/oauth-protected-resource` must reach the worker as `/mcp` and
+   `/.well-known/oauth-protected-resource`, headers intact.
+3. **`/.well-known/oauth-authorization-server/ramen` → the console's `/.well-known/oauth-authorization-server`.**
+   This is RFC 8414 path insertion, at the host's root and outside the prefix; spec-following MCP clients look
+   there. The bridge asks `<base URI>/.well-known/oauth-authorization-server` instead, which rule 1 covers.
+4. **Leave cookies alone and pass `X-Forwarded-Proto`.** The console sets its cookies with `Path=/`, which covers
+   any prefix.
+
+On GKE this was run with HTTPRoutes on the existing Gateway: rules 1 and 3 on the console Service, rule 2 in each
+zone namespace, each with a `URLRewrite` filter of type `ReplacePrefixMatch` and one `PathPrefix` per rule. GKE
+rejects `ReplaceFullPath` (`GWCER104`), and because the Gateway runs without error isolation, one rejected route
+stops every route on it from reconciling, the console-managed worker routes included, until it is fixed. New
+routes took about six minutes, and for a while after that a few prefixed requests still reached the old URL map
+and got the console's `404`.
+
+The AWS load balancer cannot rewrite paths, so on AWS a prefix needs a proxy of your own in front of it. A proxy
+in front of the edge is also one more hop in `x-forwarded-for`: raise `RAMEN_TRUST_PROXY_HOPS` by one, or IP rules
+see the proxy's address ([Transport](transport.md)). That combination has not been run.
 
 ## The state store
 
@@ -54,7 +117,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `RAMEN_PUBLIC_URL` | console, handed to workers | The address people and clients use, and the OAuth issuer the workers trust. Without it OAuth is off for the workers. |
+| `RAMEN_PUBLIC_URL` | console, handed to workers | The address people and clients use, and the OAuth issuer the workers trust. The base URI on the Config page wins over it. Without either, OAuth is off for the workers. |
 | `RAMEN_STORE`, `RAMEN_POSTGRES_DSN` | console | The state store. |
 | `RAMEN_SECRETS_BACKEND` | console | Where secret values live: `store`, `gcp` or `aws`. |
 | `RAMEN_FERNET_KEY` | console | Encrypts password hashes, secret values, key hashes and tokens in the store. Generate once, keep forever. |
@@ -78,6 +141,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_BACKUP_ROOT` | console | Where a `local` backup is written. |
 | `RAMEN_MIN_PASSWORD_LEN` | console | Raises the twelve-character floor; it can never lower it. |
 | `RAMEN_LOG_FILE`, `RAMEN_NODE_PORT` | worker | The access log's path and the port the node listens on. |
+| `RAMEN_ALB_SPLIT_DRAIN_SECS` | console, AWS | Seconds the console waits after moving the load balancer's traffic off the canary before it changes the canary's pods, default 15. |
 | `RAMEN_CONFIG` | both | The yaml file above. |
 
 The complete list is in [contract §3 and §4](../CONTRACTS.md). Precedence runs the config file, then the

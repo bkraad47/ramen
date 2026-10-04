@@ -55,12 +55,15 @@ deploys are started.
 1. **Sync** the repo at the ref into the group's bucket prefix.
 2. **Write config**: the zone's Secret with the MCP keys, the secrets scoped to this environment and zone, the
    blocked list, the verbose flag and the IP rules.
-3. **Canary**: restart `worker-canary` in place and wait for it to be ready.
+3. **Canary**: restart `worker-canary` in place and wait for it to be ready. A new worker image or size goes to
+   the canary only; the stable Deployment keeps its pod template until the canary has passed.
 4. **Reload and smoke**: the canary pip-installs if `requirements.txt` changed, loads the packages, then answers
    `tools/list`.
-5. **Stable**: restart `worker` and wait.
+5. **Stable**: restart `worker` with the new template and wait.
 
-Any failure in steps 3 to 5 scales the canary to zero and leaves the stable pods untouched. The job log on the
+Any failure in steps 3 to 5 scales the canary to zero and leaves the stable pods untouched, a bad image pin
+included. On AWS the canary's share of traffic moves to the stable track before its pods change and comes back
+once it passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-github-actions.md). The job log on the
 group page shows each step. A stuck rollout names the pod that is not running and the scheduler's reason.
 
 ## Scaling and sizes
@@ -95,5 +98,5 @@ own range, because a deploy smoke-tests the worker as an ordinary caller. Changi
 ## Deleting
 
 Deleting an environment tears down its zones' deployments for the group. Deleting a group tears down everything
-it owned, in every zone. On GKE a namespace can sit in `Terminating` for a while; [Deploy on GCP](deploy-gcp.md#gotchas)
+it owned, in every zone, including its Cloud Armor policy on GCP and its WAF IP sets on AWS. On GKE a namespace can sit in `Terminating` for a while; [Deploy on GCP](deploy-gcp.md#gotchas)
 says what to do if it never clears.

@@ -17,7 +17,7 @@ Parameters:
     Description: ALB IngressGroup name (helm value aws.albGroup / RAMEN_ALB_GROUP); scopes the console's WAF and ALB permissions.
   KubernetesVersion:
     Type: String
-    Default: "1.31"
+    Default: "1.35"
   NodeInstanceType:
     Type: String
     Default: t3.small

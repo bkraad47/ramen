@@ -106,7 +106,9 @@ class GcpCloud(Cloud):
         ksa = self.kube.read("ServiceAccount", ns_name(group, zone), "worker") or {}
         return (ksa.get("metadata", {}).get("annotations") or {}).get("iam.gke.io/gcp-service-account")
 
-    def _attach(self, group, zone, spec) -> dict:
+    def _attach(self, group, zone, spec, held: list | None = None) -> dict:
+        """`held` (a canary deploy): an existing stable Deployment keeps its pod template — a new image or size reaches
+        it only once the canary passed (`deploy` applies the appended doc then)."""
         # Namespace + RoleBinding first: _render reads the zone's KSA, which the console may only do once its
         # RoleBinding exists in that namespace (SEC-09; the API server answers 403, not 404, before that).
         self._ensure_namespace(group, zone)
@@ -117,7 +119,13 @@ class GcpCloud(Cloud):
         renderer, docs = self._render(group, zone, spec)
         docs.insert(1, rolebinding(group, zone))  # right after the Namespace: everything else needs it
         for d in docs:
-            self.kube.apply(d, keep=("replicas",) if d["metadata"]["name"] == "worker-canary" else ())
+            name = d["metadata"]["name"]
+            if held is not None and d["kind"] == "Deployment" and name == "worker":
+                held.append(d)
+                if self.kube.read("Deployment", d["metadata"]["namespace"], name):
+                    self.kube.apply(d, keep=("template",))
+                    continue
+            self.kube.apply(d, keep=("replicas",) if name == "worker-canary" else ())
         return {
             "ok": True,
             "namespace": ns_name(group, zone),
@@ -178,7 +186,8 @@ class GcpCloud(Cloud):
         workers = []
         try:
             note(f"{ns}: applying zone manifests")
-            await asyncio.to_thread(self._attach, group, zone, spec or {})
+            held: list[dict] = []
+            await asyncio.to_thread(self._attach, group, zone, spec or {}, held if canary else None)
             existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
             data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
             if self.admin_key:
@@ -208,7 +217,12 @@ class GcpCloud(Cloud):
                 for p in pods:
                     result = await self._reload_and_smoke(p, mcp_key, group, zone, note)
                     workers.append({"id": p["metadata"]["name"], "ok": True, "track": "canary", "result": result})
-            await asyncio.to_thread(self.kube.restart, ns, "worker")
+            for d in held:  # the canary passed: now the stable track may take the new template
+                ann = d["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})
+                ann["ramen.io/restartedAt"] = now()
+                await asyncio.to_thread(self.kube.apply, d)
+            if not held:
+                await asyncio.to_thread(self.kube.restart, ns, "worker")
             note("main: restarted worker, waiting for ready")
             d = await asyncio.to_thread(self.kube.wait_ready, ns, "worker")
             # old pods keep serving (with the old key set) until drained; the job is only "ok" once they are gone

@@ -14,15 +14,15 @@ variable "kubernetes_version" {
 variable "node_instance_type" {
   type        = string
   default     = "t3.small"
-  description = "Cheap first (CLAUDE.md): console + a couple of small workers fit on two t3.small nodes."
+  description = "Cheap first: t3.small. Workers are pinned to their AZ, so the node count is per AZ x 2 subnets (see node_count)."
 }
 variable "node_count" {
   type    = number
-  default = 2
+  default = 4
 }
 variable "node_max" {
   type    = number
-  default = 3
+  default = 5
 }
 variable "vpc_cidr" {
   type    = string

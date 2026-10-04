@@ -118,3 +118,23 @@ def test_eks_default_version_is_in_standard_support():
     v_cf = re.search(r'KubernetesVersion:[^\n]*\n(?:[^\n]*\n)*?\s*Default:\s*"([\d.]+)"', cf).group(1)
     assert v_tf == v_cf
     assert tuple(map(int, v_tf.split("."))) >= (1, 35), "standard support of 1.34 ends 2026-12-02"
+
+
+def test_eks_default_node_group_holds_a_zone_with_its_canary():
+    """0.6.1 AWS run: the default two t3.small nodes land one per availability zone, and zone a's node also carries
+    the console and CoreDNS, so the guide's first canary deploy stayed Unschedulable ("1 Insufficient memory").
+    Workers are pinned to their AZ: two nodes per AZ (four over the two subnets) is the smallest default that runs
+    the guide."""
+    import re
+
+    tf = (ROOT / "deploy/terraform/aws/variables.tf").read_text()
+    cf = (ROOT / "deploy/cloudformation/ramen.yaml").read_text()
+
+    def tf_default(name):
+        return int(re.search(rf'variable "{name}" \{{[^}}]*default\s*=\s*(\d+)', tf).group(1))
+
+    def cf_default(name):
+        return int(re.search(rf"\n  {name}:\n(?:    [^\n]*\n)*?    Default: \"?(\d+)", cf).group(1))
+
+    assert tf_default("node_count") == cf_default("NodeCount") >= 4
+    assert tf_default("node_max") == cf_default("NodeMax") > tf_default("node_count")

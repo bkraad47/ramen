@@ -5,8 +5,9 @@ applied this on a real account with two zones, the demo group, the Redis throttl
 teardown. Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
 Fluent Bit at volume. If a step breaks on your account, open an issue with the step and the error.
 
-Cost while it runs: the EKS control plane (about $0.10 an hour), the node group, the load balancer (about $0.025
-an hour plus traffic) and CloudWatch logs.
+Cost while it runs: the EKS control plane (about $0.10 an hour while its Kubernetes version is in standard
+support, six times that in extended support), four `t3.small` nodes (about $0.08 an hour), the load balancer
+(about $0.025 an hour plus traffic) and CloudWatch logs.
 
 ## Prerequisites
 
@@ -104,11 +105,11 @@ a scope was given. [Users and access](users-access.md#service-account-permission
 - **Scale, IP rules, logs** work as on GCP ([Groups, zones and regions](groups-zones.md#ip-rules)). Here an IP
   rule becomes a WAF IP set per group and a rule in the web ACL that blocks requests carrying
   `ramen-group: <group>` from any other source.
-- **Node sizing**: worker pods are pinned to their zone's availability zone, and the defaults in
-  `deploy/terraform/aws/variables.tf` are `node_count = 2`, `node_max = 3`. Two `t3.small` nodes held one zone,
-  not two: for two zones with canaries set `node_count = 4` and `node_max = 5` in `terraform.tfvars`, or scale
-  afterwards with `aws eks update-nodegroup-config`. A stuck rollout names the pending pod and the scheduler's
-  reason in the deploy log.
+- **Node sizing**: worker pods are pinned to their zone's availability zone, and the node group spreads over the
+  two subnets' zones. The defaults are `node_count = 4`, `node_max = 5`: two `t3.small` per availability zone. With
+  one per zone, the first canary deploy stays `Pending` ("1 Insufficient memory"), because the node in `us-east-1a`
+  also carries the console and CoreDNS. Scale later with `aws eks update-nodegroup-config`. A stuck rollout names
+  the pending pod and the scheduler's reason in the deploy log.
 - **Logs**: Fluent Bit ships every pod to the CloudWatch log group `/aws/containerinsights/ramen/application`.
   External monitors filter on `kubernetes.namespace_name = "ramen-<group>-<zone>"`.
 

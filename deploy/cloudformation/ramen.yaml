@@ -23,10 +23,10 @@ Parameters:
     Default: t3.small
   NodeCount:
     Type: Number
-    Default: 2
+    Default: 4
   NodeMax:
     Type: Number
-    Default: 3
+    Default: 5
   VpcCidr:
     Type: String
     Default: 10.42.0.0/16

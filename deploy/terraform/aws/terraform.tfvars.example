@@ -2,7 +2,7 @@
 region = "us-east-1"
 # name              = "ramen"
 # node_instance_type = "t3.small"
-# node_count        = 2    # one zone of one group fits two t3.small nodes; two zones with canaries need 4
-# node_max          = 3    # raise with node_count (4 -> 5)
+# node_count        = 4    # two per AZ: a zone with its canary next to the console needs two t3.small in its AZ
+# node_max          = 5
 # groups_bucket     = "ramen-<account>-groups"   # default
 # install_addons    = true                       # LB controller + Fluent Bit via Helm from Terraform

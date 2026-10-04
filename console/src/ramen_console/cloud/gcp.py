@@ -174,6 +174,10 @@ class GcpCloud(Cloud):
         log(f"{name}: smoke ok ({'tools/list' if mcp_key else 'health SERVING, no MCP keys configured'})")
         return result
 
+    async def _canary_out(self, ns, note) -> None:
+        """Before the canary's pods change: GCP's Service selects whatever pods exist, nothing to do. AWS overrides it
+        (the ALB keeps a weighted share for the canary target group even when it has no targets)."""
+
     async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None) -> dict[str, Any]:
         lines: list[str] = []
 
@@ -203,10 +207,12 @@ class GcpCloud(Cloud):
                 # zone Service selects both tracks — so a blocked tool, a revoked key or a tightened
                 # allowlist would still be served by it. Remove it before the stable roll.
                 if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary"):
+                    await self._canary_out(ns, note)
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
                     gone = await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
                     note("canary: scaled to 0" + ("" if gone else " (a canary pod is still terminating)"))
             if canary:
+                await self._canary_out(ns, note)  # it rolls in place (maxSurge 0): no pod serves for a moment
                 await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 1)
                 await asyncio.to_thread(self.kube.restart, ns, "worker-canary")
                 note("canary: restarted worker-canary, waiting for ready")
@@ -245,6 +251,7 @@ class GcpCloud(Cloud):
             note(f"deploy failed: {err}")
             if canary:  # also tears down a canary left from an earlier deploy
                 try:
+                    await self._canary_out(ns, note)
                     await asyncio.to_thread(self.kube.set_replicas, ns, "worker-canary", 0)
                     gone = await asyncio.to_thread(self.kube.wait_gone, ns, "app=worker,ramen.io/track=canary", 120)
                     note(

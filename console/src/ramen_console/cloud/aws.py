@@ -42,6 +42,13 @@ def _guard(fn):
     return wrapper
 
 
+def _waf_halves(cidr: str) -> list[str]:
+    """A match-all CIDR as the two halves WAF accepts (0.0.0.0/0 → 0.0.0.0/1 + 128.0.0.0/1); anything else as is."""
+    if cidr.strip() in ("0.0.0.0/0", "::/0"):
+        return ["0.0.0.0/1", "128.0.0.0/1"] if "." in cidr else ["::/1", "8000::/1"]
+    return [cidr]
+
+
 class AwsCloud(GcpCloud):
     def __init__(
         self,
@@ -212,7 +219,8 @@ class AwsCloud(GcpCloud):
     async def set_ip_rules(self, group, zone, cidrs):
         ns = ns_name(group, zone)
         cidrs = list(cidrs)
-        v4, v6 = [c for c in cidrs if ":" not in c], [c for c in cidrs if ":" in c]
+        edge = [h for c in cidrs for h in _waf_halves(c)]  # WAF IP sets take /1-/32 and /1-/128, never /0
+        v4, v6 = [c for c in edge if ":" not in c], [c for c in edge if ":" in c]
         # Node enforcement first: it is the control that actually gates a call and it needs no cloud API.
         # The WAF rule at the edge is defence in depth and is attempted afterwards, best effort.
         await asyncio.to_thread(

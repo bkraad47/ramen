@@ -310,6 +310,23 @@ async def test_rebalance(cloud, fk):
     assert (await cloud.rebalance("demo", "a"))["weights"]["ingress"] is None
 
 
+async def test_open_ip_rules_reach_the_edge(cloud, fk):
+    """0.6.1 EKS run: reopening a zone with 0.0.0.0/0 failed at the edge ("WAFInvalidParameterException ...
+    IP_ADDRESS, parameter: 0.0.0.0/0": IP sets take /1-/32 and /1-/128) and the web ACL kept the old lock while the
+    console reported only a note. A /0 is written as its two /1 halves, which WAF accepts and which mean the same."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.alb()
+    await cloud.set_ip_rules("demo", "a", ["192.0.2.0/24"])
+    r = await cloud.set_ip_rules("demo", "a", ["0.0.0.0/0", "::/0", "10.0.0.0/8"])
+    assert r["ok"] and r["attached"] and not r.get("note"), r
+    assert ip_set(fk.wafv2, "ramen-demo")["Addresses"] == ["0.0.0.0/1", "128.0.0.0/1", "10.0.0.0/8"]
+    assert ip_set(fk.wafv2, "ramen-demo-v6")["Addresses"] == ["::/1", "8000::/1"]
+    assert r["cidrs"] == ["0.0.0.0/0", "::/0", "10.0.0.0/8"]  # what the node enforces is unchanged
+    assert obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"].startswith(
+        "0.0.0.0/0"
+    )
+
+
 async def test_set_ip_rules(cloud, fk):
     await cloud.attach_zone("demo", "a", SPEC)
     r = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8", "192.168.0.0/16"])

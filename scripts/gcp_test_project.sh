@@ -19,7 +19,13 @@ run() { if [ "${DRY_RUN:-0}" = "1" ]; then echo "+ $*"; else echo "+ $*" >&2; "$
 
 case "$cmd" in
   create)
-    if [ "${DRY_RUN:-0}" != "1" ] && gcloud projects describe "$PROJECT" >/dev/null 2>&1; then
+    # A torn-down project keeps its id for 30 days (DELETE_REQUESTED) and describes fine, but cannot be billed:
+    # same-day re-runs hit it with the default id.
+    state="$([ "${DRY_RUN:-0}" = "1" ] || gcloud projects describe "$PROJECT" --format='value(lifecycleState)' 2>/dev/null || true)"
+    if [ -n "$state" ] && [ "$state" != ACTIVE ]; then
+      echo "project $PROJECT is $state (deleted ids stay reserved for 30 days); set RAMEN_GCP_PROJECT=${PROJECT}b" >&2
+      exit 1
+    elif [ -n "$state" ]; then
       echo "project $PROJECT already exists" >&2
     else
       run gcloud projects create "$PROJECT" --name="ramen test $(date +%F)" --labels=purpose=ramen-test,ephemeral=true

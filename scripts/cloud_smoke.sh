@@ -31,7 +31,7 @@ jget() { python3 -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')' 2>
 b64() { python3 -c 'import sys,base64; print(base64.b64encode(sys.stdin.read().encode()).decode())'; }
 unb64() { python3 -c 'import sys,json,base64; d=json.load(sys.stdin); print(base64.b64decode(d.get("body","")).decode())' 2>/dev/null; }
 
-STEP="login"; code=$(C -o /dev/null -w '%{http_code}' -X POST "$CONSOLE/login" -d "email=$EMAIL" -d "password=$PASS"); [ "$code" = 303 ] || [ "$code" = 200 ] || fail "HTTP $code"
+STEP="login"; code=$(C -o /dev/null -w '%{http_code}' -X POST "$CONSOLE/login" --data-urlencode "email=$EMAIL" --data-urlencode "password=$PASS"); [ "$code" = 303 ] || [ "$code" = 200 ] || fail "HTTP $code"
 STEP="zone $ZONE";  api POST /zones "{\"name\":\"$ZONE\",\"provider\":\"$PROVIDER\",\"region\":\"$REGION\"}" >/dev/null
 STEP="group $GROUP"; api POST /groups "{\"name\":\"$GROUP\",\"repo_url\":\"$REPO\",\"ref\":\"main\"}" >/dev/null
 STEP="env $ENVN";   api POST "/groups/$GROUP/environments" "{\"name\":\"$ENVN\",\"ref\":\"main\",\"zones\":[\"$ZONE\"]}" >/dev/null

@@ -50,3 +50,24 @@ def test_create_reuses_an_active_project_and_creates_a_missing_one(tmp_path):
     r = _run(tmp_path, "create", RAMEN_GCP_PROJECT="ramen-test-y", RAMEN_BILLING_ACCOUNT="b")
     assert r.returncode == 0, r.stderr
     assert "projects create ramen-test-y" in log.read_text()
+
+
+def test_cloud_smoke_login_survives_a_base64_password(tmp_path):
+    """The deploy guides make the admin password with `openssl rand -base64`; a `+` posted with plain `-d` arrives
+    as a space and the smoke run fails at login."""
+    calls = tmp_path / "curl-args"
+    curl = tmp_path / "bin" / "curl"
+    curl.parent.mkdir()
+    curl.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> {calls}\necho 401\n')
+    curl.chmod(0o755)
+    e = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    r = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "cloud_smoke.sh"), "https://c", "a@b", "p+w/=", "k"],
+        env=e,
+        capture_output=True,
+        text=True,
+    )
+    assert "FAIL: login" in r.stderr
+    args = calls.read_text().splitlines()
+    assert "password=p+w/=" in args and args[args.index("password=p+w/=") - 1] == "--data-urlencode"
+    assert "email=a@b" in args and args[args.index("email=a@b") - 1] == "--data-urlencode"

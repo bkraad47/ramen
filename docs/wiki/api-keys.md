@@ -24,7 +24,7 @@ Everything the console does is a JSON route under `/api/v1`. The OpenAPI UI is a
 Authenticate with an API key, or with a session cookie plus the CSRF header:
 
 ```sh
-curl -s -c c.txt -X POST https://<edge>/login -d email=admin@ramen.local -d password='...' -o /dev/null
+curl -s -c c.txt -X POST https://<edge>/login --data-urlencode email=admin@ramen.local --data-urlencode password='...' -o /dev/null
 CSRF="X-Ramen-CSRF: $(awk '$6=="ramen_csrf"{print $7}' c.txt)"
 curl -s -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://<edge>/api/v1/api-keys \
   -d '{"name":"ci-deploy","role":"group_admin","groups":["demo"]}'       # 201 {"key":"rmn_..."}

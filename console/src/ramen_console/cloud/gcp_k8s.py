@@ -494,6 +494,7 @@ class Kube:
                     for c in st.get("containerStatuses") or []
                     if (c.get("state") or {}).get("waiting")
                 ]
+                why = list(dict.fromkeys(why))  # Ready and ContainersReady carry the same reason
                 notes.append(f"{p['metadata']['name']} {st.get('phase')}" + (f" ({'; '.join(why)})" if why else ""))
         except Exception:  # a diagnostic must never mask the timeout itself
             return ""

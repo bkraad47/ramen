@@ -18,6 +18,7 @@ class FakeK8s:
     def __init__(self):
         self.objs: dict[tuple, dict] = {}
         self.ready = True
+        self.pull_error = False
         self.calls: list[tuple] = []
         self.rbac_lag = 0  # zone-scoped reads still answering 403 after the RoleBinding exists (RBAC cache lag)
 
@@ -96,6 +97,16 @@ class FakeK8s:
                                     "message": "0/2 nodes are available: 2 Insufficient cpu.",
                                 }
                             ],
+                        }
+                        if not self.pull_error
+                        else {  # what GKE reported for an unpullable pinned image (0.6.1 run)
+                            "phase": "Pending",
+                            "podIP": ip,
+                            "conditions": [
+                                {"type": t, "status": "False", "reason": "ContainersNotReady", "message": "x"}
+                                for t in ("Ready", "ContainersReady")
+                            ],
+                            "containerStatuses": [{"state": {"waiting": {"reason": "ImagePullBackOff"}}}],
                         },
                     }
                 )

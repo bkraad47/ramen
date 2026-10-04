@@ -3,6 +3,14 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.6.2] — Ramen on the official MCP registry
+- Listed on the official MCP registry as `io.github.bkraad47/ramen` (`server.json`): a streamable-http remote
+  template `https://{ramen_edge}/mcp` with the `ramen-group` / `ramen-zone` headers and an optional group-key
+  `Authorization` header (OAuth otherwise). Description: "Self-hosted MCP for organizations and teams: deploy your
+  own tools and make managing them easy." No product code changed since 0.6.1.
+- `check_versions.py` now checks `server.json` too: a registry version is immutable, so a release that forgets it
+  keeps the old listing as "latest".
+
 ## [0.6.1] — instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions
 **A base URI on the Config page.** When set, every link the console generates goes through it, path prefix
 included: page links, forms and redirects, mail links, OAuth metadata and the token issuer, client snippets, and

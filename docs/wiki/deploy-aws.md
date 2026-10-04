@@ -15,6 +15,29 @@ support, six times that in extended support), four `t3.small` nodes (about $0.08
 `docker` with buildx, `grpcurl`, `uv`, `openssl`, `python3`. SSO sessions expire mid-apply; `terraform apply`
 resumes.
 
+If the account is not your default profile, export it once so that `aws`, Terraform, the Helm provider's
+`aws eks get-token` and `kubectl` all use it, and check it before each step:
+
+```sh
+aws login --profile ramen               # or: aws sso login --profile ramen
+export AWS_PROFILE=ramen AWS_REGION=us-east-1
+aws sts get-caller-identity --query Account --output text
+```
+
+A profile made by `aws login` holds a `login_session`, which the Terraform AWS provider pinned here (5.x) cannot
+read: `terraform plan` fails with "No valid credential sources found". Give Terraform a profile that wraps it; it
+refreshes on its own, so a long apply does not outlive exported keys:
+
+```ini
+# ~/.aws/config
+[profile ramen-tf]
+region = us-east-1
+credential_process = aws configure export-credentials --profile ramen --format process
+```
+
+Then `export AWS_PROFILE=ramen-tf` for the steps below. `aws eks update-kubeconfig` writes the profile in force
+into the kubeconfig, so pass `--profile` there if you switch.
+
 ## 1. Infrastructure
 
 ```sh

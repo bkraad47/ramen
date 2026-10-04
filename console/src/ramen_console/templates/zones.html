@@ -2,13 +2,13 @@
 {% block body %}
 {% if p.role == 'super_admin' %}<h2>New zone</h2>
 <div class="card"><p class="muted">A zone is a place workers run: a cloud location (GCP zone such as <code>us-central1-a</code>, AWS availability zone such as <code>us-east-1a</code>) or <code>local</code> for the compose stack. Name it with lowercase letters, digits and dashes. Attach it to a group's environment on the group page; the console then creates that group's namespace, service account and workers in it on the next deploy.</p>
-<form class="inline controls" hx-post="/api/v1/zones" hx-ext="json" hx-swap="none">
+<form class="inline controls" hx-post="{{ base }}/api/v1/zones" hx-ext="json" hx-swap="none">
 <label>Name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="a"></label><label>Provider<select name="provider"><option>local</option><option>gcp</option><option>aws</option></select></label><label>Region<input name="region" placeholder="us-central1-a"></label><button class="act">Add zone</button></form></div>{% endif %}
-{% macro act(r) %}{% if p.role == 'super_admin' %}<div class="row-actions"><button class="sm danger act" hx-delete="/api/v1/zones/{{ r.id }}" hx-confirm="Delete zone {{ r.id }}?" hx-swap="none">Delete zone</button></div>{% endif %}{% endmacro %}
-{{ table(zones, ['name', 'provider', 'region', 'created'], '/api/v1/zones', 'Zones', act) }}
+{% macro act(r) %}{% if p.role == 'super_admin' %}<div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/zones/{{ r.id }}" hx-confirm="Delete zone {{ r.id }}?" hx-swap="none">Delete zone</button></div>{% endif %}{% endmacro %}
+{{ table(zones, ['name', 'provider', 'region', 'created'], u('/api/v1/zones'), 'Zones', act) }}
 <h2>Workers per group</h2><div class="card"><p class="muted">One row per group × zone. A worker is one pod: the Rust node (gRPC + Streamable HTTP, auth, limits) plus a Python sidecar that runs the group's tools. The sidecar starts on the first call and is stopped after <code>RAMEN_SIDECAR_IDLE_SECS</code> (default 300) without calls, then starts again on the next one — "sidecar stopped" in a log is idle, not broken; set a very large value on the deploy to keep it warm. The live cell refreshes every 15 s: one entry per worker with its load (low / even / high, calls in flight over total) and the canary when one is running.</p>
 <table><tr><th>Group</th><th>Zone</th><th>Namespace</th><th>Live workers and canary</th></tr>
-{% for g in groups %}{% for z in zones %}<tr><td><a href="/groups/{{ g.id }}">{{ g.id }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
+{% for g in groups %}{% for z in zones %}<tr><td><a href="{{ base }}/groups/{{ g.id }}">{{ g.id }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
 <td>{% if z.provider == 'gcp' %}<code>ramen-{{ g.id }}-{{ z.id }}</code>{% else %}—{% endif %}</td>
-<td hx-get="/ui/groups/{{ g.id }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endfor %}{% else %}<tr><td colspan="4" class="muted">No groups</td></tr>{% endfor %}</table></div>
+<td hx-get="{{ base }}/ui/groups/{{ g.id }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endfor %}{% else %}<tr><td colspan="4" class="muted">No groups</td></tr>{% endfor %}</table></div>
 {% endblock %}

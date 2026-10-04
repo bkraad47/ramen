@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, github_app
+from .. import alerts, baseuri, github_app
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -243,5 +243,7 @@ async def config(request: Request, p: Principal = Depends(super_)):
         mail=request.app.state.mailer.backend,
         permissions=perm.table(),
         scheduler=await scheduler_mod.get_config(svc(request).store),
+        base_uri=await baseuri.load(store),
+        public_url_env=os.environ.get("RAMEN_PUBLIC_URL", ""),
         github_app=github_app.public_app_config(await github_app.get_app_config(svc(request).store)),
     )

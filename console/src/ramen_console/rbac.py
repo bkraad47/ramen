@@ -120,7 +120,9 @@ def require(role: str, group_param: str | None = None):
                 from urllib.parse import quote
 
                 target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
-                raise HTTPException(303, headers={"Location": f"/login?next={quote(target, safe='')}"})
+                from .baseuri import link
+
+                raise HTTPException(303, headers={"Location": link(request, f"/login?next={quote(target, safe='')}")})
             raise HTTPException(401, "Authentication required")
         if p.kind == "apikey" and p.client_type == "agent":  # D21: agent keys belong to workers, not the console
             raise HTTPException(403, AGENT_KEY_REFUSED)

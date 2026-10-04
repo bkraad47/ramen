@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 
-from . import github_app
+from . import baseuri, github_app
 from .services import Services
 from .util import now, uid
 
@@ -80,16 +80,19 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
             if g.get("scope_token_per_min"):
                 cfg["RAMEN_THROTTLE_SCOPE_TOKEN"] = str(g["scope_token_per_min"])
             # §16.2 / §16.3: stateless session ids and console-issued tokens need the group's secret on every pod;
-            # the issuer is the console's public URL, which only RAMEN_PUBLIC_URL can state from a background job.
+            # the issuer is the console's public URL: the Config page's base URI (0.6.1), else RAMEN_PUBLIC_URL — a
+            # background job has no request to read it from.
             cfg["RAMEN_SESSION_SECRET"] = await svc.session_secret(group)
-            issuer = (os.environ.get("RAMEN_PUBLIC_URL") or "").strip().rstrip("/")
+            issuer = (await baseuri.load(svc.store) or os.environ.get("RAMEN_PUBLIC_URL") or "").strip().rstrip("/")
             if issuer:
                 cfg["RAMEN_OAUTH_ISSUER"] = issuer
                 # the workers sit behind the same address: with it the 401 challenge names an absolute
                 # resource_metadata URL (RFC 9728); found relative on the 0.5.0 GKE run
                 cfg["RAMEN_PUBLIC_URL"] = issuer
             else:
-                job["log"].append(f"{now()} zone {z}: RAMEN_PUBLIC_URL unset, OAuth tokens are off for this worker")
+                job["log"].append(
+                    f"{now()} zone {z}: no base URI or RAMEN_PUBLIC_URL, OAuth tokens are off for this worker"
+                )
             cfg = await svc.secrets_backend.resolve_config(cfg)
             job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
             results[z] = await svc.cloud.deploy(

@@ -9,7 +9,7 @@
 <label>Zone<select name="zone">{% for z in zones %}<option {{ 'selected' if z.id == zone }}>{{ z.id }}</option>{% endfor %}</select></label>
 <label>Worker<select name="worker"><option value="">All workers</option>{% for w in live_workers %}<option value="{{ w }}" {{ 'selected' if w == worker }}>{{ w }}</option>{% endfor %}</select></label>
 <label>Tail<input name="tail" type="number" value="{{ tail }}"></label><button class="act">Show</button>
-{% if group and zone %}<a class="btn ghost act" href="/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
+{% if group and zone %}<a class="btn ghost act" href="{{ base }}/api/v1/logs?group={{ group }}&zone={{ zone }}&worker={{ worker or '' }}&tail={{ tail }}&download=1">Download latest</a>{% endif %}</form></div>
 {% if entries %}
 <div class="log-panes">
 <div class="card log-list"><h2 style="margin-top:0">Entries ({{ entries|length }}, newest first)</h2>

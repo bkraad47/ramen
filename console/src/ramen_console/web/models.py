@@ -175,6 +175,10 @@ class RoleMapChange(ListFields):
     remove: str | None = None
 
 
+class BaseUriConfig(BaseModel):
+    base_uri: str = ""
+
+
 class SchedulerConfig(BaseModel):
     enabled: bool | None = None
     interval_seconds: int | None = None

@@ -3,6 +3,6 @@
 <div class="card"><div class="legend-bar">
 <div class="legend">Load per zone and group: <span class="swatch-low"></span>Low <span class="swatch-even"></span>Even <span class="swatch-high"></span>High <span class="swatch-down"></span>Down or not deployed</div>
 <div class="row-actions"><button id="auto-refresh" class="sm ghost" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button>
-{% if p.role == 'super_admin' %}<button class="sm ghost" hx-post="/api/v1/refresh" hx-swap="none">Refresh discovery</button>{% endif %}</div></div></div>
-<div id="grid" hx-get="/ui/dashboard" data-auto hx-trigger="load, every 60s" hx-swap="innerHTML"><p class="muted">Loading…</p></div>
+{% if p.role == 'super_admin' %}<button class="sm ghost" hx-post="{{ base }}/api/v1/refresh" hx-swap="none">Refresh discovery</button>{% endif %}</div></div></div>
+<div id="grid" hx-get="{{ base }}/ui/dashboard" data-auto hx-trigger="load, every 60s" hx-swap="innerHTML"><p class="muted">Loading…</p></div>
 {% endblock %}

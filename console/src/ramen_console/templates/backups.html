@@ -2,13 +2,13 @@
 {% block body %}
 <h2>New backup</h2>
 <div class="card"><p class="muted">A backup is one JSON file of groups, zones, environments, workers, users (no password hashes) and config, tagged with the release version. Secrets are not included. <b>Target</b> is where it is written: <code>local</code> keeps it on the console's disk, <code>bucket</code> uploads it to the groups bucket; the optional path overrides the default name.</p>
-<form class="inline controls" hx-post="/api/v1/backups" hx-ext="json" hx-swap="none">
+<form class="inline controls" hx-post="{{ base }}/api/v1/backups" hx-ext="json" hx-swap="none">
 <label>Target<select name="target"><option>local</option><option>bucket</option></select></label><label>Path override (optional)<input name="path"></label><button class="act">Create backup</button></form></div>
 <p class="muted">Preview a restore before running it. A restore merges the backup over the current state and never deletes on its own; restore and prune also removes what the backup does not contain. Both end every other signed-in session.</p>
-{% macro act(r) %}<div class="row-actions actions-grid"><a class="btn ghost act" href="/api/v1/backups/{{ r.id }}/download">Download</a>
-<button class="ghost act" hx-post="/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"dry_run": true}' hx-target="#restore-out" hx-swap="innerHTML">Preview restore</button>
-<button class="act" hx-post="/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"reconcile": true}' hx-confirm="Restore {{ r.id }} over the current state and re-apply its zones?" hx-target="#restore-out" hx-swap="innerHTML">Restore</button>
-<button class="danger act" hx-post="/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"prune": true, "reconcile": true}' hx-confirm="Restore {{ r.id }} and delete everything the backup does not contain?" hx-target="#restore-out" hx-swap="innerHTML">Restore and prune</button></div>{% endmacro %}
-{{ table(backups, ['id', 'created', 'release_version', 'target', 'path', 'by', 'counts'], '/api/v1/backups', 'Backups', act) }}
+{% macro act(r) %}<div class="row-actions actions-grid"><a class="btn ghost act" href="{{ base }}/api/v1/backups/{{ r.id }}/download">Download</a>
+<button class="ghost act" hx-post="{{ base }}/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"dry_run": true}' hx-target="#restore-out" hx-swap="innerHTML">Preview restore</button>
+<button class="act" hx-post="{{ base }}/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"reconcile": true}' hx-confirm="Restore {{ r.id }} over the current state and re-apply its zones?" hx-target="#restore-out" hx-swap="innerHTML">Restore</button>
+<button class="danger act" hx-post="{{ base }}/api/v1/backups/{{ r.id }}/restore" hx-ext="json" hx-vals='{"prune": true, "reconcile": true}' hx-confirm="Restore {{ r.id }} and delete everything the backup does not contain?" hx-target="#restore-out" hx-swap="innerHTML">Restore and prune</button></div>{% endmacro %}
+{{ table(backups, ['id', 'created', 'release_version', 'target', 'path', 'by', 'counts'], u('/api/v1/backups'), 'Backups', act) }}
 <div id="restore-out"></div>
 {% endblock %}

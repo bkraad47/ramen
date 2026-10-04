@@ -1,7 +1,7 @@
 {% if not data.zones or not data.groups %}<p class="muted">No zones or groups yet. Create a zone and a group, then attach zones to an environment.</p>{% else %}
 {% set titles = {'low': 'Low', 'even': 'Even', 'high': 'High', 'down': 'Down'} %}
 <div class="grid" style="grid-template-columns:140px repeat({{ data.groups|length }},1fr)">
-<div></div>{% for g in data.groups %}<div><b><a href="/groups/{{ g }}">{{ g }}</a></b></div>{% endfor %}
+<div></div>{% for g in data.groups %}<div><b><a href="{{ base }}/groups/{{ g }}">{{ g }}</a></b></div>{% endfor %}
 {% for z in data.zones %}<div><b>{{ z }}</b></div>
 {% for g in data.groups %}{% set c = data.cells[z].get(g) %}
 {% if c %}<div class="cell load-{{ c.load }}"><b>{{ titles[c.load] }}</b>{% for w in c.workers %}{{ w.id }}{% if w.track == 'canary' %} <small>[canary]</small>{% endif %}: {{ w.load }}{% if w.metrics.inflight is defined %} ({{ w.metrics.inflight }}/{{ w.metrics.total }}){% endif %}{% if w.error %} <small class="err">{{ w.error }}</small>{% endif %}<br>{% endfor %}</div>

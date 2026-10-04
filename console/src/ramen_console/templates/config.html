@@ -1,44 +1,46 @@
 {% extends "base.html" %}{% block title %}Config{% endblock %}
 {% block body %}
-<div class="card"><b>Config file:</b> <code>{{ config_file or 'none (RAMEN_CONFIG unset)' }}</code> <button class="sm" hx-post="/api/v1/config/reload" hx-swap="none">Hot reload</button>
+<div class="card"><b>Config file:</b> <code>{{ config_file or 'none (RAMEN_CONFIG unset)' }}</code> <button class="sm" hx-post="{{ base }}/api/v1/config/reload" hx-swap="none">Hot reload</button>
 <p class="muted">Top-level yaml keys map to <code>RAMEN_*</code> env vars (nested keys join with <code>_</code>); real env vars win. OAuth providers: {{ providers|join(', ') or 'none configured' }}.</p></div>
+<div class="card"><h2 style="margin-top:0">Public address (base URI)</h2><p class="muted">The address people and MCP clients reach this console at, e.g. <code>https://ops.example.com/ramen</code>. When set, every link the console generates goes through it — pages, forms, redirects, email links, OAuth discovery and the address handed to workers — so the console can sit behind a proxy that forwards <code>&lt;base URI&gt;/…</code> to its root. Empty uses RAMEN_PUBLIC_URL ({{ public_url_env or 'unset' }}), then the request's own address. A wrong value breaks every link: clear it with <code>PUT /api/v1/config/base-uri {"base_uri": ""}</code> at the console's root.</p>
+<form class="inline" hx-put="{{ base }}/api/v1/config/base-uri" hx-ext="json" hx-swap="none"><label>Base URI<input name="base_uri" value="{{ base_uri }}" placeholder="https://ops.example.com/ramen" style="min-width:24em"></label> <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Authentication</h2><p class="muted">Providers: {{ providers|join(', ') or 'none' }} · mail backend: <code>{{ mail }}</code> · break-glass (RAMEN_ADMIN_FORCE_PASSWORD): {{ 'on' if auth.force_password else 'off' }}</p>
-<form class="inline" hx-put="/api/v1/config/auth" hx-ext="json" hx-vals='{"password_login": {{ 'false' if auth.password_login else 'true' }}}' hx-swap="none"><button class="sm {{ 'danger' if auth.password_login else '' }}">Password login: {{ 'on → off' if auth.password_login else 'off → on' }}</button></form>
-<form class="inline" hx-put="/api/v1/config/auth" hx-ext="json" hx-vals='{"magic_link": {{ 'false' if auth.magic_link else 'true' }}}' hx-swap="none"><button class="sm ghost">Magic-link login: {{ 'on → off' if auth.magic_link else 'off → on' }}</button></form></div>
+<form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"password_login": {{ 'false' if auth.password_login else 'true' }}}' hx-swap="none"><button class="sm {{ 'danger' if auth.password_login else '' }}">Password login: {{ 'on → off' if auth.password_login else 'off → on' }}</button></form>
+<form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"magic_link": {{ 'false' if auth.magic_link else 'true' }}}' hx-swap="none"><button class="sm ghost">Magic-link login: {{ 'on → off' if auth.magic_link else 'off → on' }}</button></form></div>
 <div class="card"><h2 style="margin-top:0">OAuth role mapping</h2><p class="muted">Rules per sign-in provider: a value of the provider's role claim (an AD group, an IdP role) maps to a Ramen <b>role</b> and to the <b>MCP groups</b> the person may reach. Once a claim is named, the rules are applied on <b>every</b> login — role and groups set by hand are replaced, a person whose values match no rule becomes a viewer without groups, and several matches take the highest role and the union of groups. The bootstrap super admin ({{ auth.admin_email or 'RAMEN_ADMIN_EMAIL' }}) is never demoted. People signed in this way reach workers through the OAuth clients below instead of an agent key.</p>
 {% for name in providers %}<h3>{{ name }}</h3>
 <table class="settings">
-<tr><th>Role claim</th><td><form class="inline" id="claim-{{ name }}" hx-put="/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-swap="none"><label>Claim in the ID token / userinfo<input name="claim" value="{{ auth.role_claim.get(name, '') }}" placeholder="groups"></label></form></td>
+<tr><th>Role claim</th><td><form class="inline" id="claim-{{ name }}" hx-put="{{ base }}/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-swap="none"><label>Claim in the ID token / userinfo<input name="claim" value="{{ auth.role_claim.get(name, '') }}" placeholder="groups"></label></form></td>
 <td><button class="act" form="claim-{{ name }}">{{ 'Set claim' if auth.role_claim.get(name) else 'Enable mapping' }}</button></td></tr>
 {% for value, rule in (auth.role_map.get(name) or {}).items()|sort %}<tr><th><code>{{ value }}</code></th><td>{{ role_label(rule[0]) }}{% if rule[1] %} · groups: {{ rule[1]|join(', ') }}{% else %} · no groups{% endif %}</td>
-<td><form class="inline" hx-put="/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-vals='{{ tojson({"remove": value}) }}' hx-confirm="Remove the rule for {{ value }}?" hx-swap="none"><button class="act danger">Remove rule</button></form></td></tr>
+<td><form class="inline" hx-put="{{ base }}/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-vals='{{ tojson({"remove": value}) }}' hx-confirm="Remove the rule for {{ value }}?" hx-swap="none"><button class="act danger">Remove rule</button></form></td></tr>
 {% else %}<tr><th>Rules</th><td colspan="2" class="muted">None yet{% if not auth.role_claim.get(name) %} — name the claim first{% endif %}</td></tr>{% endfor %}
-<tr><th>Add rule</th><td><form class="inline controls" id="rule-{{ name }}" hx-put="/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-swap="none"><label>Claim value<input name="value" required placeholder="AD-Developers"></label><label>Ramen role<select name="role">{% for role in ['mcp_user', 'viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}">{{ role_label(role) }}</option>{% endfor %}</select></label><label>MCP groups (comma)<input name="groups" placeholder="demo,analytics"></label></form></td>
+<tr><th>Add rule</th><td><form class="inline controls" id="rule-{{ name }}" hx-put="{{ base }}/api/v1/config/auth/role-map/{{ name }}" hx-ext="json" hx-swap="none"><label>Claim value<input name="value" required placeholder="AD-Developers"></label><label>Ramen role<select name="role">{% for role in ['mcp_user', 'viewer', 'group_admin', 'super_admin'] %}<option value="{{ role }}">{{ role_label(role) }}</option>{% endfor %}</select></label><label>MCP groups (comma)<input name="groups" placeholder="demo,analytics"></label></form></td>
 <td><button class="act" form="rule-{{ name }}">Add rule</button></td></tr>
 </table>
 {% else %}<p class="muted">No OAuth provider configured (RAMEN_OAUTH_&lt;NAME&gt;_* env).</p>{% endfor %}</div>
 <div class="card"><h2 style="margin-top:0">OAuth clients</h2><p class="muted">An OAuth client lets a person sign in through this console and reach a group's workers with a token scoped to them (<code>mcp:&lt;group&gt;:&lt;zone&gt;</code>, limited to the groups their role grants), instead of a shared agent key. Register the client's name and the exact redirect URIs it will use; there is no client secret, the client proves itself with PKCE.</p>
-<form class="inline controls" id="oauth-client" hx-post="/api/v1/oauth/clients" hx-ext="json" hx-swap="none"><label>Name<input name="name" required placeholder="Claude Code"></label><label>Redirect URIs (comma)<input name="redirect_uris" required placeholder="http://localhost:9999/callback"></label></form>
+<form class="inline controls" id="oauth-client" hx-post="{{ base }}/api/v1/oauth/clients" hx-ext="json" hx-swap="none"><label>Name<input name="name" required placeholder="Claude Code"></label><label>Redirect URIs (comma)<input name="redirect_uris" required placeholder="http://localhost:9999/callback"></label></form>
 <div class="row-actions"><button class="act" form="oauth-client">Register client</button></div>
 <table><tr><th>Client id</th><th>Name</th><th>Redirect URIs</th><th>Created</th><th>Actions</th></tr>
 {% for c in oauth_clients %}<tr><td><code>{{ c.client_id }}</code></td><td>{{ c.name }}</td><td>{{ c.redirect_uris|join(', ') }}</td><td>{{ c.created }}</td>
-<td><div class="row-actions"><button class="sm danger act" hx-delete="/api/v1/oauth/clients/{{ c.client_id }}" hx-confirm="Remove the client {{ c.name }}? Its refresh tokens stop working." hx-swap="none">Remove client</button></div></td></tr>
+<td><div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/oauth/clients/{{ c.client_id }}" hx-confirm="Remove the client {{ c.name }}? Its refresh tokens stop working." hx-swap="none">Remove client</button></div></td></tr>
 {% else %}<tr><td colspan="5" class="muted">No OAuth clients registered</td></tr>{% endfor %}</table>
 <p class="muted">Clients discover the flow at <code>/.well-known/oauth-authorization-server</code>; a worker points them here from <code>/.well-known/oauth-protected-resource</code>.</p></div>
 <div class="card"><h2 style="margin-top:0">Auto-rebalance scheduler</h2><p class="muted">Watches every group × zone for a skewed worker and rebalances it automatically, the same way the Rebalance button on a group page does. Each run is audited as user <code>scheduler</code>.</p>
 <table class="settings">
 <tr><th>Scheduler</th><td><span class="badge {{ 'ok' if scheduler.enabled else '' }}">{{ 'on' if scheduler.enabled else 'off' }}</span></td>
-<td><form class="inline" hx-put="/api/v1/config/scheduler" hx-ext="json" hx-vals='{"enabled": {{ 'false' if scheduler.enabled else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if scheduler.enabled else '' }}">Scheduler: {{ 'on → off' if scheduler.enabled else 'off → on' }}</button></form></td></tr>
-<tr><th>Check every</th><td><form class="inline" id="scheduler-interval" hx-put="/api/v1/config/scheduler" hx-ext="json" hx-swap="none"><label>Seconds<input type="number" min="1" name="interval_seconds" value="{{ scheduler.interval_seconds }}"></label></form></td>
+<td><form class="inline" hx-put="{{ base }}/api/v1/config/scheduler" hx-ext="json" hx-vals='{"enabled": {{ 'false' if scheduler.enabled else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if scheduler.enabled else '' }}">Scheduler: {{ 'on → off' if scheduler.enabled else 'off → on' }}</button></form></td></tr>
+<tr><th>Check every</th><td><form class="inline" id="scheduler-interval" hx-put="{{ base }}/api/v1/config/scheduler" hx-ext="json" hx-swap="none"><label>Seconds<input type="number" min="1" name="interval_seconds" value="{{ scheduler.interval_seconds }}"></label></form></td>
 <td><button class="act ghost" form="scheduler-interval">Set interval</button></td></tr>
 </table></div>
 <div class="card"><h2 style="margin-top:0">GitHub App (OIDC-free group repo access)</h2><p class="muted">Once set, a group with a GitHub App installation id needs no stored token — a short-lived installation token is minted per deploy. {{ 'A private key is set.' if github_app.private_key_set else 'No private key set.' }}</p>
-<form class="inline" hx-put="/api/v1/config/github-app" hx-ext="json" hx-swap="none">
+<form class="inline" hx-put="{{ base }}/api/v1/config/github-app" hx-ext="json" hx-swap="none">
 <label>App id<input name="app_id" value="{{ github_app.app_id }}" placeholder="123456"></label>
 <label>Private key (PEM)<textarea name="private_key" rows="3" placeholder="(unchanged)"></textarea></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server email (SMTP)</h2><p class="muted">Overrides RAMEN_SMTP_* env vars field by field; takes effect immediately. Password is write-only — {{ 'a password is set.' if smtp.password_set else 'no password set.' }}</p>
-<form class="inline" hx-put="/api/v1/config/smtp" hx-ext="json" hx-swap="none">
+<form class="inline" hx-put="{{ base }}/api/v1/config/smtp" hx-ext="json" hx-swap="none">
 <label>Host<input name="host" value="{{ smtp.host }}" placeholder="smtp.example.com"></label>
 <label>Port<input name="port" type="number" min="1" value="{{ smtp.port }}" style="width:6em"></label>
 <label>User<input name="user" value="{{ smtp.user }}"></label>
@@ -47,7 +49,7 @@
 <label>TLS<select name="tls"><option value="1" {{ 'selected' if smtp.tls == '1' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.tls == 'ssl' }}>SSL</option><option value="0" {{ 'selected' if smtp.tls == '0' }}>None</option></select></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server warning/error emails</h2><p class="muted">These users get a digest email when the server logs a warning or error.</p>
-<form class="inline" hx-put="/api/v1/config/notify" hx-ext="json" hx-swap="none"><input type="hidden" name="user_ids" value="">
+<form class="inline" hx-put="{{ base }}/api/v1/config/notify" hx-ext="json" hx-swap="none"><input type="hidden" name="user_ids" value="">
 <label>User<select id="notify-pick">{% for u in users %}<option value="{{ u.id }}">{{ u.email }}</option>{% else %}<option value="">No users yet</option>{% endfor %}</select></label>
 <button type="button" class="sm ghost" onclick="ramenAddNotify(this)">Add</button>
 <span class="chips" id="notify-chips">{% for u in users %}{% if u.id in notify_user_ids %}<span class="chip" data-notify="{{ u.id }}">{{ u.email }}<input type="hidden" name="user_ids" value="{{ u.id }}"> <button type="button" class="x" onclick="this.parentElement.remove()">Remove</button></span>{% endif %}{% endfor %}</span>
@@ -57,9 +59,9 @@
 <div class="card"><h2 style="margin-top:0">Super-admin service-account rules</h2><p class="muted">Group admins cannot add restrictions that clash with these. Deny wins; when a rule set has allow rules, a permission must match one of them.</p>
 <table><tr><th>Effect</th><th>Permission</th><th>Actions</th></tr>
 {% for q in rules %}<tr><td>{{ q.effect|capitalize }}</td><td><code>{{ q.permission }}</code></td>
-<td><div class="row-actions"><button class="sm danger act" hx-put="/api/v1/config/sa-rules" hx-ext="json" hx-vals='{{ tojson({"rules": rules[:loop.index0] + rules[loop.index:]}) }}' hx-swap="none">Remove</button></div></td></tr>
+<td><div class="row-actions"><button class="sm danger act" hx-put="{{ base }}/api/v1/config/sa-rules" hx-ext="json" hx-vals='{{ tojson({"rules": rules[:loop.index0] + rules[loop.index:]}) }}' hx-swap="none">Remove</button></div></td></tr>
 {% else %}<tr><td colspan="3" class="muted">No rules: group admins may request any permission in the catalogue</td></tr>{% endfor %}</table>
-<form class="inline" hx-put="/api/v1/config/sa-rules" hx-ext="json" hx-swap="none"><input type="hidden" name="rules" value="{{ tojson(rules) }}">
+<form class="inline" hx-put="{{ base }}/api/v1/config/sa-rules" hx-ext="json" hx-swap="none"><input type="hidden" name="rules" value="{{ tojson(rules) }}">
 <label>Effect<select name="effect" id="rule-effect"><option value="deny">Deny</option><option value="allow">Allow</option></select></label>
 <label>Permission<select name="permission" id="rule-permission"><option value="*">* — everything</option>{% for q in permissions %}<option value="{{ q.permission }}">{{ q.permission }} — {{ q.desc }}</option>{% endfor %}</select></label>
 <label>Or a pattern<input id="rule-glob" name="glob" placeholder="kms.*"></label><button class="act">Add rule</button></form>

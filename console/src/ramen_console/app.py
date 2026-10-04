@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, alerts, scheduler
+from . import __version__, alerts, baseuri, scheduler
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth.bootstrap import ensure_super_admin
@@ -91,13 +91,15 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.auth_env = AuthSettings.from_env()
     st.mailer = Mailer.from_env()
     st.cookie_secure = os.environ.get("RAMEN_COOKIE_SECURE", "0") == "1"
-    st.templates = Jinja2Templates(directory=str(HERE / "templates"))
+    st.base_uri = baseuri.Cache()
+    st.templates = Jinja2Templates(directory=str(HERE / "templates"), context_processors=[baseuri.context])
     st.templates.env.globals.update(
         version=release_version(),
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
         password_rule=f"Use {PASSWORD_RULE}.",
+        u=baseuri.u,
     )
 
     app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
@@ -107,6 +109,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     if st.cookie_secure:  # 0.6.0: only https reaches a public console
         app.add_middleware(HttpsOnlyMiddleware)
     app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
+    app.add_middleware(baseuri.BaseUriMiddleware)  # outermost: every layer below may build links
     redact_tokens_in_access_log()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     st.oauth_server = OAuthServer(st.services, st.accounts)

@@ -3,6 +3,7 @@ from fastapi.responses import PlainTextResponse
 
 from .. import deploy as dep
 from ..audit import note, write_audit
+from ..baseuri import prefix
 from ..errors import invalid, not_found
 from ..rbac import Principal, can, require
 from . import models as m
@@ -209,7 +210,7 @@ async def deploy(
         await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)
 
     bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit)
-    html = request.app.state.templates.get_template("partials/job.html").render(job=job)
+    html = request.app.state.templates.get_template("partials/job.html").render(job=job, base=prefix(request))
     return respond(request, job, 202, hx_html=html)
 
 

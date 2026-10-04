@@ -257,6 +257,24 @@ async def test_deploy_canary_bad_smoke_scales_canary_to_zero(cloud, fk, http_sta
     assert any("scaled canary to 0" in x for x in lines)
 
 
+def _image(fk, name):
+    return obj(fk, "Deployment", "ramen-demo-a", name)["spec"]["template"]["spec"]["containers"][0]["image"]
+
+
+async def test_canary_gates_a_new_image_for_the_stable_track(cloud, fk, http_state):
+    """0.6.1 GKE run: a canary deploy wrote the newly pinned image into the stable Deployment at manifest time, so
+    stable rolled it in parallel with the canary and kept it after the canary failed ("main deployment untouched")."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    old = _image(fk, "worker")
+    http_state.smoke_ok = False
+    res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec={**SPEC, "image": "r/w:new"})
+    assert res["ok"] is False and _image(fk, "worker-canary") == "r/w:new"
+    assert _image(fk, "worker") == old
+    http_state.smoke_ok = True
+    res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec={**SPEC, "image": "r/w:new"})
+    assert res["ok"] is True and _image(fk, "worker") == "r/w:new"
+
+
 async def test_deploy_canary_reload_failure(cloud, fk, http_state):
     http_state.reload_ok = False
     res = await cloud.deploy("demo", "prod", "a", config={"RAMEN_MCP_KEYS": "rmk_1"}, spec=SPEC)

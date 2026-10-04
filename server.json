@@ -3,7 +3,7 @@
   "name": "io.github.bkraad47/ramen",
   "title": "Ramen",
   "description": "Self-hosted MCP for organizations and teams: deploy your own tools and make managing them easy.",
-  "version": "0.6.1-1",
+  "version": "0.6.2",
   "repository": {
     "url": "https://github.com/bkraad47/ramen",
     "source": "github"

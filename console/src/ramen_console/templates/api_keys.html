@@ -1,14 +1,14 @@
 {% extends "base.html" %}{% from "partials/table.html" import table %}{% from "partials/group_picker.html" import group_picker %}{% block title %}API keys{% endblock %}
 {% block body %}
 <h2>New key</h2>
-<div class="card"><p class="muted">Fill in the key, then generate it. A <b>devops</b> key goes in <code>X-Ramen-Api-Key: rmn_…</code> on <code>/api/v1/*</code> (see the <a href="/api/docs">API docs</a>); an <b>agent</b> key (<code>rmk_…</code>) is handed to a language model, reaches the named groups' workers on the next deploy, and is refused by this API. The role can be at most your own. Pick each group and press Add; add no group to use your own. The generated value is shown <b>once</b>, right here, and never again — copy it straight into the client that will use it, and revoke it from the list below when it is no longer needed.</p>
-<form class="inline controls" id="keyform" hx-post="/api/v1/api-keys" hx-ext="json" hx-target="#once" hx-swap="innerHTML">
+<div class="card"><p class="muted">Fill in the key, then generate it. A <b>devops</b> key goes in <code>X-Ramen-Api-Key: rmn_…</code> on <code>/api/v1/*</code> (see the <a href="{{ base }}/api/docs">API docs</a>); an <b>agent</b> key (<code>rmk_…</code>) is handed to a language model, reaches the named groups' workers on the next deploy, and is refused by this API. The role can be at most your own. Pick each group and press Add; add no group to use your own. The generated value is shown <b>once</b>, right here, and never again — copy it straight into the client that will use it, and revoke it from the list below when it is no longer needed.</p>
+<form class="inline controls" id="keyform" hx-post="{{ base }}/api/v1/api-keys" hx-ext="json" hx-target="#once" hx-swap="innerHTML">
 <label>Name<input name="name" required></label>
 <label>Client type<select name="client_type"><option value="devops">Devops — console API</option><option value="agent">Agent — language model to worker</option></select></label>
 <label>Role (up to your own)<select name="role"><option value="">Same as me</option><option value="viewer">Viewer</option><option value="group_admin">Group Admin</option>{% if p.role == 'super_admin' %}<option value="super_admin">Super Admin</option>{% endif %}</select></label>
 {{ group_picker(groups, add_class='act ghost') }}
 </form>
 <div class="row-actions"><button class="act" form="keyform">Generate key</button></div><div id="once"></div></div>
-{% macro act(r) %}<button class="sm danger" hx-delete="/api/v1/api-keys/{{ r.id }}" hx-confirm="Revoke key {{ r.name }}?" hx-swap="none">Revoke</button>{% endmacro %}
-{{ table(keys, ['id', 'name', 'client_type', 'role', 'groups', 'created'], '/api/v1/api-keys', 'API keys', act) }}
+{% macro act(r) %}<button class="sm danger" hx-delete="{{ base }}/api/v1/api-keys/{{ r.id }}" hx-confirm="Revoke key {{ r.name }}?" hx-swap="none">Revoke</button>{% endmacro %}
+{{ table(keys, ['id', 'name', 'client_type', 'role', 'groups', 'created'], u('/api/v1/api-keys'), 'API keys', act) }}
 {% endblock %}

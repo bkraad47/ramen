@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, github_app, scheduler
+from .. import alerts, baseuri, github_app, scheduler
 from .. import mail as mail_mod
 from ..audit import note
 from ..config import apply_config
@@ -387,6 +387,26 @@ async def set_sa_rules(request: Request, body: m.Rules, p: Principal = Depends(s
     note(request, "config.sa_rules", "sa_rules", [f"rules:{len(body.rules)}"])
     doc = await svc(request).set_sa_rules(body.rules)
     return respond(request, {"rules": doc["rules"]})
+
+
+@r.get("/config/base-uri")
+async def get_base_uri(request: Request, p: Principal = Depends(super_)):
+    return {"base_uri": await baseuri.load(svc(request).store)}
+
+
+@r.put("/config/base-uri")
+async def set_base_uri(request: Request, body: m.BaseUriConfig, p: Principal = Depends(super_)):
+    """0.6.1: the console's public address; every generated link goes through it. Empty unsets it."""
+    try:
+        value = baseuri.normalize(body.base_uri)
+    except ValueError as e:
+        note(request, "config.base_uri", "base_uri", ["error:invalid"])
+        raise invalid(str(e)) from e
+    note(request, "config.base_uri", "base_uri", [f"base_uri:{value or '-'}"])
+    await svc(request).store.put("config", baseuri.DOC, {"base_uri": value})
+    request.app.state.base_uri.set(value)
+    request.state.base_uri = value  # an HX-Refresh lands on the new links; this response already uses them
+    return respond(request, {"base_uri": value})
 
 
 @r.get("/config/scheduler")

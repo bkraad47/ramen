@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Groups{% endblock %}
 {% block body %}
 {% if p.role == 'super_admin' %}<div class="card"><details><summary class="btn">Create group</summary>
-<form class="inline" hx-post="/api/v1/groups" hx-ext="json" hx-swap="none">
+<form class="inline" hx-post="{{ base }}/api/v1/groups" hx-ext="json" hx-swap="none">
 <label>Name<input name="name" pattern="[a-z][a-z0-9-]*" required></label><label>Git repo URL<input name="repo_url" placeholder="https://github.com/org/repo.git or https://gitlab.com/org/repo.git"></label><label>Ref (branch)<input name="ref" value="main"></label><label>Git access token (optional, for private repos — GitHub or GitLab)<input name="github_token" type="password" placeholder="Prefer a GITHUB_TOKEN secret instead"></label><label>GitHub App installation id (optional; skips the token above — needs a console-wide App set on the Config page)<input name="github_app_installation_id" placeholder="123456"></label><button>Create group</button></form></details></div>{% endif %}
-{% macro act(r) %}<a class="btn ghost sm" href="/groups/{{ r.id }}">Open</a>{% if p.role == 'super_admin' %} <button class="sm danger" hx-delete="/api/v1/groups/{{ r.id }}" hx-confirm="Delete group {{ r.id }} and destroy its infrastructure?" hx-swap="none">Delete</button>{% endif %}{% endmacro %}
-{{ table(groups, ['name', 'repo_url', 'ref', 'created', 'created_by'], '/api/v1/groups', 'Groups', act) }}
+{% macro act(r) %}<a class="btn ghost sm" href="{{ base }}/groups/{{ r.id }}">Open</a>{% if p.role == 'super_admin' %} <button class="sm danger" hx-delete="{{ base }}/api/v1/groups/{{ r.id }}" hx-confirm="Delete group {{ r.id }} and destroy its infrastructure?" hx-swap="none">Delete</button>{% endif %}{% endmacro %}
+{{ table(groups, ['name', 'repo_url', 'ref', 'created', 'created_by'], u('/api/v1/groups'), 'Groups', act) }}
 {% endblock %}

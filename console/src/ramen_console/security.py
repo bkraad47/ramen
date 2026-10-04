@@ -125,6 +125,11 @@ class HttpsOnlyMiddleware(BaseHTTPMiddleware):
         if proto == "https" or request.url.path in self.EXEMPT:
             return await call_next(request)
         if request.method in ("GET", "HEAD"):
+            from .baseuri import base_of
+
+            if base := base_of(request):  # 0.6.1: behind a prefixing proxy, back to the public address
+                query = f"?{request.url.query}" if request.url.query else ""
+                return RedirectResponse(f"https{base[base.index(':') :]}{request.url.path}{query}", 301)
             return RedirectResponse(str(request.url.replace(scheme="https")), 301)
         return JSONResponse({"detail": "HTTPS required"}, 403)
 

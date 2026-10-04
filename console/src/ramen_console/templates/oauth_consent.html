@@ -1,8 +1,8 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Allow access</title><link rel="stylesheet" href="/static/ramen.css"><link rel="icon" href="/static/favicon.png" type="image/png"></head>
-<body><div class="login card"><img src="/static/logo-mark.png" alt="Project Ramen"><h1 style="text-align:center">Allow access</h1>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Allow access</title><link rel="stylesheet" href="{{ base }}/static/ramen.css"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
+<body><div class="login card"><img src="{{ base }}/static/logo-mark.png" alt="Project Ramen"><h1 style="text-align:center">Allow access</h1>
 <p><b>{{ a.client.name }}</b> wants to call the tools of group <b>{{ a.group }}</b> in zone <b>{{ a.zone }}</b> as <b>{{ p.name }}</b>.</p>
 <p class="muted">The client gets a token that is good for one hour and can renew it for thirty days. With it the client can <b>run every tool</b> of this group in this zone — the same access a viewer of the group has here — and every call it makes is logged under your account. You can end this by changing your password or asking a super admin to revoke you.</p>
-<form method="post" action="/oauth/authorize">
+<form method="post" action="{{ base }}/oauth/authorize">
 {% for k, v in q.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <button type="submit" name="decision" value="allow">Allow</button>

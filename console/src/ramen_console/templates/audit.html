@@ -1,11 +1,11 @@
 {% extends "base.html" %}{% block title %}Audit{% endblock %}
 {% block body %}
-<div class="card"><div class="dl">Download: <a href="/api/v1/audit?format=csv">CSV</a><a href="/api/v1/audit?format=json">JSON</a></div>
+<div class="card"><div class="dl">Download: <a href="{{ base }}/api/v1/audit?format=csv">CSV</a><a href="{{ base }}/api/v1/audit?format=json">JSON</a></div>
 <h2 style="margin-top:0">Audit log (newest {{ limit }})</h2>
 <div class="audit-filters"><table class="filters"><tr><th>Search</th><th>Outcome</th><th>Rows</th><th>Actions</th></tr>
 <tr><td><input id="audit-search" type="search" placeholder="User, action, target, tag or address" oninput="ramenAuditFilter()"></td>
 <td><select id="audit-outcome" onchange="ramenAuditFilter()"><option value="">Any</option><option value="ok">Succeeded</option><option value="fail">Failed</option></select></td>
 <td><span class="muted">Showing the newest {{ rows|length }}</span></td>
-<td><div class="row-actions"><a class="btn ghost act" href="/audit?limit=500">Load 500</a><button id="auto-refresh" class="ghost act" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button></div></td></tr></table></div>
-<div id="audit-scroll" hx-get="/ui/audit?limit={{ limit }}" data-auto hx-trigger="load, every 60s" hx-swap="innerHTML"></div></div>
+<td><div class="row-actions"><a class="btn ghost act" href="{{ base }}/audit?limit=500">Load 500</a><button id="auto-refresh" class="ghost act" type="button" onclick="ramenToggleAuto(this)">Auto refresh: on</button></div></td></tr></table></div>
+<div id="audit-scroll" hx-get="{{ base }}/ui/audit?limit={{ limit }}" data-auto hx-trigger="load, every 60s" hx-swap="innerHTML"></div></div>
 {% endblock %}

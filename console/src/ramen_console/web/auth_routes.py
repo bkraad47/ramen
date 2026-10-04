@@ -7,6 +7,7 @@ from starlette.responses import Response
 from ..audit import note
 from ..auth import csrf
 from ..auth.sessions import COOKIE
+from ..baseuri import base_of, link, public_url
 from ..errors import ApiError, not_found
 from ..mail import magic_mail, reset_mail
 from ..security import safe_next
@@ -22,13 +23,11 @@ async def auth_settings(request: Request):
 
 
 def base_url(request: Request) -> str:
-    import os
-
-    return (os.environ.get("RAMEN_PUBLIC_URL") or str(request.base_url)).rstrip("/")
+    return public_url(request)
 
 
 def _login_response(request: Request, user: dict, next_: str = "/"):
-    resp = RedirectResponse(safe_next(next_), 303)
+    resp = RedirectResponse(link(request, safe_next(next_)), 303)
     kw = {"samesite": "lax", "secure": request.app.state.cookie_secure, "max_age": 12 * 3600}
     session = {"uid": user["id"], "ep": request.app.state.accounts.epoch_of(user)}
     resp.set_cookie(COOKIE, request.app.state.signer.sign(session), httponly=True, **kw)
@@ -70,8 +69,8 @@ async def login(
 
 
 @r.get("/logout")
-async def logout():
-    resp = RedirectResponse("/login", 303)
+async def logout(request: Request):
+    resp = RedirectResponse(link(request, "/login"), 303)
     resp.delete_cookie(COOKIE)
     resp.delete_cookie(csrf.COOKIE)
     return resp
@@ -114,7 +113,7 @@ async def reset_finish(request: Request, token: str, password: str = Form(), _=D
     note(request, "password.reset", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
         raise ApiError(400, "This reset link is invalid, expired or already used")
-    return RedirectResponse("/login?msg=Password+updated%2C+sign+in", 303)
+    return RedirectResponse(link(request, "/login?msg=Password+updated%2C+sign+in"), 303)
 
 
 # magic link ----------------------------------------------------------------
@@ -158,7 +157,9 @@ def _client(request: Request, name: str):
 async def oauth_login(request: Request, name: str):
     client = _client(request, name)
     try:
-        return await client.authorize_redirect(request, str(request.url_for("oauth_callback", name=name)))
+        callback = request.url_for("oauth_callback", name=name)
+        callback = f"{base_of(request)}{callback.path}" if base_of(request) else str(callback)
+        return await client.authorize_redirect(request, callback)
     except Exception as e:  # noqa: BLE001 - issuer metadata unreachable/malformed: a clear 502, not a bare 500
         note(request, "login.oauth", name, [f"provider:{name}", "error:issuer"], user="-")
         raise ApiError(502, f"OAuth provider {name!r} is not reachable: {type(e).__name__}") from e

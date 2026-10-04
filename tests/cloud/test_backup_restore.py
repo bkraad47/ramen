@@ -28,9 +28,8 @@ def test_the_backup_carries_the_state_and_no_secrets(admin, backup):
         assert leak not in body, leak
 
 
-def test_restore_prunes_what_came_later_reconciles_the_zone_and_leaves_it_serving(
-    admin, backup, node_opt, gcp_project, suffix
-):
+def test_restore_prunes_what_came_later_reconciles_the_zone_and_leaves_it_serving(admin, backup, node_opt, suffix):
+    # (no gcp_project: it is unused here and skipped the restore on AWS, so the audit test below failed — 0.6.1)
     probe = f"probe-{suffix}"[:40]
     ok(admin.create_group(probe, "https://example.com/none.git"), 201)
     ok(admin.put("workers", {"count": 1}, group=GROUP, zone=ZONE))

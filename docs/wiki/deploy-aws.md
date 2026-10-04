@@ -46,7 +46,8 @@ terraform init && terraform apply        # about 20 minutes, nearly all of it EK
 cd ../../..
 ```
 
-Terraform creates the cluster and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role,
+Terraform creates the cluster (Kubernetes 1.35 by default, in standard support until 2027-03-27; an older version
+in extended support bills the control plane at about $0.60 an hour instead of $0.10) and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role,
 a permissions boundary for the zone roles, a self-signed certificate imported into ACM, the AWS Load Balancer
 Controller and Fluent Bit. A CloudFormation template with the same base resources is in `deploy/cloudformation`.
 
@@ -63,7 +64,18 @@ docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=$(cat VERSI
 docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=$(cat VERSION) -t $EW:$(cat VERSION) --push .
 ```
 
-A push from a Colima or Lima Docker can fail with `broken pipe`. `docker save` plus `crane push` works.
+A push from a Colima or Lima Docker to ECR often fails with `broken pipe`, and retrying rarely helps. Build
+locally and push with `crane`:
+
+```sh
+aws ecr get-login-password --region $REGION | crane auth login $ACCOUNT.dkr.ecr.$REGION.amazonaws.com -u AWS --password-stdin
+docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=$(cat VERSION) -t $EW:$(cat VERSION) --load .
+docker save $EW:$(cat VERSION) -o worker.tar && crane push worker.tar $EW:$(cat VERSION)   # same for the console
+```
+
+Nodes cache an image by tag. If you push the same tag again, pods keep the copy they already have: record the
+new build with its digest (`crane digest $EW:$(cat VERSION)`) on the group page's **Worker image** card and deploy,
+or push a new tag.
 
 ## 3. The console
 
@@ -98,8 +110,10 @@ load balancer for `curl --cacert` and the bridge's `--ca`.
 Open `https://<alb>/`, accept the certificate, and sign in as `admin@ramen.local`. The steps are the same as on
 GCP: a zone named `a` with provider `aws` and region `us-east-1a`, the `demo` group from the demo repo, an
 environment on zone `a`, a key, a canary deploy. Creating the environment makes the namespace `ramen-demo-a`, an
-IAM role `ramen-demo-a` bound to the zone's service account through IRSA, and a zone Ingress with a gRPC target
-group and the two header conditions. The load balancer needs a few minutes to program the listener rule.
+IAM role `ramen-demo-a` bound to the zone's service account through IRSA, and two zone Ingresses on the same load
+balancer, both matching the two headers: `worker` sends the gRPC paths to a `GRPC` target group, and `worker-http`
+sends `/mcp` and `/.well-known/oauth-protected-resource` to an `HTTP1` target group (a gRPC target group answers
+`464` to anything else). The load balancer needs a few minutes to program the listener rules.
 
 ```sh
 curl --cacert ramen-lb.pem https://$ALB/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
@@ -107,6 +121,10 @@ curl --cacert ramen-lb.pem https://$ALB/mcp -H "Authorization: Bearer $RAMEN_MCP
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 ramen-mcp-bridge --target $ALB:443 --tls --ca ramen-lb.pem --key "$RAMEN_MCP_KEY" --group demo --zone a
 ```
+
+Signing a person in through the bridge uses the same PEM: from bridge 0.2.2, `--ca` also verifies the console
+during `--oauth` (`--oauth https://$ALB --client-id <id>`); older bridges fail there with
+`CERTIFICATE_VERIFY_FAILED` unless `SSL_CERT_FILE=ramen-lb.pem` is set.
 
 ## The console's role and access controls
 
@@ -116,7 +134,7 @@ ramen-mcp-bridge --target $ALB:443 --tls --ca ramen-lb.pem --key "$RAMEN_MCP_KEY
 | Read and write the groups bucket | `GetObject`, `PutObject` and `DeleteObject` on its objects; `ListBucket` and `GetBucketLocation` on the bucket |
 | Manage group secrets | Secrets Manager under `ramen/<group>/` |
 | Use the state table and read logs | The `ramen` DynamoDB table, CloudWatch Logs Insights |
-| Program edge IP rules | `wafv2` actions scoped to the web ACL `ramen` and its IP sets |
+| Program edge IP rules | `wafv2` actions scoped to the web ACL `ramen` and its IP sets, plus the read-only `wafv2:GetWebACLForResource` on `*` (the call names no web ACL, so a scoped grant fails with a `502` on the first IP rule) |
 | Manage the zone namespaces | The same ClusterRole and per-zone Role as on GCP |
 
 Each zone's workers assume `ramen-<group>-<zone>` through IRSA. The role reads the group's prefix of the bucket
@@ -127,19 +145,25 @@ a scope was given. [Users and access](users-access.md#service-account-permission
 
 - **Scale, IP rules, logs** work as on GCP ([Groups, zones and regions](groups-zones.md#ip-rules)). Here an IP
   rule becomes a WAF IP set per group and a rule in the web ACL that blocks requests carrying
-  `ramen-group: <group>` from any other source.
+  `ramen-group: <group>` from any other source. WAF IP sets take `/1` to `/32`, so `0.0.0.0/0` is written as
+  `0.0.0.0/1` and `128.0.0.0/1`; the node keeps the list as given.
+- **Canary and the load balancer**: the zone's two tracks share its traffic by weighted target groups. Before
+  any canary pod changes, the console moves the canary's weight to the stable track and waits
+  `RAMEN_ALB_SPLIT_DRAIN_SECS` (15 seconds; the load balancer took about 7) so no request lands on a pod that is
+  going away; the canary gets its share back once it has passed.
 - **Node sizing**: worker pods are pinned to their zone's availability zone, and the node group spreads over the
   two subnets' zones. The defaults are `node_count = 4`, `node_max = 5`: two `t3.small` per availability zone. With
   one per zone, the first canary deploy stays `Pending` ("1 Insufficient memory"), because the node in `us-east-1a`
   also carries the console and CoreDNS. Scale later with `aws eks update-nodegroup-config`. A stuck rollout names
   the pending pod and the scheduler's reason in the deploy log.
+- **Deploy from CI**: [Deploy from GitHub Actions](deploy-github-actions.md).
 - **Logs**: Fluent Bit ships every pod to the CloudWatch log group `/aws/containerinsights/ramen/application`.
   External monitors filter on `kubernetes.namespace_name = "ramen-<group>-<zone>"`.
 
 ## Teardown
 
 ```sh
-# in the console: delete the group first, which removes its namespaces and IAM roles
+# in the console: delete the group first, which removes its namespaces, IAM roles and WAF IP sets
 helm uninstall ramen -n ramen-system                 # releases the load balancer
 terraform -chdir=deploy/terraform/aws destroy
 ```
@@ -160,5 +184,9 @@ aws wafv2 delete-web-acl --scope REGIONAL --name ramen --id <id> --lock-token <t
   and pass it with `--ca`.
 - The console's own range must be inside any IP lock, because a deploy smoke-tests the worker as an ordinary
   caller.
+- An IP lock blocks health probes from outside the range at the WAF too: `grpc.health.v1.Health` from your laptop
+  fails while the workers are healthy.
+- A WAF block looks like the node's own denial: gRPC `PERMISSION_DENIED` with "permission denied". If the worker's
+  access log has no `denied` line for the call, the edge blocked it; the web ACL's sampled requests show it.
 - The `Admin` gRPC service is not routed through the load balancer by design. A smoke test that tries it sees the
   load balancer's `464`.

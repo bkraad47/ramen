@@ -131,7 +131,8 @@ that catch people out:
   still verifies the hostname, it just anchors trust in that PEM. And because the Gateway certificate is
   self-signed until you supply a domain certificate, `--tls` on its own fails with
   `CERTIFICATE_VERIFY_FAILED`; in practice `--ca` is required, not optional. That exact mistake cost a run in
-  the 0.3.2 cloud verification.
+  the 0.3.2 cloud verification. From bridge 0.2.2 the same `--ca` also verifies the console during `--oauth`
+  sign-in; 0.2.1 and older used the system trust store there.
 
 ### Blocked names
 Names in `RAMEN_BLOCKED` are filtered out of `tools/list`, `resources/list` and `prompts/list` and answered with
@@ -163,7 +164,8 @@ one hour and are not individually revocable; refresh tokens are, through the use
 publishes `/.well-known/oauth-protected-resource` and answers a missing credential with
 `WWW-Authenticate: Bearer resource_metadata=…`, which is how an OAuth-capable client finds the console. Two
 practical notes: the metadata URL is absolute only when the deploy set `RAMEN_PUBLIC_URL` on the worker (the console
-does so for a cloud zone; a pod cannot know its public address on its own), and behind a load balancer that routes
+does so from its [base URI](configuration.md#the-public-address-base-uri) or its own `RAMEN_PUBLIC_URL`; a pod
+cannot know its public address on its own), and behind a load balancer that routes
 on `ramen-group`/`ramen-zone` a client must send those headers on the metadata request too, or the balancer has no
 zone to send it to. Details and what the console checks before minting: [the threat model](../threat-model.md).
 
@@ -229,6 +231,12 @@ the runtime has actually loaded the group's code.
 This section is the single record. The home page, [How it works](../how-it-works.md) and the
 [threat model](../threat-model.md) each carry one sentence and point here.
 
+- **Verified live in 0.6.1 on both clouds** (GCP on Firestore, AWS on DynamoDB, two zones each, torn down the
+  same day): everything in the 0.6.0 run again, plus the console's base URI host-only on both and with a path
+  prefix on GKE (OAuth metadata, links, mail, worker metadata and a `tools/call` with a token through the prefix),
+  a canary deploy of an unpullable image that left the stable track serving, and on AWS `POST /mcp` over HTTP/1.1
+  and OAuth discovery through the load balancer, which answered `464` before the `HTTP1` target groups were added.
+  The bridge's `--oauth` against the AWS self-signed console needed the 0.2.2 `--ca` fix.
 - **Verified live in 0.6.0 on both clouds**, each with two zones of one group behind one load balancer: a canary
   deploy to both zones, `POST /mcp` through the edge on each, the per-token Redis throttle counting across zones,
   `mcp/env.yaml` rendered from a secret into the runtime's environment, the bridge with a group key and the bridge

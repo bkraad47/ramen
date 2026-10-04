@@ -118,7 +118,7 @@ pre-commit check.
 1. `make up` on your laptop. Create a group pointing at your repo, attach zone `local`, deploy.
 2. Call it with the key from the group page, with `curl`, the `mcp` SDK or the bridge
    ([Get started](../get-started.md#3-connect-a-client)).
-3. Push, deploy again. The group page lists what each zone reported, with each tool's schema. The Logs page tails
+3. Push, deploy again, or let [GitHub Actions deploy on push](deploy-github-actions.md). The group page lists what each zone reported, with each tool's schema. The Logs page tails
    the worker.
 
 ## Heavy dependencies

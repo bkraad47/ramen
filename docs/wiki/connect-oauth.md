@@ -47,8 +47,10 @@ server: PKCE, pre-registered public clients, no client secret, no dynamic regist
     {"mcpServers": {"ramen-stdio": {"command": "ramen-mcp-bridge",
       "args": ["--target", "<edge>:443", "--tls", "--oauth", "https://<edge>", "--client-id", "<client id>", "--group", "demo", "--zone", "a"]}}}
     ```
-    The first run opens the browser. The refresh token is kept in `~/.config/ramen-mcp-bridge/` with mode 0600,
-    and later runs need no browser. `--no-browser` prints the sign-in URL instead.
+    The first run opens the browser. The refresh token is kept in `~/.config/ramen-mcp-bridge/` with mode 0600
+    (`%LOCALAPPDATA%\ramen-mcp-bridge` on Windows, from bridge 0.2.1), and later runs need no browser.
+    `--no-browser` prints the sign-in URL instead. Behind a self-signed certificate, such as the AWS guide's, add
+    `--ca <pem>`: from bridge 0.2.2 it verifies the console during sign-in as well as the worker.
 
 <figure markdown>
 ![The consent page](../img/oauth-consent.png){ .ramen-shot }
@@ -69,7 +71,9 @@ every consent decision.
 
 | Symptom | Cause |
 |---|---|
-| The client never opens a browser | The worker's metadata URL is relative because `RAMEN_PUBLIC_URL` was not set at install. The deploy log says "OAuth tokens are off for this worker". Set it and redeploy. |
+| The client never opens a browser | The worker's metadata URL is relative because neither the Config page's base URI nor `RAMEN_PUBLIC_URL` was set when it was deployed. The deploy log says "OAuth tokens are off for this worker". Set one and redeploy. |
+| Tokens refused after the base URI changed | Workers take the new issuer on their next deploy. Deploy each environment |
+| Behind a path prefix, the client finds no authorization server | The proxy is missing the root route `/.well-known/oauth-authorization-server/<prefix>` ([Configuration](configuration.md#behind-a-reverse-proxy-or-a-path-prefix)). The bridge takes the prefixed console address, `--oauth https://<host>/<prefix>` |
 | `404` on the metadata request | The client did not send the `ramen-group` and `ramen-zone` headers, so the load balancer had no zone to route to |
 | The consent page says you have no access | Your account has no role in that group |
 | `401` after a while | The refresh token ended because your role or password changed. Sign in again |

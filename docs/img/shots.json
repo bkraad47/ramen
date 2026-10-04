@@ -15,7 +15,8 @@
     },
     "config.png": {
       "captured_for": "0.6.0",
-      "page": "Config: authentication, the permission catalogue, service-account rules"
+      "captured_from": "local compose stack (make up) from ramen HEAD after 6bda120 (base URI card, unreleased 0.6.1 code; VERSION still 0.6.0), 2026-10-05",
+      "page": "Config: the public address (base URI), authentication, the permission catalogue, service-account rules"
     },
     "dashboard.png": {
       "captured_for": "0.6.0",

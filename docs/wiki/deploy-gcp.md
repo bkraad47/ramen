@@ -24,6 +24,8 @@ gcloud auth application-default login     # Terraform; or export GOOGLE_OAUTH_AC
 ```
 
 The script reads `RAMEN_GCP_PROJECT` and `RAMEN_BILLING_ACCOUNT`, and refuses to run without the billing account.
+A deleted project keeps its id for 30 days, so a second run on the same day needs another id
+(`ramen-test-$(date +%y%m%d)b`); the script refuses an id whose project is pending deletion and says so.
 
 ## 2. Infrastructure
 
@@ -80,7 +82,8 @@ certificate is publicly trusted, so there is no warning.
 3. **Open the group → Add environment**: name `prod`, tick zone `a`. This creates the namespace `ramen-demo-a`,
    its service account with Workload Identity, the Service with a network endpoint group, and a route that
    matches the `ramen-group: demo` and `ramen-zone: a` headers.
-4. **MCP auth keys → Generate key**. The key is shown once.
+4. **MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next deploy, so
+   generate keys before deploying, or deploy again after.
 5. **Deploy (canary)**. The job log reads sync, canary, reload, smoke, stable.
 
 <figure markdown>
@@ -131,21 +134,33 @@ admin approves it. [Users and access](users-access.md#service-account-permission
   ([Groups, zones and regions](groups-zones.md#ip-rules)).
 - **Logs**: Cloud Logging for the namespace, on the Logs page. External monitors read the same logs with
   `resource.labels.namespace_name="ramen-<group>-<zone>"`.
-- **Upgrade the console**: `make push`, then `kubectl -n ramen-system rollout restart deploy/console`.
+- **Upgrade the console**: `make push`, then `kubectl -n ramen-system rollout restart deploy/console`. For a
+  minute or two after a console restart the load balancer can answer `503` with the body
+  `unconditional drop overload` (no healthy backend yet); retry. `scripts/cloud_smoke.sh` rides it out.
+- **Deploy from CI**: [Deploy from GitHub Actions](deploy-github-actions.md).
 
 ## Teardown
 
 ```sh
-# in the console: delete the group, which removes its namespaces, service accounts and routes
+# in the console: delete the group, which removes its namespaces, service accounts, routes and Cloud Armor policy
 helm uninstall ramen -n ramen-system
 terraform -chdir=deploy/terraform/gcp destroy
 scripts/gcp_test_project.sh delete            # deletes the whole project
 ```
 
+Run `terraform destroy` before deleting the project. If you skip it, the local `terraform.tfstate` still describes
+the deleted project, and the next `terraform apply` in this directory plans against it: move or delete the state
+file first. `scripts/gcp_cost_check.sh` lists anything billable that is left.
+
 ## Gotchas
 
 - The Gateway programs a new route in two to seven minutes. Until then the zone's `/mcp` answers `404` from the
   console.
+- A dropped zone's `/mcp` answers `503` for a short while, then `404` once its route is gone.
+- HTTPRoutes you add yourself (a [path prefix](configuration.md#behind-a-reverse-proxy-or-a-path-prefix), say)
+  share the Gateway with the console's. GKE rejects a `URLRewrite` of type `ReplaceFullPath`; use
+  `ReplacePrefixMatch`. A rejected route stops every route on the Gateway from reconciling, the worker routes the
+  console writes included, until it is fixed or deleted.
 - A dropped zone's namespace can sit in `Terminating` for ten minutes or more while the Gateway controller
   garbage-collects its backend service. If it never clears, find it with
   `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete it by hand.

@@ -391,9 +391,9 @@ class GcpCloud(Cloud):
         return removed
 
     async def detach_group(self, group):
-        """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA (F4.1)."""
+        """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA, its Cloud Armor policy (F4.1)."""
         prefix = f"ramen-{group}-"
-        removed = {"namespaces": [], "service_accounts": []}
+        removed = {"namespaces": [], "service_accounts": [], "security_policies": []}
         for ns in await asyncio.to_thread(self.kube.list_namespaces, group):
             await asyncio.to_thread(self.kube.delete_namespace, ns)
             removed["namespaces"].append(ns)
@@ -401,6 +401,9 @@ class GcpCloud(Cloud):
         for email in await asyncio.to_thread(iam.list_service_accounts, prefix):
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
+        comp = gcp_api.Compute(self.c.compute, self.project)
+        if await asyncio.to_thread(comp.delete_armor, f"ramen-{group}"):
+            removed["security_policies"].append(f"ramen-{group}")
         return removed
 
     def _revoke_stale(self, iam, email, group, keep: list[str]) -> tuple[list[str], list[str]]:

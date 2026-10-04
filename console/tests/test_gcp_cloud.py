@@ -730,7 +730,23 @@ async def test_detach_group_destroys_namespaces_and_gsas(cloud, fk):
         "ramen-demo-a",
     ) not in fk.k8s.objs
     assert list(fk.iam_state["accounts"]) == ["ramen-other-a@p1.iam.gserviceaccount.com"]
-    assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": []}
+    assert (await cloud.detach_group("demo")) == {"namespaces": [], "service_accounts": [], "security_policies": []}
+
+
+async def test_detach_group_deletes_its_cloud_armor_policy(cloud, fk):
+    """0.6.1 GKE run: `ramen-<group>` (made by IP rules, billed per policy and rule) outlived the group. A backend
+    service still pointing at it (the Gateway collects them late) is cleared first: GCP refuses a used policy."""
+    await cloud.attach_zone("demo", "a", SPEC)
+    neg = "x/networkEndpointGroups/ramen-demo-a"
+    fk.compute_state["backend"] = {"name": "gkegw1-demo-a", "backends": [{"group": neg}]}
+    await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
+    fk.compute_state["policies"]["ramen-other"] = {"name": "ramen-other", "rules": []}
+    assert fk.compute_state["backend"]["securityPolicy"].endswith("/securityPolicies/ramen-demo")
+    r = await cloud.detach_group("demo")
+    assert r["security_policies"] == ["ramen-demo"]
+    assert list(fk.compute_state["policies"]) == ["ramen-other"]
+    assert not fk.compute_state["backend"].get("securityPolicy")
+    assert (await cloud.detach_group("demo"))["security_policies"] == []
 
 
 async def test_detach_zone_destroys_one_namespace_and_its_gsa(cloud, fk):

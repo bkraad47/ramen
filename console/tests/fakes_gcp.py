@@ -450,7 +450,7 @@ def compute_handler(state):
                 state["backend"].update(kw["body"])
                 return {"status": "DONE"}
             if method == "setSecurityPolicy":
-                state["backend"]["securityPolicy"] = kw["body"]["securityPolicy"]
+                state["backend"]["securityPolicy"] = kw["body"].get("securityPolicy")
                 return {"status": "DONE"}
         if coll == "securityPolicies":
             pols = state.setdefault("policies", {})
@@ -465,6 +465,13 @@ def compute_handler(state):
                 return copy.deepcopy(pols[kw["securityPolicy"]])
             if method == "insert":
                 pols[kw["body"]["name"]] = copy.deepcopy(kw["body"])
+                return {"status": "DONE"}
+            if method == "delete":
+                if kw["securityPolicy"] not in pols:
+                    raise FakeApiError(404, "policy not found")
+                if str((state.get("backend") or {}).get("securityPolicy")).endswith("/" + kw["securityPolicy"]):
+                    raise FakeApiError(400, "The security_policy resource is already being used by backend service")
+                del pols[kw["securityPolicy"]]
                 return {"status": "DONE"}
             p = pols[kw["securityPolicy"]]
             if method == "addRule":

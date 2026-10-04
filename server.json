@@ -2,24 +2,66 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.bkraad47/ramen",
   "title": "Ramen",
-  "description": "Self-hosted, multi-zone MCP server for Kubernetes (GKE/EKS): git repo of tools in, canary deploys.",
-  "version": "0.6.1",
-  "repository": { "url": "https://github.com/bkraad47/ramen", "source": "github" },
+  "description": "Self-hosted MCP for organizations and teams: deploy your own tools and make managing them easy.",
+  "version": "0.6.1-1",
+  "repository": {
+    "url": "https://github.com/bkraad47/ramen",
+    "source": "github"
+  },
   "websiteUrl": "https://bkraad47.github.io/ramen/",
   "remotes": [
     {
       "type": "streamable-http",
       "url": "https://{ramen_edge}/mcp",
       "variables": {
-        "ramen_edge": { "description": "Your Ramen deployment's edge host (and path prefix if a base URI is set), e.g. mcp.example.com", "isRequired": true, "format": "string" }
+        "ramen_edge": {
+          "description": "Your Ramen deployment's edge host (and path prefix if a base URI is set), e.g. mcp.example.com",
+          "isRequired": true,
+          "format": "string"
+        }
       },
       "headers": [
-        { "name": "Authorization", "value": "Bearer {key}", "description": "Group MCP key, or use OAuth sign-in instead", "isRequired": false, "isSecret": true,
-          "variables": { "key": { "description": "Group MCP key (rmk_...)", "isRequired": true, "isSecret": true, "format": "string" } } },
-        { "name": "ramen-group", "value": "{group}", "description": "Ramen group to route to", "isRequired": true,
-          "variables": { "group": { "description": "Group name", "isRequired": true, "format": "string" } } },
-        { "name": "ramen-zone", "value": "{zone}", "description": "Ramen zone to route to", "isRequired": true,
-          "variables": { "zone": { "description": "Zone name", "isRequired": true, "format": "string" } } }
+        {
+          "name": "Authorization",
+          "value": "Bearer {key}",
+          "description": "Group MCP key, or use OAuth sign-in instead",
+          "isRequired": false,
+          "isSecret": true,
+          "variables": {
+            "key": {
+              "description": "Group MCP key (rmk_...)",
+              "isRequired": true,
+              "isSecret": true,
+              "format": "string"
+            }
+          }
+        },
+        {
+          "name": "ramen-group",
+          "value": "{group}",
+          "description": "Ramen group to route to",
+          "isRequired": true,
+          "variables": {
+            "group": {
+              "description": "Group name",
+              "isRequired": true,
+              "format": "string"
+            }
+          }
+        },
+        {
+          "name": "ramen-zone",
+          "value": "{zone}",
+          "description": "Ramen zone to route to",
+          "isRequired": true,
+          "variables": {
+            "zone": {
+              "description": "Zone name",
+              "isRequired": true,
+              "format": "string"
+            }
+          }
+        }
       ]
     }
   ]

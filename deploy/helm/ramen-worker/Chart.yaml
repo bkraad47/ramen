@@ -3,5 +3,5 @@ name: ramen-worker
 description: One Ramen zone (namespace ramen-<group>-<zone>) - worker + worker-canary Deployments pinned to a GCP zone, NEG Service, HTTPRoute /mcp/<group>/<zone> on the console Gateway, Workload Identity KSA, deploy Secret. Rendered/applied by the console's gcp adapter; also usable by hand. provider=aws renders an ALB Ingress with weighted stable/canary Services and an IRSA KSA instead.
 type: application
 icon: https://raw.githubusercontent.com/bkraad47/ramen/main/docs/img/logo.png
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.6.1
+appVersion: "0.6.1"

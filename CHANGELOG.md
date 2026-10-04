@@ -2,6 +2,30 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+
+## [0.6.1] — instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions
+**A base URI on the Config page.** When set, every link the console generates goes through it, path prefix
+included: page links, forms and redirects, mail links, OAuth metadata and the token issuer, client snippets, and
+the public URL and issuer handed to workers on their next deploy. Precedence: the setting, then `RAMEN_PUBLIC_URL`,
+then the request. `GET|PUT /api/v1/config/base-uri`, super admin only, audited. Verified on GKE with a host and with
+a `/ramen` prefix behind route rewrites, and on EKS with a host.
+
+**Fixed on a fresh GCP and AWS deployment of this release** (both torn down afterwards):
+- A canary deploy no longer puts a new pinned image on the stable track at the same time; stable rolls only after
+  the canary passes, so a bad image leaves stable serving.
+- AWS: `POST /mcp` over HTTP/1.1 and OAuth protected-resource discovery got the ALB's `464` (GRPC target groups).
+  Each zone now has a second Ingress, `worker-http`, on HTTP/1.1 target groups with the same header conditions and
+  canary split.
+- AWS: a stable-only deploy scaled the canary to 0 while the ALB still sent it traffic (about 5% `503` for ~45 s);
+  the canary now leaves the split first (`RAMEN_ALB_SPLIT_DRAIN_SECS`, default 15).
+- AWS: IP rules failed on a fresh account (`wafv2:GetWebACLForResource` needs `Resource: "*"`); `0.0.0.0/0` is
+  written as two `/1` halves, which WAF IP sets accept.
+- AWS defaults: EKS 1.35 (1.31 bills extended support) and four `t3.small` nodes, so the guide's first canary fits.
+- GCP: deleting a group deletes its Cloud Armor policy. The not-ready message names each reason once.
+- Scripts: `gcp_test_project.sh` refuses a project pending deletion; `cloud_smoke.sh` URL-encodes the login form
+  (a `+` in a generated password arrived as a space) and survives a non-JSON answer while polling a job.
+
+**Docs and packaging:**
 - **The documentation site, reorganized around what a reader came for.** Home is an introduction with the three
   repositories and the reasons to use Ramen; *Get started* is one page with a picture per step (run it locally,
   connect an MCP repo, connect a client with a key, with OAuth, or through the bridge); *How it works* holds the

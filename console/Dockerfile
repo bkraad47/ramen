@@ -1,5 +1,5 @@
 FROM python:3.14-slim
-ARG RAMEN_VERSION=0.6.0
+ARG RAMEN_VERSION=0.6.1
 LABEL org.opencontainers.image.title="ramen-console" org.opencontainers.image.version="${RAMEN_VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 ENV PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1 UV_PROJECT_ENVIRONMENT=/app/.venv PATH="/app/.venv/bin:$PATH"
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \

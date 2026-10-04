@@ -138,3 +138,20 @@ def test_eks_default_node_group_holds_a_zone_with_its_canary():
 
     assert tf_default("node_count") == cf_default("NodeCount") >= 4
     assert tf_default("node_max") == cf_default("NodeMax") > tf_default("node_count")
+
+
+def test_console_may_ask_which_web_acl_guards_the_alb():
+    """0.6.1 AWS run: IP rules answered 502 'not authorized to perform wafv2:GetWebACLForResource on resource
+    arn:aws:wafv2:<region>:<account>:regional/webacl'. The request names no web ACL, so IAM checks the bare
+    `regional/webacl` ARN, which the scoped `regional/webacl/ramen/*` never matches. It is read-only: `*`."""
+    import re
+
+    tf = (ROOT / "deploy/terraform/aws/iam.tf").read_text()
+    stmts = re.findall(r"statement \{[^{}]*\}", tf)
+    get = [s for s in stmts if "wafv2:GetWebACLForResource" in s]
+    assert get and all('resources = ["*"]' in s for s in get), get
+    assert any("wafv2:AssociateWebACL" in s and "local.waf_web_acl" in s for s in stmts)  # writes stay scoped
+    cf = (ROOT / "deploy/cloudformation/ramen.yaml").read_text()
+    console = cf[cf.index("ConsoleRole:") :]
+    block = re.search(r"Action: \[[^\]]*wafv2:GetWebACLForResource[^\]]*\]\n\s*Resource: (.*)", console)
+    assert block and block.group(1).strip() == '"*"', block and block.group(0)

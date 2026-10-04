@@ -215,6 +215,36 @@ class Compute:
         )
         return f"projects/{self.project}/global/securityPolicies/{name}"
 
+    def delete_armor(self, name, attempts=24) -> bool:
+        """Delete policy `name`; False when it does not exist. GCP refuses a policy still set on a backend service,
+        and Gateway-managed ones outlive their namespace for minutes: those are cleared first."""
+        suffix = f"/securityPolicies/{name}"
+        token = None
+        while True:
+            page = (
+                self.api.backendServices()
+                .list(project=self.project, pageToken=token)
+                .execute(num_retries=3, http=fresh_http())
+            )
+            for bs in page.get("items", []):
+                if str(bs.get("securityPolicy") or "").endswith(suffix):
+                    self._ready(
+                        lambda b=bs: self.api.backendServices().setSecurityPolicy(
+                            project=self.project, backendService=b["name"], body={}
+                        ),
+                        attempts=attempts,
+                    )
+            token = page.get("nextPageToken")
+            if not token:
+                break
+        try:
+            self._ready(lambda: self.api.securityPolicies().delete(project=self.project, securityPolicy=name), attempts)
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) == 404:
+                return False
+            raise
+        return True
+
     def attach_armor(self, backend_service, policy_ref, attempts=24) -> None:
         self._ready(
             lambda: self.api.backendServices().setSecurityPolicy(

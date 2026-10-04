@@ -6,6 +6,7 @@ import pytest
 
 from ramen_tests import env as E
 from ramen_tests import gcp
+from ramen_tests.console import items
 
 from .conftest import ENV, GROUP, ZONE, S, mcp_status, ok, poll
 
@@ -51,13 +52,15 @@ def test_out_of_range_client_is_rejected_then_restored(admin, world, node_grpc, 
     try:
         _apply(admin, LOCKED + trusted)
         poll(lambda: _mcp(node_grpc, mcp_key_opt) == S.PERMISSION_DENIED, timeout=420, what="denied outside CIDRs")
+        # The node never gates health. On AWS the edge does: the WAF rule blocks every request carrying the group's
+        # header from outside the list, and the ALB answers a blocked gRPC call with the same PERMISSION_DENIED /
+        # "permission denied" as the node (0.6.1 EKS run: WAF samples show the Health/Check BLOCKs, node logs none).
+        edge_blocks = any(z.get("name") == ZONE and z.get("provider") == "aws" for z in items(ok(admin.get("zones"))))
         try:
             assert node_grpc.health() in ("SERVING", "NOT_SERVING"), "health probes must stay reachable"
         except grpc.RpcError as e:
-            # the node must not gate health; an edge rule may (AWS WAF blocks the group's traffic from outside the
-            # list by design, and answers 403 → "Received http2 header with status: 403", not the node's message)
-            if e.code() != S.PERMISSION_DENIED or (e.details() or "") == "permission denied":
-                raise AssertionError(f"health must not be CIDR-gated by the node: {e.code().name}") from e
+            if not (edge_blocks and e.code() == S.PERMISSION_DENIED):
+                raise AssertionError(f"health must not be CIDR-gated: {e.code().name}") from e
     finally:
         _apply(admin, OPEN)
     poll(lambda: _mcp(node_grpc, mcp_key_opt) == before, timeout=420, what="node open again")

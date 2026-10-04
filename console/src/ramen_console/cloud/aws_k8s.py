@@ -1,5 +1,6 @@
 """Worker namespace manifests for EKS (CONTRACTS §8, §11): ALB Ingress in IngressGroup `ramen` routing gRPC calls by
-the `ramen-group`/`ramen-zone` headers (target groups `backend-protocol-version: GRPC`, health check gRPC code 0),
+the `ramen-group`/`ramen-zone` headers (target groups `backend-protocol-version: GRPC`, health check gRPC code 0;
+the Streamable HTTP paths on a second Ingress with HTTP1 target groups),
 IRSA KSA, stable/canary Services behind one weighted forward action. Everything else (Deployments, HPA, apply/wait)
 is shared with the GCP layer."""
 
@@ -26,6 +27,7 @@ from .gcp_k8s import (
 __all__ = [
     "ACTION",
     "CONDITIONS",
+    "INGRESSES",
     "ROLE_ANNOTATION",
     "AwsKube",
     "helm_available",
@@ -85,7 +87,14 @@ def conditions(group, zone) -> str:
     )
 
 
-def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
+# A GRPC target group answers 464 to anything that is not gRPC (an HTTP/1.1 POST /mcp, every GET of the metadata),
+# so the Streamable HTTP paths (§16) ride their own Ingress whose target groups speak HTTP/1.1 (0.6.1 AWS run).
+HTTP_PATHS = ("/mcp", "/.well-known/oauth-protected-resource")
+GRPC_PATHS = tuple(p for p in LB_PATHS if p not in HTTP_PATHS)
+INGRESSES = ("worker", "worker-http")
+
+
+def ingress(group, zone, alb_group="ramen", stable=100, canary=0, http=False) -> dict:
     ns = ns_name(group, zone)
     ann = {
         "alb.ingress.kubernetes.io/group.name": alb_group,
@@ -93,10 +102,11 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
         "alb.ingress.kubernetes.io/target-type": "ip",
         "alb.ingress.kubernetes.io/listen-ports": '[{"HTTPS":443}]',
         "alb.ingress.kubernetes.io/backend-protocol": "HTTP",
-        "alb.ingress.kubernetes.io/backend-protocol-version": "GRPC",
+        "alb.ingress.kubernetes.io/backend-protocol-version": "HTTP1" if http else "GRPC",
         "alb.ingress.kubernetes.io/healthcheck-protocol": "HTTP",
-        "alb.ingress.kubernetes.io/healthcheck-path": "/grpc.health.v1.Health/Check",
-        "alb.ingress.kubernetes.io/success-codes": "0",
+        # the node answers the metadata path over HTTP (404 before an issuer is configured): any answer is alive
+        "alb.ingress.kubernetes.io/healthcheck-path": HTTP_PATHS[1] if http else "/grpc.health.v1.Health/Check",
+        "alb.ingress.kubernetes.io/success-codes": "200-499" if http else "0",
         "alb.ingress.kubernetes.io/group.order": "10",
         CONDITIONS: conditions(group, zone),
         ACTION: weights(stable, canary),
@@ -105,7 +115,7 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
         "apiVersion": "networking.k8s.io/v1",
         "kind": "Ingress",
         "metadata": {
-            "name": "worker",
+            "name": INGRESSES[1] if http else INGRESSES[0],
             "namespace": ns,
             "labels": {"ramen.io/group": group, "ramen.io/zone": zone},
             "annotations": ann,
@@ -121,7 +131,8 @@ def ingress(group, zone, alb_group="ramen", stable=100, canary=0) -> dict:
                                 "pathType": "Prefix",
                                 "backend": {"service": {"name": "worker", "port": {"name": "use-annotation"}}},
                             }
-                            for path in LB_PATHS  # Mcp, Health, reflection; Admin stays internal (CONTRACTS §11)
+                            # Mcp, Health, reflection; Admin stays internal (CONTRACTS §11)
+                            for path in (HTTP_PATHS if http else GRPC_PATHS)
                         ]
                     }
                 }
@@ -185,6 +196,7 @@ def manifests(
             },
         },
         ingress(group, zone, alb_group, stable, canary),
+        ingress(group, zone, alb_group, stable, canary, http=True),
     ]
 
 
@@ -226,6 +238,8 @@ def helm_manifests(
         if d["kind"] == "Ingress":
             ann = d["metadata"].setdefault("annotations", {})
             ann[ACTION], ann[CONDITIONS] = weights(stable, canary), conditions(group, zone)
-    if not any(d["kind"] == "Ingress" for d in docs):
-        docs.append(ingress(group, zone, alb_group, stable, canary))
+    names = {d["metadata"]["name"] for d in docs if d["kind"] == "Ingress"}
+    for name, http in zip(INGRESSES, (False, True), strict=True):
+        if name not in names:
+            docs.append(ingress(group, zone, alb_group, stable, canary, http=http))
     return copy.deepcopy(docs)

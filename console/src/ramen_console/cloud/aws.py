@@ -15,6 +15,7 @@ from . import aws_api
 from .aws_api import AwsClients
 from .aws_k8s import (
     ACTION,
+    INGRESSES,
     ROLE_ANNOTATION,
     AwsKube,
     helm_available,
@@ -128,7 +129,9 @@ class AwsCloud(GcpCloud):
     def _set_weights(self, ns, stable, canary) -> dict:
         if self.kube.read("Ingress", ns, "worker") is None:
             return {"worker": stable, "worker-canary": canary, "ingress": None}
-        self.kube.patch("Ingress", ns, "worker", {"metadata": {"annotations": {ACTION: weights(stable, canary)}}})
+        for name in INGRESSES:  # gRPC and Streamable HTTP share the split
+            if name == "worker" or self.kube.read("Ingress", ns, name) is not None:
+                self.kube.patch("Ingress", ns, name, {"metadata": {"annotations": {ACTION: weights(stable, canary)}}})
         return {"worker": stable, "worker-canary": canary, "ingress": "worker"}
 
     # repo sync ----------------------------------------------------------

@@ -291,6 +291,12 @@ async def test_deploy_canary_not_ready_times_out(cloud, fk):
     assert obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] == 0
 
 
+async def test_not_ready_diagnostic_names_each_reason_once(cloud, fk):
+    fk.k8s.ready, fk.k8s.pull_error = False, True
+    res = await cloud.deploy("demo", "prod", "a", config={}, spec=SPEC)
+    assert "ImagePullBackOff" in res["error"] and res["error"].count("ContainersNotReady") == 1, res["error"]
+
+
 async def test_deploy_no_canary_and_health_smoke(cloud, fk, http_state):
     res = await cloud.deploy("demo", "prod", "a", canary=False, config={}, spec=SPEC)
     assert res["ok"] is True

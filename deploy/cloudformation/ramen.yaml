@@ -285,8 +285,12 @@ Resources:
               - Effect: Allow
                 Action: [wafv2:ListWebACLs, wafv2:ListIPSets]
                 Resource: "*"
+              # GetWebACLForResource names no web ACL: IAM checks the bare regional/webacl ARN (read-only)
               - Effect: Allow
-                Action: [wafv2:GetWebACLForResource, wafv2:AssociateWebACL, wafv2:DisassociateWebACL]
+                Action: [wafv2:GetWebACLForResource]
+                Resource: "*"
+              - Effect: Allow
+                Action: [wafv2:AssociateWebACL, wafv2:DisassociateWebACL]
                 Resource:
                   - !Sub "arn:aws:wafv2:${AWS::Region}:${AWS::AccountId}:regional/webacl/${AlbGroup}/*"
                   - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:loadbalancer/app/k8s-${AlbGroup}*/*"

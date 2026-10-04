@@ -126,8 +126,12 @@ data "aws_iam_policy_document" "console" {
     resources = ["*"]
   }
   statement {
-    actions   = ["wafv2:GetWebACLForResource", "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL"]
+    actions   = ["wafv2:AssociateWebACL", "wafv2:DisassociateWebACL"]
     resources = [local.waf_web_acl, local.alb_arns]
+  }
+  statement { # names no web ACL, so IAM checks the bare regional/webacl ARN (read-only)
+    actions   = ["wafv2:GetWebACLForResource"]
+    resources = ["*"]
   }
   statement { # rebalance / ip-rules discover the IngressGroup ALB by tag
     actions   = ["elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeTags", "elasticloadbalancing:SetWebAcl"]

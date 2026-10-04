@@ -1,5 +1,6 @@
 {{- if eq .Values.provider "aws" }}
 {{- $canary := int .Values.aws.canaryWeight }}
+{{- $http := list "/mcp" "/.well-known/oauth-protected-resource" }}
 # CONTRACTS §8 + §11 (verified live, v0.5.6 N10): gRPC on the shared ALB. Listener rule = the two routing headers
 # (ramen-group / ramen-zone) + path /ramen.v1.Mcp/*; target groups speak gRPC (backend-protocol-version GRPC) and are
 # health-checked with grpc.health.v1 code 0. One weighted forward action → stable/canary target groups.
@@ -30,6 +31,41 @@ spec:
     - http:
         paths:
           {{- range .Values.route.paths }}
+          {{- if not (has . $http) }}
+          - path: {{ . | quote }}
+            pathType: Prefix
+            backend: { service: { name: worker, port: { name: use-annotation } } }
+          {{- end }}
+          {{- end }}
+# Streamable HTTP (§16) on its own HTTP1 target groups: a GRPC target group answers 464 to anything but gRPC (0.6.1).
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: worker-http
+  namespace: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/group.name: {{ .Values.aws.albGroup }}
+    alb.ingress.kubernetes.io/group.order: "10"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/backend-protocol-version: HTTP1
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/healthcheck-path: /.well-known/oauth-protected-resource
+    alb.ingress.kubernetes.io/success-codes: "200-499"
+    alb.ingress.kubernetes.io/conditions.worker: >-
+      [{"field":"http-header","httpHeaderConfig":{"httpHeaderName":"ramen-group","values":[{{ .Values.group | quote }}]}},{"field":"http-header","httpHeaderConfig":{"httpHeaderName":"ramen-zone","values":[{{ .Values.zone | quote }}]}}]
+    alb.ingress.kubernetes.io/actions.worker: >-
+      {"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"worker","servicePort":"{{ .Values.port }}","weight":{{ sub 100 $canary }}},{"serviceName":"worker-canary","servicePort":"{{ .Values.port }}","weight":{{ $canary }}}]}}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          {{- range $http }}
           - path: {{ . | quote }}
             pathType: Prefix
             backend: { service: { name: worker, port: { name: use-annotation } } }

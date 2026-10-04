@@ -76,6 +76,7 @@ def test_manifests_shape():
         "Deployment",
         "HorizontalPodAutoscaler",
         "Ingress",
+        "Ingress",
     ]
     assert docs[2]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].endswith("role/ramen/ramen-demo-a")
     assert docs[1]["spec"]["ingress"][0]["from"][1]["ipBlock"]["cidr"] == "10.0.0.0/16"
@@ -114,6 +115,32 @@ def test_manifests_shape():
     ]
     assert parse_weights(ing) == {"worker": 100, "worker-canary": 0}
     assert "annotations" not in manifests("demo", "a", SPEC, "img", "s3://b/demo")[1]["metadata"]
+
+
+def test_http_paths_get_their_own_http1_target_groups():
+    """0.6.1 AWS run: GRPC target groups make the ALB answer 464 to an HTTP/1.1 `POST /mcp` and to every
+    `GET /.well-known/oauth-protected-resource`, so Streamable HTTP clients and OAuth discovery never reached a
+    worker. The HTTP paths get a second Ingress (same ALB group, header conditions and weighted split) whose target
+    groups speak HTTP/1.1; gRPC keeps its own."""
+    grpc, http = manifests("demo", "a", SPEC, "img", "s3://b/demo", stable=70, canary=30)[-2:]
+    paths = lambda ing: [p["path"] for p in ing["spec"]["rules"][0]["http"]["paths"]]  # noqa: E731
+    assert grpc["metadata"]["name"] == "worker" and http["metadata"]["name"] == "worker-http"
+    assert "/mcp" not in paths(grpc) and "/ramen.v1.Mcp" in paths(grpc)
+    assert paths(http) == ["/mcp", "/.well-known/oauth-protected-resource"]
+    a = http["metadata"]["annotations"]
+    assert a["alb.ingress.kubernetes.io/backend-protocol-version"] == "HTTP1"
+    assert a["alb.ingress.kubernetes.io/healthcheck-path"] == "/.well-known/oauth-protected-resource"
+    assert a["alb.ingress.kubernetes.io/success-codes"] == "200-499"
+    assert a[CONDITIONS] == grpc["metadata"]["annotations"][CONDITIONS]
+    assert parse_weights(http) == parse_weights(grpc) == {"worker": 70, "worker-canary": 30}
+
+
+async def test_traffic_split_moves_both_ingresses(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    obj(fk, "Deployment", "ramen-demo-a", "worker-canary")["spec"]["replicas"] = 1
+    await cloud.rebalance("demo", "a")
+    for name in ("worker", "worker-http"):
+        assert parse_weights(obj(fk, "Ingress", "ramen-demo-a", name))["worker-canary"] == 33, name
 
 
 async def test_attach_zone_idempotent_keeps_weights(cloud, fk):
@@ -483,6 +510,7 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
         and "secret.create=false" in seen["cmd"]
     )
     assert ("Ingress", "ramen-demo-a", "worker") in fk.k8s.objs  # appended when the chart renders none
+    assert ("Ingress", "ramen-demo-a", "worker-http") in fk.k8s.objs
     fk.k8s.objs[("Ingress", "ramen-demo-a", "worker")]["metadata"]["annotations"][ACTION] = weights(60, 40)
     monkeypatch.setattr(
         "ramen_console.cloud.aws_k8s.subprocess.run",

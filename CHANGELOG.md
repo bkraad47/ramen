@@ -8,6 +8,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   serving the demo group, cloned at build time, with `ramen-mcp-bridge` on stdio in front. No console, cloud or
   network at runtime; it answers `initialize`, `tools/list`, `resources/list`, `prompts/list` and tool calls. Built
   for Glama's checks (awesome-mcp-servers requires a passing Glama listing).
+- The release workflow publishes to the official MCP registry (GitHub OIDC) and Smithery (`SMITHERY_API_KEY`), only for the maintainer's own tags, and attaches the MCPB bundle and a version-less `ramen-node-linux-amd64.zip` for Glama.
 - `glama.json` names the Glama maintainer; `mcpb/` is the Smithery bundle (`bkraad47/ramen`), which runs the bridge
   against your own deployment.
 - `check_versions.py` also checks `mcpb/manifest.json` and `mcpb/pyproject.toml`. No product code changed since 0.6.1.

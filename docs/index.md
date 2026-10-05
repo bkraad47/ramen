@@ -68,10 +68,6 @@ hide: [toc]
 
 <div class="ramen-hero" markdown>
 ![Project Ramen](img/logo.png){ width=360 }
-
-# Redefining how MCPs work
-
-<p class="tag">MCP management made easy</p>
 </div>
 
 <table class="ramen-badge-table">

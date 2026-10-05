@@ -33,6 +33,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
+## Unreleased
+
+- README and the docs home page show the Glama listing badge (score, tools) under the badge row.
+
 ## 0.7.1 — blocked tools and golden cases
 
 - A golden case for a tool that is **blocked** on the environment or zone is skipped (`golden.skipped: ["<case>: blocked"]`, a log line) instead of failing the deploy: the node answers `-32601` for a blocked name on purpose. Found by the compose end-to-end job right after 0.7.0 (block the demo tool → deploy → the gate failed the job).

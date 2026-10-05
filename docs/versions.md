@@ -45,10 +45,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - `SECURITY.md`; the console's htmx is shipped unminified (2.0.4, checksum in `static/VENDOR.md`) so every byte that runs in the browser is readable.
 - **Token expiry mid-task** (issue #1): an expired token gets the same `401` + `WWW-Authenticate: Bearer resource_metadata=…` challenge as no token; the client or the bridge refreshes and retries once; the MCP session survives because session ids are bound to `user:<sub>`, not to a token; a call started before expiry finishes; nothing runs twice (the only retry is for a `401` returned before dispatch).
 - **Tool changes propagate on deploy**: an existing session sees the new `tools/list` after the workers reload; the node has no server-to-client stream (`GET /mcp` is 405, no `listChanged`), so a client learns of changes by re-listing, which the compatibility gate makes safe for additive changes.
+- Proof lives in `tests/conformance/test_auth_expiry.py`, `test_tool_propagation.py` and `test_output_schema.py` (real node and console processes, both transports, the SDK and the bridge; a 3-second access token for the expiry cases), with plain-words reports in the private workspace (`reports/auth-expiry-v0.7.0.md`, `reports/tool-propagation-v0.7.0.md`). The mcp 2.x SDK surfaces the 401 as `MCPError -32603` when used with a plain bearer; its OAuth provider refreshes on its own.
 - A blocked-name call logs as `denied`/`blocked_name` (warn) instead of `error`; the wire answer stays `-32601`.
 - An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
 - `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
-- Process: versions are built on a `v<version>` branch and merged by pull request before tagging ([release](docs/release.md)).
+- Process: versions are built on a `v<version>` branch and merged by pull request before tagging (https://bkraad47.github.io/ramen/release/).
 
 ## 0.6.23 — Ramen starts on its own for MCP directories
 

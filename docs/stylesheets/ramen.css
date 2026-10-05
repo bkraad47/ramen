@@ -50,6 +50,7 @@
 .md-typeset .ramen-badges img { height: 20px; width: auto; display: block; margin: 0; border-radius: 3px; }
 
 /* Badge table on the home page: one row, every badge the same height, no ragged sizes. */
+.md-typeset p.ramen-glama { text-align: center; margin: 0 0 1.2rem; }
 .md-typeset table.ramen-badge-table { display: table; width: auto; margin: 0 auto 1rem; border: 0; background: transparent; box-shadow: none; }
 .md-typeset .ramen-badge-table td { border: 0; padding: .2rem .35rem; text-align: center; vertical-align: middle; }
 .md-typeset .ramen-badge-table img { height: 20px; width: auto; display: block; margin: 0; border-radius: 3px; }

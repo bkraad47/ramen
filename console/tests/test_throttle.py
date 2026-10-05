@@ -72,7 +72,7 @@ def test_deploy_passes_throttle_config_to_the_worker(demo):
     )
     seen = {}
 
-    async def fake_deploy(group, env, zone, canary, config, spec, log):
+    async def fake_deploy(group, env, zone, canary, config, spec, log, gate=None):
         seen[zone] = config
         return {"ok": True, "workers": []}
 

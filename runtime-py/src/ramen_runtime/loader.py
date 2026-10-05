@@ -1,5 +1,6 @@
 """Walks <bucket>/mcp/{tools,resources,prompts} and builds a Registry; errors are per package."""
 
+import hashlib
 import importlib
 import json
 import sys
@@ -9,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .log import log
-from .proto import KINDS, ProtoError, input_schema, validate_proto
+from .proto import KINDS, ProtoError, input_schema, output_schema, validate_proto
 
 
 @dataclass
@@ -26,6 +27,10 @@ class Package:
     def schema(self) -> dict:
         return input_schema(self.proto.get("input", {}))
 
+    @property
+    def output(self) -> dict | None:
+        return output_schema(self.proto["output"]) if "output" in self.proto else None
+
 
 @dataclass
 class Registry:
@@ -36,9 +41,10 @@ class Registry:
     errors: list[dict] = field(default_factory=list)
 
     def describe(self) -> dict:
-        return {
+        d = {
             "tools": [
                 {"name": t.name, "description": t.proto.get("description", ""), "inputSchema": t.schema}
+                | ({"outputSchema": t.output} if t.output else {})
                 for t in self.tools
             ],
             "resources": [
@@ -62,8 +68,18 @@ class Registry:
                 }
                 for p in self.prompts
             ],
-            "errors": self.errors,
         }
+        return d | {"hash": manifest_hash(d), "errors": self.errors}
+
+
+def manifest_hash(d: dict) -> str:
+    """C1 (0.7.0): sha256 of the canonical JSON of tools+resources+prompts, prompts without `_meta`."""
+    body = {
+        "tools": d["tools"],
+        "resources": d["resources"],
+        "prompts": [{k: v for k, v in p.items() if k != "_meta"} for p in d["prompts"]],
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def load(bucket: Path) -> Registry:

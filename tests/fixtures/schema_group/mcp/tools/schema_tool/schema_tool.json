@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "schema_tool",
+  "description": "Answer {\"n\": <int>} when `a` is digits; anything else answers {\"n\": a}, which violates the output schema.",
+  "callable": "run",
+  "input": {
+    "a": {"type": "string", "description": "digits for a valid answer, anything else for an invalid one"}
+  },
+  "output": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"], "additionalProperties": false},
+  "error": {"type": "string"}
+}

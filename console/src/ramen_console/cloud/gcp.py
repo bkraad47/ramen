@@ -178,7 +178,20 @@ class GcpCloud(Cloud):
         """Before the canary's pods change: GCP's Service selects whatever pods exist, nothing to do. AWS overrides it
         (the ALB keeps a weighted share for the canary target group even when it has no targets)."""
 
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None) -> dict[str, Any]:
+    def _caller(self, target, mcp_key, group, zone):
+        async def call(msg):
+            return await self.rpc.call(target, mcp_key, group, zone, msg)
+
+        return call
+
+    @_guard
+    async def read_file(self, group, path):
+        blob = await asyncio.to_thread(self.c.storage.bucket(self.bucket).get_blob, f"{group}/{path}")
+        return await asyncio.to_thread(blob.download_as_bytes) if blob else None
+
+    async def deploy(
+        self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None
+    ) -> dict[str, Any]:
         lines: list[str] = []
 
         def note(msg):
@@ -222,6 +235,8 @@ class GcpCloud(Cloud):
                     raise RuntimeError("canary ready but no canary pod found")
                 for p in pods:
                     result = await self._reload_and_smoke(p, mcp_key, group, zone, note)
+                    if gate:  # 0.7.0: schema gate + golden cases decide whether stable may roll (GateError aborts)
+                        await gate(result, self._caller(self._target(p), mcp_key, group, zone) if mcp_key else None)
                     workers.append({"id": p["metadata"]["name"], "ok": True, "track": "canary", "result": result})
             for d in held:  # the canary passed: now the stable track may take the new template
                 ann = d["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})

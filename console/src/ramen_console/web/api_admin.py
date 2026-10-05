@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, github_app, scheduler
+from .. import alerts, baseuri, github_app, oauth_server, regions, scheduler
 from .. import mail as mail_mod
 from ..audit import note
 from ..config import apply_config
@@ -268,6 +268,7 @@ async def config(request: Request, p: Principal = Depends(super_)):
         "secrets_backend": request.app.state.secrets.kind,
         "mail": request.app.state.mailer.backend,
         "oauth_providers": request.app.state.oauth.providers(),
+        "oauth_ttl": {"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
         "gcp": {
             k: os.environ.get(k)
             for k in ("RAMEN_GCP_PROJECT", "RAMEN_GCP_REGION", "RAMEN_GROUPS_BUCKET", "RAMEN_IMAGE_WORKER")
@@ -407,6 +408,23 @@ async def set_base_uri(request: Request, body: m.BaseUriConfig, p: Principal = D
     request.app.state.base_uri.set(value)
     request.state.base_uri = value  # an HX-Refresh lands on the new links; this response already uses them
     return respond(request, {"base_uri": value})
+
+
+@r.get("/config/regions")
+async def get_regions_config(request: Request, p: Principal = Depends(super_)):
+    return {"blocked": await svc(request).blocked_regions(), "regions": regions.REGIONS, "note": regions.NOTE}
+
+
+@r.put("/config/regions")
+async def set_regions_config(request: Request, body: m.RegionsConfig, p: Principal = Depends(super_)):
+    """C7: regions no zone may be created in or deployed to; a zone already there fails its next deploy."""
+    try:
+        blocked = regions.clean({"gcp": body.gcp or [], "aws": body.aws or []})
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])
+    await svc(request).store.put("config", regions.DOC, {"blocked": blocked})
+    return respond(request, {"blocked": blocked})
 
 
 @r.get("/config/scheduler")

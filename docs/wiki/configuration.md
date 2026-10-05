@@ -121,6 +121,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_STORE`, `RAMEN_POSTGRES_DSN` | console | The state store. |
 | `RAMEN_SECRETS_BACKEND` | console | Where secret values live: `store`, `gcp` or `aws`. |
 | `RAMEN_FERNET_KEY` | console | Encrypts password hashes, secret values, key hashes and tokens in the store. Generate once, keep forever. |
+| `RAMEN_OAUTH_ACCESS_TTL`, `RAMEN_OAUTH_REFRESH_TTL` | console | Lifetimes of the MCP access token (seconds, default 3600) and refresh token (default 30 days) the console issues (0.7.0). |
 | `RAMEN_ADMIN_EMAIL`, `RAMEN_ADMIN_PASSWORD` | console | The bootstrap super admin, re-applied on every start. `RAMEN_ADMIN_FORCE_PASSWORD=1` is the break-glass. |
 | `RAMEN_COOKIE_SECURE` | console | `1` on a public console: secure cookies and HSTS. Plain http gets a 301 for GET and a 403 otherwise when a proxy terminated it; the cloud edges have no port 80 at all. |
 | `RAMEN_LOGIN_RATE_LIMIT` | console | Failed sign-ins per address per minute, default 20. |

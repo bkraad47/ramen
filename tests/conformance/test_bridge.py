@@ -3,7 +3,6 @@ Claude Desktop / Cursor use. Needs RAMEN_NODE_URL + RAMEN_MCP_KEY (or the e2e-mi
 (RAMEN_BRIDGE_CMD, `ramen-mcp-bridge` on PATH, or ../../ramen-mcp-bridge/.venv — its own repo since v0.5.7)."""
 
 import asyncio
-import io
 
 import pytest
 
@@ -61,11 +60,12 @@ async def test_unknown_tool_is_mcp_error_not_bridge_crash(node):
         assert await s.send_ping()  # the bridge is still alive
 
 
-async def test_bad_key_through_bridge_fails_cleanly(node):
+async def test_bad_key_through_bridge_fails_cleanly(node, tmp_path):
     """UNAUTHENTICATED from the node must surface as an error to the stdio client (no hang, no traceback on stdout)."""
-    err = io.StringIO()
-    with pytest.raises(Exception):  # noqa: B017 - McpError / timeout / closed stream are all acceptable
-        async with asyncio.timeout(30):
-            async with bridge_session(node, key="nope", timeout=20, errlog=err) as s:
-                await s.list_tools()
-    assert "nope" not in err.getvalue()
+    # a real file: the SDK hands `errlog` to Popen, which needs a fileno (a StringIO made this assertion vacuous)
+    with open(tmp_path / "bridge.err", "w+") as err:
+        with pytest.raises(Exception):  # noqa: B017 - McpError / timeout / closed stream are all acceptable
+            async with asyncio.timeout(30):
+                async with bridge_session(node, key="nope", timeout=20, errlog=err) as s:
+                    await s.list_tools()
+    assert "nope" not in (tmp_path / "bridge.err").read_text()

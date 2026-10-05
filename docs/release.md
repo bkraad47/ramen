@@ -39,7 +39,17 @@ beyond GitHub (`github.actor == 'bkraad47'`); forks and other pushers stop after
 | [Official MCP registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.bkraad47/ramen) | `server.json` published with GitHub OIDC; no secret |
 | [Smithery](https://smithery.ai/servers/bkraad47/ramen) | the MCPB bundle, with the `SMITHERY_API_KEY` repository secret (skipped with a warning when unset) |
 | [Glama](https://glama.ai/mcp/servers/bkraad47/ramen) | rebuilds from the repository and downloads the latest release's worker; nothing to publish |
+| Docker Hub `bkraad47/ramen-worker`, `bkraad47/ramen-console` and GHCR `ghcr.io/bkraad47/…` (0.7.0) | multi-arch images tagged `<version>` and `latest`; GHCR with the workflow's own token, Docker Hub with `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (skipped with a warning when unset). Both clouds can pull them straight, without `make push` |
+| Demo repo tag | `ramen-demo-mcp-group` is tagged `v<version>` with the release it was verified against (`VERSION` file in the repo) |
 | PulseMCP and other directories | read the official registry |
+
+## How a release is made (since 0.7.0)
+
+1. Work on branch `v<version>` (ramen, and the demo repo when it changes); test locally.
+2. Open a pull request to `main`; CI runs lint, versions, Python, Rust, conformance on Linux and Windows, kind.
+3. Merge when green. The merge runs `ci` again and `pages` (the docs site).
+4. Tag `main` with `v<version>` (the demo repo too). The tag runs `release`, which publishes everything in the table.
+Nothing goes to `main` without a pull request.
 
 `check_versions.py` fails CI when `server.json` or the bundle is not at `VERSION`, or a description is over the
 registry's 100 characters, because a registry version cannot be changed once published.

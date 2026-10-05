@@ -3,7 +3,7 @@
   "name": "io.github.bkraad47/ramen",
   "title": "Ramen: self-hosted MCP for teams",
   "description": "Self-hosted, multi-zone MCP server for GKE/EKS: Python tools from git, canary deploys, OAuth, roles.",
-  "version": "0.6.23",
+  "version": "0.7.0",
   "repository": {
     "url": "https://github.com/bkraad47/ramen",
     "source": "github"

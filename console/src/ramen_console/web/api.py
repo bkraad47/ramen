@@ -200,7 +200,8 @@ async def deploy(
     e = await s.get_env(group, env)
     if body.zone and body.zone not in e.get("zones", []):
         raise invalid(f"Zone {body.zone} is not attached to {env}")
-    note(request, "deploy.start", f"{group}/{env}", [f"group:{group}", f"canary:{body.canary}"])
+    tags = [f"group:{group}", f"canary:{body.canary}"] + ([f"breaking:{body.breaking}"] if body.breaking else [])
+    note(request, "deploy.start", f"{group}/{env}", tags)
     job = request.app.state.jobs.create("deploy", f"{group}/{env}")
     from ..audit import client_ip
 
@@ -209,7 +210,7 @@ async def deploy(
     async def audit(action, target, ok, tags):
         await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)
 
-    bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit)
+    bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit, body.breaking)
     html = request.app.state.templates.get_template("partials/job.html").render(job=job, base=prefix(request))
     return respond(request, job, 202, hx_html=html)
 

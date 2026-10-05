@@ -1,6 +1,7 @@
-"""Proto JSON validation (CONTRACTS §1) and MCP inputSchema derivation (§2)."""
+"""Proto JSON validation (CONTRACTS §1) and MCP inputSchema / outputSchema derivation (§2)."""
 
 import jsonschema
+from jsonschema import Draft202012Validator
 
 KINDS = {"tools": "tool", "resources": "resource", "prompts": "prompt"}
 _TYPES = ["number", "string", "integer", "boolean"]
@@ -62,6 +63,11 @@ def validate_proto(proto: dict, folder: str, name: str, stem: str) -> None:
     except jsonschema.ValidationError as e:
         where = "/".join(str(p) for p in e.absolute_path) or "proto"
         raise ProtoError(f"{where}: {e.message}") from None
+    if kind == "tool" and "output" in proto:
+        try:
+            Draft202012Validator.check_schema(proto["output"])
+        except jsonschema.SchemaError as e:
+            raise ProtoError(f"output: not a valid JSON Schema: {e.message}") from None
 
 
 def input_schema(params: dict) -> dict:
@@ -72,3 +78,14 @@ def input_schema(params: dict) -> dict:
             prop["description"] = spec["description"]
         props[pname] = prop
     return {"type": "object", "properties": props, "required": list(params), "additionalProperties": False}
+
+
+def output_schema(declared: dict) -> dict:
+    """MCP `structuredContent` must be an object: a non-object `output` is wrapped under `result` (0.7.0, B5)."""
+    if declared.get("type") == "object":
+        return declared
+    return {"type": "object", "properties": {"result": declared}, "required": ["result"]}
+
+
+def wraps_output(declared: dict) -> bool:
+    return declared.get("type") != "object"

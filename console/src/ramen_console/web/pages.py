@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, github_app
+from .. import alerts, baseuri, github_app, oauth_server, regions
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -52,6 +52,9 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
         else None
     )
     w["namespace"] = live.get("namespace")
+    # B4: every worker of a zone must serve the same manifest (C2 `manifest_hash`; absent on pre-0.7.0 workers)
+    hashes = {x.get("metrics", {}).get("manifest_hash") for x in w["live"]} - {None, ""}
+    w["manifest_mismatch"] = len(hashes) > 1
     return render(request, "partials/workers.html", w=w)
 
 
@@ -102,7 +105,16 @@ async def environments(request: Request, p: Principal = Depends(viewer)):
 
 @r.get("/zones")
 async def zones(request: Request, p: Principal = Depends(viewer)):
-    return render(request, "zones.html", zones=await svc(request).zones(), groups=await svc(request).visible_groups(p))
+    s = svc(request)
+    blocked = await s.blocked_regions()
+    return render(
+        request,
+        "zones.html",
+        zones=await s.zones(),
+        groups=await s.visible_groups(p),
+        blocked=blocked,
+        region_zones={prov: regions.zones(prov, blocked[prov]) for prov in regions.PROVIDERS},
+    )
 
 
 @r.get("/secrets")
@@ -246,4 +258,8 @@ async def config(request: Request, p: Principal = Depends(super_)):
         base_uri=await baseuri.load(store),
         public_url_env=os.environ.get("RAMEN_PUBLIC_URL", ""),
         github_app=github_app.public_app_config(await github_app.get_app_config(svc(request).store)),
+        regions=regions.REGIONS,
+        blocked_regions=await svc(request).blocked_regions(),
+        regions_note=regions.NOTE,
+        oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
     )

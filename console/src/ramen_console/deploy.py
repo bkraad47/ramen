@@ -210,8 +210,13 @@ def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
             log_.append(f"{now()} zone {zone}: golden cases skipped: no MCP key to call the canary with")
             info["golden"] = {"skipped": "no MCP key", "cases": len(cases)}
             return
-        failed = []
+        failed, skipped = [], []
+        blocked = {b for b in cfg.get("RAMEN_BLOCKED", "").split(",") if b}
         for i, c in enumerate(cases, 1):
+            if c["tool"] in blocked:  # §9: a blocked name answers -32601 on purpose; its cases are not a verdict
+                skipped.append(f"{c['name']}: blocked")
+                log_.append(f"{now()} zone {zone}: golden {c['name']}: skipped (blocked)")
+                continue
             try:
                 args = golden.resolve_args(c["args"], secret)
             except golden.GoldenError as e:
@@ -220,7 +225,9 @@ def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
             log_.append(f"{now()} zone {zone}: golden {c['name']}: {'ok' if why is None else 'FAILED ' + why}")
             if why is not None:
                 failed.append(f"{c['name']}: {why}")
-        info["golden"] = {"passed": len(cases) - len(failed), "failed": failed}
+        info["golden"] = {"passed": len(cases) - len(failed) - len(skipped), "failed": failed}
+        if skipped:
+            info["golden"]["skipped"] = skipped
         if failed:
             raise GateError("golden cases failed: " + "; ".join(failed))
 

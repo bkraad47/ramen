@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.7.0` **(current)** | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
+| `0.7.1` **(current)** | — | blocked tools and golden cases | folded forward, never tagged |
+| `0.7.0` | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
 | `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
 | `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |
 | `0.6.2` | 2026-10-05 | Ramen on the official MCP registry | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.2) |
@@ -32,6 +33,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
+## 0.7.1 — blocked tools and golden cases
+
+- A golden case for a tool that is **blocked** on the environment or zone is skipped (`golden.skipped: ["<case>: blocked"]`, a log line) instead of failing the deploy: the node answers `-32601` for a blocked name on purpose. Found by the compose end-to-end job right after 0.7.0 (block the demo tool → deploy → the gate failed the job).
+- Two CI fixes from the same run: the generated epoch-bump test password always carries every character class the policy wants; the 0.7.0 changelog links the release page by absolute URL (the relative link broke the generated versions page under `mkdocs --strict`).
+
 ## 0.7.0 — your tests gate your rollout
 
 - **Schema compatibility gate on deploy.** After the canary reloads, its tools, resources and prompts are diffed against what the zone's stable workers serve. A removed tool/resource/prompt, a removed input, a new required input, a changed type or a narrowed enum is breaking: the canary is scaled down, stable is untouched, the job log says what broke and `job.result[zone].compat` carries the diff. `POST .../deploy {"breaking": true}` accepts it; the refused job's card offers "Deploy again, accept breaking changes". Additive changes pass and are listed.
@@ -45,10 +51,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - `SECURITY.md`; the console's htmx is shipped unminified (2.0.4, checksum in `static/VENDOR.md`) so every byte that runs in the browser is readable.
 - **Token expiry mid-task** (issue #1): an expired token gets the same `401` + `WWW-Authenticate: Bearer resource_metadata=…` challenge as no token; the client or the bridge refreshes and retries once; the MCP session survives because session ids are bound to `user:<sub>`, not to a token; a call started before expiry finishes; nothing runs twice (the only retry is for a `401` returned before dispatch).
 - **Tool changes propagate on deploy**: an existing session sees the new `tools/list` after the workers reload; the node has no server-to-client stream (`GET /mcp` is 405, no `listChanged`), so a client learns of changes by re-listing, which the compatibility gate makes safe for additive changes.
+- Proof lives in `tests/conformance/test_auth_expiry.py`, `test_tool_propagation.py` and `test_output_schema.py` (real node and console processes, both transports, the SDK and the bridge; a 3-second access token for the expiry cases), with plain-words reports in the private workspace (`reports/auth-expiry-v0.7.0.md`, `reports/tool-propagation-v0.7.0.md`). The mcp 2.x SDK surfaces the 401 as `MCPError -32603` when used with a plain bearer; its OAuth provider refreshes on its own.
 - A blocked-name call logs as `denied`/`blocked_name` (warn) instead of `error`; the wire answer stays `-32601`.
 - An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
 - `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
-- Process: versions are built on a `v<version>` branch and merged by pull request before tagging ([release](docs/release.md)).
+- Process: versions are built on a `v<version>` branch and merged by pull request before tagging (https://bkraad47.github.io/ramen/release/).
 
 ## 0.6.23 — Ramen starts on its own for MCP directories
 

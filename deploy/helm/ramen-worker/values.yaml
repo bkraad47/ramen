@@ -15,7 +15,7 @@ environment: default        # → RAMEN_ENV in Secret ramen-deploy
 zone: a                     # zone record name → namespace ramen-<group>-<zone>
 gcpZone: us-central1-a      # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
 image: ""                   # default: <region>-docker.pkg.dev/<project>/ramen/worker:<tag>
-tag: 0.6.2
+tag: 0.6.21
 pullPolicy: Always
 createNamespace: true
 serviceAccount:

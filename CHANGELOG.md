@@ -3,6 +3,15 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.6.23] — Ramen starts on its own for MCP directories
+- `glama/Dockerfile` + `glama/start.sh`: a self-contained image of the real worker (ramen-node + Python runtime)
+  serving the demo group, cloned at build time, with `ramen-mcp-bridge` on stdio in front. No console, cloud or
+  network at runtime; it answers `initialize`, `tools/list`, `resources/list`, `prompts/list` and tool calls. Built
+  for Glama's checks (awesome-mcp-servers requires a passing Glama listing).
+- `glama.json` names the Glama maintainer; `mcpb/` is the Smithery bundle (`bkraad47/ramen`), which runs the bridge
+  against your own deployment.
+- `check_versions.py` also checks `mcpb/manifest.json` and `mcpb/pyproject.toml`. No product code changed since 0.6.1.
+
 ## [0.6.21] — a registry listing that says what Ramen is for
 - The official MCP registry entry `io.github.bkraad47/ramen` gets a new title and description: "Ramen: self-hosted
   MCP for teams" / "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every

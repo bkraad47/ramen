@@ -17,8 +17,8 @@ services:
   console:
     build:
       context: ../../console
-      args: { RAMEN_VERSION: "${VERSION:-0.6.21}" }
-    image: ramen-console:${VERSION:-0.6.21}
+      args: { RAMEN_VERSION: "${VERSION:-0.6.23}" }
+    image: ramen-console:${VERSION:-0.6.23}
     depends_on:
       firestore: { condition: service_healthy }
     environment:
@@ -50,8 +50,8 @@ services:
     build:
       context: ../..
       dockerfile: node-rs/Dockerfile
-      args: { VERSION: "${VERSION:-0.6.21}" }
-    image: ramen-worker:${VERSION:-0.6.21}
+      args: { VERSION: "${VERSION:-0.6.23}" }
+    image: ramen-worker:${VERSION:-0.6.23}
     environment:
       RAMEN_NODE_PORT: "8080"
       RAMEN_BUCKET: /buckets/demo

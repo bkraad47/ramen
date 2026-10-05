@@ -711,7 +711,7 @@ wheels = [
 
 [[package]]
 name = "ramen-tests"
-version = "0.6.21"
+version = "0.6.23"
 source = { editable = "." }
 dependencies = [
     { name = "grpcio" },

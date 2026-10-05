@@ -3,5 +3,5 @@ name: ramen
 description: Ramen console on GKE (namespace ramen-system) - Workload Identity KSA, GKE Gateway (global external HTTPS LB on a static IP, self-signed TLS Secret) with HTTPRoutes for the console and per-zone workers, HealthCheckPolicy, ClusterRole. Per-zone workers live in the ramen-worker chart. provider=aws swaps the Gateway for an ALB Ingress and Workload Identity for IRSA.
 type: application
 icon: https://raw.githubusercontent.com/bkraad47/ramen/main/docs/img/logo.png
-version: 0.6.21
-appVersion: "0.6.21"
+version: 0.6.23
+appVersion: "0.6.23"

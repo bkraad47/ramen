@@ -10,6 +10,22 @@
 | `terraform/aws/` | AWS infra, verified live (v0.5.6 N10) per `docs/CONTRACTS.md` §8: VPC (2 public subnets), EKS + one small managed node group, OIDC provider (IRSA), DynamoDB `ramen` table, S3 groups bucket, ECR `ramen/console` + `ramen/worker`, console IAM role, AWS Load Balancer Controller + Fluent Bit (CloudWatch Container Insights) via Helm, self-signed cert imported into ACM. |
 | `cloudformation/ramen.yaml` | **UNTESTED** CloudFormation equivalent of the Terraform base (no Helm, no ACM import) for teams that cannot run Terraform. `cfn-lint` clean. |
 
+## Public images (0.7.0)
+Every release publishes `ramen-worker` and `ramen-console` (linux/amd64 + linux/arm64, tags `<version>` and `latest`) to
+`docker.io/bkraad47/` and `ghcr.io/bkraad47/`. Both charts default to the per-project registry (`make push` fills it),
+but any image reference works on either cloud, so the push step is optional:
+```sh
+V=$(cat VERSION)
+# console chart: console image + the worker image the console deploys (console.env wins over the computed default)
+helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace ... \
+  --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
+  --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V
+# worker chart by hand:
+helm template ramen-worker deploy/helm/ramen-worker --set image=docker.io/bkraad47/ramen-worker:$V ...
+```
+A group may also record a public reference as its worker image in the console (per-group images, CONTRACTS §13.3).
+Swap `docker.io/` for `ghcr.io/` if Docker Hub is rate-limited from your cluster.
+
 ## GCP bring-up (tested on a throwaway project, ~25 min, mostly GKE + LB provisioning)
 Needs: gcloud (logged in), terraform ≥1.6, helm 4, kubectl, docker with buildx, `gke-gcloud-auth-plugin`.
 ```sh
@@ -24,7 +40,7 @@ terraform init && terraform apply                       # ~8 min; outputs cluste
                                                           # public_hostname, certificate_map, artifact_repo, console_gsa, groups_bucket
 cd ../../..
 
-# 2. images (linux/amd64 → Artifact Registry repo `ramen`)
+# 2. images (linux/amd64 → Artifact Registry repo `ramen`); optional — see "Public images" to pull docker.io/bkraad47/* instead
 make push PROJECT=$PROJECT REGION=$REGION               # runs gcloud auth configure-docker; ~5 min
 
 # 3. console
@@ -120,7 +136,7 @@ cd ../../..
 #    and import a self-signed cert: `aws acm import-certificate --certificate fileb://tls.crt --private-key fileb://tls.key`):
 #    aws cloudformation deploy --stack-name ramen --template-file deploy/cloudformation/ramen.yaml --capabilities CAPABILITY_NAMED_IAM
 
-# 2. images (linux/amd64 → ECR repos ramen/console, ramen/worker)
+# 2. images (linux/amd64 → ECR repos ramen/console, ramen/worker); optional — see "Public images" to pull docker.io/bkraad47/* instead
 aws ecr get-login-password | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
 docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=0.3.0 -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/worker:0.3.0 --push .
 docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=0.3.0 -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/console:0.3.0 --push console

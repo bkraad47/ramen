@@ -3,6 +3,66 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.7.0] — your tests gate your rollout
+The r/selfhosted thread on 0.6 asked three things: what happens when a token expires mid-task, what happens when a
+tool's schema changes under a session, and whether a deploy can be gated on behaviour. 0.7.0 answers all three, adds
+region governance, and ships every release as public images.
+
+### Added
+- **Schema compatibility gate on deploy.** After the canary reloads, its tools, resources and prompts are diffed
+  against what the zone's stable workers serve. A removed tool/resource/prompt, a removed input, a new required input,
+  a changed type or a narrowed enum is breaking: the canary is scaled down, stable is untouched, the job log says what
+  broke and `job.result[zone].compat` carries the diff. `POST .../deploy {"breaking": true}` accepts it; the refused
+  job's card offers "Deploy again, accept breaking changes". Additive changes pass and are listed.
+- **Golden cases.** A group repo may ship `mcp/tests.yaml` (`cases: [{name, tool, args, expect:
+  {text_contains|subset|exact}}]`); the console runs every case against the canary with the group's first MCP key
+  before stable rolls, and one failing case aborts the deploy with the case name and the difference. `args` may use
+  `{{$group.VAR}}`. The demo repo ships four cases.
+- **Output schemas enforced.** A tool proto's `output` is published as MCP `outputSchema` and every result is
+  validated against it; a scalar schema is wrapped as `{"result": …}` in `structuredContent`, an object schema is used
+  as declared; a mismatch is a tool error `invalid output: <path>: <message>`. Tools without `output` are unchanged.
+- **Capability manifest per deploy.** The reload result carries `hash` (sha256 of the canonical tools/resources/
+  prompts); `Admin/Metrics` reports `manifest_hash`; the console stores every worker's full manifest with
+  `last_deploy`, shows it per zone on the group page (collapsed, with the schemas clients see) and flags a **manifest
+  mismatch** when the workers of one zone disagree.
+- **Blocked regions.** Super admins pick GCP and AWS regions no zone may be created in or deployed to (Config page,
+  `GET|PUT /api/v1/config/regions`). Creating a zone there is `403`; a zone in a region blocked later fails its next
+  deploy with the same message, a job-log line and a server warning the digest email carries. The zones page's
+  location is now a dropdown of the provider's zones grouped by region, minus the blocked ones.
+- **Denial reasons.** Every denied call's access-log line names its `reason` (`no_key`, `bad_key`, `token_expired`,
+  `token_invalid`, `cidr`, `blocked_name`, `throttled`, `origin`, `too_large`, `inflight`, `session_expired`,
+  `session_invalid`); the console audits `oauth.token`, `oauth.refresh`, `oauth.refresh_reuse` and `oauth.denied`
+  with a reason instead of one generic row.
+- **Token lifetimes.** `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and `RAMEN_OAUTH_REFRESH_TTL` (default 30
+  days), shown on the Config page.
+- **Public images.** Each release pushes `ramen-worker` and `ramen-console` (linux/amd64 + arm64, tags `<version>`
+  and `latest`) to `docker.io/bkraad47/` and `ghcr.io/bkraad47/`; both charts accept them, so `make push` to a
+  per-project registry is optional (`deploy/README.md`, "Public images").
+- `SECURITY.md`; the console's htmx is shipped unminified (2.0.4, checksum in `static/VENDOR.md`) so every byte that
+  runs in the browser is readable.
+
+### Verified, with tests, no code change needed
+- **Token expiry mid-task** (issue #1): an expired token gets the same `401` + `WWW-Authenticate: Bearer
+  resource_metadata=…` challenge as no token; the client or the bridge refreshes and retries once; the MCP session
+  survives because session ids are bound to `user:<sub>`, not to a token; a call started before expiry finishes;
+  nothing runs twice (the only retry is for a `401` returned before dispatch).
+- **Tool changes propagate on deploy**: an existing session sees the new `tools/list` after the workers reload; the
+  node has no server-to-client stream (`GET /mcp` is 405, no `listChanged`), so a client learns of changes by
+  re-listing, which the compatibility gate makes safe for additive changes.
+
+- Proof lives in `tests/conformance/test_auth_expiry.py`, `test_tool_propagation.py` and `test_output_schema.py`
+  (real node and console processes, both transports, the SDK and the bridge; a 3-second access token for the expiry
+  cases), with plain-words reports in the private workspace (`reports/auth-expiry-v0.7.0.md`,
+  `reports/tool-propagation-v0.7.0.md`). The mcp 2.x SDK surfaces the 401 as `MCPError -32603` when used with a plain
+  bearer; its OAuth provider refreshes on its own.
+
+### Changed
+- A blocked-name call logs as `denied`/`blocked_name` (warn) instead of `error`; the wire answer stays `-32601`.
+- An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
+- `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
+- Process: versions are built on a `v<version>` branch and merged by pull request before tagging
+  ([release](docs/release.md)).
+
 ## [0.6.23] — Ramen starts on its own for MCP directories
 - `glama/Dockerfile` + `glama/start.sh` (and `glama/Dockerfile.standalone`, which clones the release itself, to paste into Glama): a self-contained image of the real worker (ramen-node + Python runtime)
   serving the demo group, cloned at build time, with `ramen-mcp-bridge` on stdio in front. No console, cloud or

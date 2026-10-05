@@ -1,0 +1,1 @@
+# Conformance-only group: one tool with an object output schema (C9 / B5), so output validation can be probed.

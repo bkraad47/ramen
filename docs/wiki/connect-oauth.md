@@ -65,7 +65,22 @@ when the person's role, password or account changes. The token runs every tool o
 same reach as a group key, with the person's name on every log line.
 
 The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
-every consent decision.
+every consent decision, and since 0.7.0 every token mint (`oauth.token`), refresh (`oauth.refresh`), a rotated-out
+refresh token presented again (`oauth.refresh_reuse`, which revokes the family) and every refusal (`oauth.denied`
+with its reason). The lifetimes are the console's `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and
+`RAMEN_OAUTH_REFRESH_TTL` (default 30 days), shown on the Config page.
+
+### When the token expires mid-task
+
+The worker refuses an expired token *before* the call reaches any tool code, with the same `401` and
+`WWW-Authenticate: Bearer resource_metadata=...` challenge a request with no token gets, so an OAuth client (Claude
+Code) refreshes and retries on its own, and the bridge does the same once for that one call. No browser appears
+unless the refresh token itself is gone. The MCP session survives: session ids are bound to the person
+(`user:<sub>`), not to one token, so the same `Mcp-Session-Id` keeps working with the refreshed token. A call that
+started before expiry finishes (auth is checked on entry), and nothing runs twice: the only retry happens when the
+`401` came back before dispatch. Refresh tokens Ramen holds are stored hashed, rotate on every use, belong to one
+person and one group, and die when the person's role, password or account changes. Verified with a 3-second token
+in `tests/conformance` for 0.7.0 (see the [changelog](../changelog.md)).
 
 ## What can go wrong
 

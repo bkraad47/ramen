@@ -100,3 +100,43 @@ def test_reload_replaces_module(tmp_path):
     write_pkg(tmp_path, "tools", "x", TOOL, "def f(a):\n    return 'v2'\n")
     assert load(tmp_path).tools[0].func("") == "v2"
     assert json.loads(json.dumps(load(tmp_path).describe()))
+
+
+def _canonical_hash(d: dict) -> str:
+    import hashlib
+
+    prompts = [{k: v for k, v in p.items() if k != "_meta"} for p in d["prompts"]]
+    body = {"tools": d["tools"], "resources": d["resources"], "prompts": prompts}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def test_describe_hash_is_sha256_of_canonical_manifest_without_meta(demo_bucket):
+    d = load(demo_bucket).describe()
+    assert len(d["hash"]) == 64 and d["hash"] == _canonical_hash(d)
+    assert load(demo_bucket).describe()["hash"] == d["hash"]  # stable across reloads
+    assert d["prompts"][0]["_meta"]["settings"]  # _meta still emitted, just not hashed
+
+
+def test_hash_changes_with_the_manifest_but_not_with_errors(tmp_path):
+    write_pkg(tmp_path, "tools", "x", TOOL, "def f(a):\n    return a\n")
+    h1 = load(tmp_path).describe()["hash"]
+    write_pkg(tmp_path, "tools", "bad", {**TOOL, "name": "bad"}, "def f(:\n")  # a load error, not a package
+    assert load(tmp_path).describe()["hash"] == h1
+    write_pkg(tmp_path, "tools", "x", {**TOOL, "description": "changed"}, "def f(a):\n    return a\n")
+    assert load(tmp_path).describe()["hash"] != h1
+
+
+def test_output_schema_is_emitted_wrapped_for_scalars_and_as_is_for_objects(demo_bucket, tmp_path):
+    d = load(demo_bucket).describe()
+    assert d["tools"][0]["outputSchema"] == {
+        "type": "object",
+        "properties": {"result": {"type": "number"}},
+        "required": ["result"],
+    }
+    obj = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}
+    write_pkg(tmp_path, "tools", "o", {**TOOL, "name": "o", "output": obj}, "def f(a):\n    return {'n': 1}\n")
+    plain = {k: v for k, v in TOOL.items() if k != "output"}
+    write_pkg(tmp_path, "tools", "p", {**plain, "name": "p"}, "def f(a):\n    return a\n")
+    tools = {t["name"]: t for t in load(tmp_path).describe()["tools"]}
+    assert tools["o"]["outputSchema"] == obj
+    assert "outputSchema" not in tools["p"]

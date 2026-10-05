@@ -10,6 +10,8 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+import os
 import re
 import secrets
 import time
@@ -21,18 +23,43 @@ from .rbac import Principal, can_connect, principal_from
 from .services import Services
 from .util import now, uid
 
+log = logging.getLogger("ramen.oauth")
 ACCESS_TTL = 3600
 CODE_TTL = 600
 REFRESH_TTL = 30 * 24 * 3600
 SCOPE_RE = re.compile(r"^mcp:([a-z][a-z0-9-]{0,39}):([a-z][a-z0-9-]{0,39})$")
 
 
-class OAuthError(ApiError):
-    """RFC 6749 §5.2: `{"error": ..., "error_description": ...}` with the status the spec names."""
+def _ttl(name: str, default: int) -> int:
+    """C8: a positive number of seconds from the environment, else the default (and a warning, once per mint)."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        log.warning("%s=%r is not a positive number of seconds; using %d", name, raw, default)
+        return default
+    return value
 
-    def __init__(self, error: str, description: str, status: int = 400):
+
+def access_ttl() -> int:
+    return _ttl("RAMEN_OAUTH_ACCESS_TTL", ACCESS_TTL)
+
+
+def refresh_ttl() -> int:
+    return _ttl("RAMEN_OAUTH_REFRESH_TTL", REFRESH_TTL)
+
+
+class OAuthError(ApiError):
+    """RFC 6749 §5.2: `{"error": ..., "error_description": ...}` with the status the spec names. `reason` is the
+    audit tag (D3): finer than `error`, never shown to the client."""
+
+    def __init__(self, error: str, description: str, status: int = 400, reason: str | None = None):
         super().__init__(status, description)
-        self.error = error
+        self.error, self.reason = error, reason or error
 
     def body(self) -> dict:
         return {"error": self.error, "error_description": self.detail}
@@ -117,7 +144,7 @@ class OAuthServer:
     async def client(self, client_id: str) -> dict:
         c = await self.store.get("oauth_clients", client_id or "")
         if not c:
-            raise OAuthError("invalid_client", "unknown client_id", 401)
+            raise OAuthError("invalid_client", "unknown client_id", 401, reason="unknown_client")
         return c
 
     # --- discovery (RFC 8414) -----------------------------------------------------------------------------------------
@@ -216,10 +243,12 @@ class OAuthServer:
             or rec["client_id"] != client["client_id"]
             or rec["redirect_uri"] != (form.get("redirect_uri") or "")
         ):
-            raise OAuthError("invalid_grant", "code is unknown, used, expired, or not for this client")
+            raise OAuthError(
+                "invalid_grant", "code is unknown, used, expired, or not for this client", reason="code_invalid"
+            )
         verifier = form.get("code_verifier") or ""
         if not hmac.compare_digest(b64url(hashlib.sha256(verifier.encode()).digest()), rec["code_challenge"]):
-            raise OAuthError("invalid_grant", "code_verifier does not match")
+            raise OAuthError("invalid_grant", "code_verifier does not match", reason="pkce_mismatch")
         user = await self._still_allowed(rec)
         return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=uid())
 
@@ -231,11 +260,17 @@ class OAuthServer:
                 # a rotated-out token presented again means two parties hold the chain: the whole family dies (M3)
                 for r in await tx.list("oauth_refresh", {"family": rec["family"]}):
                     await tx.delete("oauth_refresh", r["id"])
-                raise OAuthError("invalid_grant", "refresh token reuse detected; every token of this grant is revoked")
+                raise OAuthError(
+                    "invalid_grant",
+                    "refresh token reuse detected; every token of this grant is revoked",
+                    reason="refresh_reuse",
+                )
             if rec:  # rotation: the presented token dies here, kept as a tombstone until the family expires
                 await tx.put("oauth_refresh", rec["id"], {**rec, "used": True})
         if not rec or rec["client_id"] != client["client_id"] or rec["exp"] < time.time():
-            raise OAuthError("invalid_grant", "refresh token is unknown, expired, or not for this client")
+            raise OAuthError(
+                "invalid_grant", "refresh token is unknown, expired, or not for this client", reason="refresh_invalid"
+            )
         user = await self._still_allowed(rec)
         return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=rec["family"])
 
@@ -244,9 +279,13 @@ class OAuthServer:
         the group, and nothing has revoked their sessions since the grant."""
         user = await self.store.get("users", rec["user"])
         if not user or user.get("login_disabled") or self.accounts.epoch_of(user) != rec["epoch"]:
-            raise OAuthError("invalid_grant", "the user's sessions were revoked; sign in again")
+            raise OAuthError(
+                "invalid_grant", "the user's sessions were revoked; sign in again", reason="sessions_revoked"
+            )
         if not can_connect(principal_from(user), rec["group"]):
-            raise OAuthError("invalid_grant", f"the user no longer has access to group {rec['group']}")
+            raise OAuthError(
+                "invalid_grant", f"the user no longer has access to group {rec['group']}", reason="no_group_access"
+            )
         return user
 
     async def _tokens(self, client: dict, user: dict, group: str, zone: str, issuer: str, family: str) -> dict:
@@ -262,7 +301,7 @@ class OAuthServer:
             "zone": zone,
             "client_id": client["client_id"],
             "iat": iat,
-            "exp": iat + ACCESS_TTL,
+            "exp": iat + access_ttl(),
             "jti": uid(),
         }
         access = mint_jwt(claims, await self.svc.session_secret(group))
@@ -281,14 +320,14 @@ class OAuthServer:
                 "epoch": self.accounts.epoch_of(user),
                 "family": family,
                 "used": False,
-                "exp": iat + REFRESH_TTL,
+                "exp": iat + refresh_ttl(),
                 "created": now(),
             },
         )
         return {
             "access_token": access,
             "token_type": "Bearer",
-            "expires_in": ACCESS_TTL,
+            "expires_in": access_ttl(),
             "refresh_token": refresh,
             "scope": scope,
         }

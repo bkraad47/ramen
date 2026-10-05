@@ -23,6 +23,7 @@ impl Metrics {
         sidecar_alive: bool,
         loaded_at: Option<String>,
         packages: Value,
+        manifest_hash: &str,
     ) -> Value {
         let pct = inflight * 100 / max.max(1);
         let load = if pct < 30 {
@@ -33,7 +34,8 @@ impl Metrics {
             "even"
         };
         json!({"inflight": inflight, "total": self.total.load(Relaxed), "errors": self.errors.load(Relaxed), "load": load,
-               "sidecar_alive": sidecar_alive, "loaded_at": loaded_at, "packages": packages})
+               "sidecar_alive": sidecar_alive, "loaded_at": loaded_at, "packages": packages,
+               "manifest_hash": manifest_hash})
     }
 }
 
@@ -46,7 +48,7 @@ mod tests {
         let m = Metrics::default();
         m.record(true);
         m.record(false);
-        let s = m.snapshot(1, 10, false, None, Value::Null);
+        let s = m.snapshot(1, 10, false, None, Value::Null, "");
         assert_eq!(
             (
                 s["total"].as_u64(),
@@ -55,7 +57,27 @@ mod tests {
             ),
             (Some(2), Some(1), Some("low"))
         );
-        assert_eq!(m.snapshot(5, 10, true, None, Value::Null)["load"], "even");
-        assert_eq!(m.snapshot(9, 10, true, None, Value::Null)["load"], "high");
+        assert_eq!(
+            m.snapshot(5, 10, true, None, Value::Null, "")["load"],
+            "even"
+        );
+        assert_eq!(
+            m.snapshot(9, 10, true, None, Value::Null, "")["load"],
+            "high"
+        );
+    }
+
+    /// C2 (0.7.0): the hash of the manifest this node serves, `""` before the first load.
+    #[test]
+    fn manifest_hash_is_reported() {
+        let m = Metrics::default();
+        assert_eq!(
+            m.snapshot(0, 1, false, None, Value::Null, "")["manifest_hash"],
+            ""
+        );
+        assert_eq!(
+            m.snapshot(0, 1, true, None, Value::Null, "ab12")["manifest_hash"],
+            "ab12"
+        );
     }
 }

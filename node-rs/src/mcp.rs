@@ -73,6 +73,28 @@ pub async fn dispatch(
     Ok(Some(r))
 }
 
+/// Whether this call targets a blocked name or URI (§9) — the access log's `blocked_name` reason (C6).
+/// `dispatch` still answers the `-32601` itself; this only classifies the call for the log.
+pub async fn blocked_target(
+    sc: &Sidecar,
+    blocked: &[String],
+    method: &str,
+    params: &Value,
+) -> bool {
+    if blocked.is_empty() {
+        return false;
+    }
+    let hit = |n: &str| blocked.iter().any(|b| b == n);
+    match method {
+        "tools/call" | "prompts/get" => params.get("name").and_then(Value::as_str).is_some_and(hit),
+        "resources/read" => match params.get("uri").and_then(Value::as_str) {
+            Some(uri) => hit(uri) || resource_name(sc, uri).await.is_some_and(|n| hit(&n)),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 pub fn is_blocked(blocked: &[String], item: &Value) -> bool {
     ["name", "uri"]
         .iter()
@@ -284,6 +306,32 @@ mod tests {
 
     fn tool(name: &str, schema: Value) -> Value {
         json!({"name": name, "description": "", "inputSchema": schema})
+    }
+
+    #[tokio::test]
+    async fn blocked_target_classifies_calls_by_name_and_by_resource_uri() {
+        let sc = sidecar();
+        sc.set_loaded_for_test(
+            json!({"resources": [{"name": "readme", "uri": "ramen://demo/readme"}]}),
+        )
+        .await;
+        let b = vec!["calc".to_string(), "readme".to_string()];
+        assert!(blocked_target(&sc, &b, "tools/call", &json!({"name": "calc"})).await);
+        assert!(blocked_target(&sc, &b, "prompts/get", &json!({"name": "calc"})).await);
+        assert!(!blocked_target(&sc, &b, "tools/call", &json!({"name": "other"})).await);
+        assert!(!blocked_target(&sc, &b, "tools/list", &json!({})).await);
+        // a resource blocked by name is also blocked when read by its URI
+        assert!(
+            blocked_target(
+                &sc,
+                &b,
+                "resources/read",
+                &json!({"uri": "ramen://demo/readme"})
+            )
+            .await
+        );
+        assert!(!blocked_target(&sc, &b, "resources/read", &json!({"uri": "ramen://other"})).await);
+        assert!(!blocked_target(&sc, &[], "tools/call", &json!({"name": "calc"})).await);
     }
 
     #[tokio::test]

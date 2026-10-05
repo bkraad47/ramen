@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class GateError(RuntimeError):
+    """A deploy gate refused the canary (0.7.0: B3 schema compatibility, C4 golden cases); the adapter tears the
+    canary down exactly as on a failed smoke test."""
+
+
 class Cloud(ABC):
     @abstractmethod
     async def sync_repo(self, group: str, repo_url: str, ref: str, token: str | None) -> str: ...
@@ -16,7 +21,15 @@ class Cloud(ABC):
         config: dict[str, str] | None = None,
         spec: dict[str, Any] | None = None,
         log=None,
-    ) -> dict[str, Any]: ...
+        gate=None,
+    ) -> dict[str, Any]:
+        """`gate(result, call)` (0.7.0) is awaited after the canary's reload + smoke with the reload result and an
+        async `call(jsonrpc) -> response` bound to that pod and the group's first MCP key (None without keys); it
+        raises GateError to abort before the stable track rolls. Adapters without a canary call it on each reload."""
+
+    async def read_file(self, group: str, path: str) -> bytes | None:
+        """A file of the group's synced repo (`mcp/tests.yaml`), from wherever `sync_repo` put it; None if absent."""
+        return None
 
     @abstractmethod
     async def rebalance(self, group: str, zone: str) -> dict[str, Any]: ...

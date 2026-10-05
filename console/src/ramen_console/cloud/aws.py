@@ -158,8 +158,18 @@ class AwsCloud(GcpCloud):
         return await asyncio.to_thread(aws_api.sync_repo_to_s3, self.c.s3, self._bucket(), group, repo_url, ref, token)
 
     # deploy -------------------------------------------------------------
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None) -> dict[str, Any]:
-        res = await super().deploy(group, env, zone, canary, config, spec, log)
+    @_guard
+    async def read_file(self, group, path):
+        try:
+            obj = await asyncio.to_thread(self.c.s3.get_object, Bucket=self._bucket(), Key=f"{group}/{path}")
+        except self.c.s3.exceptions.NoSuchKey:
+            return None
+        return obj["Body"].read()
+
+    async def deploy(
+        self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None
+    ) -> dict[str, Any]:
+        res = await super().deploy(group, env, zone, canary, config, spec, log, gate)
         ns = ns_name(group, zone)
         try:
             main = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker") or {}

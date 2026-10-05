@@ -97,9 +97,13 @@ jobs:
           uv pip install --python .bridge-venv ramen-mcp-bridge
           BIN=$(find .bridge-venv -maxdepth 2 -iname "ramen-mcp-bridge*" -type f)
           echo "RAMEN_BRIDGE_CMD=$PWD/$BIN" >> "$GITHUB_ENV"
-      - name: both transports on real nodes (§16.5)
+      - name: console venv (0.7.0 auth-expiry cases run a real console as the OAuth server)
+        run: |
+          (cd console && uv sync --all-extras)
+          echo "RAMEN_CONSOLE_PYTHON=$PWD/console/.venv/bin/python" >> "$GITHUB_ENV"
+      - name: both transports on real nodes (§16.5), tool propagation (R2), token expiry (A1/A2/A4/D2), scripts
         working-directory: tests
-        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py
+        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_scripts.py
 
   client-windows:
     # §16.4 / X7: the client flow on the platform where fresh-machine setups break — the node built natively, the

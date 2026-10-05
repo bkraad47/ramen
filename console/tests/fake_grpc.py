@@ -21,6 +21,8 @@ class FakeWorker:
         self.smoke_ok, self.reload_ok = True, True
         self.forbid: list[str] = []  # strings that must never show up in metadata (secret values)
         self.load_result = {"tools": [{"name": "calc"}], "errors": []}
+        # tools/call answers: by tool name, else the arguments echoed back as text (golden-case tests, C4)
+        self.tool_results: dict[str, dict] = {}
         self.metrics = {"inflight": 2, "total": 9, "errors": 0, "load": "even"}
         self.load_fn = None  # (n-th metrics call) -> load string
         self._n = 0
@@ -70,7 +72,15 @@ class _Mcp(mcp_pb2_grpc.McpServicer):
             context.abort(grpc.StatusCode.INTERNAL, "boom")
         if "id" not in body:
             return mcp_pb2.JsonRpc(body=b"")
-        result = {"tools": []} if body.get("method") == "tools/list" else {"ok": True}
+        if body.get("method") == "tools/list":
+            result = {"tools": []}
+        elif body.get("method") == "tools/call":
+            params = body.get("params") or {}
+            result = self.w.tool_results.get(
+                params.get("name"), {"content": [{"type": "text", "text": json.dumps(params.get("arguments") or {})}]}
+            )
+        else:
+            result = {"ok": True}
         return mcp_pb2.JsonRpc(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())
 
 

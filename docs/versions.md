@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.7.0` **(current)** | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
+| `0.7.1` **(current)** | — | blocked tools and golden cases | folded forward, never tagged |
+| `0.7.0` | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
 | `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
 | `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |
 | `0.6.2` | 2026-10-05 | Ramen on the official MCP registry | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.2) |
@@ -31,6 +32,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+
+## 0.7.1 — blocked tools and golden cases
+
+- A golden case for a tool that is **blocked** on the environment or zone is skipped (`golden.skipped: ["<case>: blocked"]`, a log line) instead of failing the deploy: the node answers `-32601` for a blocked name on purpose. Found by the compose end-to-end job right after 0.7.0 (block the demo tool → deploy → the gate failed the job).
+- Two CI fixes from the same run: the generated epoch-bump test password always carries every character class the policy wants; the 0.7.0 changelog links the release page by absolute URL (the relative link broke the generated versions page under `mkdocs --strict`).
 
 ## 0.7.0 — your tests gate your rollout
 

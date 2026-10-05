@@ -18,7 +18,7 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 > browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
 > Per-user access through OAuth (the console is the authorization server), live-verified on GKE since 0.5.1.
 
-**What is true today, before the pitch.** Current release **0.6.21**. The local stack and CI prove both
+**What is true today, before the pitch.** Current release **0.6.23**. The local stack and CI prove both
 transports on real node processes on Linux and Windows. One GKE cluster has proved the gRPC path end to end
 (0.3.2, 0.4.0) and the HTTP path with OAuth through the same load balancer (0.5.1, with a publicly trusted
 certificate since 0.5.5). The AWS path has been applied to a real account since 0.5.6, and the published bridge

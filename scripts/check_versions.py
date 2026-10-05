@@ -35,6 +35,9 @@ TEXT = {
     # the official MCP registry entry (io.github.bkraad47/ramen): a published version is immutable, so a release that
     # forgets this keeps the old listing as "latest"
     "server.json": r"^\s*\"version\":\s*\"([^\"]+)\"",
+    # the Smithery bundle (bkraad47/ramen): same reason
+    "mcpb/manifest.json": r"^  \"version\":\s*\"([^\"]+)\"",
+    "mcpb/pyproject.toml": r"^version\s*=\s*\"([^\"]+)\"",
 }
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
 # §14 W9: these derive __version__ from distribution metadata. A literal here is drift waiting to happen.

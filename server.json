@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.bkraad47/ramen",
   "title": "Ramen: self-hosted MCP for teams",
-  "description": "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every call.",
-  "version": "0.6.21",
+  "description": "Self-hosted, multi-zone MCP server for GKE/EKS: git repo of Python tools → canary-deployed Rust+Python workers, OAuth sign-in, roles per group.",
+  "version": "0.6.23",
   "repository": {
     "url": "https://github.com/bkraad47/ramen",
     "source": "github"

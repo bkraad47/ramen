@@ -61,7 +61,7 @@ region governance, and ships every release as public images.
 - An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
 - `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
 - Process: versions are built on a `v<version>` branch and merged by pull request before tagging
-  ([release](docs/release.md)).
+  (https://bkraad47.github.io/ramen/release/).
 
 ## [0.6.23] — Ramen starts on its own for MCP directories
 - `glama/Dockerfile` + `glama/start.sh` (and `glama/Dockerfile.standalone`, which clones the release itself, to paste into Glama): a self-contained image of the real worker (ramen-node + Python runtime)

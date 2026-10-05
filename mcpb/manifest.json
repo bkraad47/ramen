@@ -1,0 +1,119 @@
+{
+  "manifest_version": "0.3",
+  "name": "ramen",
+  "display_name": "Ramen: self-hosted MCP for teams",
+  "version": "0.6.21",
+  "description": "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every call.",
+  "long_description": "Connects your MCP client to your organization's own Ramen deployment. Ramen hosts a team's tools, resources and prompts (Python in a git repo) on your Kubernetes (GKE/EKS) or docker compose, with canary deploys, roles per group, secrets that are never shown, IP rules, throttling and an audit log of every call. This bundle runs ramen-mcp-bridge: point it at your deployment's host, group and zone, and sign in with OAuth or a group MCP key. You need a Ramen deployment: https://bkraad47.github.io/ramen/",
+  "author": {
+    "name": "bkraad47",
+    "url": "https://github.com/bkraad47"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bkraad47/ramen"
+  },
+  "homepage": "https://bkraad47.github.io/ramen/",
+  "documentation": "https://bkraad47.github.io/ramen/wiki/connect-oauth/",
+  "license": "BSD-3-Clause",
+  "keywords": [
+    "self-hosted",
+    "teams",
+    "kubernetes",
+    "gke",
+    "eks",
+    "oauth",
+    "rbac",
+    "audit",
+    "mcp-gateway"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "src/server.py"
+      ],
+      "env": {
+        "RAMEN_BRIDGE_TARGET": "${user_config.target}",
+        "RAMEN_BRIDGE_GROUP": "${user_config.group}",
+        "RAMEN_BRIDGE_ZONE": "${user_config.zone}",
+        "RAMEN_BRIDGE_TLS": "${user_config.tls}",
+        "RAMEN_MCP_KEY": "${user_config.key}",
+        "RAMEN_BRIDGE_OAUTH": "${user_config.oauth_console}",
+        "RAMEN_BRIDGE_CLIENT_ID": "${user_config.client_id}",
+        "RAMEN_BRIDGE_CA": "${user_config.ca}"
+      }
+    }
+  },
+  "user_config": {
+    "target": {
+      "type": "string",
+      "title": "Ramen host:port",
+      "description": "Your deployment's edge, e.g. mcp.example.com:443",
+      "required": true
+    },
+    "group": {
+      "type": "string",
+      "title": "Group",
+      "description": "Ramen group to connect to",
+      "required": true
+    },
+    "zone": {
+      "type": "string",
+      "title": "Zone",
+      "description": "Ramen zone to connect to",
+      "required": true
+    },
+    "tls": {
+      "type": "boolean",
+      "title": "Use TLS",
+      "description": "On for any cloud deployment (port 443)",
+      "required": false,
+      "default": true
+    },
+    "key": {
+      "type": "string",
+      "title": "Group MCP key",
+      "description": "rmk_... key from the group page. Leave empty to sign in with OAuth instead.",
+      "required": false,
+      "sensitive": true,
+      "default": ""
+    },
+    "oauth_console": {
+      "type": "string",
+      "title": "Console URL for OAuth sign-in",
+      "description": "e.g. https://mcp.example.com - sign in as yourself instead of using a key",
+      "required": false,
+      "default": ""
+    },
+    "client_id": {
+      "type": "string",
+      "title": "OAuth client id",
+      "description": "From the console's Config page (needed with OAuth)",
+      "required": false,
+      "default": ""
+    },
+    "ca": {
+      "type": "file",
+      "title": "CA bundle (PEM)",
+      "description": "Only for a self-signed certificate",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

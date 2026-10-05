@@ -1,0 +1,5 @@
+.venv/
+server/lib/
+server/venv/
+__pycache__/
+uv.lock

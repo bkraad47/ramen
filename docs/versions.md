@@ -4,7 +4,12 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.6.0` **(current)** | 2026-10-03 | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
+| `0.7.0` **(current)** | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
+| `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
+| `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |
+| `0.6.2` | 2026-10-05 | Ramen on the official MCP registry | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.2) |
+| `0.6.1` | 2026-10-05 | instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.1) |
+| `0.6.0` | 2026-10-03 | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) |
 | `0.5.95` | 2026-10-03 | roles are per group: the roles engine of instructions/v0.5.95.md | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.95) |
 | `0.5.94` | 2026-10-03 | group page zones and blocked packages as checkbox dropdowns | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.94) |
 | `0.5.93` | 2026-10-03 | OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.93) |
@@ -27,8 +32,52 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## Unreleased
+## 0.7.0 — your tests gate your rollout
 
+- **Schema compatibility gate on deploy.** After the canary reloads, its tools, resources and prompts are diffed against what the zone's stable workers serve. A removed tool/resource/prompt, a removed input, a new required input, a changed type or a narrowed enum is breaking: the canary is scaled down, stable is untouched, the job log says what broke and `job.result[zone].compat` carries the diff. `POST .../deploy {"breaking": true}` accepts it; the refused job's card offers "Deploy again, accept breaking changes". Additive changes pass and are listed.
+- **Golden cases.** A group repo may ship `mcp/tests.yaml` (`cases: [{name, tool, args, expect: {text_contains|subset|exact}}]`); the console runs every case against the canary with the group's first MCP key before stable rolls, and one failing case aborts the deploy with the case name and the difference. `args` may use `{{$group.VAR}}`. The demo repo ships four cases.
+- **Output schemas enforced.** A tool proto's `output` is published as MCP `outputSchema` and every result is validated against it; a scalar schema is wrapped as `{"result": …}` in `structuredContent`, an object schema is used as declared; a mismatch is a tool error `invalid output: <path>: <message>`. Tools without `output` are unchanged.
+- **Capability manifest per deploy.** The reload result carries `hash` (sha256 of the canonical tools/resources/ prompts); `Admin/Metrics` reports `manifest_hash`; the console stores every worker's full manifest with `last_deploy`, shows it per zone on the group page (collapsed, with the schemas clients see) and flags a **manifest mismatch** when the workers of one zone disagree.
+- **Blocked regions.** Super admins pick GCP and AWS regions no zone may be created in or deployed to (Config page, `GET|PUT /api/v1/config/regions`). Creating a zone there is `403`; a zone in a region blocked later fails its next deploy with the same message, a job-log line and a server warning the digest email carries. The zones page's location is now a dropdown of the provider's zones grouped by region, minus the blocked ones.
+- **Denial reasons.** Every denied call's access-log line names its `reason` (`no_key`, `bad_key`, `token_expired`, `token_invalid`, `cidr`, `blocked_name`, `throttled`, `origin`, `too_large`, `inflight`, `session_expired`, `session_invalid`); the console audits `oauth.token`, `oauth.refresh`, `oauth.refresh_reuse` and `oauth.denied` with a reason instead of one generic row.
+- **Token lifetimes.** `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and `RAMEN_OAUTH_REFRESH_TTL` (default 30 days), shown on the Config page.
+- **Public images.** Each release pushes `ramen-worker` and `ramen-console` (linux/amd64 + arm64, tags `<version>` and `latest`) to `docker.io/bkraad47/` and `ghcr.io/bkraad47/`; both charts accept them, so `make push` to a per-project registry is optional (`deploy/README.md`, "Public images").
+- `SECURITY.md`; the console's htmx is shipped unminified (2.0.4, checksum in `static/VENDOR.md`) so every byte that runs in the browser is readable.
+- **Token expiry mid-task** (issue #1): an expired token gets the same `401` + `WWW-Authenticate: Bearer resource_metadata=…` challenge as no token; the client or the bridge refreshes and retries once; the MCP session survives because session ids are bound to `user:<sub>`, not to a token; a call started before expiry finishes; nothing runs twice (the only retry is for a `401` returned before dispatch).
+- **Tool changes propagate on deploy**: an existing session sees the new `tools/list` after the workers reload; the node has no server-to-client stream (`GET /mcp` is 405, no `listChanged`), so a client learns of changes by re-listing, which the compatibility gate makes safe for additive changes.
+- A blocked-name call logs as `denied`/`blocked_name` (warn) instead of `error`; the wire answer stays `-32601`.
+- An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
+- `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
+- Process: versions are built on a `v<version>` branch and merged by pull request before tagging ([release](docs/release.md)).
+
+## 0.6.23 — Ramen starts on its own for MCP directories
+
+- `glama/Dockerfile` + `glama/start.sh` (and `glama/Dockerfile.standalone`, which clones the release itself, to paste into Glama): a self-contained image of the real worker (ramen-node + Python runtime) serving the demo group, cloned at build time, with `ramen-mcp-bridge` on stdio in front. No console, cloud or network at runtime; it answers `initialize`, `tools/list`, `resources/list`, `prompts/list` and tool calls. Built for Glama's checks (awesome-mcp-servers requires a passing Glama listing).
+- The release workflow publishes to the official MCP registry (GitHub OIDC) and Smithery (`SMITHERY_API_KEY`), only for the maintainer's own tags, and attaches the MCPB bundle and a version-less `ramen-node-linux-amd64.zip` for Glama.
+- `glama.json` names the Glama maintainer; `mcpb/` is the Smithery bundle (`bkraad47/ramen`), which runs the bridge against your own deployment.
+- `check_versions.py` also checks `mcpb/manifest.json` and `mcpb/pyproject.toml`. No product code changed since 0.6.1.
+
+## 0.6.21 — a registry listing that says what Ramen is for
+
+- The official MCP registry entry `io.github.bkraad47/ramen` gets a new title and description: "Ramen: self-hosted MCP for teams" / "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every call." No product code changed since 0.6.1.
+
+## 0.6.2 — Ramen on the official MCP registry
+
+- Listed on the official MCP registry as `io.github.bkraad47/ramen` (`server.json`): a streamable-http remote template `https://{ramen_edge}/mcp` with the `ramen-group` / `ramen-zone` headers and an optional group-key `Authorization` header (OAuth otherwise). Description: "Self-hosted MCP for organizations and teams: deploy your own tools and make managing them easy." No product code changed since 0.6.1.
+- `check_versions.py` now checks `server.json` too: a registry version is immutable, so a release that forgets it keeps the old listing as "latest".
+
+## 0.6.1 — instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions
+
+- **A base URI on the Config page.** When set, every link the console generates goes through it, path prefix included: page links, forms and redirects, mail links, OAuth metadata and the token issuer, client snippets, and the public URL and issuer handed to workers on their next deploy. Precedence: the setting, then `RAMEN_PUBLIC_URL`, then the request. `GET|PUT /api/v1/config/base-uri`, super admin only, audited. Verified on GKE with a host and with a `/ramen` prefix behind route rewrites, and on EKS with a host.
+- **Fixed on a fresh GCP and AWS deployment of this release** (both torn down afterwards):
+- A canary deploy no longer puts a new pinned image on the stable track at the same time; stable rolls only after the canary passes, so a bad image leaves stable serving.
+- AWS: `POST /mcp` over HTTP/1.1 and OAuth protected-resource discovery got the ALB's `464` (GRPC target groups). Each zone now has a second Ingress, `worker-http`, on HTTP/1.1 target groups with the same header conditions and canary split.
+- AWS: a stable-only deploy scaled the canary to 0 while the ALB still sent it traffic (about 5% `503` for ~45 s); the canary now leaves the split first (`RAMEN_ALB_SPLIT_DRAIN_SECS`, default 15).
+- AWS: IP rules failed on a fresh account (`wafv2:GetWebACLForResource` needs `Resource: "*"`); `0.0.0.0/0` is written as two `/1` halves, which WAF IP sets accept.
+- AWS defaults: EKS 1.35 (1.31 bills extended support) and four `t3.small` nodes, so the guide's first canary fits.
+- GCP: deleting a group deletes its Cloud Armor policy. The not-ready message names each reason once.
+- Scripts: `gcp_test_project.sh` refuses a project pending deletion; `cloud_smoke.sh` URL-encodes the login form (a `+` in a generated password arrived as a space) and survives a non-JSON answer while polling a job.
+- **Docs and packaging:**
 - **The documentation site, reorganized around what a reader came for.** Home is an introduction with the three repositories and the reasons to use Ramen; *Get started* is one page with a picture per step (run it locally, connect an MCP repo, connect a client with a key, with OAuth, or through the bridge); *How it works* holds the architecture and a table of every feature with where it is managed; the *Wiki* is one page per subject (deploy on GCP, deploy on AWS, groups and zones and regions, the MCP repo, secrets, users and access, connect with OAuth, connect with a password, API keys and the API, throttling with Redis, Entra ID and Workspace, backups, configuration); *Changelog* and *Release* are short pages, and the contracts, threat model, transport and architecture pages move under *Reference*. The repeated and stale how-to pages are gone.
 - **Every screenshot is now a live capture** from a real GCP deployment of this release rather than a seeded console, including the zones page and what an MCP user sees. The architecture drawing was redrawn wider so its labels no longer overlap each other.
 - The deploy guides now say what the console's own service account may do on each cloud, and what each zone's identity starts with.

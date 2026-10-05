@@ -10,8 +10,9 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   albGroup: ramen            # ALB IngressGroup shared by the console Ingress ("/") and every worker Ingress (gRPC, header rules; CONTRACTS §11)
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 image:
-  repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console
-  tag: 0.6.23
+  repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console (gcp) or <account>.dkr.ecr.<region>.amazonaws.com/ramen/console (aws);
+                             # any reference works on both clouds, e.g. the public docker.io/bkraad47/ramen-console (or ghcr.io/bkraad47/...) — no `make push` needed
+  tag: 0.7.0
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:
@@ -23,7 +24,8 @@ console:
   port: 8000
   resources: { requests: { cpu: 250m, memory: 512Mi } }   # Autopilot sets limits = requests
   backendTimeoutSec: 300     # GCPBackendPolicy timeout (gcp only): IAM/compute calls exceed the LB's 30s default
-  env:                       # CONTRACTS §7 console runtime env; RAMEN_GCP_PROJECT/REGION/GROUPS_BUCKET/IMAGE_WORKER default from project/region
+  env:                       # CONTRACTS §7 console runtime env; RAMEN_GCP_PROJECT/REGION/GROUPS_BUCKET/IMAGE_WORKER default from project/region.
+                             # Keys set here win over the defaults: RAMEN_IMAGE_WORKER: docker.io/bkraad47/ramen-worker:<tag> deploys the public worker image
     RAMEN_STORE: firestore
     RAMEN_CLOUD: gcp
     RAMEN_SECRETS_BACKEND: gcp

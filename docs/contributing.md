@@ -23,6 +23,8 @@ is asked in return.
    same change, and a release note in `CHANGELOG.md` says what a user will notice.
 4. No secrets in logs, no `unsafe-eval` in the console, no new dependency without a reason in the PR.
 5. Small PRs merge; large ones get a design note first.
+6. Everything reaches `main` through a pull request, including the maintainer's own releases, which are built on a
+   `v<version>` branch and tagged after the merge ([how a release is made](release.md#how-a-release-is-made-since-070)).
 
 ## Related repositories
 | Repo | What | Versioning |

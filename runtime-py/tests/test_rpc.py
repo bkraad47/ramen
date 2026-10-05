@@ -57,6 +57,7 @@ def test_full_session(demo_bucket, monkeypatch):
     assert by[1]["result"] == {"ok": True}
     assert by[2]["error"]["code"] == -32002
     assert by[3]["result"]["tools"][0]["name"] == "demo_calculator_tool" and by[3]["result"]["errors"] == []
+    assert len(by[3]["result"]["hash"]) == 64  # C1: manifest hash travels with the load result
     assert by[4]["result"]["content"][0]["text"] == "42"
     assert by[5]["result"]["contents"][0]["mimeType"] == "text/markdown"
     assert "1+1" in by[6]["result"]["messages"][0]["content"]["text"]

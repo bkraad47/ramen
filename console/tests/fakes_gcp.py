@@ -288,6 +288,9 @@ class FakeBlob:
     def upload_from_filename(self, path):
         self.bucket.data[self.name] = open(path, "rb").read()
 
+    def download_as_bytes(self):
+        return self.bucket.data[self.name]
+
     def delete(self):
         self.bucket.data.pop(self.name, None)
 
@@ -313,6 +316,9 @@ class FakeBucket:
 
     def blob(self, name):
         return FakeBlob(self, name)
+
+    def get_blob(self, name):
+        return FakeBlob(self, name) if name in self.data else None
 
 
 class FakeStorage:

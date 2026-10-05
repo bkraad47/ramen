@@ -184,13 +184,17 @@ fn pre_guard(
     let log = log_for(cfg, peer, md);
     if !crate::auth::ip_allowed(cfg, log.ip) {
         return Some(denied(
-            &log.deny(cfg, Status::permission_denied("ip not allowed")),
+            &log.deny(cfg, Status::permission_denied("ip not allowed"), "cidr"),
             cfg,
         ));
     }
     if !origin_allowed(&cfg.allowed_origins, headers) {
         return Some(denied(
-            &log.deny(cfg, Status::permission_denied("origin not allowed")),
+            &log.deny(
+                cfg,
+                Status::permission_denied("origin not allowed"),
+                "origin",
+            ),
             cfg,
         ));
     }
@@ -239,7 +243,7 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
         Ok(b) => b,
         Err(_) => {
             let st = Status::out_of_range("message too large");
-            return denied(&log.deny(&cfg, st), &cfg);
+            return denied(&log.deny(&cfg, st, "too_large"), &cfg);
         }
     };
     // §16.2: a session header on any request must validate for THIS credential, or the call is 404.
@@ -250,11 +254,15 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
     if let Some(sid) = &presented
         && let Err(why) = app.sessions.verify(sid, &caller.binding)
     {
-        let st = Status::not_found(match why {
-            Invalid::Expired => "session expired",
-            Invalid::BadMac | Invalid::Malformed => "unknown session",
-        });
-        return with_headers(denied(&log.deny(&cfg, st), &cfg), version, None);
+        let (msg, reason) = match why {
+            Invalid::Expired => ("session expired", "session_expired"),
+            Invalid::BadMac | Invalid::Malformed => ("unknown session", "session_invalid"),
+        };
+        return with_headers(
+            denied(&log.deny(&cfg, Status::not_found(msg), reason), &cfg),
+            version,
+            None,
+        );
     }
     let is_init = serde_json::from_slice::<Value>(&body)
         .ok()
@@ -361,7 +369,14 @@ async fn delete_mcp(State(app): State<Shared>, req: Request) -> Response {
                 req.headers(),
             )
         }
-        Err(_) => denied(&log.deny(&cfg, Status::not_found("unknown session")), &cfg),
+        Err(_) => denied(
+            &log.deny(
+                &cfg,
+                Status::not_found("unknown session"),
+                "session_invalid",
+            ),
+            &cfg,
+        ),
     }
 }
 
@@ -1092,5 +1107,108 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(status_of(Code::Internal), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    fn user_token(secret: &str, sub: &str, exp: u64, jti: &str) -> String {
+        let key = crate::session::Sessions::new(Some(secret), 60).derived_key("oauth");
+        format!(
+            "Bearer {}",
+            token::mint(
+                &json!({"iss": "https://console.example", "sub": sub, "aud": "mcp:demo:a", "scope": "mcp:demo:a", "exp": exp, "jti": jti}),
+                &key,
+            )
+        )
+    }
+
+    /// A2 (0.7.0): a session is bound to the person (`user:<sub>`), never to one access token, so a token
+    /// refreshed mid-task keeps the MCP session; another person's token does not.
+    #[tokio::test]
+    async fn a_refreshed_token_for_the_same_subject_keeps_the_session() {
+        let secret = "zone-secret";
+        let (addr, stop) = serve(cfg(&[
+            ("RAMEN_SESSION_SECRET", secret),
+            ("RAMEN_OAUTH_ISSUER", "https://console.example"),
+        ]))
+        .await;
+        let now = crate::session::now();
+        let first = user_token(secret, "u1", now + 60, "j1");
+        let refreshed = user_token(secret, "u1", now + 3600, "j2");
+        assert_ne!(first, refreshed);
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, ("Authorization", &first)],
+            INIT,
+        )
+        .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let sid = r.header("mcp-session-id").unwrap().to_string();
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[
+                JSON,
+                ("Authorization", &refreshed),
+                ("Mcp-Session-Id", &sid),
+            ],
+            PING,
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.header("mcp-session-id")),
+            (200, Some(sid.as_str()))
+        );
+        let other = user_token(secret, "u2", now + 3600, "j3");
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, ("Authorization", &other), ("Mcp-Session-Id", &sid)],
+            PING,
+        )
+        .await;
+        assert_eq!(
+            r.status, 404,
+            "another person's token must not ride the session"
+        );
+        let _ = stop.send(());
+    }
+
+    /// A4 (0.7.0): an expired token is answered exactly like no token at all — 401 with the RFC 9728
+    /// challenge — so an OAuth client restarts sign-in instead of giving up.
+    #[tokio::test]
+    async fn an_expired_token_gets_the_same_401_challenge_as_no_token() {
+        let secret = "zone-secret";
+        let (addr, stop) = serve(cfg(&[
+            ("RAMEN_SESSION_SECRET", secret),
+            ("RAMEN_OAUTH_ISSUER", "https://console.example"),
+            ("RAMEN_PUBLIC_URL", "https://mcp.example"),
+        ]))
+        .await;
+        let expired = user_token(secret, "u1", crate::session::now() - 1, "j1");
+        let none = http(addr, "POST", "/mcp", &[JSON], PING).await;
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, ("Authorization", &expired)],
+            PING,
+        )
+        .await;
+        assert_eq!((none.status, r.status), (401, 401));
+        assert_eq!(
+            r.header("www-authenticate"),
+            Some(
+                "Bearer resource_metadata=\"https://mcp.example/.well-known/oauth-protected-resource\", scope=\"mcp:demo:a\""
+            )
+        );
+        assert_eq!(
+            r.header("www-authenticate"),
+            none.header("www-authenticate")
+        );
+        assert_eq!(r.body, none.body); // nothing tells the caller which check failed (token.rs)
+        let _ = stop.send(());
     }
 }

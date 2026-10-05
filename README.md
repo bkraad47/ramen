@@ -27,13 +27,15 @@ canary deploys (the stable track waits for the canary), `POST /mcp` over HTTP/1.
 balancer, per-token throttling shared across zones through Redis, OAuth sign-in through the bridge, the base URI,
 and zone teardown. Everything below is written so those lines stay findable.
 
-Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer.
+**Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer, and keeps who-can-call-what, secrets, canary gates and the audit trail in one console. It is a platform for *your* tools, not a gateway in front of someone else's.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a
 **Python 3.14 runtime** that pip-installs and runs your code. One **console** manages groups (tenants), environments,
 zones, secrets, canary deploys, rebalancing, IP rules, logs, audit and backups — in the browser or through an API key.
 
 - **Git → bucket → worker.** Deploy syncs the repo to a bucket; workers load by content hash. No git creds on pods.
-- **Canary by default.** Roll a canary, smoke-test `tools/list`, then roll stable. Failure leaves stable untouched.
+- **Canary by default, gated.** Roll a canary, smoke-test `tools/list`, diff its tool schemas against stable
+  (breaking changes stop unless you say `breaking: true`), run the repo's golden cases, then roll stable. Failure
+  leaves stable untouched.
 - **Multi-zone from day one.** Group → Environment → Zone → Worker; the LB routes on `ramen-group` / `ramen-zone`
   metadata, so one client config works for every zone.
 - **Enterprise controls.** A role per group (Group Admin, Viewer or MCP User) plus global super admins, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
@@ -195,6 +197,8 @@ A group repo is any git repo with `mcp/tools/<name>/<name>.py` + `<name>.json` (
 `requirements.txt`). Start from [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group); the
 contract is in [the MCP repo page](https://bkraad47.github.io/ramen/wiki/mcp-repo/). Secrets are referenced as
 `{{$group.NAME}}` and substituted by the runtime at call time. Nothing about the transport leaks into tool code.
+Declare `output` and the worker publishes it as `outputSchema` and validates every result; add `mcp/tests.yaml` and
+your cases gate every deploy (0.7.0).
 
 ## Repository
 

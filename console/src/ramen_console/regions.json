@@ -1,0 +1,392 @@
+{
+ "note": "Public GCP regions (zone letters) and AWS commercial regions (availability-zone letters) as of 2026-10. Static list, edited by hand at release time; GovCloud and China partitions are left out. AWS AZ letters are per-account aliases, so a letter may map to a different physical AZ in another account.",
+ "gcp": {
+  "africa-south1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-east1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-east2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-northeast1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-northeast2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-northeast3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-south1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-south2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-southeast1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "asia-southeast2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "australia-southeast1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "australia-southeast2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-central2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-north1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-north2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-southwest1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west1": [
+   "b",
+   "c",
+   "d"
+  ],
+  "europe-west2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west4": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west6": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west8": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west9": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west10": [
+   "a",
+   "b",
+   "c"
+  ],
+  "europe-west12": [
+   "a",
+   "b",
+   "c"
+  ],
+  "me-central1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "me-central2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "me-west1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "northamerica-northeast1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "northamerica-northeast2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "northamerica-south1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "southamerica-east1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "southamerica-west1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-central1": [
+   "a",
+   "b",
+   "c",
+   "f"
+  ],
+  "us-east1": [
+   "b",
+   "c",
+   "d"
+  ],
+  "us-east4": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-east5": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-south1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-west1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-west2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-west3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-west4": [
+   "a",
+   "b",
+   "c"
+  ]
+ },
+ "aws": {
+  "af-south-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-east-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-east-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-northeast-1": [
+   "a",
+   "c",
+   "d"
+  ],
+  "ap-northeast-2": [
+   "a",
+   "b",
+   "c",
+   "d"
+  ],
+  "ap-northeast-3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-south-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-south-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-4": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-5": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-6": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ap-southeast-7": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ca-central-1": [
+   "a",
+   "b",
+   "d"
+  ],
+  "ca-west-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-central-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-central-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-north-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-south-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-south-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-west-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-west-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "eu-west-3": [
+   "a",
+   "b",
+   "c"
+  ],
+  "il-central-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "me-central-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "me-south-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "mx-central-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "sa-east-1": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-east-1": [
+   "a",
+   "b",
+   "c",
+   "d",
+   "e",
+   "f"
+  ],
+  "us-east-2": [
+   "a",
+   "b",
+   "c"
+  ],
+  "us-west-1": [
+   "a",
+   "b"
+  ],
+  "us-west-2": [
+   "a",
+   "b",
+   "c",
+   "d"
+  ]
+ }
+}

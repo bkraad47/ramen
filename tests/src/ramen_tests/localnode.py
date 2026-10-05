@@ -22,12 +22,15 @@ def node_binary() -> Path | None:
     p = E.env("RAMEN_NODE_BIN")
     if p:
         return Path(p)
-    for kind in ("release", "debug"):
-        for name in ("ramen-node", "ramen-node.exe"):  # cargo names the Windows binary with the suffix
-            c = E.RAMEN_DIR / "node-rs" / "target" / kind / name
-            if c.exists():
-                return c
-    return None
+    found = [
+        E.RAMEN_DIR / "node-rs" / "target" / kind / name
+        for kind in ("release", "debug")
+        for name in ("ramen-node", "ramen-node.exe")  # cargo names the Windows binary with the suffix
+    ]
+    found = [c for c in found if c.exists()]
+    # 0.7.0: the most recently built one wins — a stale release binary next to a fresh `cargo build` (debug) used to
+    # run yesterday's node against today's tests
+    return max(found, key=lambda c: c.stat().st_mtime) if found else None
 
 
 def require_binary() -> Path:

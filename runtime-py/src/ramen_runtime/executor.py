@@ -6,6 +6,7 @@ import jsonschema
 
 from . import envfile, prompts, secrets
 from .loader import Registry
+from .proto import wraps_output
 
 
 class Executor:
@@ -25,10 +26,21 @@ class Executor:
             jsonschema.validate(arguments, tool.schema)
             args = secrets.substitute_args(arguments, used)
             result = tool.func(**args)
-            return {"content": [{"type": "text", "text": _text(result)}], "isError": False}
+            r = {"content": [{"type": "text", "text": _text(result)}], "isError": False}
+            if tool.output is not None:  # B5: the declared output schema is enforced on the way out
+                structured = {"result": result} if wraps_output(tool.proto["output"]) else result
+                try:
+                    jsonschema.validate(structured, tool.output)
+                except jsonschema.ValidationError as e:
+                    where = "/".join(str(p) for p in e.absolute_path) or "output"
+                    raise _OutputError(f"invalid output: {where}: {e.message}") from None
+                r["structuredContent"] = structured
+            return r
         except jsonschema.ValidationError as e:
             where = "/".join(str(p) for p in e.absolute_path) or "arguments"
             msg = f"invalid arguments: {where}: {e.message}"
+        except _OutputError as e:
+            msg = str(e)
         except Exception as e:  # noqa: BLE001 - user code; message only, no traceback
             msg = secrets.redact(f"{type(e).__name__}: {e}", used + envfile.rendered_values())
         return {"content": [{"type": "text", "text": msg}], "isError": True}
@@ -48,6 +60,10 @@ class Executor:
             raise ValueError(f"missing prompt arguments: {missing}")
         text = prompts.render(p.skill, arguments, p.settings)
         return {"messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
+
+
+class _OutputError(Exception):
+    pass
 
 
 def _text(value) -> str:

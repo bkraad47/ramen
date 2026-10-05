@@ -25,6 +25,17 @@ environment and deploys. The page lists every zone and the worker counts per gro
 A zone that is deleted, or dropped from the last environment that used it, is torn down for real: the namespace,
 its pods and routes, and the zone's service account or IAM role.
 
+### Blocked regions (0.7.0)
+
+A super admin can keep workers out of whole regions: **Config → Blocked regions** lists every GCP region and AWS
+region (one checkbox dropdown per provider). A blocked region refuses new zones (`403 Region <r> is blocked by a
+super admin`, on the page and at `POST /api/v1/zones`), and a zone that already sits in a region blocked later
+fails its next deploy with the same message in the job log and a server warning, which the warning-email digest
+carries to the people on the notify list. Other zones of the environment still deploy. Group admins cannot change
+the list. `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...]}`; a GCP zone `us-west1-a` belongs to
+`us-west1`, an AWS availability zone `eu-west-1a` to `eu-west-1`. On the zones page the location is a dropdown of the
+provider's zones grouped by region, minus the blocked ones; `local` zones keep a free-text location.
+
 ## Creating a group
 
 **Groups → Create group** with a name, the repo URL and the ref. A private repo needs a secret named `GITHUB_TOKEN`
@@ -59,10 +70,17 @@ deploys are started.
    the canary only; the stable Deployment keeps its pod template until the canary has passed.
 4. **Reload and smoke**: the canary pip-installs if `requirements.txt` changed, loads the packages, then answers
    `tools/list`.
-5. **Stable**: restart `worker` with the new template and wait.
+5. **Gates (0.7.0)**: the canary's tools, resources and prompts are compared with what the zone's stable workers
+   serve. A removed tool, resource or prompt, a removed input, a new required input, a changed type or a narrowed
+   choice list is **breaking** and stops the deploy; additive changes pass and are listed. Then the repo's **golden
+   cases** (`mcp/tests.yaml`, see [The MCP repo](mcp-repo.md#golden-cases)) run against the canary with the group's
+   first MCP key; one failing case stops the deploy and the log names the case and the difference.
+6. **Stable**: restart `worker` with the new template and wait.
 
-Any failure in steps 3 to 5 scales the canary to zero and leaves the stable pods untouched, a bad image pin
-included. On AWS the canary's share of traffic moves to the stable track before its pods change and comes back
+Any failure in steps 3 to 6 scales the canary to zero and leaves the stable pods untouched, a bad image pin
+included. A deploy refused as breaking offers **Deploy again, accept breaking changes** on its job card (the API
+takes `"breaking": true`); clients that hold a session keep talking to the stable workers meanwhile and see the
+new set on their next `tools/list`. The first deploy of a zone has nothing to compare against. On AWS the canary's share of traffic moves to the stable track before its pods change and comes back
 once it passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-github-actions.md). The job log on the
 group page shows each step. A stuck rollout names the pod that is not running and the scheduler's reason.
 
@@ -83,6 +101,10 @@ audited as `scheduler`.
 ## Packages per zone
 
 After a deploy the group page lists what each zone reported: tools, resources and prompts with their schemas.
+Since 0.7.0 each zone also shows its **manifest**: the hash of everything the workers serve (the same hash the
+worker reports on its metrics) with the names and the exact schemas a client sees in a collapsed section. The live
+workers cell shows each worker's hash and flags a **manifest mismatch** when the workers of one zone disagree, which
+is what a half-finished rollout looks like.
 **Disable** a package on one zone, or add it to **Blocked everywhere** on the environment. A blocked name
 disappears from `tools/list` and answers the JSON-RPC error `-32601` until it is enabled again. The node enforces
 it, so a bad tool can be pulled without a code change.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .. import grpcclient
 from ..grpcclient import GrpcError, target_of
-from .base import Cloud
+from .base import Cloud, GateError
 
 
 def git_env(token: str | None) -> dict[str, str]:
@@ -104,7 +104,11 @@ class LocalCloud(Cloud):
         p.write_text(json.dumps(cidrs))
         return {"ok": True, "cidrs": cidrs}
 
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None):
+    async def read_file(self, group, path):
+        p = self._bucket(group) / path
+        return p.read_bytes() if p.is_file() else None
+
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
         vars_ = {
             "RAMEN_GROUP": group,
             "RAMEN_ENV": env,
@@ -122,15 +126,26 @@ class LocalCloud(Cloud):
         (d / "env").write_text(text)
         (d / f"env-{zone}").write_text(text)
         results = []
+        mcp_key = (vars_.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
         for target in self._targets(group, zone):
             try:
                 body = await self.rpc.reload(target, self.admin_key)
+                if gate:  # no canary track here: the gate runs on every worker's reload (0.7.0)
+                    await gate(body, self._caller(target, mcp_key, group, zone) if mcp_key else None)
                 results.append({"id": target, "ok": True, "status": "OK", "result": body})
+            except GateError as e:
+                results.append({"id": target, "ok": False, "status": "GATE", "error": str(e), "result": body})
             except (GrpcError, ValueError) as e:
                 results.append(
                     {"id": target, "ok": False, "status": getattr(e, "code", None) and e.code.name, "error": str(e)}
                 )
         return {"ok": all(w["ok"] for w in results), "workers": results, "env_file": str(d / f"env-{zone}")}
+
+    def _caller(self, target, mcp_key, group, zone):
+        async def call(msg):
+            return await self.rpc.call(target, mcp_key, group, zone, msg)
+
+        return call
 
     async def workers(self, group, zone):
         out = []

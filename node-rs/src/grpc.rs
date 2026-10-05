@@ -117,6 +117,12 @@ impl App {
         let max = self.cfg.read().await.max_inflight;
         let loaded = self.sidecar.loaded().await;
         let packages = loaded.as_ref().map(|l| json!({"tools": len(&l.result, "tools"), "resources": len(&l.result, "resources"), "prompts": len(&l.result, "prompts"), "errors": len(&l.result, "errors")})).unwrap_or(Value::Null);
+        // C2: the runtime's manifest hash (C1), kept with the last load result; "" before the first load
+        let hash = loaded
+            .as_ref()
+            .and_then(|l| l.result["hash"].as_str())
+            .unwrap_or("")
+            .to_string();
         self.metrics.snapshot(
             // Saturating: an `Admin/Reload` that lowers `RAMEN_MAX_INFLIGHT` leaves more permits available
             // than the new `max`, and the semaphore keeps its startup capacity until the pod restarts.
@@ -125,6 +131,7 @@ impl App {
             self.sidecar.alive().await,
             loaded.map(|l| l.at),
             packages,
+            &hash,
         )
     }
 }
@@ -206,8 +213,11 @@ impl CallLog {
         }
         emit(level, "mcp", line);
     }
-    pub fn deny(&self, cfg: &Config, st: Status) -> Status {
-        self.emit(cfg, "denied", st.code(), Value::Null);
+    /// C6 (0.7.0): every denial names its `reason` (`no_key`, `bad_key`, `token_expired`, `token_invalid`,
+    /// `cidr`, `blocked_name`, `throttled`, `origin`, `too_large`, `inflight`, `session_expired`,
+    /// `session_invalid`) — a short code, never the credential.
+    pub fn deny(&self, cfg: &Config, st: Status, reason: &'static str) -> Status {
+        self.emit(cfg, "denied", st.code(), json!({"reason": reason}));
         st
     }
 }
@@ -226,22 +236,23 @@ pub struct Caller {
 
 /// The credential check shared by both transports: an `rmk_` key (constant-time, §11) or, when `RAMEN_OAUTH_ISSUER`
 /// is set, a console-issued HS256 token for this group and zone (§16.3). A token is only tried when the bearer has
-/// the three-part JWT shape, so key comparison stays the first and constant-time path.
-pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Option<Caller> {
+/// the three-part JWT shape, so key comparison stays the first and constant-time path. `Err` is the access-log
+/// reason (C6); the caller only ever sees "unauthorized".
+pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Result<Caller, &'static str> {
     if let Some(id) = auth::check_key(cfg, md) {
         let raw = auth::bearer(md).unwrap_or("");
         let digest = ring::digest::digest(&ring::digest::SHA256, raw.as_bytes());
         let binding = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-        return Some(Caller {
+        return Ok(Caller {
             id,
             binding,
             principal: None,
         });
     }
-    let bearer = auth::bearer(md)?;
-    let issuer = cfg.oauth_issuer.as_deref()?;
+    let bearer = auth::bearer(md).ok_or("no_key")?;
+    let issuer = cfg.oauth_issuer.as_deref().ok_or("bad_key")?;
     if bearer.matches('.').count() != 2 {
-        return None;
+        return Err("bad_key");
     }
     let p = token::verify(
         bearer,
@@ -251,9 +262,13 @@ pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Option<Caller> {
         &cfg.zone,
         session::now(),
     )
-    .ok()?;
+    .map_err(|e| match e {
+        token::Reject::Expired => "token_expired",
+        _ => "token_invalid",
+    })?;
+    // A2: the binding is the person (`sub`), not the token — a refreshed token keeps the session.
     let id = format!("user:{}", p.sub);
-    Some(Caller {
+    Ok(Caller {
         binding: id.clone(),
         id,
         principal: Some(p),
@@ -277,10 +292,13 @@ pub fn guard(
         t0: Instant::now(),
     };
     if !auth::ip_allowed(cfg, log.ip) {
-        return Err(log.deny(cfg, Status::permission_denied("ip not allowed")));
+        return Err(log.deny(cfg, Status::permission_denied("ip not allowed"), "cidr"));
     }
-    let Some(caller) = credential(app, cfg, md) else {
-        return Err(log.deny(cfg, Status::unauthenticated("unauthorized")));
+    let caller = match credential(app, cfg, md) {
+        Ok(c) => c,
+        Err(reason) => {
+            return Err(log.deny(cfg, Status::unauthenticated("unauthorized"), reason));
+        }
     };
     log.key_id = Some(caller.id.clone());
     Ok((log, caller))
@@ -320,6 +338,7 @@ pub async fn dispatch_body(
         return Err(log.deny(
             cfg,
             Status::resource_exhausted("throttled: rate limit exceeded"),
+            "throttled",
         ));
     }
     let Ok(_permit) = app.sem.try_acquire() else {
@@ -327,8 +346,12 @@ pub async fn dispatch_body(
         return Err(log.deny(
             cfg,
             Status::resource_exhausted("busy: max inflight reached"),
+            "inflight",
         ));
     };
+    // C6: a call to a blocked name is a denial in the log (`blocked_name`); on the wire it stays the
+    // `-32601` "not found" that `mcp::dispatch` answers (§9), so a caller learns nothing new.
+    let blocked = mcp::blocked_target(&app.sidecar, &cfg.blocked, &method, &params).await;
     let out = mcp::dispatch(&app.sidecar, &cfg.blocked, &method, &params).await;
     let ok = match &out {
         Ok(Some(r)) => !r.get("isError").and_then(Value::as_bool).unwrap_or(false),
@@ -336,15 +359,23 @@ pub async fn dispatch_body(
         Err(_) => false,
     };
     app.metrics.record(ok);
-    let extra = if cfg.verbose {
+    let mut extra = if cfg.verbose {
         json!({"request": rpc, "response": match &out {
             Ok(v) => v.clone().unwrap_or(Value::Null),
             Err(e) => json!({"code": e.code, "message": e.message}),
         }})
     } else {
-        Value::Null
+        json!({})
     };
-    log.emit(cfg, if ok { "ok" } else { "error" }, Code::Ok, extra);
+    let status = if blocked {
+        extra["reason"] = json!("blocked_name");
+        "denied"
+    } else if ok {
+        "ok"
+    } else {
+        "error"
+    };
+    log.emit(cfg, status, Code::Ok, extra);
     Ok(match out {
         Ok(Some(result)) => Some(json!({"jsonrpc": "2.0", "id": id, "result": result})),
         Ok(None) => None,
@@ -499,5 +530,219 @@ mod tests {
         }
         crate::log::set_file(None);
         let _ = std::fs::remove_file(&p);
+    }
+
+    fn h(pairs: &[(&'static str, &str)]) -> MetadataMap {
+        let mut m = MetadataMap::new();
+        for (k, v) in pairs {
+            m.insert(*k, v.parse().unwrap());
+        }
+        m
+    }
+
+    fn user_token(secret: &str, claims: Value) -> String {
+        let key = crate::session::Sessions::new(Some(secret), 60).derived_key("oauth");
+        format!("Bearer {}", token::mint(&claims, &key))
+    }
+
+    /// C6: `credential` names why it refused (for the access log only; the wire says "unauthorized").
+    #[tokio::test]
+    async fn credential_names_the_reason_it_refuses() {
+        let c = cfg(&[
+            ("RAMEN_MCP_KEYS", "rmk_test"),
+            ("RAMEN_SESSION_SECRET", "s"),
+            ("RAMEN_OAUTH_ISSUER", "https://console.example"),
+            ("RAMEN_GROUP", "demo"),
+            ("RAMEN_ZONE", "a"),
+        ]);
+        let a = app(c.clone()).await;
+        let now = session::now();
+        let claims = |exp: u64, aud: &str| json!({"iss": "https://console.example", "sub": "u1", "aud": aud, "scope": aud, "exp": exp});
+        let reason = |md: MetadataMap| credential(&a, &c, &md).err();
+        assert_eq!(reason(h(&[])), Some("no_key"));
+        assert_eq!(
+            reason(h(&[("authorization", "Basic rmk_test")])),
+            Some("no_key")
+        );
+        assert_eq!(
+            reason(h(&[("authorization", "Bearer rmk_wrong")])),
+            Some("bad_key")
+        );
+        assert_eq!(
+            reason(h(&[("authorization", "Bearer a.b.c")])),
+            Some("token_invalid")
+        );
+        assert_eq!(
+            reason(h(&[(
+                "authorization",
+                &user_token("s", claims(now - 1, "mcp:demo:a"))
+            )])),
+            Some("token_expired")
+        );
+        assert_eq!(
+            reason(h(&[(
+                "authorization",
+                &user_token("s", claims(now + 60, "mcp:demo:b"))
+            )])),
+            Some("token_invalid")
+        );
+        assert_eq!(
+            reason(h(&[(
+                "authorization",
+                &user_token("other", claims(now + 60, "mcp:demo:a"))
+            )])),
+            Some("token_invalid")
+        );
+        let ok = credential(
+            &a,
+            &c,
+            &h(&[(
+                "authorization",
+                &user_token("s", claims(now + 60, "mcp:demo:a")),
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            (ok.id.as_str(), ok.binding.as_str()),
+            ("user:u1", "user:u1")
+        );
+        assert_eq!(
+            credential(&a, &c, &h(&[("authorization", "Bearer rmk_test")]))
+                .unwrap()
+                .principal,
+            None
+        );
+        // no issuer: a JWT-shaped bearer is just a wrong key
+        let plain = cfg(&[("RAMEN_MCP_KEYS", "rmk_test")]);
+        assert_eq!(
+            credential(
+                &*app(plain.clone()).await,
+                &plain,
+                &h(&[("authorization", "Bearer a.b.c")])
+            )
+            .err(),
+            Some("bad_key")
+        );
+    }
+
+    fn last_line_with(p: &std::path::Path, nonce: &str) -> Value {
+        let text = std::fs::read_to_string(p).unwrap();
+        text.lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v["nonce"] == nonce || v["name"] == nonce)
+            .unwrap_or_else(|| panic!("no emitted line carried {nonce}"))
+    }
+
+    /// C6: the access-log line of every denial carries `reason` and never the credential. The log-file lock is
+    /// taken in sync code and the async work runs under `block_on`, so no guard is held across an `.await`.
+    #[test]
+    fn denials_carry_a_reason_and_never_the_credential() {
+        let _guard = crate::log::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let p = std::env::temp_dir().join(format!("ramen-reason-log-{}.log", std::process::id()));
+        crate::log::set_file(Some(p.clone()));
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(reason_lines(&p));
+        crate::log::set_file(None);
+        let _ = std::fs::remove_file(p);
+    }
+
+    async fn reason_lines(p: &std::path::Path) {
+        let c = cfg(&[("RAMEN_MCP_KEYS", "rmk_test")]);
+        let a = app(c.clone()).await;
+        // guard: wrong key
+        let md = h(&[("authorization", "Bearer rmk_wrong")]);
+        let Err(st) = guard(&a, &c, None, &md, "grpc") else {
+            panic!("a wrong key must be refused")
+        };
+        assert_eq!(st.code(), Code::Unauthenticated);
+        let text = std::fs::read_to_string(p).unwrap();
+        let line = text
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v["reason"] == "bad_key")
+            .expect("a denied line with reason bad_key");
+        assert_eq!(
+            (line["status"].as_str(), line["level"].as_str()),
+            (Some("denied"), Some("warn"))
+        );
+        assert!(
+            !text.contains("rmk_wrong"),
+            "the credential must never be logged"
+        );
+        // blocked name: wire stays -32601, log says denied/blocked_name
+        let blocked = cfg(&[
+            ("RAMEN_MCP_KEYS", "rmk_test"),
+            ("RAMEN_BLOCKED", "calc-nonce"),
+        ]);
+        a.sidecar
+            .set_loaded_for_test(
+                json!({"tools": [{"name": "calc-nonce", "inputSchema": {"type": "object"}}]}),
+            )
+            .await;
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let out = dispatch_body(
+            &a,
+            &blocked,
+            &mut log,
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"calc-nonce","arguments":{}}}"#,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(out["error"]["code"], -32601);
+        let line = last_line_with(p, "calc-nonce");
+        assert_eq!(
+            (line["status"].as_str(), line["reason"].as_str()),
+            (Some("denied"), Some("blocked_name"))
+        );
+        // inflight: every permit taken
+        let permits = a.sem.try_acquire_many(a.sem_max as u32).unwrap();
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let st = dispatch_body(
+            &a,
+            &c,
+            &mut log,
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"busy-nonce"}}"#,
+        )
+        .await
+        .unwrap_err();
+        drop(permits);
+        assert_eq!(st.code(), Code::ResourceExhausted);
+        assert_eq!(last_line_with(p, "busy-nonce")["reason"], "inflight");
+        // the plain deny path keeps the reason verbatim (cidr/origin/too_large/session_* come through here)
+        for reason in [
+            "cidr",
+            "origin",
+            "too_large",
+            "session_expired",
+            "session_invalid",
+            "throttled",
+        ] {
+            let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "http");
+            log.name = Some(format!("deny-{reason}"));
+            log.deny(&c, Status::permission_denied("x"), reason);
+            assert_eq!(
+                last_line_with(p, &format!("deny-{reason}"))["reason"],
+                reason
+            );
+        }
+        crate::log::set_file(None);
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// C2: `Admin/Metrics` reports the manifest hash of the last load, `""` before it.
+    #[tokio::test]
+    async fn metrics_report_the_manifest_hash() {
+        let a = app(cfg(&[])).await;
+        assert_eq!(a.metrics_json().await["manifest_hash"], "");
+        a.sidecar
+            .set_loaded_for_test(json!({"tools": [], "hash": "deadbeef"}))
+            .await;
+        assert_eq!(a.metrics_json().await["manifest_hash"], "deadbeef");
     }
 }

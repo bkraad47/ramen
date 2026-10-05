@@ -22,7 +22,7 @@ def demo(demo_bucket):
 
 def test_call_tool_ok(demo):
     r = demo.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
-    assert r == {"content": [{"type": "text", "text": "5"}], "isError": False}
+    assert r == {"content": [{"type": "text", "text": "5"}], "structuredContent": {"result": 5}, "isError": False}
 
 
 def test_call_tool_exception_is_error_without_traceback(demo):
@@ -44,7 +44,8 @@ def test_call_unknown_tool(demo):
 
 
 def test_dict_result_is_json(tmp_path):
-    write_pkg(tmp_path, "tools", "t", TOOL, "def f(a):\n    return {'a': a, 'n': 1.5}\n")
+    plain = {k: v for k, v in TOOL.items() if k != "output"}
+    write_pkg(tmp_path, "tools", "t", plain, "def f(a):\n    return {'a': a, 'n': 1.5}\n")
     r = Executor(load(tmp_path)).call_tool("t", {"a": "z"})
     assert r["content"][0]["text"] == '{"a": "z", "n": 1.5}'
 
@@ -109,3 +110,39 @@ def test_get_prompt_missing_arg(demo):
         demo.get_prompt("get_calculation_prompt", {})
     with pytest.raises(KeyError):
         demo.get_prompt("nope", {})
+
+
+def test_scalar_output_is_wrapped_as_structured_content(demo):
+    r = demo.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
+    assert r == {
+        "content": [{"type": "text", "text": "5"}],
+        "structuredContent": {"result": 5},
+        "isError": False,
+    }
+
+
+def test_object_output_is_validated_and_passed_through(tmp_path):
+    obj = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"], "additionalProperties": False}
+    code = "def f(a):\n    return {'n': int(a)} if a.isdigit() else {'n': a}\n"
+    write_pkg(tmp_path, "tools", "t", {**TOOL, "output": obj}, code)
+    ex = Executor(load(tmp_path))
+    r = ex.call_tool("t", {"a": "7"})
+    assert r["structuredContent"] == {"n": 7} and r["isError"] is False
+    assert r["content"][0]["text"] == '{"n": 7}'
+    r = ex.call_tool("t", {"a": "x"})
+    assert r["isError"] is True
+    assert r["content"][0]["text"] == "invalid output: n: 'x' is not of type 'integer'"
+    assert "structuredContent" not in r
+
+
+def test_scalar_output_mismatch_is_a_tool_error(tmp_path):
+    write_pkg(tmp_path, "tools", "t", {**TOOL, "output": {"type": "number"}}, "def f(a):\n    return a\n")
+    r = Executor(load(tmp_path)).call_tool("t", {"a": "nope"})
+    assert r["isError"] is True and r["content"][0]["text"] == "invalid output: result: 'nope' is not of type 'number'"
+
+
+def test_no_output_schema_means_no_structured_content(tmp_path):
+    plain = {k: v for k, v in TOOL.items() if k != "output"}
+    write_pkg(tmp_path, "tools", "t", plain, "def f(a):\n    return {'a': a}\n")
+    r = Executor(load(tmp_path)).call_tool("t", {"a": "z"})
+    assert r == {"content": [{"type": "text", "text": '{"a": "z"}'}], "isError": False}

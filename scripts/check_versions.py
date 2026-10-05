@@ -59,9 +59,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=Path(__file__).resolve().parents[1], type=Path)
     ap.add_argument("--tag", help="git tag to compare, e.g. v0.1.0")
+    ap.add_argument(
+        "--demo",
+        type=Path,
+        help="the demo group repo's VERSION (default ../ramen-demo-mcp/VERSION beside this repo); skipped when absent",
+    )
     a = ap.parse_args()
     version = (a.root / "VERSION").read_text().strip()
     rows, bad = [("VERSION", version)], []
+    # 0.7.0: the demo group repo (ramen-demo-mcp-group) releases in step with ramen — Glama builds it from its own
+    # release tag, so a lagging demo VERSION shows up as a stale listing. Only ramen-master has the checkout beside us.
+    demo = a.demo if a.demo is not None else a.root.parent / "ramen-demo-mcp" / "VERSION"
+    if demo.exists():
+        v = demo.read_text().strip()
+        rows.append(("../ramen-demo-mcp/VERSION", v))
+        if v != version:
+            bad.append(f"../ramen-demo-mcp/VERSION: {v} != {version}")
     if not SEMVER.match(version):
         bad.append(f"VERSION {version!r} is not semver")
     for rel, keys in {**REQUIRED, **OPTIONAL}.items():

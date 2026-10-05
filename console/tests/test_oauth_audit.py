@@ -1,5 +1,7 @@
 """D3 (0.7.0): the token endpoint audits mints, refreshes, refresh-token reuse and every denial with its reason."""
 
+import secrets
+
 from tests.test_api import app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 from tests.test_oauth_server import CLIENT, consent, pkce, register
 
@@ -83,6 +85,7 @@ def test_denials_carry_a_reason(demo):
 def test_a_revoked_user_is_denied_with_that_reason(demo):
     cid = register(demo)
     tok = mint(demo, cid)
-    demo.post("/api/v1/users/me/password", json={"password": "N3wPassw0rd!-here"})  # bumps the epoch (V1.4)
+    new_pw = "epoch-bump-" + secrets.token_urlsafe(8)  # not a literal: secret scanners flag fixture passwords
+    demo.post("/api/v1/users/me/password", json={"password": new_pw})  # bumps the epoch (V1.4)
     assert refresh(demo, cid, tok["refresh_token"]).status_code == 400
     assert any("reason:sessions_revoked" in a["tags"] for a in rows(demo, "oauth.denied"))

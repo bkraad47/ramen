@@ -261,3 +261,24 @@ def test_local_read_file_reads_the_clone_and_returns_none_when_absent(tmp_path):
     assert asyncio.run(c.read_file("demo", "mcp/tests.yaml")) == b"cases: []"
     assert asyncio.run(c.read_file("demo", "mcp")) is None  # a directory is not a file
     assert Path(p).exists()
+
+
+def test_golden_cases_for_a_blocked_tool_are_skipped_not_failed(demo, ws, tmp_path):
+    """Found by the compose e2e after 0.7.0: blocking a tool (CONTRACTS §9) made its golden case fail the deploy,
+    because the node answers -32601 for a blocked name. A blocked tool is an intentional removal: cases skipped."""
+    demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "ci"})
+    for w in ws.values():
+        w.tool_results["calc"] = {"content": [{"type": "text", "text": "42"}]}
+        w.tool_results["other"] = {"content": [{"type": "text", "text": "ok"}]}
+    write_cases(
+        tmp_path,
+        "cases:\n  - tool: calc\n    args: {a: 40, b: 2}\n    expect: {text_contains: '42'}\n"
+        "  - tool: other\n    name: other\n    expect: {text_contains: 'ok'}\n",
+    )
+    assert demo.put("/api/v1/groups/demo/environments/prod/blocked", json={"blocked": ["calc"]}).status_code == 200
+    job = deploy(demo)
+    assert job["status"] == "ok", job
+    assert job["result"]["zone-a"]["golden"] == {"passed": 1, "failed": [], "skipped": ["calc: blocked"]}
+    assert any("golden calc: skipped (blocked)" in line for line in job["log"])
+    calls = [c for c in ws["cold"].calls if c[0] == "Mcp/Call" and c[2].get("method") == "tools/call"]
+    assert [c[2]["params"]["name"] for c in calls] == ["other"]

@@ -4,6 +4,7 @@ image tags), mkdocs `version_current`, the Dockerfile ARG defaults and the compo
 Usage: check_versions.py [--root <ramen>] [--tag vX.Y.Z]   exit 1 on any mismatch."""
 
 import argparse
+import json
 import re
 import sys
 import tomllib
@@ -92,6 +93,11 @@ def main() -> int:
         rows.append((rel, "(hard-coded)" if literal else "(from metadata)"))
         if literal:
             bad.append(f"{rel}: __version__ is hard-coded; derive it from the installed distribution")
+    # the registry refuses a description over 100 characters at publish time, after the release is already tagged
+    for rel in ("server.json", "mcpb/manifest.json"):
+        path = a.root / rel
+        if path.exists() and len(desc := json.loads(path.read_text()).get("description", "")) > 100:
+            bad.append(f"{rel}: description is {len(desc)} characters (registry limit 100)")
     if a.tag:
         t = a.tag.removeprefix("v")
         rows.append(("tag", t))

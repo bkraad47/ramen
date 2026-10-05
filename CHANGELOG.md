@@ -3,6 +3,11 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.6.21] — a registry listing that says what Ramen is for
+- The official MCP registry entry `io.github.bkraad47/ramen` gets a new title and description: "Ramen: self-hosted
+  MCP for teams" / "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every
+  call." No product code changed since 0.6.1.
+
 ## [0.6.2] — Ramen on the official MCP registry
 - Listed on the official MCP registry as `io.github.bkraad47/ramen` (`server.json`): a streamable-http remote
   template `https://{ramen_edge}/mcp` with the `ramen-group` / `ramen-zone` headers and an optional group-key

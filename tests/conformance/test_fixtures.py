@@ -24,7 +24,9 @@ def test_schema_is_valid_2020_12():
 
 
 @pytest.mark.parametrize(
-    "path", protos("demo_group") + protos("secrets_group") + protos("numpy_group"), ids=lambda p: p.parent.name
+    "path",
+    protos("demo_group") + protos("secrets_group") + protos("numpy_group") + protos("schema_group"),
+    ids=lambda p: p.parent.name,
 )
 def test_valid_fixture_matches_schema_and_layout(path: Path):
     doc = json.loads(path.read_text())

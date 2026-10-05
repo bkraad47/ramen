@@ -89,6 +89,7 @@ class Verbose(BaseModel):
 class DeployIn(BaseModel):
     zone: str | None = None
     canary: bool = True
+    breaking: bool = False  # C5: accept a breaking schema change the compatibility gate would otherwise refuse
 
 
 class WorkersIn(ListFields):
@@ -200,6 +201,21 @@ class GitHubAppConfig(BaseModel):
 
 class NotifyConfig(ListFields):
     user_ids: list[str]
+
+
+class RegionsConfig(ListFields):
+    """C7: the blocked regions per provider — as `gcp`/`aws` lists (what the Config card's checkbox dropdowns post)
+    or wrapped in `blocked`, the shape the stored doc has."""
+
+    gcp: list[str] | None = None
+    aws: list[str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unwrap(cls, data):
+        if isinstance(data, dict) and isinstance(data.get("blocked"), dict):
+            return {**data["blocked"], **{k: v for k, v in data.items() if k != "blocked"}}
+        return data
 
 
 class ImageIn(BaseModel):

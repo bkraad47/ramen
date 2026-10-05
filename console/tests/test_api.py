@@ -108,7 +108,7 @@ def test_pages_render(demo):
         assert r.status_code == 200, path
         assert "F26B3A" in r.text or path == "/login" or "logo.png" in r.text
     assert demo.get("/static/logo.png").status_code == 200
-    assert demo.get("/static/htmx.min.js").status_code == 200
+    assert demo.get("/static/htmx.js").status_code == 200
     assert demo.get("/groups/nope").status_code == 404
     assert demo.get("/ui/dashboard").status_code == 200
 

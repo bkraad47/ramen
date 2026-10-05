@@ -85,3 +85,9 @@ def test_input_schema_maps_types():
     assert s["properties"]["e"] == {"type": "string", "enum": ["x", "y"], "description": "E"}
     assert s["required"] == ["a", "b", "c", "d", "e"]
     assert s["additionalProperties"] is False
+
+
+def test_output_must_be_a_valid_json_schema():
+    with pytest.raises(ProtoError, match="output"):
+        validate_proto({**BASE, "output": {"type": "float"}}, "tools", "t", "t")
+    validate_proto({**BASE, "output": {"type": "object", "properties": {"n": {"type": "integer"}}}}, "tools", "t", "t")

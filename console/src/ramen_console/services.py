@@ -1,3 +1,4 @@
+from . import regions
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
@@ -168,11 +169,22 @@ class Services:
     async def zones(self) -> list[dict]:
         return sorted(await self.store.list("zones"), key=lambda z: z["name"])
 
+    async def blocked_regions(self) -> dict[str, list[str]]:
+        """C7: `config/regions` → `{"gcp": [...], "aws": [...]}`, both keys always present."""
+        doc = (await self.store.get("config", regions.DOC) or {}).get("blocked") or {}
+        return {p: list(doc.get(p) or []) for p in regions.PROVIDERS}
+
+    async def region_block(self, provider, region) -> str | None:
+        """The blocked region a zone's `region` falls in, or None."""
+        return regions.blocked_region(provider, region or "", await self.blocked_regions())
+
     async def create_zone(self, name, provider="local", region="") -> dict:
         if not NAME_RE.match(name or ""):
             raise invalid("Zone name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("zones", name):
             raise conflict(f"Zone {name} exists")
+        if hit := await self.region_block(provider, region):
+            raise forbidden(regions.message(hit))
         return await self.store.put(
             "zones", name, {"name": name, "provider": provider, "region": region, "created": now()}
         )

@@ -65,11 +65,16 @@ async def authorize_decide(
 async def token(request: Request):
     """Public client, no client authentication (PKCE is the proof); form-encoded per RFC 6749."""
     form = {k: str(v) for k, v in (await request.form()).items()}
-    srv = server(request)
+    grant = form.get("grant_type") or "-"
+    tags = [f"grant:{grant}", f"client:{form.get('client_id') or '-'}"]
     try:
-        out = await srv.exchange(form, base_url(request))
+        out = await server(request).exchange(form, base_url(request))
     except OAuthError as e:
-        note(request, "oauth.token", form.get("grant_type") or "-", [f"error:{e.error}"])
+        # D3: every denial is audited with its reason; a replayed refresh token is its own event (M3)
+        action = "oauth.refresh_reuse" if e.reason == "refresh_reuse" else "oauth.denied"
+        note(request, action, grant, tags + [f"reason:{e.reason}", f"error:{e.error}"])
         return JSONResponse(e.body(), e.status_code, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
-    note(request, "oauth.token", out["scope"], [f"grant:{form.get('grant_type')}", f"client:{form.get('client_id')}"])
+    _, group, zone = out["scope"].split(":")
+    action = "oauth.refresh" if grant == "refresh_token" else "oauth.token"
+    note(request, action, out["scope"], tags + [f"group:{group}", f"zone:{zone}"])
     return JSONResponse(out, 200, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})

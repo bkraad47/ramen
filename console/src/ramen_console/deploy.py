@@ -2,7 +2,8 @@ import asyncio
 import logging
 import os
 
-from . import baseuri, github_app
+from . import baseuri, compat, github_app, golden, regions
+from .cloud.base import GateError
 from .services import Services
 from .util import now, uid
 
@@ -42,7 +43,9 @@ class Jobs:
         )[:20]
 
 
-async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: str | None, canary: bool, audit):
+async def run_deploy(
+    svc: Services, job: dict, group: str, env_name: str, zone: str | None, canary: bool, audit, breaking: bool = False
+):
     zones: list[str] = []
     try:
         g = await svc.get_group(group)
@@ -55,7 +58,19 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         )
         job["log"].append(f"{now()} syncing repo {g['repo_url']}")
         await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
+        cases = await _golden_cases(svc, group, job)
+        prev = env.get("last_deploy") or {}
+        blocked = await svc.blocked_regions()
+        gates: dict[str, dict] = {}
         for z in zones:
+            zdoc = await svc.store.get("zones", z) or {}
+            if hit := regions.blocked_region(zdoc.get("provider", ""), zdoc.get("region") or "", blocked):
+                # C7: a region blocked after the zone was created; the warning digest (N2) carries this line
+                msg = regions.message(hit)
+                log.warning("deploy %s/%s: zone %s refused, %s", group, env_name, z, msg)
+                job["log"].append(f"{now()} zone {z}: refused, {msg}")
+                results[z] = {"ok": False, "error": msg, "workers": []}
+                continue
             vars_, _, mcp = await svc.secrets_for(group, env_name, z)
             cfg = {
                 "RAMEN_VERBOSE": "1" if env.get("verbose") else "0",
@@ -95,16 +110,26 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
                 )
             cfg = await svc.secrets_backend.resolve_config(cfg)
             job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
+            gates[z] = {}
+            stable = (prev.get("manifest") or {}).get((prev.get("stable") or {}).get(z))
             results[z] = await svc.cloud.deploy(
-                group, env_name, z, canary=canary, config=cfg, spec=await svc.zone_spec(group, z), log=job["log"].append
+                group,
+                env_name,
+                z,
+                canary=canary,
+                config=cfg,
+                spec=await svc.zone_spec(group, z),
+                log=job["log"].append,
+                gate=_gate(job, group, env_name, z, breaking, stable, cases, cfg, gates[z]),
             )
+            results[z].update(gates[z])
         ok = all(r.get("ok") for r in results.values()) if results else False
         failed = [
             f"{z} {w['id']}: {w.get('error') or w.get('status')}"
             for z, r in results.items()
             for w in r.get("workers", [])
             if not w.get("ok")
-        ]
+        ] + [f"{z}: {r['error']}" for z, r in results.items() if not r.get("ok") and not r.get("workers")]
         for r in results.values():
             r.pop("log", None)
         job.update(
@@ -126,17 +151,98 @@ async def run_deploy(svc: Services, job: dict, group: str, env_name: str, zone: 
         job.update(status="error", error=f"{type(e).__name__}: {e}", finished=now())
     try:
         env = await svc.get_env(group, env_name)
+        manifest, stable = _manifests(job.get("result") or {}, env.get("last_deploy") or {})
         env["last_deploy"] = {
             "job": job["id"],
             "status": job["status"],
             "at": job["finished"],
             "error": job["error"],
             "packages": _packages(job.get("result") or {}),
+            "manifest": manifest,  # C3: full definitions + hash per worker
+            "stable": stable,  # zone → the manifest key the next canary is diffed against (B3)
         }
         await svc.store.put("environments", env["id"], env)
     except Exception:  # noqa: BLE001
         log.exception("could not record last_deploy")
     await audit("deploy", f"{group}/{env_name}", job["status"] == "ok", [f"group:{group}", f"job:{job['id']}"])
+
+
+async def _golden_cases(svc: Services, group: str, job: dict) -> list[dict]:
+    """C4: `mcp/tests.yaml` from the synced repo; a file the console cannot run fails the deploy before any zone."""
+    raw = await svc.cloud.read_file(group, golden.PATH)
+    if raw is None:
+        return []
+    try:
+        cases = golden.parse(raw.decode("utf-8", "replace"))
+    except golden.GoldenError as e:
+        raise RuntimeError(f"{golden.PATH}: {e}") from None
+    job["log"].append(f"{now()} {golden.PATH}: {len(cases)} golden case{'s' if len(cases) != 1 else ''}")
+    return cases
+
+
+def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
+    """The deploy gate the adapter awaits on the canary (CONTRACTS C4/C5): schema compatibility against the stable
+    track's stored manifest, then every golden case. `info` collects `compat` / `golden` for the job result."""
+    log_ = job["log"]
+    prefix = f"RAMEN_SECRET_{group.upper().replace('-', '_')}__"
+
+    def secret(ref: str):  # `{{$group.VAR}}` → this group's already-resolved deploy secret
+        g, _, name = ref.partition(".")
+        return cfg.get(f"{prefix}{name}") if g == group else None
+
+    async def gate(result, call):
+        if stable is not None and (new := compat.manifest_of(result)) is not None:
+            d = compat.diff(stable, new)
+            info["compat"] = {**d, "against": stable["hash"], "forced": False}
+            log_.append(f"{now()} zone {zone}: schema vs stable {stable['hash'][:12]}: {compat.summary(d)}")
+            if compat.is_breaking(d):
+                if not breaking:
+                    raise GateError(
+                        "breaking schema change (deploy again with breaking: true to accept): "
+                        + "; ".join(d["breaking"])
+                    )
+                info["compat"]["forced"] = True
+                log_.append(f"{now()} zone {zone}: breaking change accepted (breaking: true)")
+        if not cases:
+            return
+        if call is None:
+            log.warning("deploy %s/%s: zone %s: golden cases skipped, the group has no MCP key", group, env_name, zone)
+            log_.append(f"{now()} zone {zone}: golden cases skipped: no MCP key to call the canary with")
+            info["golden"] = {"skipped": "no MCP key", "cases": len(cases)}
+            return
+        failed = []
+        for i, c in enumerate(cases, 1):
+            try:
+                args = golden.resolve_args(c["args"], secret)
+            except golden.GoldenError as e:
+                raise GateError(f"golden case {c['name']}: {e}") from None
+            why = golden.check_response(c, await call(golden.request({**c, "args": args}, i)))
+            log_.append(f"{now()} zone {zone}: golden {c['name']}: {'ok' if why is None else 'FAILED ' + why}")
+            if why is not None:
+                failed.append(f"{c['name']}: {why}")
+        info["golden"] = {"passed": len(cases) - len(failed), "failed": failed}
+        if failed:
+            raise GateError("golden cases failed: " + "; ".join(failed))
+
+    return gate
+
+
+def _manifests(result: dict, prev: dict) -> tuple[dict, dict]:
+    """C3 `manifest` per worker plus `stable`: zone → key of the stable track's manifest. A zone this job did not
+    deploy successfully keeps the stable manifest it had, so a refused canary never erases the baseline."""
+    manifest, stable = {}, {}
+    for z, r in result.items():
+        for w in r.get("workers", []):
+            if (m := compat.manifest_of(w.get("result"))) is None:
+                continue
+            key = f"{z} {w['id']}"
+            manifest[key] = m
+            if r.get("ok") and w.get("ok") and (z not in stable or w.get("track") == "stable"):
+                stable[z] = key
+    for z, key in (prev.get("stable") or {}).items():
+        if z not in stable and key in (prev.get("manifest") or {}):
+            manifest[key], stable[z] = prev["manifest"][key], key
+    return manifest, stable
 
 
 def _packages(result: dict) -> dict:

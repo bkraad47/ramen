@@ -561,6 +561,11 @@ async fn py_end_to_end_with_demo_repo() {
         tools["result"]["tools"][0]["inputSchema"]["required"],
         json!(["var1", "var2", "func"])
     );
+    // C9: the declared `output` (a number) is published as an object schema wrapping `result`
+    assert_eq!(
+        tools["result"]["tools"][0]["outputSchema"],
+        json!({"type": "object", "properties": {"result": {"type": "number"}}, "required": ["result"]})
+    );
     let r = rpc(
         &n,
         "k1",
@@ -571,7 +576,7 @@ async fn py_end_to_end_with_demo_repo() {
     .unwrap();
     assert_eq!(
         r["result"],
-        json!({"content": [{"type": "text", "text": "5"}], "isError": false})
+        json!({"content": [{"type": "text", "text": "5"}], "structuredContent": {"result": 5}, "isError": false})
     );
     let r = rpc(&n, "k1", "tools/call", json!({"name": "demo_calculator_tool", "arguments": {"var1": 2, "var2": 0, "func": "divide"}})).await.unwrap();
     assert_eq!(r["result"]["isError"], true);
@@ -639,6 +644,7 @@ async fn py_end_to_end_with_demo_repo() {
         (Some(true), Some(1), Some(0))
     );
     assert!(m["loaded_at"].is_string());
+    assert_eq!(m["manifest_hash"].as_str().map(str::len), Some(64)); // C2, from the runtime's C1 hash
     // respawn after a kill re-runs runtime.load transparently
     n.app.sidecar.kill("test").await;
     assert!(!n.app.sidecar.alive().await);
@@ -651,6 +657,7 @@ async fn py_end_to_end_with_demo_repo() {
     );
     let b = reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
     assert_eq!(b["tools"][0]["name"], "demo_calculator_tool");
+    assert_eq!(b["hash"], m["manifest_hash"]); // C1: the reload result carries the same hash
     assert_eq!(
         rpc(&n, "k2", "ping", json!({})).await.unwrap()["result"],
         json!({})

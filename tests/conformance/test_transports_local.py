@@ -19,6 +19,7 @@ from ramen_tests.mcp_client import (
     sdk_text,
     text_of,
 )
+from ramen_tests.tokens import mint_console_token
 
 pytestmark = pytest.mark.conformance
 TRANSPORTS = ("grpc", "http")
@@ -270,22 +271,6 @@ def test_tool_code_never_sees_the_nodes_credentials():
     hidden = {"RAMEN_MCP_KEYS", "RAMEN_ADMIN_KEY", "RAMEN_ALLOWED_CIDRS", "RAMEN_ADMIN_CIDRS", *secrets}
     assert not seen & hidden, seen & hidden
     assert {"RAMEN_GROUP", "RAMEN_ZONE", "RAMEN_BUCKET"} <= seen  # the runtime still knows where it is
-
-
-def mint_console_token(claims: dict, session_secret: str) -> str:
-    """What console/src/ramen_console/oauth_server.py::mint_jwt produces (its own test pins that against this same
-    derivation): HS256 with key = HMAC-SHA256(session secret, b"oauth")."""
-    import base64
-    import hashlib
-    import hmac
-
-    def b64(b: bytes) -> str:
-        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
-
-    head = b64(b'{"alg":"HS256","typ":"JWT"}')
-    body = b64(json.dumps(claims, separators=(",", ":")).encode())
-    key = hmac.new(session_secret.encode(), b"oauth", hashlib.sha256).digest()
-    return f"{head}.{body}.{b64(hmac.new(key, f'{head}.{body}'.encode(), hashlib.sha256).digest())}"
 
 
 @pytest.mark.parametrize("transport", TRANSPORTS)

@@ -62,7 +62,12 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <td>{% if n in (e.blocked or []) %}<span class="badge error">Disabled everywhere</span>{% elif can_admin %}<button class="sm {{ 'ghost' if off else 'danger' }}" hx-put="{{ base }}/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/zones/{{ z }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (zb|reject("equalto", n)|list) if off else (zb + [n])}) }}' hx-swap="none">{{ 'Enable' if off else 'Disable' }}</button>{% else %}<span class="badge {{ 'error' if off else 'ok' }}">{{ 'Disabled' if off else 'Enabled' }}</span>{% endif %}</td></tr>
 {% endfor %}{% endfor %}
 {% if pk.errors %}<tr><td colspan="4"><span class="badge error">Errors</span> <code>{{ tojson(pk.errors) }}</code></td></tr>{% endif %}</table>{% endif %}
-{% if not ns.found %}<p class="muted">Deploy to see the packages this zone's workers report.</p>{% endif %}</div>
+{% if not ns.found %}<p class="muted">Deploy to see the packages this zone's workers report.</p>{% endif %}
+{% set zm = [] %}{% for wkey, m in ((e.last_deploy and e.last_deploy.manifest) or {}).items() %}{% if wkey.split(' ')[0] == z %}{% set _ = zm.append((wkey, m)) %}{% endif %}{% endfor %}
+{% if zm %}{% set hashes = zm|map(attribute=1)|map(attribute='hash')|unique|list %}{% set m = zm[0][1] %}<details class="manifest"><summary>Manifest <code title="{{ hashes[0] }}">{{ hashes[0][:12] }}</code>{% if hashes|length > 1 %} <span class="badge error">workers differ</span>{% endif %}</summary>
+<p class="muted">The exact set of tools, resources and prompts this zone served after its last deploy, with the schemas clients see. The hash is what every worker of the zone reports in its metrics; the next canary is checked against it.</p>
+<ul>{% for kind, ident in [('tools', 'name'), ('resources', 'uri'), ('prompts', 'name')] %}<li>{{ kind }}: {% for it in m.get(kind, []) %}<code>{{ it[ident] }}</code>{{ ', ' if not loop.last }}{% else %}<span class="muted">none</span>{% endfor %}</li>{% endfor %}</ul>
+{% for wkey, wm in zm %}<details><summary class="muted">{{ wkey.split(' ', 1)[1] }} · <code>{{ wm.hash }}</code> · schemas</summary><pre>{{ tojson({'tools': wm.tools, 'resources': wm.resources, 'prompts': wm.prompts}, indent=1) }}</pre></details>{% endfor %}</details>{% endif %}</div>
 {% else %}<p class="muted">No zones attached to this environment.</p>{% endfor %}</div>
 {% else %}<p class="muted">No environments</p>{% endfor %}
 

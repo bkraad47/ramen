@@ -8,6 +8,7 @@ from authlib.integrations.starlette_client import OAuth
 
 REQUIRED = ("client_id", "client_secret")
 RESERVED = {"reset", "magic", "oauth", "login", "logout"}
+NOT_PROVIDERS = {"RAMEN_OAUTH_ACCESS_TTL", "RAMEN_OAUTH_REFRESH_TTL"}
 
 
 def metadata_url(p: dict) -> str | None:
@@ -46,6 +47,8 @@ class OAuthRegistry:
         env = env or os.environ
         found: dict[str, dict] = {}
         for k, v in env.items():
+            if k in NOT_PROVIDERS:  # C8 token lifetimes share the prefix but configure no provider
+                continue
             if k.startswith("RAMEN_OAUTH_") and k.count("_") >= 3:
                 _, _, name, field = k.split("_", 3)
                 found.setdefault(name.lower(), {})[field.lower()] = v

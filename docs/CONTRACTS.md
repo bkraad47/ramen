@@ -469,3 +469,46 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   stripped; `<prefix>/*` with `ramen-group`/`ramen-zone` → that zone's workers, stripped;
   `/.well-known/oauth-authorization-server<prefix>` → the console's `/.well-known/oauth-authorization-server`.
   Documented in `docs/wiki/configuration.md`.
+
+## 19. v0.7.0 — gates, manifests, regions, output schemas (binding)
+- **Manifest hash.** The runtime's load result and `Admin/Reload` carry `hash` = sha256 of the canonical JSON
+  (`sort_keys`, no spaces) of `{"tools", "resources", "prompts"}` with each prompt's `_meta` removed; `errors`/`env`
+  are not hashed. `Admin/Metrics` reports `manifest_hash` (the last load's `hash`, `""` before it). The console stores
+  `env.last_deploy.manifest[<zone> <pod>] = {hash, tools, resources, prompts}` and `last_deploy.stable[zone]` (the
+  stable track's key), shows the hash per zone and per worker, and flags workers of one zone that disagree.
+- **Output schema.** A tool proto's `output` is a JSON Schema (invalid → that package's load error). `describe()`
+  emits it as `outputSchema`; a non-object schema is wrapped as `{"type":"object","properties":{"result":<it>},
+  "required":["result"]}` and the value as `structuredContent: {"result": v}`; an object schema and dict are used as
+  declared. The runtime validates and answers `isError: true`, text `invalid output: <path>: <message>` on a
+  mismatch, without `structuredContent`. Tools without `output` are unchanged (no `outputSchema`, no
+  `structuredContent`).
+- **Compatibility gate.** `Cloud.deploy(..., gate=None)`: adapters await `gate(canary_result, call)` after the
+  canary's reload and smoke; a `GateError` takes the existing failure path (canary to 0, stable untouched). The
+  console's gate diffs the canary manifest against `last_deploy.stable[zone]`'s manifest: removed tool/resource/
+  prompt, removed property, new required property, changed `type`, narrowed `enum` (recursive; prompt arguments and
+  `outputSchema` included) ⇒ breaking ⇒ refused unless `DeployIn.breaking` is true; descriptions and `_meta` are
+  ignored; `job.result[zone].compat = {breaking, additive, against, forced}`. The local adapter runs the gate on
+  every reload.
+- **Golden cases.** `mcp/tests.yaml` `{cases: [{name?, tool, args, expect: {text_contains|subset|exact}}]}`, read
+  through `Cloud.read_file(group, "mcp/tests.yaml")` (local clone, GCS blob, S3 object). Each case is a `tools/call`
+  on the canary with the group's first MCP key; `{{$group.VAR}}` in `args` is resolved from the deploy's resolved
+  config; a JSON-RPC error or a mismatch fails the case; any failure is a `GateError` naming the case;
+  `job.result[zone].golden = {passed, failed}` or `{"skipped": "no MCP key"}`. A malformed file fails the job before
+  any zone changes.
+- **Blocked regions.** `config/regions` `{"blocked": {"gcp": [...], "aws": [...]}}`, `GET|PUT /api/v1/config/regions`
+  (super admin, audited `config.regions`, unknown region → 422), names from `regions.json`. A zone's `region` is
+  matched to a region by prefix on the provider's list (`us-west1-a` → `us-west1`; `us-west1` never blocks
+  `us-west12`). Blocked ⇒ `POST /api/v1/zones` 403 `Region <r> is blocked by a super admin`; a deploy marks that zone
+  `{"ok": false, "error": <same>, "workers": []}`, logs a `ramen.deploy` WARNING and continues with the other zones.
+- **Denial reasons.** Every denied call's access-log line carries `reason` ∈ `no_key`, `bad_key`, `token_expired`,
+  `token_invalid`, `cidr`, `blocked_name`, `throttled`, `origin`, `too_large`, `inflight`, `session_expired`,
+  `session_invalid`; the credential is never logged; a blocked-name call logs `denied` (warn), wire `-32601` as
+  before. The console audits `oauth.token`, `oauth.refresh`, `oauth.refresh_reuse`, `oauth.denied` (+ `reason:`).
+- **Token lifetimes.** `RAMEN_OAUTH_ACCESS_TTL` (default 3600 s) and `RAMEN_OAUTH_REFRESH_TTL` (default 30 d), read at
+  every mint, invalid values fall back with a warning; neither is an OAuth provider name.
+- **Sessions and expiry (verified, no change).** Session ids are bound to `user:<sub>` for tokens, so a refreshed
+  token keeps the session; an expired token gets the no-token `401` challenge byte for byte.
+- **Images.** The release publishes `ramen-worker` and `ramen-console` for `linux/amd64,linux/arm64`, tags
+  `<version>` and `latest`, to `ghcr.io/bkraad47/` always and `docker.io/bkraad47/` when the Docker Hub secrets exist.
+- **Process (D42).** Versions are built on branch `v<version>`, merged to `main` by pull request, then tagged; the
+  demo repo carries `VERSION` and the same tag; `check_versions.py` compares it when present.

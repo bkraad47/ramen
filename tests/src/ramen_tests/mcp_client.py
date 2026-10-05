@@ -439,22 +439,34 @@ class HttpNode:
         return self._client.get(url, headers=headers or {}, timeout=self.timeout)
 
 
-@asynccontextmanager
-async def http_session(node: HttpNode, key: str | None = None, timeout: float = 60):
-    """Official mcp SDK Streamable HTTP ClientSession straight at the node's `/mcp` (§16.4: no bridge to install)."""
+def sdk_http_client(node: HttpNode, key: str | None = None, timeout: float = 60):
+    """The httpx2.AsyncClient `http_session` drives the SDK with: bearer + routing headers. Handed out so a test can
+    change `client.headers["Authorization"]` on the live session (what a client does after a token refresh)."""
     import httpx2
-    from mcp.client.streamable_http import streamable_http_client
 
     k = node.key if key is None else key
     headers = {
         name: value for name, value in node.headers(k, session=False).items() if name not in ("Content-Type", "Accept")
     }
-    verify: bool | str = E.tls_verify()
-    async with httpx2.AsyncClient(headers=headers, verify=verify, timeout=timeout) as client:
+    return httpx2.AsyncClient(headers=headers, verify=E.tls_verify(), timeout=timeout)
+
+
+@asynccontextmanager
+async def http_session(node: HttpNode, key: str | None = None, timeout: float = 60, http_client=None):
+    """Official mcp SDK Streamable HTTP ClientSession straight at the node's `/mcp` (§16.4: no bridge to install).
+    `http_client`: a caller-owned `sdk_http_client()` (the caller closes it); else one is made for the session."""
+    from mcp.client.streamable_http import streamable_http_client
+
+    own = http_client is None
+    client = sdk_http_client(node, key, timeout) if own else http_client
+    try:
         async with streamable_http_client(node.url, http_client=client) as streams:
             async with ClientSession(streams[0], streams[1], read_timeout_seconds=timeout) as s:
                 await s.initialize()
                 yield s
+    finally:
+        if own:
+            await client.aclose()
 
 
 # -- bridge (stdio) ---------------------------------------------------------------------------------------------------
@@ -487,8 +499,9 @@ def bridge_args(target: str, key: str, group: str, zone: str, tls: bool = False,
 
 
 @asynccontextmanager
-async def bridge_session(node: Node, key: str | None = None, timeout: float = 60, errlog=sys.stderr):
-    """Official mcp SDK stdio ClientSession through `ramen-mcp-bridge` pointed at `node`. Initialised on entry."""
+async def bridge_session(node: Node, key: str | None = None, timeout: float = 60, errlog=sys.stderr, args=None):
+    """Official mcp SDK stdio ClientSession through `ramen-mcp-bridge` pointed at `node`. Initialised on entry.
+    `args`: the bridge's own flags instead of the `--key` set (e.g. `--oauth <console> --client-id ...`)."""
     cmd = bridge_command()
     assert cmd, "ramen-mcp-bridge not found (RAMEN_BRIDGE_CMD / PATH / ../runtime-py/.venv)"
     k = node.key if key is None else key
@@ -496,11 +509,9 @@ async def bridge_session(node: Node, key: str | None = None, timeout: float = 60
     if ca_pem is None and node.tls and not E.tls_verify():
         ca_pem = _insecure_root(node.target)[0]  # RAMEN_TLS_INSECURE=1: pin the server's own (self-signed) cert
     ca = None if ca_pem is None else _ca_file(ca_pem)
-    params = StdioServerParameters(
-        command=cmd[0],
-        args=cmd[1:] + bridge_args(node.target, k or "", node.group or "demo", node.zone or "local", node.tls, ca),
-        env={**os.environ},
-    )
+    if args is None:
+        args = bridge_args(node.target, k or "", node.group or "demo", node.zone or "local", node.tls, ca)
+    params = StdioServerParameters(command=cmd[0], args=cmd[1:] + list(args), env={**os.environ})
     async with stdio_client(params, errlog=errlog) as (r, w):
         async with ClientSession(r, w, read_timeout_seconds=timeout) as s:
             await s.initialize()

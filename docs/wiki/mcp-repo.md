@@ -52,6 +52,39 @@ def calculator_func(var1: float, var2: float, func: str) -> float:
 An exception becomes `isError: true` with `ExceptionType: message` and no traceback, so raise `ValueError` with a
 sentence a model can act on.
 
+`output` (0.7.0) is a JSON Schema and becomes the MCP `outputSchema`; the worker validates every result against it.
+A scalar schema such as `{"type": "number"}` is published as an object with one `result` property and the value
+comes back as `structuredContent: {"result": 5}` next to the text; an object schema is used as declared and the
+returned dict is the `structuredContent`. A result that does not match is a tool error, `invalid output: <path>:
+<message>`, so a tool cannot quietly change shape under a client. Tools without `output` behave as before.
+
+Write the description for a model, not a human: what the tool returns, what fails and how (division by zero, an
+unknown unit), whether it has side effects, and when to use it or not. Scorers such as Glama's Tool Definition
+Quality Score read exactly that, and so does the agent choosing between tools.
+
+## Golden cases
+
+`mcp/tests.yaml` (0.7.0) turns your tests into a deploy gate. The console runs every case against the canary with
+the group's first MCP key before the stable workers take the new code; one failing case aborts the deploy and the
+job log names it and the difference.
+
+```yaml title="mcp/tests.yaml"
+cases:
+  - name: add
+    tool: demo_calculator_tool
+    args: {var1: 40, var2: 2, func: add}
+    expect: {text_contains: "42"}
+  - name: word count
+    tool: word_count
+    args: {text: "ramen is a bowl of noodles"}
+    expect: {subset: {structuredContent: {words: 6}}}
+```
+
+`expect` is one of `text_contains` (a substring of the result text), `subset` (part of the `tools/call` result,
+matched field by field) or `exact` (the whole result). `args` may reference the group's secrets as
+`{{$group.VAR}}`; the console resolves them before the call. A JSON-RPC error counts as a failure. A group without
+an MCP key skips the cases with a warning; a malformed file fails the deploy before any zone changes.
+
 ## Resources and prompts
 
 A **resource** is a tool with a `uri` and a `mime_type` whose callable returns the content. The demo's

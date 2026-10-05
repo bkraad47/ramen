@@ -85,7 +85,8 @@ def test_denials_carry_a_reason(demo):
 def test_a_revoked_user_is_denied_with_that_reason(demo):
     cid = register(demo)
     tok = mint(demo, cid)
-    new_pw = "epoch-bump-" + secrets.token_urlsafe(8)  # not a literal: secret scanners flag fixture passwords
-    demo.post("/api/v1/users/me/password", json={"password": new_pw})  # bumps the epoch (V1.4)
+    # not a literal (secret scanners flag fixture passwords); the prefix supplies every class the policy wants
+    new_pw = "Epoch-9!" + secrets.token_urlsafe(8)
+    assert demo.post("/api/v1/users/me/password", json={"password": new_pw}).status_code < 300  # bumps the epoch (V1.4)
     assert refresh(demo, cid, tok["refresh_token"]).status_code == 400
     assert any("reason:sessions_revoked" in a["tags"] for a in rows(demo, "oauth.denied"))

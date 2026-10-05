@@ -3,6 +3,14 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.7.1] — blocked tools and golden cases
+- A golden case for a tool that is **blocked** on the environment or zone is skipped (`golden.skipped: ["<case>: blocked"]`,
+  a log line) instead of failing the deploy: the node answers `-32601` for a blocked name on purpose. Found by the compose
+  end-to-end job right after 0.7.0 (block the demo tool → deploy → the gate failed the job).
+- Two CI fixes from the same run: the generated epoch-bump test password always carries every character class the policy
+  wants; the 0.7.0 changelog links the release page by absolute URL (the relative link broke the generated versions page
+  under `mkdocs --strict`).
+
 ## [0.7.0] — your tests gate your rollout
 The r/selfhosted thread on 0.6 asked three things: what happens when a token expires mid-task, what happens when a
 tool's schema changes under a session, and whether a deploy can be gated on behaviour. 0.7.0 answers all three, adds
@@ -61,7 +69,7 @@ region governance, and ships every release as public images.
 - An `output` that is not a valid JSON Schema fails that package's load instead of failing every call.
 - `check_versions.py` also compares the demo repo's `VERSION` when `../ramen-demo-mcp/VERSION` exists.
 - Process: versions are built on a `v<version>` branch and merged by pull request before tagging
-  ([release](docs/release.md)).
+  (https://bkraad47.github.io/ramen/release/).
 
 ## [0.6.23] — Ramen starts on its own for MCP directories
 - `glama/Dockerfile` + `glama/start.sh` (and `glama/Dockerfile.standalone`, which clones the release itself, to paste into Glama): a self-contained image of the real worker (ramen-node + Python runtime)

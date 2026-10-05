@@ -27,11 +27,54 @@ jobs:
           mkdir -p dist
           git archive --format=zip -o "dist/ramen-$VER-source.zip" HEAD
           [ -f node-rs/target/release/ramen-node ] && zip -j "dist/ramen-$VER-node-linux-amd64.zip" node-rs/target/release/ramen-node || true
+          # version-less copy: Glama's build downloads releases/latest/download/ramen-node-linux-amd64.zip
+          cp "dist/ramen-$VER-node-linux-amd64.zip" dist/ramen-node-linux-amd64.zip
           zip -r "dist/ramen-$VER-console.zip" console runtime-py deploy skills -x '*/.venv/*' '*/__pycache__/*' '*/target/*'
           ls -la dist
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: MCPB bundle (Smithery, Claude Desktop)
+        run: npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "dist/ramen-$VER.mcpb"
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           name: Ramen v${{ env.VER }}
           generate_release_notes: true
           files: dist/*
+
+  # Official MCP registry (io.github.bkraad47/ramen) from server.json; GitHub OIDC, no secret.
+  registry:
+    needs: build
+    # only bkraad47's own releases publish to the registries (not forks, not other pushers)
+    if: github.repository == 'bkraad47/ramen' && github.actor == 'bkraad47'
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish
+        run: |
+          curl -fsSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          # a published version is immutable: re-running a release must not fail on it
+          if ! out=$(./mcp-publisher publish 2>&1); then echo "$out"; grep -q "duplicate version" <<<"$out" || exit 1; fi
+          echo "$out"
+
+  # Smithery (bkraad47/ramen) from the MCPB bundle; needs the SMITHERY_API_KEY repo secret.
+  smithery:
+    needs: build
+    # only bkraad47's own releases publish to the registries (not forks, not other pushers)
+    if: github.repository == 'bkraad47/ramen' && github.actor == 'bkraad47'
+    runs-on: ubuntu-latest
+    permissions: { contents: read }
+    env:
+      SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Publish
+        run: |
+          if [ -z "$SMITHERY_API_KEY" ]; then echo "::warning::SMITHERY_API_KEY not set; Smithery not published"; exit 0; fi
+          VER=$(cat VERSION)
+          npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "ramen-$VER.mcpb"
+          npx -y @smithery/cli@4.11.1 mcp publish "./ramen-$VER.mcpb" -n bkraad47/ramen

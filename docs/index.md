@@ -1,5 +1,5 @@
 ---
-title: Ramen
+title: Self-hosted MCP for teams
 description: Multizone, highly available MCP server for GCP and AWS Kubernetes. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, secrets, roles and OAuth.
 hide: [toc]
 ---

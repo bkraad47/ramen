@@ -85,6 +85,8 @@ hide: [toc]
 </tr>
 </table>
 
+<p class="ramen-glama"><a href="https://glama.ai/mcp/servers/bkraad47/ramen"><img width="380" height="200" src="https://glama.ai/mcp/servers/bkraad47/ramen/badge" alt="Ramen on Glama: score, tools and listing"></a></p>
+
 Ramen is a multizone, highly available MCP server for GCP and AWS Kubernetes. Your team keeps **a git repo of
 tools, resources and prompts in plain Python**. Ramen turns it into a fleet of MCP workers behind a cloud load
 balancer, with canary deploys, secrets, a role per group, an OAuth front door for Claude Code and the bridge, and a log line

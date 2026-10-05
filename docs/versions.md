@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.7.1` **(current)** | — | blocked tools and golden cases | folded forward, never tagged |
+| `0.7.1` **(current)** | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
 | `0.7.0` | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
 | `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
 | `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |

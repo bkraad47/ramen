@@ -2,6 +2,7 @@
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
+- README and the docs home page show the Glama listing badge (score, tools) under the badge row.
 
 ## [0.7.1] — blocked tools and golden cases
 - A golden case for a tool that is **blocked** on the environment or zone is skipped (`golden.skipped: ["<case>: blocked"]`,

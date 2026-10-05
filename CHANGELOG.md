@@ -4,7 +4,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 ## [Unreleased]
 
 ## [0.6.23] — Ramen starts on its own for MCP directories
-- `glama/Dockerfile` + `glama/start.sh`: a self-contained image of the real worker (ramen-node + Python runtime)
+- `glama/Dockerfile` + `glama/start.sh` (and `glama/Dockerfile.standalone`, which clones the release itself, to paste into Glama): a self-contained image of the real worker (ramen-node + Python runtime)
   serving the demo group, cloned at build time, with `ramen-mcp-bridge` on stdio in front. No console, cloud or
   network at runtime; it answers `initialize`, `tools/list`, `resources/list`, `prompts/list` and tool calls. Built
   for Glama's checks (awesome-mcp-servers requires a passing Glama listing).

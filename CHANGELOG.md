@@ -25,6 +25,8 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   3-part ids from 0.7.1 still verify; during the rolling upgrade an old pod answers a new id `404` and the client
   re-initializes. Proof on real processes: `tests/conformance/test_tool_access.py`, `test_rollout_notify.py`,
   `test_call_args_hash.py` (the official SDK client receives `ToolListChangedNotification` across a reload).
+- Golden cases run as the group key, so a case for a tool the key may not call under tool access is skipped
+  (`golden.skipped: ["<case>: not callable for key"]`), like a blocked tool's — found on the GCP run of this release.
 - Not built: per-user upstream credentials (tools acting as the person against Google/Microsoft) — needs a token broker.
 
 ## [0.7.1] — blocked tools and golden cases

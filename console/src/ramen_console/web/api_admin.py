@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, github_app, oauth_server, regions, scheduler
+from .. import alerts, baseuri, drift, github_app, oauth_server, regions, scheduler
 from .. import mail as mail_mod
 from ..audit import note
 from ..config import apply_config
@@ -425,6 +425,19 @@ async def set_regions_config(request: Request, body: m.RegionsConfig, p: Princip
     note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])
     await svc(request).store.put("config", regions.DOC, {"blocked": blocked})
     return respond(request, {"blocked": blocked})
+
+
+@r.get("/config/drift")
+async def get_drift_config(request: Request, p: Principal = Depends(super_)):
+    return {"warn_pct": await drift.threshold(svc(request).store)}
+
+
+@r.put("/config/drift")
+async def set_drift_config(request: Request, body: m.DriftConfig, p: Principal = Depends(super_)):
+    """C12: the repeat rate at or over which a zone's drift check logs a `ramen.drift` warning."""
+    note(request, "config.drift", "drift", [f"warn_pct:{body.warn_pct}"])
+    await svc(request).store.put("config", drift.DOC, {"warn_pct": body.warn_pct})
+    return respond(request, {"warn_pct": body.warn_pct})
 
 
 @r.get("/config/scheduler")

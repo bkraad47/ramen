@@ -150,6 +150,13 @@ replayed with a different key. The console writes the secret into every zone's d
 from its own deploy file. Without it the node generates one per process and says so in its log, and sessions then
 die with the pod.
 
+
+Since 0.7.2 a session id also carries the first twelve hex characters of the manifest hash it was opened on. After a
+deploy changes the tool set, the worker's next answer to that session is an event stream (when the client accepts
+`text/event-stream`, as the official SDKs and Claude Code do) that begins with `notifications/tools/list_changed`,
+once per session and per rollout, so the client re-lists. The worker keeps serving the current version; nothing is
+pinned to the old one, and behind a load balancer each pod announces once. Session ids from 0.7.1 are still accepted;
+during the upgrade to 0.7.2 an old pod answers a new id with `404` and the client re-initializes.
 ### Origin
 A request that carries a browser `Origin` header is refused with `403` unless the origin is on
 `RAMEN_ALLOWED_ORIGINS` — and that list is **empty by default**, so a page on another site cannot use a victim's

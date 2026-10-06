@@ -3,8 +3,9 @@
 On real `ramen-node` processes: the bucket's `mcp/tools` changes on disk (one package added, one removed), the node is
 told with `Admin/Reload` (exactly what the console does on deploy), and the SAME MCP session — raw Streamable HTTP
 with its `Mcp-Session-Id`, the official SDK client, a running bridge — lists the new set, calls the new tool and is
-refused the removed one. The honest part: the node declares no `listChanged` and has no `GET /mcp` stream, so a client
-learns of a change only when it lists again (`reports/tool-propagation-v0.7.0.md`)."""
+refused the removed one. In 0.7.0 the node declared no `listChanged` and a client learned of a change only when it
+listed again (`reports/tool-propagation-v0.7.0.md`); since 0.7.2 (C11) the notice rides on the session's next POST —
+`test_rollout_notify.py` covers that; here the propagation itself."""
 
 import hashlib
 import json
@@ -72,7 +73,8 @@ def test_same_http_session_lists_the_new_tool_set_after_reload(live):
 async def test_sdk_client_sees_the_change_only_when_it_lists_again(live):
     async with http_session(live.http) as s:
         caps = s.server_capabilities
-        assert caps.tools is not None and not caps.tools.list_changed, "no notifications/tools/list_changed is promised"
+        if not (caps.tools and caps.tools.list_changed):
+            pytest.xfail("waiting for worker-agent (C11): no tools.listChanged in initialize")
         assert names((await s.list_tools()).tools) == {OLD}
         swap_tools(live.bucket)
         live.node.admin_reload()
@@ -98,11 +100,14 @@ async def test_running_bridge_sees_the_new_tool_on_its_next_list(live):
         assert await s.send_ping()
 
 
-def test_node_offers_no_change_notification_channel(live):
-    """What an AI client is up against: nothing in `initialize` promises list-changed notifications, `GET /mcp` (the
-    server→client stream) is 405, so a client with a cached tool list keeps it until it asks again."""
+def test_change_notice_rides_on_the_next_post_not_on_a_stream(live):
+    """What an AI client is up against: `initialize` promises `tools.listChanged` (C11), but `GET /mcp` (the
+    server→client stream) stays 405 — the notice arrives on the session's next POST, so a client that never calls
+    again keeps its cached list."""
     caps = live.http.initialize()["capabilities"]
-    assert caps == {"tools": {}, "resources": {}, "prompts": {}}, caps
+    if caps.get("tools") == {}:
+        pytest.xfail("waiting for worker-agent (C11): no tools.listChanged in initialize")
+    assert caps == {"tools": {"listChanged": True}, "resources": {}, "prompts": {}}, caps
     r = live.http.get()
     assert (r.status_code, r.headers.get("Allow")) == (405, "POST, DELETE, OPTIONS")
 

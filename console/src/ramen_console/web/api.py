@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import PlainTextResponse
 
 from .. import deploy as dep
+from .. import drift, toolaccess
 from ..audit import note, write_audit
 from ..baseuri import prefix
 from ..errors import invalid, not_found
@@ -168,6 +169,21 @@ async def set_blocked(request: Request, group: str, env: str, body: m.Blocked, p
     """Blocked tools/resources/prompts (F5.6); applied to workers by the next deploy as RAMEN_BLOCKED."""
     note(request, "environment.blocked", f"{group}/{env}", [f"group:{group}"] + [f"blocked:{n}" for n in body.blocked])
     return respond(request, await svc(request).update_env(group, env, blocked=body.blocked))
+
+
+@r.put("/groups/{group}/environments/{env}/tool-access")
+async def set_tool_access(request: Request, group: str, env: str, body: m.ToolAccess, p: Principal = Depends(admin_g)):
+    """C10: who may list and call each tool, by caller kind; the whole map every time. The next deploy hands the
+    workers `RAMEN_TOOL_ACCESS`."""
+    try:
+        access = toolaccess.clean(body.tool_access)
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    note(request, "environment.tool_access", f"{group}/{env}", [f"group:{group}"] + [f"tool:{n}" for n in access])
+    s = svc(request)
+    e = await s.get_env(group, env)
+    e["tool_access"] = access
+    return respond(request, await s.store.put("environments", e["id"], e))
 
 
 @r.put("/groups/{group}/environments/{env}/zones/{zone}/blocked")
@@ -368,6 +384,16 @@ async def logs(
     text = await s.cloud.logs(group, zone, worker, tail)
     headers = {"Content-Disposition": f'attachment; filename="{group}-{zone}.log"'} if download else {}
     return PlainTextResponse(text, headers=headers)
+
+
+@r.get("/groups/{group}/zones/{zone}/drift")
+async def zone_drift(request: Request, group: str, zone: str, tail: int = 500, p: Principal = Depends(viewer_g)):
+    """C12: repeat rate per tool over the zone's last `tail` log lines, plus the warning threshold."""
+    if tail < 1:
+        raise invalid("Tail must be at least 1")
+    s = svc(request)
+    await s.get_group(group)
+    return await drift.report(s.store, group, zone, await s.cloud.logs(group, zone, None, tail), tail)
 
 
 def _once(label: str, value: str) -> str:

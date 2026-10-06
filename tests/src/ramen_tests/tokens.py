@@ -28,13 +28,26 @@ def user_token(
     jti: str = "j1",
     group: str = "demo",
     zone: str = "local",
+    **claims: object,
 ) -> tuple[str, float]:
-    """A token for `sub` on `mcp:<group>:<zone>` that expires `ttl` seconds from now → (token, exp)."""
+    """A token for `sub` on `mcp:<group>:<zone>` that expires `ttl` seconds from now → (token, exp).
+    `**claims` are added verbatim (0.7.2 C10: `role="viewer"` is the kind the node reads for tool access)."""
     now = int(time.time())
     exp = now + int(ttl)
     scope = f"mcp:{group}:{zone}"
-    claims = {"iss": issuer, "sub": sub, "email": f"{sub}@x", "iat": now, "exp": exp, "jti": jti, "aud": scope}
-    return mint_console_token({**claims, "scope": scope}, secret), exp
+    base = {"iss": issuer, "sub": sub, "email": f"{sub}@x", "iat": now, "exp": exp, "jti": jti, "aud": scope}
+    return mint_console_token({**base, "scope": scope, **claims}, secret), exp
+
+
+def legacy_session_id(secret: str, key: str, ttl: float = 600, nonce: bytes = b"\x01" * 16) -> str:
+    """A 0.7.1-style 3-part `Mcp-Session-Id` for an `rmk_` key: `nonce.expiry.mac`, `mac = HMAC-SHA256(secret,
+    nonce ‖ "\\n" ‖ expiry ‖ "\\n" ‖ binding)` with binding = sha256 hex of the key (node-rs session.rs / grpc.rs).
+    0.7.2 C11 says a node still verifies it (treated as `hash12 = ""`)."""
+    n = b64url(nonce)
+    expiry = int(time.time() + ttl)
+    binding = hashlib.sha256(key.encode()).hexdigest()
+    mac = hmac.new(secret.encode(), f"{n}\n{expiry}\n{binding}".encode(), hashlib.sha256).digest()
+    return f"{n}.{expiry}.{b64url(mac)}"
 
 
 def claims_of(token: str) -> dict:

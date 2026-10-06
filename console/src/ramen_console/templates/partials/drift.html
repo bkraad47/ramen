@@ -1,0 +1,4 @@
+{% if d.tools %}<table><tr><th>Tool</th><th>Calls</th><th>Repeats</th><th>Rate</th></tr>
+{% for name, x in d.tools.items()|sort %}<tr><td>{% if name in d.warn %}<span class="badge error">{{ name }}</span>{% else %}<code>{{ name }}</code>{% endif %}</td><td>{{ x.calls }}</td><td>{{ x.repeats }}</td><td>{{ (x.rate * 100)|round|int }}%</td></tr>{% endfor %}</table>
+{% else %}<p class="muted">No tool calls in the last {{ d.tail }} log lines.</p>{% endif %}
+<p class="muted">A repeat is a call identical (same key, tool and arguments) to one at most {{ d.window_s }} s earlier; warning threshold {{ d.threshold }}%.</p>

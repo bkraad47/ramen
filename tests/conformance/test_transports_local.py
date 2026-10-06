@@ -161,7 +161,7 @@ def test_http_initialize_mints_a_session_that_only_its_credential_can_use(plain)
         n.wait_serving()
         c = n.http_client()
         c.initialize()
-        assert c.session_id and c.session_id.count(".") == 2
+        assert c.session_id and c.session_id.count(".") in (2, 3)  # 0.7.2 C11: `<nonce>.<expiry>.<hash12>.<mac>`
         assert c.ping() == {}  # accepted back
         other = n.http_client(key="other-key")
         other.session_id = c.session_id

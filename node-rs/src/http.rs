@@ -101,6 +101,46 @@ fn accepts_json(headers: &HeaderMap) -> bool {
     }
 }
 
+/// Whether the client can take an SSE answer (`Accept` names `text/event-stream`), the Streamable HTTP way of
+/// carrying a server notification alongside a response.
+fn accepts_sse(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|a| {
+            a.split(',')
+                .map(|s| s.trim().split(';').next().unwrap_or("").trim())
+                .any(|m| m == "text/event-stream")
+        })
+}
+
+/// One `data:` event per message, then the stream ends — exactly what a Streamable HTTP client reads from a POST
+/// answered as `text/event-stream`.
+fn sse(events: &[Value]) -> Response {
+    let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+    let mut resp = (StatusCode::OK, body).into_response();
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    resp
+}
+
+/// The first 12 hex of the manifest hash of the last load (C11), `""` before any load.
+async fn manifest_hash12(app: &Shared) -> String {
+    app.sidecar
+        .loaded()
+        .await
+        .and_then(|l| {
+            l.result["hash"]
+                .as_str()
+                .map(|h| h.chars().take(12).collect())
+        })
+        .unwrap_or_default()
+}
+
 fn is_json(headers: &HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
@@ -251,19 +291,24 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
         .get(SESSION_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    if let Some(sid) = &presented
-        && let Err(why) = app.sessions.verify(sid, &caller.binding)
+    let verified = match presented
+        .as_deref()
+        .map(|sid| app.sessions.verify(sid, &caller.binding))
     {
-        let (msg, reason) = match why {
-            Invalid::Expired => ("session expired", "session_expired"),
-            Invalid::BadMac | Invalid::Malformed => ("unknown session", "session_invalid"),
-        };
-        return with_headers(
-            denied(&log.deny(&cfg, Status::not_found(msg), reason), &cfg),
-            version,
-            None,
-        );
-    }
+        None => None,
+        Some(Ok(s)) => Some(s),
+        Some(Err(why)) => {
+            let (msg, reason) = match why {
+                Invalid::Expired => ("session expired", "session_expired"),
+                Invalid::BadMac | Invalid::Malformed => ("unknown session", "session_invalid"),
+            };
+            return with_headers(
+                denied(&log.deny(&cfg, Status::not_found(msg), reason), &cfg),
+                version,
+                None,
+            );
+        }
+    };
     let is_init = serde_json::from_slice::<Value>(&body)
         .ok()
         .and_then(|v| {
@@ -272,7 +317,7 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
                 .map(|m| m == "initialize")
         })
         .unwrap_or(false);
-    let out = match grpc::dispatch_body(&app, &cfg, &mut log, &body).await {
+    let out = match grpc::dispatch_body(&app, &cfg, &mut log, &caller.kind, &body).await {
         Ok(o) => o,
         Err(st) => {
             return with_headers(
@@ -282,13 +327,30 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
             );
         }
     };
+    // C11: the manifest this pod serves right now; stamped into new session ids, compared with presented ones.
+    let current12 = manifest_hash12(&app).await;
     let session = if is_init {
-        Some(app.sessions.issue(&caller.binding))
+        Some(app.sessions.issue(&caller.binding, &current12))
     } else {
         presented
     };
     let resp = match out {
-        Some(v) => (StatusCode::OK, axum::Json(v)).into_response(),
+        Some(v) => {
+            // C11: a session minted against another manifest learns of the change once per pod, on its first
+            // response an SSE-capable client asks for after the rollout. A JSON-only client is answered as before.
+            let stale = verified
+                .as_ref()
+                .filter(|s| !is_init && s.hash12 != current12 && accepts_sse(&headers))
+                .is_some_and(|s| app.notified.first_time(&format!("{}.{current12}", s.nonce)));
+            if stale {
+                sse(&[
+                    json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}),
+                    v,
+                ])
+            } else {
+                (StatusCode::OK, axum::Json(v)).into_response()
+            }
+        }
         None => StatusCode::ACCEPTED.into_response(),
     };
     cors(
@@ -361,7 +423,7 @@ async fn delete_mcp(State(app): State<Shared>, req: Request) -> Response {
             .into_response();
     };
     match app.sessions.verify(sid, &caller.binding) {
-        Ok(()) => {
+        Ok(_) => {
             log.emit(&cfg, "ok", Code::Ok, json!({"session": "ended"}));
             cors(
                 StatusCode::NO_CONTENT.into_response(),
@@ -513,6 +575,38 @@ mod tests {
         (addr, tx)
     }
 
+    /// Like `serve`, but with an app the test keeps a handle on (to change what is "loaded" mid-test).
+    async fn serve_app(app: Shared) -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let mut routes = grpc::routes(&app);
+        let merged = std::mem::take(routes.axum_router_mut()).merge(router(app.clone()));
+        *routes.axum_router_mut() = merged;
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .accept_http1(true)
+                .add_routes(routes)
+                .serve_with_incoming_shutdown(
+                    tokio_stream::wrappers::TcpListenerStream::new(listener),
+                    async {
+                        let _ = rx.await;
+                    },
+                )
+                .await
+                .unwrap();
+        });
+        (addr, tx)
+    }
+
+    /// The `data:` payloads of an SSE body, in order.
+    fn sse_events(body: &str) -> Vec<Value> {
+        body.split("\n\n")
+            .filter_map(|ev| ev.strip_prefix("data: "))
+            .map(|d| serde_json::from_str(d).unwrap())
+            .collect()
+    }
+
     const JSON: (&str, &str) = ("Content-Type", "application/json");
     const KEY: (&str, &str) = ("Authorization", "Bearer rmk_test");
     const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#;
@@ -533,7 +627,13 @@ mod tests {
             .header("mcp-session-id")
             .expect("session id on initialize")
             .to_string();
-        assert_eq!(sid.split('.').count(), 3);
+        // C11: four parts; nothing loaded yet, so the manifest stamp is empty
+        assert_eq!(sid.split('.').count(), 4);
+        assert_eq!(sid.split('.').nth(2), Some(""));
+        assert_eq!(
+            r.json()["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
         // the id is accepted back on the next call under the same key, and echoed
         let r = http(
             addr,
@@ -1090,6 +1190,189 @@ mod tests {
             ("Origin", "https://evil.example"),
         ];
         assert_eq!(http(addr, "POST", "/mcp", &bad, PING).await.status, 403);
+        let _ = stop.send(());
+    }
+
+    /// C11 (0.7.2): a session carries the manifest hash it was initialized against; after a rollout the first
+    /// response an SSE-capable client asks for arrives as SSE with `notifications/tools/list_changed` first, once
+    /// per session per pod; JSON-only clients and 0.7.1 three-part ids are served as before.
+    #[tokio::test]
+    async fn a_rollout_is_announced_once_per_session_to_sse_capable_clients() {
+        let app = grpc::app(cfg(&[
+            ("RAMEN_MCP_KEYS", "rmk_test"),
+            ("RAMEN_SESSION_SECRET", "s"),
+        ]))
+        .await;
+        let set_hash = |h: char| {
+            let app = app.clone();
+            async move {
+                app.sidecar
+                    .set_loaded_for_test(json!({"tools": [], "hash": h.to_string().repeat(64)}))
+                    .await;
+            }
+        };
+        set_hash('a').await;
+        let (addr, stop) = serve_app(app.clone()).await;
+        const BOTH: (&str, &str) = ("Accept", "application/json, text/event-stream");
+        let r = http(addr, "POST", "/mcp", &[JSON, KEY, BOTH], INIT).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let sid = r.header("mcp-session-id").unwrap().to_string();
+        assert_eq!(sid.split('.').nth(2), Some("aaaaaaaaaaaa"));
+        // same manifest: plain JSON even though the client could take SSE
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &sid)],
+            PING,
+        )
+        .await;
+        assert_eq!(r.status, 200);
+        assert!(
+            r.header("content-type")
+                .unwrap()
+                .starts_with("application/json")
+        );
+        // rollout: the manifest changes under the session
+        set_hash('b').await;
+        // a notification (202, no response) is not the place for it, and does not use up the one announcement
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &sid)],
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        )
+        .await;
+        assert_eq!((r.status, r.body.as_str()), (202, ""));
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &sid)],
+            PING,
+        )
+        .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.header("content-type"), Some("text/event-stream"));
+        assert_eq!(r.header("mcp-session-id"), Some(sid.as_str()));
+        let events = sse_events(&r.body);
+        assert_eq!(events.len(), 2, "{}", r.body);
+        assert_eq!(
+            events[0],
+            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+        );
+        assert_eq!(events[1], json!({"jsonrpc": "2.0", "id": 2, "result": {}}));
+        assert!(
+            r.body.starts_with("data: ") && r.body.ends_with("\n\n"),
+            "{:?}",
+            r.body
+        );
+        // once per session per pod: the next request is plain JSON again, even though the stamp still differs
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &sid)],
+            PING,
+        )
+        .await;
+        assert!(
+            r.header("content-type")
+                .unwrap()
+                .starts_with("application/json")
+        );
+        assert_eq!(r.json()["result"], json!({}));
+        // a second rollout is announced again (the set is keyed by nonce and manifest)
+        set_hash('c').await;
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &sid)],
+            PING,
+        )
+        .await;
+        assert_eq!(r.header("content-type"), Some("text/event-stream"));
+        assert_eq!(sse_events(&r.body).len(), 2);
+        // a fresh initialize is stamped with the current manifest and is not notified
+        let r = http(addr, "POST", "/mcp", &[JSON, KEY, BOTH], INIT).await;
+        let fresh = r.header("mcp-session-id").unwrap().to_string();
+        assert_eq!(fresh.split('.').nth(2), Some("cccccccccccc"));
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &fresh)],
+            PING,
+        )
+        .await;
+        assert!(
+            r.header("content-type")
+                .unwrap()
+                .starts_with("application/json")
+        );
+        // a JSON-only client never sees SSE, and does not use up the announcement for an SSE-capable retry
+        set_hash('d').await;
+        for accept in [None, Some(("Accept", "application/json"))] {
+            let mut hs = vec![JSON, KEY, ("Mcp-Session-Id", &fresh)];
+            hs.extend(accept);
+            let r = http(addr, "POST", "/mcp", &hs, PING).await;
+            assert_eq!(r.status, 200);
+            assert!(
+                r.header("content-type")
+                    .unwrap()
+                    .starts_with("application/json")
+            );
+            assert_eq!(r.json()["result"], json!({}));
+        }
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &fresh)],
+            PING,
+        )
+        .await;
+        assert_eq!(r.header("content-type"), Some("text/event-stream"));
+        // a 0.7.1 three-part id is still a session (stamp ""), so it is told about the current manifest once
+        let d = ring::digest::digest(&ring::digest::SHA256, b"rmk_test");
+        let binding: String = d.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        let old = app.sessions.issue_legacy(&binding);
+        assert_eq!(old.split('.').count(), 3);
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &old)],
+            PING,
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.header("mcp-session-id")),
+            (200, Some(old.as_str()))
+        );
+        assert_eq!(r.header("content-type"), Some("text/event-stream"));
+        assert_eq!(sse_events(&r.body)[1]["result"], json!({}));
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, BOTH, ("Mcp-Session-Id", &old)],
+            PING,
+        )
+        .await;
+        assert!(
+            r.header("content-type")
+                .unwrap()
+                .starts_with("application/json")
+        );
+        assert_eq!(
+            http(addr, "DELETE", "/mcp", &[KEY, ("Mcp-Session-Id", &old)], "")
+                .await
+                .status,
+            204
+        );
         let _ = stop.send(());
     }
 

@@ -18,6 +18,7 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_CALL_TIMEOUT_SECS",
     "RAMEN_LOG_FILE",
     "RAMEN_BLOCKED",
+    "RAMEN_TOOL_ACCESS",
     "RAMEN_ALLOWED_ORIGINS",
     "RAMEN_REDIS_ITEM_URL",
     "RAMEN_REDIS_SCOPE_URL",
@@ -26,6 +27,23 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_THROTTLE_SCOPE_IP",
     "RAMEN_THROTTLE_SCOPE_TOKEN",
 ];
+
+/// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
+/// `super_admin` never appears here because it is always allowed. A tool absent from the map is unrestricted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct ToolAccess {
+    #[serde(default)]
+    pub list: Vec<String>,
+    #[serde(default)]
+    pub call: Vec<String>,
+}
+
+/// `RAMEN_TOOL_ACCESS`: compact JSON `{"<tool>": {"list": [...], "call": [...]}}`, written by the console deploy.
+pub fn parse_tool_access(text: &str) -> Result<HashMap<String, ToolAccess>, String> {
+    serde_json::from_str(text).map_err(|e| {
+        format!("RAMEN_TOOL_ACCESS must be a JSON object of tool → {{list, call}}: {e}")
+    })
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -61,6 +79,8 @@ pub struct Config {
     pub log_file: Option<PathBuf>,
     /// Tool/resource/prompt names (or resource URIs) hidden from `*/list` and answered with `-32601` (CONTRACTS §9).
     pub blocked: Vec<String>,
+    /// C10: per-tool list/call permissions by caller kind (`RAMEN_TOOL_ACCESS`); empty = every tool unrestricted.
+    pub tool_access: HashMap<String, ToolAccess>,
     /// §16.1: browser `Origin` values allowed on `/mcp` (`RAMEN_ALLOWED_ORIGINS`, comma list; `*` = any).
     /// Empty = every request that carries an `Origin` header is refused (DNS-rebinding defence).
     pub allowed_origins: Vec<String>,
@@ -206,6 +226,8 @@ impl Config {
             call_timeout_secs: num("RAMEN_CALL_TIMEOUT_SECS", 120)?,
             log_file: get("RAMEN_LOG_FILE").map(PathBuf::from),
             blocked: list("RAMEN_BLOCKED"),
+            tool_access: get("RAMEN_TOOL_ACCESS")
+                .map_or(Ok(HashMap::new()), |t| parse_tool_access(&t))?,
             allowed_origins: list("RAMEN_ALLOWED_ORIGINS"),
             session_secret: get("RAMEN_SESSION_SECRET").filter(|s| !s.is_empty()),
             session_ttl_secs: num("RAMEN_SESSION_TTL_SECS", 1800)?.max(1),
@@ -343,6 +365,47 @@ mod tests {
         }
     }
 
+    /// C10 (0.7.2): `RAMEN_TOOL_ACCESS` is the compact JSON map the console writes into the deploy file.
+    #[test]
+    fn tool_access_parses_the_json_map_and_is_deploy_scoped() {
+        assert!(
+            Config::from_map(&HashMap::new())
+                .unwrap()
+                .tool_access
+                .is_empty()
+        );
+        let m: HashMap<_, _> = [(
+            "RAMEN_TOOL_ACCESS".to_string(),
+            r#"{"calc":{"list":["key","viewer"],"call":["key"]},"noop":{}}"#.to_string(),
+        )]
+        .into();
+        let c = Config::from_map(&m).unwrap();
+        let calc = &c.tool_access["calc"];
+        assert_eq!(
+            (calc.list.clone(), calc.call.clone()),
+            (
+                vec!["key".to_string(), "viewer".to_string()],
+                vec!["key".to_string()]
+            )
+        );
+        assert!(c.tool_access["noop"].list.is_empty() && c.tool_access["noop"].call.is_empty());
+        for bad in [
+            "not json",
+            "[1]",
+            r#"{"calc": 1}"#,
+            r#"{"calc": {"list": "key"}}"#,
+        ] {
+            let m: HashMap<_, _> = [("RAMEN_TOOL_ACCESS".to_string(), bad.to_string())].into();
+            assert!(
+                Config::from_map(&m)
+                    .unwrap_err()
+                    .contains("RAMEN_TOOL_ACCESS"),
+                "{bad}"
+            );
+        }
+        assert!(DEPLOY_KEYS.contains(&"RAMEN_TOOL_ACCESS"));
+    }
+
     #[test]
     fn tls_needs_both_files() {
         let one: HashMap<_, _> = [("RAMEN_TLS_CERT".to_string(), "/c.pem".to_string())].into();
@@ -396,7 +459,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("bucket/.ramen/env-z1"),
-            "RAMEN_MCP_KEYS=rmk_1,e1\nRAMEN_ALLOWED_CIDRS=10.0.0.0/8\nRAMEN_ADMIN_KEY=nope\nRAMEN_BLOCKED=secret_tool\n",
+            "RAMEN_MCP_KEYS=rmk_1,e1\nRAMEN_ALLOWED_CIDRS=10.0.0.0/8\nRAMEN_ADMIN_KEY=nope\nRAMEN_BLOCKED=secret_tool\nRAMEN_TOOL_ACCESS={\"calc\":{\"list\":[\"key\"],\"call\":[\"key\"]}}\n",
         )
         .unwrap();
         let bucket = dir.join("bucket").display().to_string();
@@ -413,6 +476,7 @@ mod tests {
         assert_eq!(c.allowed_cidrs.len(), 1);
         assert!(c.admin_key.is_none() && c.bucket.ends_with("bucket") && !c.verbose);
         assert_eq!(c.blocked, vec!["secret_tool"]);
+        assert_eq!(c.tool_access["calc"].call, vec!["key"]); // the deploy file carries the map, like RAMEN_BLOCKED
         let c =
             Config::from_vars(vars(&[("RAMEN_BUCKET", &bucket), ("RAMEN_ZONE", "other")])).unwrap();
         assert_eq!(

@@ -49,6 +49,7 @@ ROUTES = {
     "request_approve": "/api/v1/requests/{id}/approve",  # POST → applied SA permissions / role granted
     "policy_permissions": "/api/v1/policy/permissions",  # GET catalogue [{permission,desc,gcp,aws}]
     "env_blocked": "/api/v1/groups/{group}/environments/{env}/blocked",  # PUT {blocked:[names]}
+    "env_tool_access": "/api/v1/groups/{group}/environments/{env}/tool-access",  # PUT {tool:{list,call}} (0.7.2 C10)
     # v0.4.0 (CONTRACTS §12.1)
     "env_zone_blocked": "/api/v1/groups/{group}/environments/{env}/zones/{zone}/blocked",  # PUT {blocked:[names]}
     "config_auth": "/api/v1/config/auth",  # GET|PUT {password_login?, magic_link?} (super admin)

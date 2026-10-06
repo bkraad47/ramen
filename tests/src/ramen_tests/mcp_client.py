@@ -312,6 +312,8 @@ class HttpNode:
         self.url, self.key, self.group, self.zone, self.timeout = url, key, group, zone, timeout
         self.session_id: str | None = None
         self.protocol_version: str | None = None
+        self.notifications: list[dict] = []  # server notifications carried on SSE answers (C11), in order
+        self.last_response: httpx.Response | None = None
         v: bool | str = E.tls_verify() if verify is None else verify
         if isinstance(ca, (str, bytes)):
             v = ca if isinstance(ca, str) else _ca_file(ca)
@@ -384,7 +386,15 @@ class HttpNode:
         r = self.post(body, key, timeout=timeout)
         if r.status_code >= 300:
             raise HttpError(r)
-        out = r.json()
+        self.last_response = r
+        if r.headers.get("content-type", "").startswith("text/event-stream"):
+            # 0.7.2 C11: after a rollout the node may answer a POST as SSE — notifications first, the response last.
+            events = sse_events(r.text)
+            self.notifications += [e for e in events if "id" not in e]
+            out = next((e for e in events if e.get("id") == rid), None)
+            assert out is not None, events
+        else:
+            out = r.json()
         assert isinstance(out, dict) and out.get("jsonrpc") == "2.0" and out.get("id") == rid, out
         if "error" in out:
             raise JsonRpcError(out["error"])
@@ -439,6 +449,18 @@ class HttpNode:
         return self._client.get(url, headers=headers or {}, timeout=self.timeout)
 
 
+def sse_events(text: str) -> list[dict]:
+    """JSON messages of a `text/event-stream` body, in order (`data:` lines joined per event; other fields ignored)."""
+    out, data = [], []
+    for line in text.splitlines() + [""]:
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip())
+        elif line == "" and data:
+            out.append(json.loads("\n".join(data)))
+            data = []
+    return out
+
+
 def sdk_http_client(node: HttpNode, key: str | None = None, timeout: float = 60):
     """The httpx2.AsyncClient `http_session` drives the SDK with: bearer + routing headers. Handed out so a test can
     change `client.headers["Authorization"]` on the live session (what a client does after a token refresh)."""
@@ -452,16 +474,17 @@ def sdk_http_client(node: HttpNode, key: str | None = None, timeout: float = 60)
 
 
 @asynccontextmanager
-async def http_session(node: HttpNode, key: str | None = None, timeout: float = 60, http_client=None):
+async def http_session(node: HttpNode, key: str | None = None, timeout: float = 60, http_client=None, **session_kw):
     """Official mcp SDK Streamable HTTP ClientSession straight at the node's `/mcp` (§16.4: no bridge to install).
-    `http_client`: a caller-owned `sdk_http_client()` (the caller closes it); else one is made for the session."""
+    `http_client`: a caller-owned `sdk_http_client()` (the caller closes it); else one is made for the session.
+    `session_kw` go to `ClientSession` (e.g. `message_handler=` to see server notifications, C11)."""
     from mcp.client.streamable_http import streamable_http_client
 
     own = http_client is None
     client = sdk_http_client(node, key, timeout) if own else http_client
     try:
         async with streamable_http_client(node.url, http_client=client) as streams:
-            async with ClientSession(streams[0], streams[1], read_timeout_seconds=timeout) as s:
+            async with ClientSession(streams[0], streams[1], read_timeout_seconds=timeout, **session_kw) as s:
                 await s.initialize()
                 yield s
     finally:

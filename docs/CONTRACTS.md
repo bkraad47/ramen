@@ -512,3 +512,28 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   `<version>` and `latest`, to `ghcr.io/bkraad47/` always and `docker.io/bkraad47/` when the Docker Hub secrets exist.
 - **Process (D42).** Versions are built on branch `v<version>`, merged to `main` by pull request, then tagged; the
   demo repo carries `VERSION` and the same tag; `check_versions.py` compares it when present.
+
+## 20. v0.7.2 — per-tool access, rollout awareness, drift (binding)
+- **Tool access (A8).** `environment.tool_access = {"<tool>": {"list": [kind…], "call": [kind…]}}`, kinds `key`,
+  `group_admin`, `viewer`, `mcp_user`; `super_admin` always allowed; a tool absent from the map is unrestricted;
+  `call ⊆ list`. `PUT /api/v1/groups/{g}/environments/{e}/tool-access` (group admin+, whole map, unknown kind → 422).
+  Deploy hands `RAMEN_TOOL_ACCESS` (compact JSON) to every zone. Tokens carry `role` (the person's role in the scope's
+  group; `super_admin`); a key is kind `key`; a token without `role` is `mcp_user`. Node: `tools/list` omits tools the
+  kind may not list; `tools/call` → `-32601 tool not found` when not listable (log reason `tool_hidden`), `-32003
+  forbidden: <tool> is not callable for <kind>` when listable only (reason `tool_denied`). Tools only.
+- **Rollout awareness (B1-lite).** Session ids are `<nonce>.<expiry>.<hash12>.<mac>` (`hash12` = the manifest hash's
+  first 12 hex at `initialize`, `""` before a load; 3-part 0.7.1 ids still verify as `hash12 = ""`). When a request's
+  session `hash12` differs from the node's current hash and `Accept` includes `text/event-stream`, the node answers
+  `text/event-stream` with `notifications/tools/list_changed` then the response; otherwise JSON. Once per session nonce
+  per pod, per manifest version (a second rollout is announced again; 4096-entry set). `initialize` declares
+  `tools.listChanged = true`. Nothing is pinned: the pod serves the current version at once; the notification only
+  prompts a re-list. Behind a load balancer a session may be told once per pod. During a 0.7.1 → 0.7.2 rolling upgrade a
+  0.7.1 pod answers a 4-part id `404` and the client re-initializes. `initialize` and notifications are never answered as
+  SSE; an unknown `role` matches no list (fails closed).
+- **Drift (C2).** `tools/call` log lines carry `args` = sha256 hex[:12] of the canonical arguments (never the values).
+  `drift.repeat_rate(lines, window_s=60)` → `{tool: {calls, repeats, rate}}`, a repeat being the same `key_id` + `name`
+  + `args` as another call within the window. `GET /api/v1/groups/{g}/zones/{z}/drift?tail=500` (viewer+) returns the
+  map + `threshold`; `config/drift {"warn_pct": 30}`, `GET|PUT /api/v1/config/drift` (super admin); a rate ≥ threshold
+  logs a WARNING `ramen.drift` (digest) and shows red on the group page's Drift card. No automatic rollback.
+- **Not built (D44).** Per-user upstream credentials (tools acting as the person against Google/Microsoft) need a token
+  broker and IdP consent in the console; deferred to a minor release.

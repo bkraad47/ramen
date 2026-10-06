@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 
-from . import baseuri, compat, github_app, golden, regions
+from . import baseuri, compat, github_app, golden, regions, toolaccess
 from .cloud.base import GateError
 from .services import Services
 from .util import now, uid
@@ -75,6 +75,7 @@ async def run_deploy(
             cfg = {
                 "RAMEN_VERBOSE": "1" if env.get("verbose") else "0",
                 "RAMEN_BLOCKED": ",".join(Services.blocked_for_zone(env, z)),  # U5: env-wide plus this zone's
+                "RAMEN_TOOL_ACCESS": toolaccess.compact(env.get("tool_access")),  # C10: env-wide, every zone
                 **vars_,
             }
             if mcp:

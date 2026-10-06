@@ -57,6 +57,8 @@ pub struct App {
     pub token_key: ring::hmac::Key,
     /// N7: item/scope rate limiting. Redis connections are startup-fixed like `sessions`/`sem_max`.
     pub throttle: crate::throttle::Throttle,
+    /// C11: sessions this pod has told about the current manifest (`<nonce>.<hash12>`), bounded at 4096.
+    pub notified: session::Notified,
 }
 
 pub type Shared = Arc<App>;
@@ -97,6 +99,7 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         sessions,
         token_key,
         throttle,
+        notified: session::Notified::new(4096),
     })
 }
 
@@ -232,6 +235,19 @@ pub struct Caller {
     pub binding: String,
     /// Present for a console-issued token (§16.3).
     pub principal: Option<token::Principal>,
+    /// C10: what `RAMEN_TOOL_ACCESS` keys on — `key` for an `rmk_` key, the token's `role` claim otherwise
+    /// (`mcp_user` when the claim is missing).
+    pub kind: String,
+}
+
+/// C12: a 12-hex sha256 prefix of the canonical JSON (sorted keys, no spaces — serde_json's own `to_string`) of a
+/// call's `arguments`, `""` when absent. The console's drift detection groups by it; the arguments are never logged.
+pub fn args_digest(arguments: Option<&Value>) -> String {
+    let Some(v) = arguments else {
+        return String::new();
+    };
+    let d = ring::digest::digest(&ring::digest::SHA256, v.to_string().as_bytes());
+    d.as_ref()[..6].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The credential check shared by both transports: an `rmk_` key (constant-time, §11) or, when `RAMEN_OAUTH_ISSUER`
@@ -247,6 +263,7 @@ pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Result<Caller, &
             id,
             binding,
             principal: None,
+            kind: "key".into(),
         });
     }
     let bearer = auth::bearer(md).ok_or("no_key")?;
@@ -271,6 +288,7 @@ pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Result<Caller, &
     Ok(Caller {
         binding: id.clone(),
         id,
+        kind: p.role.clone().unwrap_or_else(|| "mcp_user".into()),
         principal: Some(p),
     })
 }
@@ -306,10 +324,12 @@ pub fn guard(
 
 /// Parse one JSON-RPC message, take an inflight permit, dispatch, and log. `Ok(None)` is a notification.
 /// JSON-RPC protocol errors come back as `Ok(Some(error body))`, never as a transport error (§11).
+/// `kind` is the caller's kind (`Caller::kind`) for the C10 tool-access policy.
 pub async fn dispatch_body(
     app: &App,
     cfg: &Config,
     log: &mut CallLog,
+    kind: &str,
     body: &[u8],
 ) -> Result<Option<Value>, Status> {
     let Ok(rpc) = serde_json::from_slice::<Value>(body) else {
@@ -352,7 +372,14 @@ pub async fn dispatch_body(
     // C6: a call to a blocked name is a denial in the log (`blocked_name`); on the wire it stays the
     // `-32601` "not found" that `mcp::dispatch` answers (§9), so a caller learns nothing new.
     let blocked = mcp::blocked_target(&app.sidecar, &cfg.blocked, &method, &params).await;
-    let out = mcp::dispatch(&app.sidecar, &cfg.blocked, &method, &params).await;
+    let policy = mcp::Policy {
+        blocked: &cfg.blocked,
+        tool_access: &cfg.tool_access,
+        kind,
+    };
+    // C10: `tool_hidden` / `tool_denied` — like `blocked_name`, the wire answer comes from `mcp::dispatch`.
+    let access_denial = policy.denial(&method, &params);
+    let out = mcp::dispatch(&app.sidecar, &policy, &method, &params).await;
     let ok = match &out {
         Ok(Some(r)) => !r.get("isError").and_then(Value::as_bool).unwrap_or(false),
         Ok(None) => true,
@@ -367,8 +394,14 @@ pub async fn dispatch_body(
     } else {
         json!({})
     };
+    if method == "tools/call" {
+        extra["args"] = json!(args_digest(params.get("arguments"))); // C12
+    }
     let status = if blocked {
         extra["reason"] = json!("blocked_name");
+        "denied"
+    } else if let Some(reason) = access_denial {
+        extra["reason"] = json!(reason);
         "denied"
     } else if ok {
         "ok"
@@ -402,12 +435,14 @@ impl Mcp for McpSvc {
     async fn call(&self, req: Request<JsonRpc>) -> Result<Response<JsonRpc>, Status> {
         let app = &self.0;
         let cfg = app.cfg.read().await.clone();
-        let (mut log, _caller) = guard(app, &cfg, req.remote_addr(), req.metadata(), "grpc")?;
+        let (mut log, caller) = guard(app, &cfg, req.remote_addr(), req.metadata(), "grpc")?;
         let body = req.into_inner().body;
-        Ok(match dispatch_body(app, &cfg, &mut log, &body).await? {
-            Some(v) => reply(v),
-            None => Response::new(JsonRpc::default()),
-        })
+        Ok(
+            match dispatch_body(app, &cfg, &mut log, &caller.kind, &body).await? {
+                Some(v) => reply(v),
+                None => Response::new(JsonRpc::default()),
+            },
+        )
     }
 
     async fn session(
@@ -603,15 +638,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (ok.id.as_str(), ok.binding.as_str()),
-            ("user:u1", "user:u1")
+            (ok.id.as_str(), ok.binding.as_str(), ok.kind.as_str()),
+            ("user:u1", "user:u1", "mcp_user") // C10: no `role` claim → mcp_user
         );
+        let mut with_role = claims(now + 60, "mcp:demo:a");
+        with_role["role"] = json!("super_admin");
         assert_eq!(
-            credential(&a, &c, &h(&[("authorization", "Bearer rmk_test")]))
-                .unwrap()
-                .principal,
-            None
+            credential(
+                &a,
+                &c,
+                &h(&[("authorization", &user_token("s", with_role))])
+            )
+            .unwrap()
+            .kind,
+            "super_admin"
         );
+        let by_key = credential(&a, &c, &h(&[("authorization", "Bearer rmk_test")])).unwrap();
+        assert_eq!((by_key.principal, by_key.kind.as_str()), (None, "key"));
         // no issuer: a JWT-shaped bearer is just a wrong key
         let plain = cfg(&[("RAMEN_MCP_KEYS", "rmk_test")]);
         assert_eq!(
@@ -689,6 +732,7 @@ mod tests {
             &a,
             &blocked,
             &mut log,
+            "key",
             br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"calc-nonce","arguments":{}}}"#,
         )
         .await
@@ -700,6 +744,133 @@ mod tests {
             (line["status"].as_str(), line["reason"].as_str()),
             (Some("denied"), Some("blocked_name"))
         );
+        // C10: tool access — hidden (-32601, tool_hidden) and listed-but-denied (-32003, tool_denied)
+        let mut access = cfg(&[("RAMEN_MCP_KEYS", "rmk_test")]);
+        access.tool_access = crate::config::parse_tool_access(
+            r#"{"calc-nonce":{"list":["key","viewer"],"call":["key"]}}"#,
+        )
+        .unwrap();
+        let call = |name: &str, args: &str| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{args}}}}}"#
+            )
+        };
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let out = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "mcp_user",
+            call("calc-nonce", "{}").as_bytes(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(out["error"]["code"], -32601, "{out}");
+        let line = last_line_with(p, "calc-nonce");
+        assert_eq!(
+            (line["status"].as_str(), line["reason"].as_str()),
+            (Some("denied"), Some("tool_hidden"))
+        );
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let out = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "viewer",
+            call("calc-nonce", "{}").as_bytes(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (
+                out["error"]["code"].as_i64(),
+                out["error"]["message"].as_str()
+            ),
+            (
+                Some(-32003),
+                Some("forbidden: calc-nonce is not callable for viewer")
+            )
+        );
+        let line = last_line_with(p, "calc-nonce");
+        assert_eq!(
+            (line["status"].as_str(), line["reason"].as_str()),
+            (Some("denied"), Some("tool_denied"))
+        );
+        // C12: `args` is a 12-hex digest of the canonical arguments, equal for equal args in any key order,
+        // "" when absent, and the arguments themselves never appear in the line
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let _ = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "key",
+            call("calc-nonce", r#"{"b":"secret-arg-value","a":1}"#).as_bytes(),
+        )
+        .await;
+        let first = last_line_with(p, "calc-nonce")["args"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(first.len(), 12);
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()), "{first}");
+        assert_eq!(
+            first,
+            crate::grpc::args_digest(Some(&json!({"a": 1, "b": "secret-arg-value"})))
+        );
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let _ = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "key",
+            call("calc-nonce", r#"{"a":1,"b":"secret-arg-value"}"#).as_bytes(),
+        )
+        .await;
+        assert_eq!(last_line_with(p, "calc-nonce")["args"], first);
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let _ = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "key",
+            call("calc-nonce", r#"{"a":2,"b":"secret-arg-value"}"#).as_bytes(),
+        )
+        .await;
+        assert_ne!(last_line_with(p, "calc-nonce")["args"], first);
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let _ = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "key",
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"calc-nonce"}}"#,
+        )
+        .await;
+        assert_eq!(last_line_with(p, "calc-nonce")["args"], "");
+        let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
+        let _ = dispatch_body(
+            &a,
+            &access,
+            &mut log,
+            "key",
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"name":"calc-nonce"}}"#,
+        )
+        .await;
+        let listed = std::fs::read_to_string(p)
+            .unwrap()
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v["method"] == "tools/list")
+            .unwrap();
+        assert!(listed.get("args").is_none(), "args only on tools/call");
+        assert!(
+            !std::fs::read_to_string(p)
+                .unwrap()
+                .contains("secret-arg-value")
+        );
         // inflight: every permit taken
         let permits = a.sem.try_acquire_many(a.sem_max as u32).unwrap();
         let mut log = CallLog::new("127.0.0.1".parse().unwrap(), "grpc");
@@ -707,6 +878,7 @@ mod tests {
             &a,
             &c,
             &mut log,
+            "key",
             br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"busy-nonce"}}"#,
         )
         .await

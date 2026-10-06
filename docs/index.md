@@ -16,7 +16,7 @@ hide: [toc]
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
       "operatingSystem": "Kubernetes (GKE, EKS), Docker",
-      "softwareVersion": "0.7.1",
+      "softwareVersion": "0.7.2",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
       "downloadUrl": "https://github.com/bkraad47/ramen/releases",
@@ -51,7 +51,7 @@ hide: [toc]
         "Docker"
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"

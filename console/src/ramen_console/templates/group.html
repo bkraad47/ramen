@@ -44,6 +44,24 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <a class="btn ghost act" href="{{ base }}/logs?group={{ group.id }}&zone={{ z.id }}">View logs</a></div></td></tr>
 </table></div></td></tr>{% endfor %}</table></div>{% endif %}
 
+<h2>Drift</h2>
+<div class="card"><p class="muted">Per zone, the share of each tool's recent calls that repeat an identical call (same key, tool and arguments) within a minute — a model looping on a tool. A tool at or over the threshold set on the Config page is shown in red and logged as a warning. Read from the zone's last 500 log lines; nothing rolls back on its own.</p>
+{% for z in zones %}<div class="pkg-zone"><h3>Zone {{ z.id }}</h3><div hx-get="{{ base }}/ui/groups/{{ group.id }}/zones/{{ z.id }}/drift" data-auto hx-trigger="load, every 60s" hx-swap="innerHTML"><p class="muted">Loading…</p></div></div>{% else %}<p class="muted">No zones yet.</p>{% endfor %}</div>
+
+<h2>Tool access</h2>
+{% set kind_opts = [] %}{% for k in kinds %}{% set _ = kind_opts.append((k, role_label(k) if k != 'key' else 'Group MCP key')) %}{% endfor %}
+{% for e in envs %}{% set ta = e.tool_access or {} %}<div class="card"><b>{{ e.name }}</b>
+<p class="muted">Who may see and call each tool, by caller kind: a <b>group MCP key</b>, or a person's role <b>in this group</b> carried by their OAuth token. Super admins always see and call everything. Every kind in both columns is the default (unrestricted); a kind that may call must also be able to list. A change reaches the workers on the next deploy. The table offers the tools the zones reported on the last deploy; a name set through the API that no zone serves stays listed.</p>
+{% if can_admin %}<form hx-put="{{ base }}/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/tool-access" hx-ext="json" hx-swap="none">{% endif %}
+<table><tr><th>Tool</th><th>May list</th><th>May call</th></tr>
+{% for n in tool_rows[e.name] %}{% set a = ta.get(n) %}{% set lst = a['list'] if a else kinds %}{% set cal = a['call'] if a else kinds %}
+<tr><td><code class="tool">{{ n }}</code>{% if a %} <span class="badge error">restricted</span>{% endif %}{% if n not in known_tools[e.name] %} <span class="muted">not in the last deploy</span>{% endif %}</td>
+<td>{% if can_admin %}{{ multi('list:' ~ n, kind_opts, lst, 'ta-' ~ e.name ~ '-' ~ n ~ '-list', '', 'Nobody') }}{% else %}{{ lst|join(', ') or 'Nobody' }}{% endif %}</td>
+<td>{% if can_admin %}{{ multi('call:' ~ n, kind_opts, cal, 'ta-' ~ e.name ~ '-' ~ n ~ '-call', '', 'Nobody') }}{% else %}{{ cal|join(', ') or 'Nobody' }}{% endif %}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">Deploy to see the tools this environment serves.</td></tr>{% endfor %}</table>
+{% if can_admin %}{% if tool_rows[e.name] %}<div class="row-actions"><button class="sm">Save tool access</button></div>{% endif %}</form>{% endif %}</div>
+{% else %}<p class="muted">No environments</p>{% endfor %}
+
 <h2>Packages per zone (tools, resources and prompts)</h2>
 {% for e in envs %}<div class="card"><b>{{ e.name }}</b> · Blocked across the environment: {% for n in e.blocked or [] %}<span class="badge error">{{ n }}</span>{% if can_admin %} <button class="sm ghost" hx-put="{{ base }}/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (e.blocked or [])|reject("equalto", n)|list}) }}' hx-swap="none">Unblock</button>{% endif %}{% else %}<span class="muted">None</span>{% endfor %}
 {% set packages = (e.last_deploy and e.last_deploy.packages) or {} %}
@@ -58,7 +76,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 {% if ns.found %}{% set pk = ns.pk %}<p class="muted">Reported by {{ ns.n }} worker{{ 's' if ns.n != 1 }} (canary and stable pods run the same code, so the list is shown once).</p>
 <table><tr><th>Kind</th><th>Name</th><th>Call</th><th>State</th></tr>
 {% for kind in ['tools', 'resources', 'prompts'] %}{% for it in pk.get(kind, []) %}{% set n = it.name or it.uri %}{% set off = n in zb or n in (e.blocked or []) %}
-<tr><td>{{ kind }}</td><td><code>{{ n }}</code>{% if it.uri and it.name %} <span class="muted">{{ it.uri }}</span>{% endif %}</td><td><code class="muted">{{ tojson(it.get('inputSchema') or it.get('arguments') or {}) }}</code></td>
+<tr><td>{{ kind }}</td><td><code>{{ n }}</code>{% if it.uri and it.name %} <span class="muted">{{ it.uri }}</span>{% endif %}{% if kind == 'tools' and n in (e.tool_access or {}) %} <span class="badge error" title="Only some caller kinds may list or call this tool — see Tool access above">restricted</span>{% endif %}</td><td><code class="muted">{{ tojson(it.get('inputSchema') or it.get('arguments') or {}) }}</code></td>
 <td>{% if n in (e.blocked or []) %}<span class="badge error">Disabled everywhere</span>{% elif can_admin %}<button class="sm {{ 'ghost' if off else 'danger' }}" hx-put="{{ base }}/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/zones/{{ z }}/blocked" hx-ext="json" hx-vals='{{ tojson({"blocked": (zb|reject("equalto", n)|list) if off else (zb + [n])}) }}' hx-swap="none">{{ 'Enable' if off else 'Disable' }}</button>{% else %}<span class="badge {{ 'error' if off else 'ok' }}">{{ 'Disabled' if off else 'Enabled' }}</span>{% endif %}</td></tr>
 {% endfor %}{% endfor %}
 {% if pk.errors %}<tr><td colspan="4"><span class="badge error">Errors</span> <code>{{ tojson(pk.errors) }}</code></td></tr>{% endif %}</table>{% endif %}

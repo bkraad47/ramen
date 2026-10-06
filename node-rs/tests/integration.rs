@@ -955,3 +955,112 @@ for line in sys.stdin:
     server.await.unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// C10 (0.7.2): `RAMEN_TOOL_ACCESS` from the deploy file narrows tools per caller kind — `key` for an `rmk_` key, a
+/// token's `role` claim (missing → `mcp_user`), `super_admin` unrestricted. Hidden → `-32601`, listed-but-denied →
+/// `-32003`. Same `dispatch_body` as HTTP, so this gRPC run covers both transports. Fake runtime.
+#[tokio::test]
+async fn tool_access_narrows_list_and_call_per_caller_kind() {
+    let dir = std::env::temp_dir().join(format!("ramen-access-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("ramen_runtime")).unwrap();
+    std::fs::create_dir_all(dir.join("bucket/.ramen")).unwrap();
+    std::fs::write(
+        dir.join("ramen_runtime/__main__.py"),
+        r#"import json, sys
+LOAD = {"tools": [{"name": "calc"}, {"name": "secret_tool"}, {"name": "open"}], "prompts": [], "resources": [], "errors": []}
+for line in sys.stdin:
+    m = json.loads(line)
+    r = LOAD if m["method"] == "runtime.load" else {"called": m["method"], "params": m["params"]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("bucket/.ramen/env"),
+        r#"RAMEN_TOOL_ACCESS={"calc":{"list":["key","viewer"],"call":["key"]},"secret_tool":{"list":["group_admin"],"call":["group_admin"]}}
+"#,
+    )
+    .unwrap();
+    let pp = dir.display().to_string();
+    let bucket = dir.join("bucket").display().to_string();
+    let secret = "zone-secret";
+    let vars: Vec<(String, String)> = [
+        ("RAMEN_MCP_KEYS", "k1"),
+        ("RAMEN_ADMIN_KEY", "adm"),
+        ("RAMEN_GROUP", "demo"),
+        ("RAMEN_PYTHON", "python3"),
+        ("RAMEN_PYTHONPATH", pp.as_str()),
+        ("RAMEN_BUCKET", bucket.as_str()),
+        ("RAMEN_SESSION_SECRET", secret),
+        ("RAMEN_OAUTH_ISSUER", "https://console.example"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let n = serve(
+        app_with(
+            Config::from_vars(vars.clone().into_iter()).unwrap(),
+            Box::new(move || Config::from_vars(vars.clone().into_iter())),
+        )
+        .await,
+    )
+    .await;
+    reload(&n, &[("x-ramen-admin-key", "adm")]).await.unwrap();
+    let key = ramen_node::session::Sessions::new(Some(secret), 60).derived_key("oauth");
+    let token = |role: Option<&str>| {
+        let mut c = json!({"iss": "https://console.example", "sub": "u1", "aud": "mcp:demo:local",
+                           "scope": "mcp:demo:local", "exp": ramen_node::session::now() + 60});
+        if let Some(r) = role {
+            c["role"] = json!(r);
+        }
+        ramen_node::token::mint(&c, &key)
+    };
+    let names = |v: &Value| -> Vec<String> {
+        v["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let call = |name: &str| json!({"name": name, "arguments": {}});
+    // a key: kind `key`
+    let v = rpc(&n, "k1", "tools/list", json!({})).await.unwrap();
+    assert_eq!(names(&v), vec!["calc", "open"]);
+    let v = rpc(&n, "k1", "tools/call", call("calc")).await.unwrap();
+    assert_eq!(v["result"]["called"], "runtime.call_tool");
+    let v = rpc(&n, "k1", "tools/call", call("secret_tool"))
+        .await
+        .unwrap();
+    assert_eq!(v["error"]["code"], -32601, "hidden: {v}");
+    // a viewer token: may list calc, not call it
+    let viewer = token(Some("viewer"));
+    let v = rpc(&n, &viewer, "tools/list", json!({})).await.unwrap();
+    assert_eq!(names(&v), vec!["calc", "open"]);
+    let v = rpc(&n, &viewer, "tools/call", call("calc")).await.unwrap();
+    assert_eq!(
+        (v["error"]["code"].as_i64(), v["error"]["message"].as_str()),
+        (
+            Some(-32003),
+            Some("forbidden: calc is not callable for viewer")
+        ),
+        "{v}"
+    );
+    let v = rpc(&n, &viewer, "tools/call", call("open")).await.unwrap();
+    assert_eq!(v["result"]["called"], "runtime.call_tool");
+    // no role claim → mcp_user: calc is hidden
+    let plain = token(None);
+    let v = rpc(&n, &plain, "tools/list", json!({})).await.unwrap();
+    assert_eq!(names(&v), vec!["open"]);
+    let v = rpc(&n, &plain, "tools/call", call("calc")).await.unwrap();
+    assert_eq!(v["error"]["code"], -32601, "{v}");
+    // super_admin sees and calls everything
+    let sa = token(Some("super_admin"));
+    let v = rpc(&n, &sa, "tools/list", json!({})).await.unwrap();
+    assert_eq!(names(&v), vec!["calc", "secret_tool", "open"]);
+    let v = rpc(&n, &sa, "tools/call", call("secret_tool"))
+        .await
+        .unwrap();
+    assert_eq!(v["result"]["called"], "runtime.call_tool");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

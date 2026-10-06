@@ -22,7 +22,7 @@ def http_nodes(stack, zone_targets, group) -> dict[str, HttpNode]:
 def test_every_zone_serves_streamable_http_on_the_grpc_port(http_nodes, nodes):
     for zone, h in http_nodes.items():
         assert h.initialize()["protocolVersion"] == PROTOCOL, zone
-        assert h.session_id and h.session_id.count(".") == 2, zone
+        assert h.session_id and h.session_id.count(".") == 3, zone  # 0.7.2: <nonce>.<expiry>.<hash12>.<mac>
         assert TOOL in {t["name"] for t in h.list_tools()}, zone
         assert text_of(h.call_tool(TOOL, {"var1": 2, "var2": 3, "func": "add"})).strip().startswith("5"), zone
         assert nodes[zone].ping() == {}  # and gRPC still answers on the same port

@@ -1,32 +1,106 @@
 //! MCP JSON-RPC methods (CONTRACTS §3 methods, carried over gRPC per §11) → sidecar `runtime.*` calls.
+use crate::config::ToolAccess;
 use crate::sidecar::{RpcErr, Sidecar};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The caller kind that is allowed everything and never listed in `RAMEN_TOOL_ACCESS` (C10).
+pub const SUPER_ADMIN: &str = "super_admin";
 
-/// `Ok(None)` for notifications (no response body). `blocked` (CONTRACTS §9, `RAMEN_BLOCKED`) hides names /
-/// resource URIs from the list calls and answers `-32601` for calls to them.
+/// What one caller may see and call: `blocked` (§9, `RAMEN_BLOCKED`) hides names from everyone; `tool_access`
+/// (C10, `RAMEN_TOOL_ACCESS`) narrows tools per caller `kind` (`key`, or a token's `role`).
+#[derive(Clone, Copy)]
+pub struct Policy<'a> {
+    pub blocked: &'a [String],
+    pub tool_access: &'a HashMap<String, ToolAccess>,
+    pub kind: &'a str,
+}
+
+impl Policy<'_> {
+    fn allows(&self, name: &str, which: fn(&ToolAccess) -> &Vec<String>) -> bool {
+        self.kind == SUPER_ADMIN
+            || self
+                .tool_access
+                .get(name)
+                .is_none_or(|a| which(a).iter().any(|k| k == self.kind))
+    }
+    /// Whether `tools/list` shows this tool to the caller (the blocked list is applied separately).
+    pub fn tool_listable(&self, name: &str) -> bool {
+        self.allows(name, |a| &a.list)
+    }
+    pub fn tool_callable(&self, name: &str) -> bool {
+        self.allows(name, |a| &a.call)
+    }
+    /// The access-log reason a `tools/call` is refused by this policy: `tool_hidden` (answered `-32601`) or
+    /// `tool_denied` (answered `-32003`). `None` when the call is allowed or the method is not `tools/call`.
+    pub fn denial(&self, method: &str, params: &Value) -> Option<&'static str> {
+        if method != "tools/call" {
+            return None;
+        }
+        let name = params.get("name").and_then(Value::as_str)?;
+        if !self.tool_listable(name) {
+            Some("tool_hidden")
+        } else if !self.tool_callable(name) {
+            Some("tool_denied")
+        } else {
+            None
+        }
+    }
+}
+
+/// `Ok(None)` for notifications (no response body). Blocked names / resource URIs are hidden from the list calls
+/// and answered `-32601` when called; a tool the caller's kind may not list is answered the same way, and one it
+/// may list but not call is `-32003 forbidden: <tool> is not callable for <kind>`.
 pub async fn dispatch(
     sc: &Sidecar,
-    blocked: &[String],
+    policy: &Policy<'_>,
     method: &str,
     params: &Value,
 ) -> Result<Option<Value>, RpcErr> {
     if method.starts_with("notifications/") {
         return Ok(None);
     }
+    let blocked = policy.blocked;
     let r = match method {
         "initialize" => {
-            json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
-                               "serverInfo": {"name": "ramen-node", "version": env!("CARGO_PKG_VERSION")}})
+            // C11: list changes are announced on the first SSE-capable response after a rollout (http.rs)
+            json!({"protocolVersion": PROTOCOL_VERSION,
+                   "capabilities": {"tools": {"listChanged": true}, "resources": {}, "prompts": {}},
+                   "serverInfo": {"name": "ramen-node", "version": env!("CARGO_PKG_VERSION")}})
         }
         "ping" => json!({}),
-        "tools/list" => json!({"tools": loaded(sc, "tools", blocked).await?}),
+        "tools/list" => {
+            let tools = loaded(sc, "tools", blocked).await?;
+            let visible = match tools {
+                Value::Array(items) if !policy.tool_access.is_empty() => Value::Array(
+                    items
+                        .into_iter()
+                        .filter(|t| {
+                            t.get("name")
+                                .and_then(Value::as_str)
+                                .is_none_or(|n| policy.tool_listable(n))
+                        })
+                        .collect(),
+                ),
+                other => other,
+            };
+            json!({"tools": visible})
+        }
         "resources/list" => json!({"resources": loaded(sc, "resources", blocked).await?}),
         "prompts/list" => json!({"prompts": loaded(sc, "prompts", blocked).await?}),
         "tools/call" => {
             let name = str_param(params, "name")?;
             deny_if_blocked(blocked, name, "tool")?;
+            if !policy.tool_listable(name) {
+                return Err(RpcErr::new(-32601, format!("tool not found: {name}")));
+            }
+            if !policy.tool_callable(name) {
+                return Err(RpcErr::new(
+                    -32003,
+                    format!("forbidden: {name} is not callable for {}", policy.kind),
+                ));
+            }
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
             // N8: the sidecar validates the same schema (executor.py `jsonschema.validate`); catching it here
             // too saves the round trip and matches the exact result shape a sidecar validation failure uses
@@ -332,6 +406,125 @@ mod tests {
         );
         assert!(!blocked_target(&sc, &b, "resources/read", &json!({"uri": "ramen://other"})).await);
         assert!(!blocked_target(&sc, &[], "tools/call", &json!({"name": "calc"})).await);
+    }
+
+    fn access(json: &str) -> HashMap<String, ToolAccess> {
+        crate::config::parse_tool_access(json).unwrap()
+    }
+
+    /// C10: a tool absent from the map is unrestricted; `super_admin` is never restricted.
+    #[test]
+    fn policy_decides_list_and_call_per_kind() {
+        let m = access(
+            r#"{"calc":{"list":["key","viewer"],"call":["key"]},"hidden":{"list":[],"call":[]}}"#,
+        );
+        let p = |kind: &'static str| Policy {
+            blocked: &[],
+            tool_access: &m,
+            kind,
+        };
+        assert!(p("key").tool_listable("calc") && p("key").tool_callable("calc"));
+        assert!(p("viewer").tool_listable("calc") && !p("viewer").tool_callable("calc"));
+        assert!(!p("mcp_user").tool_listable("calc") && !p("mcp_user").tool_callable("calc"));
+        assert!(!p("key").tool_listable("hidden"));
+        assert!(p("mcp_user").tool_listable("other") && p("mcp_user").tool_callable("other"));
+        assert!(p("super_admin").tool_listable("hidden") && p("super_admin").tool_callable("calc"));
+        // the log reason: hidden beats denied; nothing for an unrestricted tool or another method
+        assert_eq!(
+            p("mcp_user").denial("tools/call", &json!({"name": "calc"})),
+            Some("tool_hidden")
+        );
+        assert_eq!(
+            p("viewer").denial("tools/call", &json!({"name": "calc"})),
+            Some("tool_denied")
+        );
+        assert_eq!(
+            p("key").denial("tools/call", &json!({"name": "calc"})),
+            None
+        );
+        assert_eq!(
+            p("viewer").denial("tools/call", &json!({"name": "other"})),
+            None
+        );
+        assert_eq!(
+            p("mcp_user").denial("prompts/get", &json!({"name": "calc"})),
+            None
+        );
+        assert_eq!(p("mcp_user").denial("tools/call", &json!({})), None);
+    }
+
+    #[tokio::test]
+    async fn tools_list_is_filtered_per_kind_and_calls_are_hidden_or_forbidden() {
+        let sc = sidecar();
+        sc.set_loaded_for_test(
+            json!({"tools": [tool("calc", scalar_schema()), tool("open", scalar_schema())],
+            "prompts": [{"name": "calc"}]}),
+        )
+        .await;
+        let m = access(r#"{"calc":{"list":["key","viewer"],"call":["key"]}}"#);
+        let list = |kind: &'static str| {
+            let sc = &sc;
+            let p = Policy {
+                blocked: &[],
+                tool_access: &m,
+                kind,
+            };
+            async move {
+                dispatch(sc, &p, "tools/list", &json!({}))
+                    .await
+                    .unwrap()
+                    .unwrap()["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t["name"].as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(list("key").await, vec!["calc", "open"]);
+        assert_eq!(list("viewer").await, vec!["calc", "open"]);
+        assert_eq!(list("mcp_user").await, vec!["open"]);
+        assert_eq!(list("super_admin").await, vec!["calc", "open"]);
+        let call = json!({"name": "calc", "arguments": {"a": 1, "b": "x"}});
+        let p = Policy {
+            blocked: &[],
+            tool_access: &m,
+            kind: "mcp_user",
+        };
+        let e = dispatch(&sc, &p, "tools/call", &call).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.message.as_str()),
+            (-32601, "tool not found: calc")
+        );
+        let p = Policy {
+            blocked: &[],
+            tool_access: &m,
+            kind: "viewer",
+        };
+        let e = dispatch(&sc, &p, "tools/call", &call).await.unwrap_err();
+        assert_eq!(
+            (e.code, e.message.as_str()),
+            (-32003, "forbidden: calc is not callable for viewer")
+        );
+        // prompts are not covered in 0.7.2: a prompt that shares the name stays listed
+        let p = Policy {
+            blocked: &[],
+            tool_access: &m,
+            kind: "mcp_user",
+        };
+        assert_eq!(
+            dispatch(&sc, &p, "prompts/list", &json!({}))
+                .await
+                .unwrap()
+                .unwrap()["prompts"][0]["name"],
+            "calc"
+        );
+        // C11: the node now tells clients it will announce list changes
+        let init = dispatch(&sc, &p, "initialize", &json!({}))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(init["capabilities"]["tools"]["listChanged"], true);
     }
 
     #[tokio::test]

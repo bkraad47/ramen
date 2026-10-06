@@ -64,7 +64,8 @@ it on its own, without calling the console. The refresh token lives thirty days,
 when the person's role, password or account changes. The token runs every tool of the group in that zone, the
 same reach as a group key, with the person's name on every log line.
 
-The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
+Since 0.7.2 the token also names the person's `role` in the group, which the worker uses for per-tool access
+([Groups, zones and regions](groups-zones.md#tool-access-072)). The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
 every consent decision, and since 0.7.0 every token mint (`oauth.token`), refresh (`oauth.refresh`), a rotated-out
 refresh token presented again (`oauth.refresh_reuse`, which revokes the family) and every refusal (`oauth.denied`
 with its reason). The lifetimes are the console's `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and

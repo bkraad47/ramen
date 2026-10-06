@@ -300,6 +300,9 @@ class OAuthServer:
             "group": group,
             "zone": zone,
             "client_id": client["client_id"],
+            # C10: the caller kind the node applies `RAMEN_TOOL_ACCESS` with — the role in THIS group (D41), or
+            # super_admin; `_still_allowed` has just confirmed a membership exists, so the fallback is for safety
+            "role": principal_from(user).role_in(group) or "mcp_user",
             "iat": iat,
             "exp": iat + access_ttl(),
             "jti": uid(),

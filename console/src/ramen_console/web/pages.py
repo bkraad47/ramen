@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, github_app, oauth_server, regions
+from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolaccess
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -58,6 +58,14 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
     return render(request, "partials/workers.html", w=w)
 
 
+@r.get("/ui/groups/{group}/zones/{zone}/drift")
+async def drift_partial(request: Request, group: str, zone: str, p: Principal = Depends(require("viewer", "group"))):
+    """C12: the group page's Drift card for one zone (the API's report, rendered)."""
+    s = svc(request)
+    text = await s.cloud.logs(group, zone, None, 500)
+    return render(request, "partials/drift.html", d=await drift.report(s.store, group, zone, text, 500))
+
+
 @r.get("/ui/jobs/{jid}")
 async def job_partial(request: Request, jid: str, p: Principal = Depends(viewer)):
     return render(request, "partials/job.html", job=request.app.state.jobs.get(jid))
@@ -74,11 +82,15 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
     g = await s.get_group(group)
     zones = await s.zones()
     workers = {z["id"]: await s.worker_config(group, z["id"]) for z in zones}
+    envs = await s.environments(group)
     return render(
         request,
         "group.html",
         group=g,
-        envs=await s.environments(group),
+        envs=envs,
+        kinds=toolaccess.KINDS,
+        tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
+        known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,
         workers=workers,
         mcp_keys=await s.secrets(group, kind="mcp_key"),
@@ -262,4 +274,5 @@ async def config(request: Request, p: Principal = Depends(super_)):
         blocked_regions=await svc(request).blocked_regions(),
         regions_note=regions.NOTE,
         oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
+        drift={"warn_pct": await drift.threshold(store)},
     )

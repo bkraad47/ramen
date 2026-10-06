@@ -105,6 +105,21 @@ Since 0.7.0 each zone also shows its **manifest**: the hash of everything the wo
 worker reports on its metrics) with the names and the exact schemas a client sees in a collapsed section. The live
 workers cell shows each worker's hash and flags a **manifest mismatch** when the workers of one zone disagree, which
 is what a half-finished rollout looks like.
+
+### Tool access (0.7.2)
+
+Per environment, a group admin can restrict single tools: who may **see** a tool in `tools/list` and who may **call**
+it, by kind of caller: group keys, group admins, viewers, MCP users (super admins always may; a kind that may call may
+list). A tool left out of the table is open to everyone with access to the group, as before. A caller who may not list
+a tool gets `-32601 tool not found`; one who may list but not call gets `-32003 forbidden`. The worker enforces it on
+both transports on the next deploy. Blocking (above) still removes a tool for everyone.
+
+### Drift (0.7.2)
+
+The group page's **Drift** card shows, per zone and tool, how often the same caller repeated the same call (same
+arguments, hashed, never stored) within a minute, from the worker's call log. A high rate is what an agent retrying
+or abandoning a tool looks like. Above the threshold on the Config page (default 30 %) the console logs a warning the
+digest email carries. `GET /api/v1/groups/{g}/zones/{z}/drift`.
 **Disable** a package on one zone, or add it to **Blocked everywhere** on the environment. A blocked name
 disappears from `tools/list` and answers the JSON-RPC error `-32601` until it is enabled again. The node enforces
 it, so a bad tool can be pulled without a code change.

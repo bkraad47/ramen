@@ -40,6 +40,7 @@ def _entry(i: int, raw: str, names: dict[str, str]) -> dict:
         "consumer": (names.get(kid) or kid or ANONYMOUS) if call else (doc.get("msg") or ""),
         "method": doc.get("method"),
         "name": doc.get("name"),
+        "args": doc.get("args"),  # C12: sha256[:12] of a tools/call's arguments (0.7.2 workers); drift reads it
         "status": status,
         "outcome": ("success" if status == "ok" else "failure") if call else "unknown",
         "body": json.dumps(doc, indent=2),

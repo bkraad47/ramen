@@ -282,3 +282,28 @@ def test_golden_cases_for_a_blocked_tool_are_skipped_not_failed(demo, ws, tmp_pa
     assert any("golden calc: skipped (blocked)" in line for line in job["log"])
     calls = [c for c in ws["cold"].calls if c[0] == "Mcp/Call" and c[2].get("method") == "tools/call"]
     assert [c[2]["params"]["name"] for c in calls] == ["other"]
+
+
+def test_golden_cases_for_a_tool_the_key_may_not_call_are_skipped(demo, ws, tmp_path):
+    """Found on GCP in the 0.7.2 run: golden cases run as the group key, so a tool whose access excludes `key`
+    (hidden -32601 or forbidden -32003) failed the gate. Such cases are skipped, like a blocked tool's."""
+    demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "ci"})
+    for w in ws.values():
+        w.tool_results["calc"] = {"content": [{"type": "text", "text": "42"}]}
+        w.tool_results["other"] = {"content": [{"type": "text", "text": "ok"}]}
+    write_cases(
+        tmp_path,
+        "cases:\n  - tool: calc\n    args: {a: 40, b: 2}\n    expect: {text_contains: '42'}\n"
+        "  - tool: other\n    name: other\n    expect: {text_contains: 'ok'}\n",
+    )
+    r = demo.put(
+        "/api/v1/groups/demo/environments/prod/tool-access",
+        json={"calc": {"list": ["group_admin"], "call": ["group_admin"]}},
+    )
+    assert r.status_code == 200, r.text
+    job = deploy(demo)
+    assert job["status"] == "ok", job
+    assert job["result"]["zone-a"]["golden"] == {"passed": 1, "failed": [], "skipped": ["calc: not callable for key"]}
+    assert any("golden calc: skipped (not callable for key)" in line for line in job["log"])
+    calls = [c for c in ws["cold"].calls if c[0] == "Mcp/Call" and c[2].get("method") == "tools/call"]
+    assert [c[2]["params"]["name"] for c in calls] == ["other"]

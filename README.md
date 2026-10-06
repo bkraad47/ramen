@@ -40,6 +40,9 @@ zones, secrets, canary deploys, rebalancing, IP rules, logs, audit and backups �
   leaves stable untouched.
 - **Multi-zone from day one.** Group → Environment → Zone → Worker; the LB routes on `ramen-group` / `ramen-zone`
   metadata, so one client config works for every zone.
+- **Per-tool access and a drift signal (0.7.2).** Decide per environment who may see and who may call each tool (group
+  keys, group admins, viewers, MCP users); clients learn about a rollout through `tools/list_changed`; the group page
+  shows how often the same caller repeated the same call, with a warning threshold.
 - **Enterprise controls.** A role per group (Group Admin, Viewer or MCP User) plus global super admins, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
   zone at the node, one Cloud Armor policy per group at the edge), secrets that are never displayed, an audit
   line for every action.

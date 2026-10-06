@@ -16,6 +16,9 @@ pub struct Principal {
     pub sub: String,
     pub email: Option<String>,
     pub jti: Option<String>,
+    /// C10 (0.7.2): the person's role in the group of the scope (`group_admin`, `viewer`, `mcp_user`, or
+    /// `super_admin`), as the console minted it. Absent on older tokens → the node treats them as `mcp_user`.
+    pub role: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +105,11 @@ pub fn verify(
             .and_then(Value::as_str)
             .map(String::from),
         jti: claims.get("jti").and_then(Value::as_str).map(String::from),
+        role: claims
+            .get("role")
+            .and_then(Value::as_str)
+            .filter(|r| !r.is_empty())
+            .map(String::from),
     })
 }
 
@@ -143,6 +151,19 @@ mod tests {
         assert_eq!(p.sub, "u1");
         assert_eq!(p.email.as_deref(), Some("ada@example.com"));
         assert_eq!(p.jti.as_deref(), Some("j1"));
+        assert_eq!(p.role, None); // C10: no claim → the node treats the caller as `mcp_user`
+        let mut c = claims();
+        c["role"] = json!("viewer");
+        let p = verify(
+            &mint(&c, &key("s")),
+            &key("s"),
+            "https://console.example",
+            "demo",
+            "a",
+            1_900_000_000,
+        )
+        .unwrap();
+        assert_eq!(p.role.as_deref(), Some("viewer"));
     }
 
     #[test]

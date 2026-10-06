@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.7.1` **(current)** | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
+| `0.7.2` **(current)** | 2026-10-06 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
+| `0.7.1` | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
 | `0.7.0` | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
 | `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
 | `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |
@@ -33,9 +34,14 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## Unreleased
+## 0.7.2 — the rest of the r/selfhosted list
 
+- **Per-tool access.** Group admins decide, per environment and tool, who may *see* it in `tools/list` and who may *call* it: group keys, group admins, viewers, MCP users (super admins always may). A tool a caller may not list is simply not there (`-32601`); one they may list but not call answers `-32003 forbidden`. Set on the group page's "Tool access" table or `PUT .../environments/{e}/tool-access`; the worker enforces it; tokens now carry the person's `role` in the group.
+- **Clients learn about a rollout.** Session ids carry the manifest hash they started on; after a deploy changes the tool set, the worker's next answer to that session is a Streamable HTTP event stream that begins with `notifications/tools/list_changed` (for clients that accept `text/event-stream`, which the official SDKs and Claude Code do), once per session. `initialize` declares `tools.listChanged`. Sessions from 0.7.1 keep working.
+- **Drift signal.** Call logs carry a hash of each call's arguments (never the values); the group page's new "Drift" card shows, per zone and tool, how often the same caller repeated the same call within a minute, and a rate above the Config page's threshold (default 30 %) logs a warning the digest email carries.
 - README and the docs home page show the Glama listing badge (score, tools) under the badge row.
+- Details: `PUT /api/v1/groups/{g}/environments/{e}/tool-access` (whole map, 422 on an unknown kind or a kind that may call but not list; audited `environment.tool_access`); workers get `RAMEN_TOOL_ACCESS`; hidden → `-32601 tool not found`, listed-only → `-32003 forbidden: <tool> is not callable for <kind>`, log reasons `tool_hidden`/`tool_denied`. `GET /api/v1/groups/{g}/zones/{z}/drift?tail=500` → `{tools: {<tool>: {calls, repeats, rate}}, threshold, window_s, warn}`; `GET|PUT /api/v1/config/drift {"warn_pct": 30}`. Session ids are now four-part (`nonce.expiry.hash12.mac`); 3-part ids from 0.7.1 still verify; during the rolling upgrade an old pod answers a new id `404` and the client re-initializes. Proof on real processes: `tests/conformance/test_tool_access.py`, `test_rollout_notify.py`, `test_call_args_hash.py` (the official SDK client receives `ToolListChangedNotification` across a reload).
+- Not built: per-user upstream credentials (tools acting as the person against Google/Microsoft) — needs a token broker.
 
 ## 0.7.1 — blocked tools and golden cases
 

@@ -1,7 +1,7 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _split(v):
@@ -84,6 +84,29 @@ class Blocked(ListFields):
 
 class Verbose(BaseModel):
     verbose: bool
+
+
+class ToolAccess(BaseModel):
+    """C10: the whole `{tool: {list, call}}` map — bare, wrapped in `tool_access`, or as the group page's form posts
+    it (`list:<tool>` / `call:<tool>` checkbox groups). Kinds and `call ⊆ list` are checked by `toolaccess.clean`."""
+
+    tool_access: dict[str, dict]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_form(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("tool_access must be a map of tool name to {list, call}")
+        if isinstance(data.get("tool_access"), dict):
+            return {"tool_access": data["tool_access"]}
+        if any(k.partition(":")[0] in ("list", "call") and ":" in k for k in data):
+            out: dict[str, dict] = {}
+            for k, v in data.items():
+                mode, _, tool = k.partition(":")
+                if mode in ("list", "call") and tool:
+                    out.setdefault(tool, {"list": [], "call": []})[mode] = _split(v)
+            return {"tool_access": out}
+        return {"tool_access": data}
 
 
 class DeployIn(BaseModel):
@@ -216,6 +239,12 @@ class RegionsConfig(ListFields):
         if isinstance(data, dict) and isinstance(data.get("blocked"), dict):
             return {**data["blocked"], **{k: v for k, v in data.items() if k != "blocked"}}
         return data
+
+
+class DriftConfig(BaseModel):
+    """C12: the repeat rate (percent) at or over which a zone's drift check warns."""
+
+    warn_pct: int = Field(ge=0, le=100)
 
 
 class ImageIn(BaseModel):

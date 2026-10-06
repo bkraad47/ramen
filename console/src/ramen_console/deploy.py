@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 
@@ -213,10 +214,16 @@ def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
             return
         failed, skipped = [], []
         blocked = {b for b in cfg.get("RAMEN_BLOCKED", "").split(",") if b}
+        access = json.loads(cfg.get("RAMEN_TOOL_ACCESS") or "{}")
         for i, c in enumerate(cases, 1):
-            if c["tool"] in blocked:  # §9: a blocked name answers -32601 on purpose; its cases are not a verdict
-                skipped.append(f"{c['name']}: blocked")
-                log_.append(f"{now()} zone {zone}: golden {c['name']}: skipped (blocked)")
+            # §9 / §20: a blocked name answers -32601 on purpose, and the cases run as the group key, so a tool the key
+            # may not call (hidden -32601 or forbidden -32003) is not a verdict either — skipped, never failed
+            why_skip = "blocked" if c["tool"] in blocked else None
+            if why_skip is None and c["tool"] in access and "key" not in access[c["tool"]].get("call", []):
+                why_skip = "not callable for key"
+            if why_skip:
+                skipped.append(f"{c['name']}: {why_skip}")
+                log_.append(f"{now()} zone {zone}: golden {c['name']}: skipped ({why_skip})")
                 continue
             try:
                 args = golden.resolve_args(c["args"], secret)

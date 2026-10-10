@@ -26,7 +26,9 @@ what the console lets it do; a label; and an **OAuth only** switch. Its name is 
 - **OAuth only**: a person holding the role in any group cannot sign in with a password or a magic link; the login
   page answers `403 This account signs in with <provider>`. The built-in roles cannot be made OAuth-only.
 
-The person's token carries the custom role name, so workers enforce it on both transports. Deleting a role that a
+The person's token carries the custom role name, so workers enforce it on both transports. Workers learn the
+roles and their bases (`RAMEN_ROLES`) on the group's **next deploy**, like per-tool access: until then a new role
+matches no tool-access entry on that worker (it fails closed). Deleting a role that a
 membership, a provider rule or a tool-access entry still uses is refused (`409`) until those are changed. Names are
 lowercase, `a-z0-9_`, up to 32 characters, and may not shadow a built-in.
 

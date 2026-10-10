@@ -101,7 +101,10 @@ that came from the provider. They do not touch the memberships an admin set on t
 - An admin entry for a group the provider also maps **wins**: set a person to `group_admin` in `analytics` and they
   stay group admin there, whatever the provider says. Remove the admin entry and the provider's role stands again.
 - Removed from the Entra group: the provider's membership is gone at the next sign-in, sessions and refresh tokens
-  end at once (epoch bump), and the person keeps only what an admin set by hand.
+  end at once (epoch bump), and the person keeps only what an admin set by hand. Ramen learns of the removal only
+  at a sign-in: until the person signs in again, an MCP client's refresh token keeps renewing for up to
+  `RAMEN_OAUTH_REFRESH_TTL` (30 days by default). To cut someone off now, delete the account on the Users page (the
+  next sign-in recreates it from the provider's current groups), or shorten that TTL.
 
 The Users page shows the source next to each membership: *via entra*, *set here*. People whose claim values match
 no rule and have no admin entry see only their own account page.
@@ -123,7 +126,7 @@ The built-in roles cannot be made OAuth-only; make a custom one on the base you 
 | `502 could not read your groups from entra` | Graph refused the token: the app registration lacks `User.Read`, or admin consent is required in your tenant. Check the audit line's tags |
 | Sign-in succeeds but the person sees only their own account page | Their groups matched no rule (ids and display names both work with the lookup; check the spelling) |
 | A rule demoted everyone, including you | Start the console with `RAMEN_ADMIN_FORCE_PASSWORD=1`, sign in as the bootstrap super admin, fix the rules |
-| An existing password account signs in through the provider | It is the same account, matched on the verified email; the mapping decides the provider-side memberships, the admin entries stay |
+| An existing password account signs in through the provider | It is the same account, matched on the email the provider returns (0.7.5: verified or not); the mapping decides the provider-side memberships, the admin entries stay |
 | A person with a custom OAuth-only role cannot sign in with a password | By design; they must use the provider button |
 | The provider does not serve the standard discovery path | Point `RAMEN_OAUTH_<NAME>_ISSUER` at the issuer whose `.well-known/openid-configuration` resolves |
 

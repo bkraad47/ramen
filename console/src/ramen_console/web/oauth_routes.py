@@ -41,7 +41,7 @@ async def authorize_page(request: Request, p: Principal = Depends(viewer)):
     )
 
 
-def _back_to_client(request: Request, target: str):
+def _back_to_client(request: Request, target: str, client_name: str = "your application"):
     """Hand the browser to the client's redirect URI. A `303` is right for a web client and for anything that follows
     redirects itself, but browsers in 2026 drop a redirect from a public https page to a loopback `http://` address
     (Chromium: the form POST ends `ERR_ABORTED`, the page never moves), which is exactly where Claude Code, the bridge
@@ -53,11 +53,17 @@ def _back_to_client(request: Request, target: str):
     browser = request.headers.get("sec-fetch-mode") == "navigate"
     if not browser or urlsplit(target).hostname not in ("127.0.0.1", "localhost", "::1"):
         return RedirectResponse(target, 303)
+    from html import escape
+
     safe = target.replace("\\", "\\\\").replace("'", "\\'").replace("<", "%3C").replace(">", "%3E")
+    who = escape(client_name or "your application")
     body = (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Returning to your application</title>"
-        f"</head><body style='font-family:sans-serif'><p>Returning to your application… "
-        f"<a href='{safe}'>continue</a> if nothing happens.</p>"
+        f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Signed in — back to {who}</title>"
+        "</head><body style='font-family:sans-serif;max-width:40rem;margin:4rem auto'>"
+        f"<h2>Signed in</h2><p>Handing your sign-in back to <b>{who}</b> on this computer. "
+        "It will confirm in a moment and this tab can be closed.</p>"
+        f"<p>Nothing happening? <a href='{safe}'>Continue to {who}</a>. If that page cannot be reached, "
+        f"{who} is no longer waiting: start the sign-in again from there.</p>"
         f"<script>location.replace('{safe}')</script></body></html>"
     )
     return HTMLResponse(body, headers={"Cache-Control": "no-store"})
@@ -77,10 +83,13 @@ async def authorize_decide(
     params = {"state": a["state"]} if a["state"] else {}
     if decision != "allow":
         note(request, "oauth.authorize", a["scope"], tags + ["decision:deny"])
-        return _back_to_client(request, with_params(a["redirect_uri"], {**params, "error": "access_denied"}))
+        return _back_to_client(
+            request, with_params(a["redirect_uri"], {**params, "error": "access_denied"}), a["client"].get("name", "")
+        )
     code = await server(request).issue_code(p, a)
     note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"])
-    return _back_to_client(request, with_params(a["redirect_uri"], {**params, "code": code}))
+    target = with_params(a["redirect_uri"], {**params, "code": code})
+    return _back_to_client(request, target, a["client"].get("name", ""))
 
 
 @r.post("/oauth/token")

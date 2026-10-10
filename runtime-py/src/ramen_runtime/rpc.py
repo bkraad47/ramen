@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from . import bucket as gcs
-from . import deps, envfile
+from . import deps, envfile, guardrails
 from .executor import Executor
 from .loader import load
 from .log import log
@@ -89,8 +89,16 @@ class Server:
         summary = gcs.sync(uri, bucket) if (uri := os.environ.get("RAMEN_BUCKET_URI")) else None
         deps.install(bucket)
         env = envfile.apply(bucket)  # 0.6.0: mcp/env.yaml rendered from secrets into this process's environment
-        self.exe = Executor(load(bucket))
-        return self.exe.reg.describe() | {"env": sorted(env)} | ({"sync": summary} if summary else {})
+        reg = load(bucket)
+        guard, errors = guardrails.load(bucket)  # §21.2: after env.yaml, so LLM-backed rails find their keys
+        reg.errors.extend(errors)
+        self.exe = Executor(reg, guard)
+        # `guardrails` rides next to the manifest and is not part of its hash (C1)
+        return (
+            self.exe.reg.describe()
+            | {"env": sorted(env), "guardrails": guard.describe()}
+            | ({"sync": summary} if summary else {})
+        )
 
     def _exe(self) -> Executor:
         if self.exe is None:

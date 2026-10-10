@@ -13,6 +13,31 @@ Viewer of three and an MCP User of two more.
 Group admins cannot approve their own permission requests, grant a role above their own, or see other groups.
 A person with no membership anywhere sees only their own account page.
 
+## Custom roles
+
+Since 0.7.5 a super admin can define roles of their own on the Config page's **Roles** card (or
+`PUT /api/v1/config/roles/<name>`). A custom role has a **base**, one of Group Admin, Viewer or MCP User, which is
+what the console lets it do; a label; and an **OAuth only** switch. Its name is what makes it useful elsewhere:
+
+- **Per-tool access** ([groups and zones](groups-zones.md)) can list or call a tool for `analyst` without opening it
+  to every viewer. A caller with a custom role matches a tool-access entry that names the role *or* its base, so a
+  custom role never has less than its base.
+- **Identity provider rules** ([Entra ID and Workspace](sso.md)) can map a provider group straight to it.
+- **OAuth only**: a person holding the role in any group cannot sign in with a password or a magic link; the login
+  page answers `403 This account signs in with <provider>`. The built-in roles cannot be made OAuth-only.
+
+The person's token carries the custom role name, so workers enforce it on both transports. Deleting a role that a
+membership, a provider rule or a tool-access entry still uses is refused (`409`) until those are changed. Names are
+lowercase, `a-z0-9_`, up to 32 characters, and may not shadow a built-in.
+
+## Where a membership comes from
+
+Each membership shows its source on the Users page: *set here* for what an admin gave on this page or through
+`PUT /api/v1/groups/<g>/members/<uid>`, *via <provider>* for what the identity provider's rules decided at the last
+sign-in. The provider rewrites its own entries at every sign-in and never touches the admin's; where both name the
+same group the admin's entry wins. Removing a person from a provider group removes that membership at their next
+sign-in, and their sessions end, unless an admin entry keeps it. Details on [Entra ID and Workspace](sso.md).
+
 ## The Users page
 
 One member table per group with a role dropdown, **Remove** and **Add member** by email, then the account table

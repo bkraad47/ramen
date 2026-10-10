@@ -2,9 +2,10 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, regions, scheduler
+from .. import alerts, baseuri, drift, github_app, oauth_server, rbac, regions, roles, scheduler
 from .. import mail as mail_mod
 from ..audit import note
+from ..auth import providers
 from ..config import apply_config
 from ..errors import forbidden, invalid
 from ..mail import invite_mail
@@ -281,7 +282,8 @@ async def reload_config(request: Request, p: Principal = Depends(super_)):
     note(request, "config.reload", os.environ.get("RAMEN_CONFIG", "-"), ["scope:global"])
     applied = apply_config()
     st = request.app.state
-    st.oauth, st.auth_env = st.oauth.from_env(), st.auth_env.from_env()
+    st.auth_env = st.auth_env.from_env()
+    await providers.refresh(st, force=True, rebuild=True)  # D50: env + the store doc
     st.mailer = await mail_mod.build_mailer(st.store)  # layers config/smtp back over the fresh env read (N2)
     return respond(request, {"applied": sorted(applied)})
 
@@ -342,6 +344,8 @@ async def set_role_map(request: Request, provider: str, body: m.RoleMapChange, p
     if body.value:
         if not body.role:
             raise invalid("A rule needs a role")
+        if not rbac.is_role(body.role):
+            raise invalid(f"Unknown role {body.role!r}")
         rules[body.value.strip().lower()] = {"role": body.role, "groups": body.groups or []}
         tags.append(f"rule:{body.value.strip().lower()}={body.role}:{','.join(body.groups or [])}")
     if body.remove:
@@ -351,6 +355,98 @@ async def set_role_map(request: Request, provider: str, body: m.RoleMapChange, p
         raise invalid("Nothing to change: give claim, value+role or remove")
     note(request, "config.auth", f"role-map:{provider}", tags)
     await st.store.put("config", "auth", doc)
+    return respond(
+        request,
+        {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
+    )
+
+
+def _auth_out(request: Request, auth) -> dict:
+    st = request.app.state
+    return {**auth.public(), "providers": st.oauth.providers(), "mail": st.mailer.backend}
+
+
+@r.get("/config/oauth-providers")
+async def get_oauth_providers(request: Request, p: Principal = Depends(super_)):
+    """D50: every identity provider, masked (`has_secret`, never the secret); `source` is `config` or `env`."""
+    return await providers.describe(svc(request).store)
+
+
+@r.put("/config/oauth-providers/{name}")
+async def put_oauth_provider(request: Request, name: str, body: m.ProviderIn, p: Principal = Depends(super_)):
+    """D50: add or edit a provider (Entra ID, Google Workspace, any OIDC issuer). Omit `client_secret` to keep the
+    stored one. The registry and the login page follow at once; a same-named env provider is overridden."""
+    return await _put_provider(request, name, body.model_dump())
+
+
+@r.post("/config/oauth-providers")
+async def post_oauth_provider(request: Request, body: m.ProviderCreate, p: Principal = Depends(super_)):
+    """The Config page's form: `PUT /config/oauth-providers/{name}` with the name in the body."""
+    return await _put_provider(request, body.name.strip().lower(), body.model_dump(exclude={"name"}))
+
+
+async def _put_provider(request: Request, name: str, body: dict):
+    from .auth_routes import auth_settings
+
+    st = request.app.state
+    doc = await providers.load(st.store)
+    try:
+        entry = providers.clean(name, body, doc.get(name))
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    doc[name] = entry
+    tags = [f"provider:{name}", f"issuer:{entry['issuer']}", f"groups_source:{entry['groups_source']}"]
+    tags.append("secret:set" if body.get("client_secret") else "secret:kept")
+    note(request, "config.oauth_provider", name, tags)
+    auth_doc = await st.store.get("config", "auth") or {}
+    auth_doc.setdefault("groups_source", {})[name] = entry["groups_source"]  # one truth for settings.source_of
+    await st.store.put("config", "auth", auth_doc)
+    await auth_settings(request)
+    return respond(request, await providers.save(st, doc))
+
+
+@r.delete("/config/oauth-providers/{name}")
+async def delete_oauth_provider(request: Request, name: str, p: Principal = Depends(super_)):
+    """D50: remove a provider set here; one that exists only in the environment answers 409."""
+    from ..auth.oauth import env_providers
+    from ..errors import conflict, not_found
+
+    st = request.app.state
+    doc = await providers.load(st.store)
+    if name not in doc:
+        if name in env_providers():
+            raise conflict(f"Provider {name!r} is set by the environment (RAMEN_OAUTH_{name.upper()}_*)")
+        raise not_found("provider")
+    doc.pop(name)
+    note(request, "config.oauth_provider", name, [f"provider:{name}", "removed"])
+    return respond(request, await providers.save(st, doc))
+
+
+@r.put("/config/auth/groups-source/{provider}")
+async def set_groups_source(request: Request, provider: str, body: m.GroupsSource, p: Principal = Depends(super_)):
+    """§21.3 (D47): read a provider's groups from the ID token (`claim`) or from its API at every sign-in (`lookup`:
+    Microsoft Graph for `entra`, Cloud Identity for `google`). The client is re-registered with the scope it needs."""
+    from ..errors import not_found
+    from .auth_routes import auth_settings
+
+    st = request.app.state
+    if provider not in st.oauth.providers():
+        raise not_found(f"Unknown OAuth provider {provider!r}")
+    source = (body.source or "").strip().lower()
+    if source not in ("claim", "lookup"):
+        raise invalid("source must be claim or lookup")
+    try:
+        st.oauth.set_groups_source(provider, source)
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    doc = await st.store.get("config", "auth") or {}
+    doc.setdefault("groups_source", {})[provider] = source
+    note(request, "config.auth", f"groups-source:{provider}", [f"groups_source:{source}"])
+    await st.store.put("config", "auth", doc)
+    pdoc = await providers.load(st.store)
+    if provider in pdoc:  # D50: a provider set on the Config page carries its group source in its own entry too
+        pdoc[provider]["groups_source"] = source
+        await providers.save(st, pdoc)
     return respond(
         request,
         {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},
@@ -408,6 +504,57 @@ async def set_base_uri(request: Request, body: m.BaseUriConfig, p: Principal = D
     request.app.state.base_uri.set(value)
     request.state.base_uri = value  # an HX-Refresh lands on the new links; this response already uses them
     return respond(request, {"base_uri": value})
+
+
+def _roles_out(custom: dict) -> dict:
+    return {"roles": custom, "builtin": list(rbac.ROLES)}
+
+
+@r.get("/config/roles")
+async def get_roles(request: Request, p: Principal = Depends(super_)):
+    """D48: the custom roles — name → {base, label, oauth_only}; `builtin` lists the fixed four."""
+    return _roles_out(await roles.load(svc(request).store, force=True))
+
+
+@r.put("/config/roles/{name}")
+async def put_role(request: Request, name: str, body: m.RoleIn, p: Principal = Depends(super_)):
+    """D48: create or replace a custom role. `base` is the built-in group role it ranks as in the console and on the
+    worker; `oauth_only` makes every holder sign in through a provider. Built-in names are refused."""
+    return await _put_role(request, name, body.model_dump())
+
+
+@r.post("/config/roles")
+async def post_role(request: Request, body: m.RoleCreate, p: Principal = Depends(super_)):
+    """The Config page's "Add role" form: `PUT /config/roles/{name}` with the name in the body."""
+    return await _put_role(request, body.name.strip(), body.model_dump(exclude={"name"}))
+
+
+async def _put_role(request: Request, name: str, body: dict):
+    try:
+        role = roles.clean(name, body)
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    store = svc(request).store
+    custom = await roles.load(store, force=True)
+    custom[name] = role
+    note(request, "config.roles", name, [f"role:{name}", f"base:{role['base']}", f"oauth_only:{role['oauth_only']}"])
+    return respond(request, _roles_out(await roles.save(store, custom)))
+
+
+@r.delete("/config/roles/{name}")
+async def delete_role(request: Request, name: str, p: Principal = Depends(super_)):
+    """D48: remove a custom role — 409 while a membership, a role-map rule or a tool-access entry still names it."""
+    from ..errors import conflict, not_found
+
+    store = svc(request).store
+    custom = await roles.load(store, force=True)
+    if name not in custom:
+        raise not_found("role")
+    if used := await roles.in_use(store, name):
+        raise conflict(f"Role {name!r} is still used by: {', '.join(used)}")
+    custom.pop(name)
+    note(request, "config.roles", name, [f"role:{name}", "removed"])
+    return respond(request, _roles_out(await roles.save(store, custom)))
 
 
 @r.get("/config/regions")

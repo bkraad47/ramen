@@ -1,5 +1,4 @@
 import json
-from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -194,9 +193,45 @@ class RoleMapChange(ListFields):
 
     claim: str | None = None
     value: str | None = None
-    role: Literal["super_admin", "group_admin", "viewer", "mcp_user"] | None = None
+    role: str | None = None  # a built-in or a custom role (D48); checked in the route
     groups: list[str] | None = None
     remove: str | None = None
+
+
+class ProviderIn(BaseModel):
+    """D50: an identity provider set on the Config page. `client_secret` omitted = keep the stored one."""
+
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str | None = None
+    scopes: str | None = None
+    groups_source: str | None = None
+
+
+class ProviderCreate(ProviderIn):
+    """The Config page's form: the same, with the name in the body."""
+
+    name: str
+
+
+class GroupsSource(BaseModel):
+    """§21.3: where a provider's groups come from — `claim` (the ID token / userinfo) or `lookup` (its API)."""
+
+    source: str
+
+
+class RoleIn(BaseModel):
+    """D48: a custom role — `base` is the built-in group role it ranks as; `oauth_only` refuses password sign-in."""
+
+    base: str
+    label: str | None = None
+    oauth_only: bool = False
+
+
+class RoleCreate(RoleIn):
+    """The Config page's form: the same, with the name in the body."""
+
+    name: str
 
 
 class BaseUriConfig(BaseModel):

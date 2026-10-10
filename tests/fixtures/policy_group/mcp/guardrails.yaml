@@ -1,0 +1,7 @@
+# CONTRACTS §21.2 fixture: the team's own policy.py, fail closed (tests copy this dir and flip `fail`).
+engine: policy
+config: mcp/guardrails
+fail: closed
+timeout_s: 5
+tools:
+  echo_tool: {pre: true, post: true}

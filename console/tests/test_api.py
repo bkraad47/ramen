@@ -603,16 +603,17 @@ def test_oauth_routes(demo, monkeypatch):
     with TestClient(demo.app) as anon:
         anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
         me = anon.get("/api/v1/me").json()
-        assert me["role"] == "viewer" and sorted(me["groups"]) == ["demo", "other"]
+        # §21.3 (0.7.5): the provider decides its side; what the admin set by hand (group_admin in `other`) wins there
+        assert me["memberships"] == {"demo": "viewer", "other": "group_admin"} and me["role"] == "group_admin"
     claims["roles"] = ["ad-admins"]
     with TestClient(demo.app) as anon:
         anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
         assert anon.get("/api/v1/me").json()["role"] == "super_admin"
-    claims["roles"] = []  # no rule matches: viewer without groups, never a leftover admin
+    claims["roles"] = []  # no rule matches: nothing from the provider; only the admin-set membership is left
     with TestClient(demo.app) as anon:
         anon.get("/auth/oauth/oidc/callback", follow_redirects=False)
         me = anon.get("/api/v1/me").json()
-        assert me["role"] == "viewer" and me["groups"] == []
+        assert me["memberships"] == {"other": "group_admin"} and me["groups"] == ["other"]
     # the bootstrap super admin is never demoted by a provider
     claims["email"] = "root@ramen.local"
     with TestClient(demo.app) as anon:

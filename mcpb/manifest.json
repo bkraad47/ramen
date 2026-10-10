@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "ramen",
   "display_name": "Ramen: self-hosted MCP for teams",
-  "version": "0.7.2",
+  "version": "0.7.5",
   "description": "Self-hosted MCP for teams: deploy your own tools from git, control who uses them, audit every call.",
   "long_description": "Connects your MCP client to your organization's own Ramen deployment. Ramen hosts a team's tools, resources and prompts (Python in a git repo) on your Kubernetes (GKE/EKS) or docker compose, with canary deploys, roles per group, secrets that are never shown, IP rules, throttling and an audit log of every call. This bundle runs ramen-mcp-bridge: point it at your deployment's host, group and zone, and sign in with OAuth or a group MCP key. You need a Ramen deployment: https://bkraad47.github.io/ramen/",
   "author": {

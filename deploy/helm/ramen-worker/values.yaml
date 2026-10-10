@@ -16,7 +16,7 @@ zone: a                     # zone record name → namespace ramen-<group>-<zone
 gcpZone: us-central1-a      # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
 image: ""                   # default: <region>-docker.pkg.dev/<project>/ramen/worker:<tag> (gcp) or <account>.dkr.ecr.<region>.amazonaws.com/ramen/worker:<tag> (aws);
                             # any full reference works on both clouds, e.g. docker.io/bkraad47/ramen-worker:<tag> or ghcr.io/bkraad47/ramen-worker:<tag> (no `make push`)
-tag: 0.7.2
+tag: 0.7.5
 pullPolicy: Always
 createNamespace: true
 serviceAccount:

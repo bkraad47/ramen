@@ -3,25 +3,33 @@
 
 import json
 
+from . import rbac
+
 # `key` = a group MCP key; the rest = the person's role in THIS group (the token's `role` claim). Super admins are
 # always allowed and never appear in a list.
 KINDS = ("key", "group_admin", "viewer", "mcp_user")
 MODES = ("list", "call")
 
 
+def kinds() -> tuple[str, ...]:
+    """The built-in kinds, then every custom role (D48): a custom name in a list matches callers holding that role."""
+    return KINDS + tuple(n for n in rbac.custom_roles() if n not in KINDS)
+
+
 def _kinds(tool: str, raw) -> list[str]:
     if isinstance(raw, str):
         raw = raw.split(",")
+    known = kinds()
     out = []
     for k in raw or []:
         k = str(k).strip()
         if not k:
             continue
-        if k not in KINDS:
-            raise ValueError(f"{tool}: unknown kind {k!r} (one of {', '.join(KINDS)})")
+        if k not in known:
+            raise ValueError(f"{tool}: unknown kind {k!r} (one of {', '.join(known)})")
         if k not in out:
             out.append(k)
-    return sorted(out, key=KINDS.index)
+    return sorted(out, key=known.index)
 
 
 def clean(raw) -> dict[str, dict[str, list[str]]]:
@@ -40,7 +48,7 @@ def clean(raw) -> dict[str, dict[str, list[str]]]:
         missing = [k for k in lists["call"] if k not in lists["list"]]
         if missing:
             raise ValueError(f"{', '.join(missing)} may call {tool} but not list it; a caller must list to call")
-        if all(len(lists[mode]) == len(KINDS) for mode in MODES):
+        if all(len(lists[mode]) == len(kinds()) for mode in MODES):
             continue
         out[tool] = lists
     return out

@@ -1,5 +1,3 @@
-import os
-
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
@@ -7,7 +5,7 @@ from starlette.responses import Response
 from ..audit import note
 from ..auth import csrf
 from ..auth.sessions import COOKIE
-from ..baseuri import base_of, link, public_url
+from ..baseuri import link, public_url
 from ..errors import ApiError, not_found
 from ..mail import magic_mail, reset_mail
 from ..security import safe_next
@@ -65,7 +63,25 @@ async def login(
     user = await request.app.state.accounts.authenticate(email, password)
     if not user:
         return await _login_page(request, 401, error="Invalid email or password", next=next)
+    if refused := await _oauth_only(request, user, auth):
+        return refused
     return _login_response(request, user, next)
+
+
+async def _oauth_only(request: Request, user: dict, auth) -> Response | None:
+    """§21.4 (D48): a person holding an `oauth_only` role signs in through a provider, never with a password or a
+    sign-in link; the break-glass bootstrap admin is exempt. Checked only after the credential proved right, so a
+    wrong password reveals no account policy."""
+    from .. import roles
+
+    st = request.app.state
+    await roles.load(st.store)
+    if user.get("email") == auth.admin_email or not roles.requires_oauth(user):
+        return None
+    providers = st.oauth.providers()
+    note(request, "login", user["email"], ["oauth_only", *(f"provider:{p}" for p in providers)], user=user["email"])
+    msg = "This account signs in with " + (", ".join(providers) if providers else "an OAuth provider (none configured)")
+    return await _login_page(request, 403, error=msg)
 
 
 @r.get("/logout")
@@ -143,6 +159,8 @@ async def magic_login(request: Request, token: str):
     note(request, "login.magic", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
         raise ApiError(400, "This sign-in link is invalid, expired or already used")
+    if refused := await _oauth_only(request, user, await auth_settings(request)):
+        return refused
     return _login_response(request, user)
 
 
@@ -154,11 +172,16 @@ def _client(request: Request, name: str):
     return client
 
 
-async def oauth_login(request: Request, name: str):
+async def oauth_login(request: Request, name: str, next: str = "/"):
     client = _client(request, name)
+    # An MCP client's consent page (`/oauth/authorize?...`) sends the person here with `next`; carry it across the
+    # provider round trip or an SSO user lands on the home page and the client never gets its code (0.7.5 live run).
+    request.session["ramen_next"] = safe_next(next)
     try:
         callback = request.url_for("oauth_callback", name=name)
-        callback = f"{base_of(request)}{callback.path}" if base_of(request) else str(callback)
+        # The provider must see the public https address: the base URI, else RAMEN_PUBLIC_URL, else the request —
+        # behind a TLS-terminating load balancer the request alone says http:// and Entra answers AADSTS50011.
+        callback = f"{public_url(request)}{callback.path}"
         return await client.authorize_redirect(request, callback)
     except Exception as e:  # noqa: BLE001 - issuer metadata unreachable/malformed: a clear 502, not a bare 500
         note(request, "login.oauth", name, [f"provider:{name}", "error:issuer"], user="-")
@@ -177,19 +200,48 @@ async def oauth_callback(request: Request, name: str):
     info = dict(token.get("userinfo") or {})
     if not info.get("email"):
         info = dict(await client.userinfo(token=token))
-    email = (info.get("email") or "").strip().lower()
-    note(request, "login.oauth", email or "-", [f"provider:{name}"], user=email or "-")
-    trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
-    if not email or (info.get("email_verified") is not True and not trusted):
-        raise ApiError(403, "The provider did not return a verified email")
+    email = (info.get("email") or info.get("preferred_username") or "").strip().lower()
+    if "@" not in email:
+        email = ""
+    # D51: an email (verified or not — Entra never says) identifies the person; without one, the provider's stable id
+    provider_id = _provider_id(name, info)
+    if not email and not provider_id:
+        raise ApiError(403, "The provider returned neither an email nor a stable subject")
+    who = email or f"{name}:{provider_id}"
+    tags = [f"provider:{name}"]
+    note(request, "login.oauth", who, tags, user=who)
     auth = await auth_settings(request)
+    if auth.source_of(name) == "lookup":  # §21.3: the provider's API, not the token, says which groups
+        from ..auth import groups
+
+        st = request.app.state
+        tags.append("groups:lookup")
+        try:
+            info["groups"] = await groups.lookup(
+                name,
+                token.get("access_token") or "",
+                email,
+                st.oauth.groups_url(name),
+                transport=getattr(st, "groups_transport", None),
+            )
+        except groups.LookupError as e:
+            note(request, "login.oauth", email, [*tags, "error:groups"], user=email)
+            raise ApiError(502, str(e)) from e
+        note(request, "login.oauth", email, tags, user=email)  # the audit row says the groups were looked up
     super_, memberships = auth.map_memberships(name, info)
     # the bootstrap super admin is the break-glass account: a provider's rules never demote it
     authoritative = auth.has_mapping(name) and email != auth.admin_email
     user = await request.app.state.accounts.upsert_sso_user(
-        email, memberships, super_, provider=name, authoritative=authoritative
+        email, memberships, super_, provider=name, authoritative=authoritative, provider_id=provider_id
     )
-    return _login_response(request, user)
+    return _login_response(request, user, request.session.pop("ramen_next", "/"))
+
+
+def _provider_id(name: str, info: dict) -> str:
+    """D51: the provider's stable id for the person — Entra `oid` within `tid`, Google and plain OIDC `sub`."""
+    if info.get("oid"):
+        return f"{info.get('tid') or '-'}/{info['oid']}"
+    return str(info.get("sub") or "")
 
 
 for path in ALIASES:

@@ -87,7 +87,16 @@ def check_response(case: dict, response: dict) -> str | None:
         return f"error {e.get('code')}: {e.get('message')}"
     if "result" not in response:
         return "no result in the response"
-    return check(case["expect"], response["result"])
+    result = response["result"] or {}
+    why = check(case["expect"], result)
+    if why is None or not isinstance(result, dict) or not result.get("isError"):
+        return why
+    # §21.5: the tool answered an error — its text comes first (a rail's verdict reads `guardrail blocked: <stage>:
+    # <message>`, §21.2), the expectation diff after it
+    text = "".join(str(c.get("text", "")) for c in result.get("content", []) if isinstance(c, dict))
+    rail = ((result.get("_meta") or {}).get("ramen") or {}).get("guardrail")
+    where = f" (guardrail {rail.get('stage')}, {rail.get('engine')})" if isinstance(rail, dict) else ""
+    return f"tool error: {text}{where}; {why}"
 
 
 def check(expect: dict, got) -> str | None:

@@ -126,6 +126,11 @@ impl App {
             .and_then(|l| l.result["hash"].as_str())
             .unwrap_or("")
             .to_string();
+        // §21.2: the runtime's guardrails block rides with the load result; "none" before the first load
+        let guardrails = loaded
+            .as_ref()
+            .and_then(|l| l.result.get("guardrails").cloned())
+            .unwrap_or_else(|| json!({"engine": "none", "tools": {}}));
         self.metrics.snapshot(
             // Saturating: an `Admin/Reload` that lowers `RAMEN_MAX_INFLIGHT` leaves more permits available
             // than the new `max`, and the semaphore keeps its startup capacity until the pod restarts.
@@ -135,6 +140,7 @@ impl App {
             loaded.map(|l| l.at),
             packages,
             &hash,
+            guardrails,
         )
     }
 }
@@ -376,6 +382,7 @@ pub async fn dispatch_body(
         blocked: &cfg.blocked,
         tool_access: &cfg.tool_access,
         kind,
+        roles: &cfg.roles,
     };
     // C10: `tool_hidden` / `tool_denied` — like `blocked_name`, the wire answer comes from `mcp::dispatch`.
     let access_denial = policy.denial(&method, &params);
@@ -403,6 +410,10 @@ pub async fn dispatch_body(
     } else if let Some(reason) = access_denial {
         extra["reason"] = json!(reason);
         "denied"
+    } else if let Some(reason) = out.as_ref().ok().and_then(|o| guardrail_reason(o.as_ref())) {
+        // §21.2: the runtime refused the call (or its output) on a rail; `_meta` stays on the result
+        extra["reason"] = json!(reason);
+        "denied"
     } else if ok {
         "ok"
     } else {
@@ -414,6 +425,15 @@ pub async fn dispatch_body(
         Ok(None) => None,
         Err(RpcErr { code, message }) => Some(rpc_error(id, code, &message)),
     })
+}
+
+/// §21.2 (0.7.5): `guardrail_pre` / `guardrail_post` when a `tools/call` result carries `_meta.ramen.guardrail`.
+pub fn guardrail_reason(result: Option<&Value>) -> Option<&'static str> {
+    match result?.pointer("/_meta/ramen/guardrail/stage")?.as_str()? {
+        "pre" => Some("guardrail_pre"),
+        "post" => Some("guardrail_post"),
+        _ => None,
+    }
 }
 
 pub fn rpc_error(id: Value, code: i64, msg: &str) -> Value {
@@ -907,14 +927,48 @@ mod tests {
         let _ = std::fs::remove_file(p);
     }
 
-    /// C2: `Admin/Metrics` reports the manifest hash of the last load, `""` before it.
+    /// C2: `Admin/Metrics` reports the manifest hash of the last load, `""` before it; §21.2: and the runtime's
+    /// `guardrails` block, `{"engine": "none", "tools": {}}` before it or when the runtime reports none.
     #[tokio::test]
     async fn metrics_report_the_manifest_hash() {
         let a = app(cfg(&[])).await;
         assert_eq!(a.metrics_json().await["manifest_hash"], "");
+        assert_eq!(
+            a.metrics_json().await["guardrails"],
+            json!({"engine": "none", "tools": {}})
+        );
         a.sidecar
             .set_loaded_for_test(json!({"tools": [], "hash": "deadbeef"}))
             .await;
         assert_eq!(a.metrics_json().await["manifest_hash"], "deadbeef");
+        assert_eq!(a.metrics_json().await["guardrails"]["engine"], "none");
+        a.sidecar
+            .set_loaded_for_test(json!({"tools": [], "hash": "deadbeef",
+                "guardrails": {"engine": "nemo", "fail": "closed", "tools": {"calc": ["pre"]}}}))
+            .await;
+        assert_eq!(a.metrics_json().await["guardrails"]["engine"], "nemo");
+        assert_eq!(
+            a.metrics_json().await["guardrails"]["tools"]["calc"][0],
+            "pre"
+        );
+    }
+
+    /// §21.2 (0.7.5): the access-log reason for a call the runtime refused on a rail.
+    #[test]
+    fn guardrail_reason_reads_the_result_meta() {
+        assert_eq!(
+            guardrail_reason(Some(
+                &json!({"isError": true, "_meta": {"ramen": {"guardrail": {"stage": "pre", "engine": "nemo"}}}})
+            )),
+            Some("guardrail_pre")
+        );
+        assert_eq!(
+            guardrail_reason(Some(
+                &json!({"isError": true, "_meta": {"ramen": {"guardrail": {"stage": "post"}}}})
+            )),
+            Some("guardrail_post")
+        );
+        assert_eq!(guardrail_reason(Some(&json!({"isError": true}))), None);
+        assert_eq!(guardrail_reason(None), None);
     }
 }

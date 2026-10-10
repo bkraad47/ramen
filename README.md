@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/img/logo.png" width="380" alt="Project Ramen"></p>
 
 <p align="center">Multizone, highly available, enterprise-grade <b>MCP server</b> for GCP and AWS Kubernetes.<br>
-Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRPC inside, managed from a FastAPI console.</p>
+Rust MCP node + Python 3.12 runtime workers, Streamable HTTP at the edge and gRPC inside, managed from a FastAPI console.</p>
 
 <p align="center">
 <a href="https://github.com/bkraad47/ramen/releases"><img height="20" src="https://img.shields.io/github/v/release/bkraad47/ramen?color=F26B3A&label=release&style=flat" alt="release"></a>
@@ -20,7 +20,7 @@ Rust MCP node + Python 3.14 runtime workers, Streamable HTTP at the edge and gRP
 > browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
 > Per-user access through OAuth (the console is the authorization server), live-verified on GKE since 0.5.1.
 
-**What is true today, before the pitch.** Current release **0.6.23**. The local stack and CI prove both
+**What is true today, before the pitch.** Current release **0.7.5**. The local stack and CI prove both
 transports on real node processes on Linux and Windows. One GKE cluster has proved the gRPC path end to end
 (0.3.2, 0.4.0) and the HTTP path with OAuth through the same load balancer (0.5.1, with a publicly trusted
 certificate since 0.5.5). The AWS path has been applied to a real account since 0.5.6, and the published bridge
@@ -31,7 +31,7 @@ and zone teardown. Everything below is written so those lines stay findable.
 
 **Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts** into a fleet of MCP workers behind a cloud load balancer, and keeps who-can-call-what, secrets, canary gates and the audit trail in one console. It is a platform for *your* tools, not a gateway in front of someone else's.
 Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC, bearer auth, IP allow-lists, health, logs) 1:1 with a
-**Python 3.14 runtime** that pip-installs and runs your code. One **console** manages groups (tenants), environments,
+**Python 3.12 runtime** that pip-installs and runs your code. One **console** manages groups (tenants), environments,
 zones, secrets, canary deploys, rebalancing, IP rules, logs, audit and backups — in the browser or through an API key.
 
 - **Git → bucket → worker.** Deploy syncs the repo to a bucket; workers load by content hash. No git creds on pods.
@@ -43,7 +43,14 @@ zones, secrets, canary deploys, rebalancing, IP rules, logs, audit and backups �
 - **Per-tool access and a drift signal (0.7.2).** Decide per environment who may see and who may call each tool (group
   keys, group admins, viewers, MCP users); clients learn about a rollout through `tools/list_changed`; the group page
   shows how often the same caller repeated the same call, with a warning threshold.
-- **Enterprise controls.** A role per group (Group Admin, Viewer or MCP User) plus global super admins, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
+- **Guardrails inside the worker (0.7.5).** Opt a tool into a pre-call and post-call check that runs in the Python
+  runtime next to it: [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails (deterministic or
+  LLM-backed, your model and key) or a `policy.py` of your own. A blocked call is a readable tool error, the tool
+  never ran or its output never left the pod, and the access log says which rail. Per tool, fail-closed by default.
+- **Your identity provider decides, your admins override (0.7.5).** Read a person's groups from Entra ID (Graph) or
+  Google Workspace (Cloud Identity) at sign-in, map them to roles per group, keep what admins set by hand, define
+  your own roles, and make a role OAuth-only. Any IdP on any cloud.
+- **Enterprise controls.** A role per group (Group Admin, Viewer, MCP User or one you define) plus global super admins, `rmk_` MCP keys, `rmn_` API keys, IP rules (per
   zone at the node, one Cloud Armor policy per group at the edge), secrets that are never displayed, an audit
   line for every action.
 - **Transport: Streamable HTTP at the edge, gRPC inside.** `POST /mcp` for any client that can make an HTTP
@@ -142,7 +149,7 @@ both or on neither.
 **Why the node is Rust.** A worker runs two processes with one job each. `ramen-node` (Rust + tonic) owns what must
 not be slowed down or broken by user code: the gRPC surface, key checking, source-range checking, the blocked-name
 filter, concurrency bounds, deadlines, health and the access log. It is a small static binary with no interpreter
-and no user code in its address space. `ramen_runtime` (Python 3.14) owns what users write: `pip install`, validation,
+and no user code in its address space. `ramen_runtime` (Python 3.12) owns what users write: `pip install`, validation,
 secret substitution, the call. They talk over newline-delimited JSON-RPC on stdin/stdout ([§2](docs/CONTRACTS.md)),
 so there is no extra socket to secure, and the runtime is killed after an idle timeout — a crash or leak in tool
 code costs one respawn, not the process holding the keys.
@@ -203,7 +210,8 @@ A group repo is any git repo with `mcp/tools/<name>/<name>.py` + `<name>.json` (
 contract is in [the MCP repo page](https://bkraad47.github.io/ramen/wiki/mcp-repo/). Secrets are referenced as
 `{{$group.NAME}}` and substituted by the runtime at call time. Nothing about the transport leaks into tool code.
 Declare `output` and the worker publishes it as `outputSchema` and validates every result; add `mcp/tests.yaml` and
-your cases gate every deploy (0.7.0).
+your cases gate every deploy (0.7.0). Add `mcp/guardrails.yaml` and NeMo rails or a `policy.py` check the arguments
+before a tool runs and its result before it leaves the worker (0.7.5, [Guardrails](https://bkraad47.github.io/ramen/wiki/guardrails/)).
 
 ## Repository
 
@@ -211,7 +219,7 @@ your cases gate every deploy (0.7.0).
 |---|---|
 | [`console/`](console/) | FastAPI + Jinja2 + HTMX manager UI and `/api/v1`; gRPC client to workers |
 | [`node-rs/`](node-rs/) | Rust MCP server node (tonic: `ramen.v1.Mcp`, `ramen.v1.Admin`, `grpc.health.v1.Health`; auth, CIDRs, sidecar supervisor) |
-| [`runtime-py/`](runtime-py/) | Python 3.14 runtime (loads protos, pip installs, runs calls, resolves secrets) |
+| [`runtime-py/`](runtime-py/) | Python 3.12 runtime (loads protos, pip installs, runs calls, resolves secrets) |
 | [`proto/`](proto/) | `ramen/v1/mcp.proto`, `admin.proto` — the transport contract, single source for Rust and Python stubs |
 | [`deploy/`](deploy/) | compose, Helm charts, Terraform (GCP, AWS), CloudFormation |
 | [`skills/`](skills/) | Cloud-ops agent skills: deploy-gcp, deploy-aws, rotate-keys, backup-restore, scale-zone |

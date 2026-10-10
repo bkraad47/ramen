@@ -2,6 +2,7 @@
 
 import io
 import json
+import secrets as pysecrets
 import shutil
 import sys
 from pathlib import Path
@@ -331,6 +332,37 @@ def test_load_result_carries_guardrails_outside_the_hash(tmp_path, monkeypatch):
         },
     )
     assert call[0]["result"]["isError"] and "guardrail unavailable" in call[0]["result"]["content"][0]["text"]
+
+
+def test_rails_load_after_env_yaml_so_an_llm_backed_rail_finds_its_key(tmp_path, monkeypatch):
+    """§21.2: `models:` keys come from `mcp/env.yaml` (secret references rendered); the engine is built after export."""
+    key = "rk-" + pysecrets.token_hex(8)  # generated: never a literal a scanner could flag
+    monkeypatch.setattr("ramen_runtime.rpc.deps.install", lambda b: {"installed": False})
+    monkeypatch.setenv("RAMEN_SECRET_DEMO__RAILS_KEY", key)
+    monkeypatch.setenv("RAILS_API_KEY", "")  # restored (removed) by monkeypatch after envfile overwrites it
+    policy = (
+        "import os\nKEY = os.environ.get('RAILS_API_KEY')\n"
+        "def pre(tool, arguments):\n    return None if KEY else 'no model key at load'\n"
+    )
+    b = bucket_with(tmp_path, "engine: policy\ntools:\n  echo_tool: {pre: true}\n", policy=policy)
+    (b / "mcp" / "env.yaml").write_text("RAILS_API_KEY: '{{$demo.RAILS_KEY}}'\n")
+    out = run(
+        Server(b),
+        {"jsonrpc": "2.0", "id": 1, "method": "runtime.load", "params": {"bucket": str(b)}},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "runtime.call_tool",
+            "params": {"name": "echo_tool", "arguments": {"text": "x"}},
+        },
+    )
+    assert out[0]["result"]["errors"] == [] and "RAILS_API_KEY" in out[0]["result"]["env"]
+    assert out[1]["result"] == {
+        "content": [{"type": "text", "text": "x"}],
+        "isError": False,
+        "structuredContent": {"result": "x"},
+    }
+    assert key not in json.dumps(out)
 
 
 def test_log_lines_name_tool_stage_verdict_never_the_payload(tmp_path, capsys):

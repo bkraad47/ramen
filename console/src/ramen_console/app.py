@@ -13,9 +13,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, alerts, baseuri, scheduler
+from . import __version__, alerts, baseuri, rbac, roles, scheduler
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
+from .auth import providers
 from .auth.bootstrap import ensure_super_admin
 from .auth.csrf import CsrfMiddleware
 from .auth.csrf import token as csrf_token
@@ -60,7 +61,9 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await ensure_super_admin(app.state.store)
-        await app.state.accounts.migrate_memberships()  # 0.5.95 (D41): per-group roles on pre-existing users
+        await roles.load(app.state.store, force=True)  # D48: custom roles before any membership is read
+        await providers.refresh(app.state, force=True)  # D50: identity providers from env + the store doc
+        await app.state.accounts.migrate_memberships()  # 0.5.95 (D41) and 0.7.5 (§21.3) membership shapes
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),
@@ -87,7 +90,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     signing_secret = resolve_signing_secret()
     st.signer = SessionSigner(signing_secret)
     st.tokens = Tokens(signing_secret)
-    st.oauth = OAuthRegistry.from_env()
+    st.oauth = OAuthRegistry.from_env()  # env only until the lifespan reads the store doc (D50)
+    st.oauth_transport = None  # tests point the providers' HTTP at a fake issuer
     st.auth_env = AuthSettings.from_env()
     st.mailer = Mailer.from_env()
     st.cookie_secure = os.environ.get("RAMEN_COOKIE_SECURE", "0") == "1"
@@ -98,6 +102,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
+        provider_label=lambda n: {"entra": "Microsoft Entra ID", "google": "Google"}.get(n, n),
+        custom_roles=rbac.custom_roles,  # D48: templates list custom roles after the built-ins
         password_rule=f"Use {PASSWORD_RULE}.",
         u=baseuri.u,
     )

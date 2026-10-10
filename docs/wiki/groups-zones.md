@@ -114,6 +114,10 @@ list). A tool left out of the table is open to everyone with access to the group
 a tool gets `-32601 tool not found`; one who may list but not call gets `-32003 forbidden`. The worker enforces it on
 both transports on the next deploy. Blocking (above) still removes a tool for everyone.
 
+Since 0.7.5 the kinds include the [custom roles](users-access.md#custom-roles) a super admin defined: a caller whose
+token carries `analyst` matches an entry naming `analyst` or its base. Access is decided before any
+[guardrail](guardrails.md) runs, so a caller who may not call a tool gets `-32003` and no rail ever sees the payload.
+
 ### Drift (0.7.2)
 
 The group page's **Drift** card shows, per zone and tool, how often the same caller repeated the same call (same

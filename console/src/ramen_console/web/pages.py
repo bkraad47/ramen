@@ -6,6 +6,7 @@ from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolac
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
+from ..auth import providers as providers_mod
 from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
@@ -88,7 +89,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         "group.html",
         group=g,
         envs=envs,
-        kinds=toolaccess.KINDS,
+        kinds=toolaccess.kinds(),
         tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
         known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,
@@ -262,6 +263,7 @@ async def config(request: Request, p: Principal = Depends(super_)):
         config_file=os.environ.get("RAMEN_CONFIG"),
         rules=rules,
         providers=request.app.state.oauth.providers(),
+        provider_details=await providers_mod.describe(store),  # D50
         auth=await auth_settings(request),
         oauth_clients=await request.app.state.oauth_server.clients(),
         mail=request.app.state.mailer.backend,

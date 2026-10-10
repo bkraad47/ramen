@@ -5,17 +5,19 @@ on:
 permissions:
   contents: read
 env:
-  UV_PYTHON: "3.14"
+  UV_PYTHON: "3.14"       # the console and the test harness; the runtime is pinned to 3.12 (CONTRACTS §21.1, D45)
+  RUNTIME_PYTHON: "3.12"
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
+      - run: uv python install 3.14 3.12
       - name: ruff (ruff.toml) on console, runtime-py, tests, scripts, deploy/local
         run: |
-          for d in console runtime-py tests; do (cd "$d" && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .); done
+          for d in console tests; do (cd "$d" && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .); done
+          (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .)
           (cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local)
 
   versions:
@@ -27,11 +29,13 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
-    strategy: { matrix: { dir: [console, runtime-py] } }
+    strategy: { matrix: { include: [{ dir: console, python: "3.14" }, { dir: runtime-py, python: "3.12" }] } }
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
+      - run: uv python install ${{ matrix.python }}
       - working-directory: ${{ matrix.dir }}
         run: |
           if [ -f pyproject.toml ]; then uv sync --all-extras && uv run pytest --cov --cov-report=xml --cov-fail-under=90; else echo "no project yet"; fi
@@ -83,13 +87,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
+      - run: uv python install 3.14 3.12
       - uses: actions/download-artifact@v4
         with: { name: ramen-node, path: bin }
       - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
-      - name: runtime-py venv (sidecar)
+      - name: runtime-py venv (sidecar, Python 3.12 — D45)
         run: |
-          (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
+          (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
           echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
       - name: "install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)"
         run: |
@@ -101,9 +105,14 @@ jobs:
         run: |
           (cd console && uv sync --all-extras)
           echo "RAMEN_CONSOLE_PYTHON=$PWD/console/.venv/bin/python" >> "$GITHUB_ENV"
-      - name: both transports on real nodes (§16.5), tool propagation (R2), token expiry (A1/A2/A4/D2), 0.7.2 tool access (C10) / rollout notice (C11) / args hash (C12), scripts
+      - name: demo group repo (0.7.5 its own NeMo rails on a real node) — branch/tag v<VERSION>, else main
+        run: |
+          R=https://github.com/bkraad47/ramen-demo-mcp-group
+          git clone -q --depth 1 --branch "v$(cat VERSION)" "$R" .demo || git clone -q --depth 1 "$R" .demo
+          echo "RAMEN_DEMO_DIR=$PWD/.demo" >> "$GITHUB_ENV"
+      - name: both transports on real nodes (§16.5), tool propagation (R2), token expiry (A1/A2/A4/D2), 0.7.2 tool access (C10) / rollout notice (C11) / args hash (C12), 0.7.5 guardrails / custom roles / identity federation / golden gate / demo repo rails (§21), scripts
         working-directory: tests
-        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_tool_access.py conformance/test_rollout_notify.py conformance/test_call_args_hash.py conformance/test_scripts.py
+        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_tool_access.py conformance/test_rollout_notify.py conformance/test_call_args_hash.py conformance/test_guardrails.py conformance/test_custom_roles.py conformance/test_identity_federation.py conformance/test_golden_guardrails.py conformance/test_demo_repo_guardrails.py conformance/test_scripts.py
 
   client-windows:
     # §16.4 / X7: the client flow on the platform where fresh-machine setups break — the node built natively, the
@@ -120,12 +129,13 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with: { version: "28.x", repo-token: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
+      - run: uv python install 3.14 3.12
       - name: build the node on Windows
         working-directory: node-rs
         run: cargo build --release
-      - name: runtime-py venv (sidecar)
+      - name: runtime-py venv (sidecar, Python 3.12 — D45)
         working-directory: runtime-py
+        env: { UV_PYTHON: "3.12" }
         run: |
           uv sync --all-extras
           uv pip install pip   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
@@ -173,13 +183,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
+      - run: uv python install 3.14 3.12
       - uses: actions/download-artifact@v4
         with: { path: artifacts, pattern: "coverage-*" }
-      - name: Runtime venv for sidecar conformance
+      - name: Runtime venv for sidecar conformance (Python 3.12 — D45)
         run: |
           if [ -f runtime-py/pyproject.toml ]; then
-            (cd runtime-py && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
+            (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
             echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
           fi
       - name: "install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)"

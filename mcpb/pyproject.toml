@@ -1,6 +1,6 @@
 [project]
 name = "ramen-mcpb"
-version = "0.7.2"
+version = "0.7.5"
 description = "MCPB bundle for Ramen: runs ramen-mcp-bridge against your own Ramen deployment"
 requires-python = ">=3.10"
 dependencies = ["ramen-mcp-bridge==0.2.2"]

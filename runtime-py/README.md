@@ -1,6 +1,7 @@
 # ramen_runtime (runtime-py)
 
-Python 3.14 worker runtime. Loads a group's `mcp/` packages from a bucket directory, validates each proto
+Python 3.12 worker runtime (pinned to 3.12 only, D45: the `[nemo]` guardrails extra does not run on 3.14). Loads a
+group's `mcp/` packages from a bucket directory, validates each proto
 against the §1 contract, and executes them over newline-delimited JSON-RPC 2.0 on stdin/stdout for the Rust
 node (`docs/CONTRACTS.md` §2). Logs are JSON lines on stderr.
 
@@ -45,3 +46,10 @@ still installed into the worker image (`/opt/venv/bin/ramen-mcp-bridge`, used th
 `deploy/local/mcp_call.py` (the local demo's smoke client), not for tests — the bridge and its tests live in
 [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge) since 0.5.7. Fixture: `tests/fixtures/demo` is a copy
 of [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group).
+
+## Guardrails (0.7.5, CONTRACTS §21.2)
+
+`mcp/guardrails.yaml` opts tools into pre-call / post-call hooks run in this process by an engine: `nemo` (NeMo
+Guardrails rails from a config dir; `pip install 'ramen-runtime[nemo]'`) or `policy` (the team's own `policy.py`).
+A blocked call is an `isError` result carrying `_meta.ramen.guardrail`; the load result reports `guardrails:
+{engine, fail, tools}`. See `guardrails.py` and `tests/test_guardrails.py`.

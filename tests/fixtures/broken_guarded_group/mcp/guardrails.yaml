@@ -1,0 +1,6 @@
+# CONTRACTS §21.2 fixture: an engine that cannot load — every opted-in tool must answer blocked, never unguarded.
+engine: nemo
+config: mcp/guardrails
+fail: open
+tools:
+  echo_tool: {pre: true}

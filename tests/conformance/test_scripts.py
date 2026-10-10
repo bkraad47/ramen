@@ -1,6 +1,7 @@
 """scripts/check_versions.py (CONTRACTS §6), 0.7.0: the demo group repo's VERSION joins the table when that repo sits
 beside `ramen` (ramen-master checks it out as `../ramen-demo-mcp`); a mismatch fails like any other row."""
 
+import shutil
 import subprocess
 import sys
 
@@ -29,3 +30,20 @@ def test_demo_repo_version_is_a_row_that_fails_on_mismatch(tmp_path):
     other.write_text("9.9.9\n")
     r = run("--demo", str(other))
     assert r.returncode == 1 and f"{ROW}: 9.9.9 != {version}" in r.stderr, r.stderr
+
+
+def test_the_runtime_python_pin_and_the_image_bases_must_agree(tmp_path):
+    """§21.1 (D45): one Python minor for the runtime, and every image that installs it builds on that minor."""
+    root = tmp_path / "ramen"
+    skip = shutil.ignore_patterns(".git", ".venv", "target", "site", "__pycache__", "node_modules", ".demo")
+    shutil.copytree(E.RAMEN_DIR, root, ignore=skip)
+    ok = run("--root", str(root))
+    assert ok.returncode == 0 and "runtime-py python" in ok.stdout and "glama/Dockerfile python" in ok.stdout, ok.stdout
+    dockerfile = root / "glama" / "Dockerfile"
+    dockerfile.write_text(dockerfile.read_text().replace("FROM python:3.12", "FROM python:3.14"))
+    r = run("--root", str(root))
+    assert r.returncode == 1 and "glama/Dockerfile: FROM python:3.14 but the runtime is pinned to 3.12" in r.stderr
+    py = root / "runtime-py" / "pyproject.toml"
+    py.write_text(py.read_text().replace('">=3.12,<3.13"', '">=3.12"'))
+    r = run("--root", str(root))
+    assert r.returncode == 1 and "must pin one minor" in r.stderr, r.stderr

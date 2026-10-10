@@ -16,14 +16,14 @@ hide: [toc]
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
       "operatingSystem": "Kubernetes (GKE, EKS), Docker",
-      "softwareVersion": "0.7.2",
+      "softwareVersion": "0.7.5",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
       "downloadUrl": "https://github.com/bkraad47/ramen/releases",
       "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
       "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
       "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
-      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE and EKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.14 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
+      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE and EKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "author": {
         "@type": "Person",
@@ -51,7 +51,7 @@ hide: [toc]
         "Docker"
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
-      "version": "0.7.2",
+      "version": "0.7.5",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"
@@ -113,7 +113,11 @@ it and press Deploy.
 - **One deployment per team, not one server per tool.** A worker loads every tool of the group. Thirty tools
   run on one Deployment per zone with a canary, behind one load balancer.
 - **Built on how organizations work.** A group is a team. It owns a repo, a bucket, its secrets and its members.
-  People hold a role per group: Group Admin, Viewer or MCP User.
+  People hold a role per group: Group Admin, Viewer, MCP User, or a role you define. Entra ID or Google Workspace
+  groups can decide the roles at sign-in, and what an admin sets by hand stays.
+- **Guardrails where the tool runs.** Opt a tool into NeMo Guardrails rails, or a policy file of your own, checked
+  in the worker before the call and after the result. A blocked call is a readable tool error; the access log names
+  the rail.
 - **Canary by default.** Every deploy rolls one canary pod, smoke-tests it, then rolls the stable pods. A failure
   leaves the old version serving.
 - **Clients connect as themselves.** Claude Code and the bridge sign a person in through the console with OAuth

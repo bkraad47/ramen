@@ -1,0 +1,8 @@
+models: []
+rails:
+  input:
+    flows:
+      - check blocked words
+  output:
+    flows:
+      - check output words

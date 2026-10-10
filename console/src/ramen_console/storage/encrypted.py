@@ -13,6 +13,8 @@ SENSITIVE: dict[str, set[str]] = {
     "config": {"smtp_password", "github_app_private_key"},
     "workers": {"redis_item_url"},
 }
+# D50: a doc whose SECRET lives one level down, per entry — (collection, key) → the nested field name
+NESTED: dict[tuple[str, str], str] = {("config", "oauth_providers"): "client_secret"}
 PREFIX = "enc:"
 
 
@@ -33,18 +35,23 @@ class EncryptedStore(Store):
     def __init__(self, inner: Store, cipher: FieldCipher):
         self.inner, self._cipher = inner, cipher
 
-    def _wrap(self, collection, doc: Doc | None, fn):
+    def _wrap(self, collection, doc: Doc | None, fn, key=None):
         if doc is None:
             return None
         fields = SENSITIVE.get(collection, set())
-        return {k: fn(v) if k in fields and isinstance(v, str) else v for k, v in doc.items()}
+        out = {k: fn(v) if k in fields and isinstance(v, str) else v for k, v in doc.items()}
+        if nested := NESTED.get((collection, key or doc.get("id"))):
+            for k, v in out.items():
+                if isinstance(v, dict) and isinstance(v.get(nested), str):
+                    out[k] = {**v, nested: fn(v[nested])}
+        return out
 
     async def get(self, collection, key):
-        return self._wrap(collection, await self.inner.get(collection, key), self._cipher.decrypt)
+        return self._wrap(collection, await self.inner.get(collection, key), self._cipher.decrypt, key)
 
     async def put(self, collection, key, doc: Doc):
-        stored = await self.inner.put(collection, key, self._wrap(collection, doc, self._cipher.encrypt))
-        return self._wrap(collection, stored, self._cipher.decrypt)
+        stored = await self.inner.put(collection, key, self._wrap(collection, doc, self._cipher.encrypt, key))
+        return self._wrap(collection, stored, self._cipher.decrypt, key)
 
     async def delete(self, collection, key):
         await self.inner.delete(collection, key)

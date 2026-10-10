@@ -89,3 +89,16 @@ code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--li
 .audit-filters input[type=search]{min-width:260px}.audit-filters table.filters{width:100%;margin:0}.audit-filters .filters th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:0 10px 2px 0}.audit-filters .filters td{padding:0 10px 6px 0;vertical-align:middle}.audit-filters .filters input,.audit-filters .filters select{width:100%;min-width:0}.audit-filters .filters .row-actions{display:flex;gap:8px;flex-wrap:nowrap}
 #audit-scroll{max-height:60vh;overflow:auto}
 #audit-scroll thead th{position:sticky;top:0;background:var(--bg);z-index:1}
+
+/* 0.7.5: one size for every sign-in button, whatever the provider's name */
+.login .signin{display:block;width:100%;box-sizing:border-box;padding:10px 14px;margin:0}
+.login .signin-providers{display:flex;flex-direction:column;gap:8px;margin:16px 0 0;padding-top:16px;border-top:1px solid var(--line,#e6e1d8)}
+/* 0.7.5: label / field / hint rows, so long values (issuers, ids) never push fields over each other */
+table.formtable{width:100%;border-collapse:collapse;table-layout:fixed;margin:4px 0}
+table.formtable th{width:9.5em;text-align:left;font-weight:500;font-size:12px;color:var(--muted);padding:5px 10px 5px 0;vertical-align:middle}
+table.formtable td{padding:5px 10px 5px 0;vertical-align:middle;overflow-wrap:anywhere}
+table.formtable td input,table.formtable td select{width:100%;min-width:0;box-sizing:border-box}
+table.formtable td.muted{font-size:12px}
+table.formtable td .act{width:180px}
+.settings table.formtable input,.settings table.formtable select{width:100%;font-size:12px}
+.settings table.formtable th{width:7.5em}

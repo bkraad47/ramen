@@ -72,3 +72,17 @@ def test_neither_email_nor_subject_is_refused(demo):
     demo.app.state.oauth = registry(idp, RAMEN_OAUTH_IDP_SCOPES="email")
     r, me = _sign_in(demo, idp)
     assert r.status_code == 403 and "neither an email nor a stable subject" in r.text
+
+
+def test_the_account_shows_the_provider_used_last_and_a_password_account_stays_password(demo):
+    """0.7.5 live run: an account first made by Entra, then signed in through Google, still said `entra`."""
+    import asyncio
+
+    acc = demo.app.state.accounts
+    u = asyncio.run(acc.upsert_sso_user("both@corp.test", {}, provider="entra"))
+    assert u["provider"] == "entra"
+    u = asyncio.run(acc.upsert_sso_user("both@corp.test", {}, provider="google"))
+    assert u["provider"] == "google"
+    assert asyncio.run(acc.store.get("users", u["id"]))["provider"] == "google"
+    asyncio.run(acc.store.put("users", "pw1", {"id": "pw1", "email": "pw@corp.test", "provider": "password"}))
+    assert asyncio.run(acc.upsert_sso_user("pw@corp.test", {}, provider="google"))["provider"] == "password"

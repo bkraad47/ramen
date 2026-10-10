@@ -161,3 +161,20 @@ def test_provider_callback_uses_the_public_url_behind_a_tls_terminating_edge(dem
         r = anon.get("/auth/idp/login", follow_redirects=False)
         q = parse_qs(urlsplit(r.headers["location"]).query)
         assert q["redirect_uri"] == ["https://console.example/auth/idp/callback"]
+
+
+def test_provider_sign_in_returns_to_next_so_an_mcp_consent_page_is_reached(demo, monkeypatch):
+    """0.7.5 live run: an MCP client sends the person to /oauth/authorize, which redirects an anonymous person to
+    /login?next=…; the provider button must carry `next` across the round trip or the person lands on the home page
+    and the client never gets its code."""
+    idp = FakeIdp({"email": "dev@corp.test", "email_verified": True})
+    demo.app.state.oauth = registry(idp)
+    target = "/oauth/authorize?client_id=x&state=y"
+    with TestClient(demo.app) as anon:
+        page = anon.get("/login", params={"next": target}).text
+        assert "/auth/idp/login?next=/oauth/authorize%3Fclient_id%3Dx%26state%3Dy" in page
+        r = anon.get("/auth/idp/login", params={"next": target}, follow_redirects=False)
+        q = parse_qs(urlsplit(r.headers["location"]).query)
+        idp.nonce, idp.challenge = q["nonce"][0], q["code_challenge"][0]
+        r = anon.get(f"/auth/idp/callback?code=good-code&state={q['state'][0]}", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].endswith(target), r.headers.get("location")

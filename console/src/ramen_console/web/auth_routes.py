@@ -7,7 +7,7 @@ from starlette.responses import Response
 from ..audit import note
 from ..auth import csrf
 from ..auth.sessions import COOKIE
-from ..baseuri import base_of, link, public_url
+from ..baseuri import link, public_url
 from ..errors import ApiError, not_found
 from ..mail import magic_mail, reset_mail
 from ..security import safe_next
@@ -178,7 +178,9 @@ async def oauth_login(request: Request, name: str):
     client = _client(request, name)
     try:
         callback = request.url_for("oauth_callback", name=name)
-        callback = f"{base_of(request)}{callback.path}" if base_of(request) else str(callback)
+        # The provider must see the public https address: the base URI, else RAMEN_PUBLIC_URL, else the request —
+        # behind a TLS-terminating load balancer the request alone says http:// and Entra answers AADSTS50011.
+        callback = f"{public_url(request)}{callback.path}"
         return await client.authorize_redirect(request, callback)
     except Exception as e:  # noqa: BLE001 - issuer metadata unreachable/malformed: a clear 502, not a bare 500
         note(request, "login.oauth", name, [f"provider:{name}", "error:issuer"], user="-")

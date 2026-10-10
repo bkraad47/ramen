@@ -147,3 +147,15 @@ def test_oauth_rejects_unverified_or_missing_email_and_bad_code(demo):
         state = start(anon, idp2)
         assert anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False).status_code == 403
     assert not [u for u in demo.get("/api/v1/users").json() if u["email"] == "x@y"]
+
+
+def test_provider_callback_uses_the_public_url_behind_a_tls_terminating_edge(demo, monkeypatch):
+    """0.7.5 cloud run: TLS ends at the load balancer, so the request says http://; the provider must still be sent
+    the public https callback (Entra answers AADSTS50011 otherwise). Base URI wins, then RAMEN_PUBLIC_URL."""
+    idp = FakeIdp({"email": "dev@corp.test", "email_verified": True})
+    demo.app.state.oauth = registry(idp)
+    monkeypatch.setenv("RAMEN_PUBLIC_URL", "https://console.example")
+    with TestClient(demo.app) as anon:
+        r = anon.get("/auth/idp/login", follow_redirects=False)
+        q = parse_qs(urlsplit(r.headers["location"]).query)
+        assert q["redirect_uri"] == ["https://console.example/auth/idp/callback"]

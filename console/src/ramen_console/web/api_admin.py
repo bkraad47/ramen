@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Request
 from .. import alerts, baseuri, drift, github_app, oauth_server, rbac, regions, roles, scheduler
 from .. import mail as mail_mod
 from ..audit import note
+from ..auth import providers
 from ..config import apply_config
 from ..errors import forbidden, invalid
 from ..mail import invite_mail
@@ -281,7 +282,8 @@ async def reload_config(request: Request, p: Principal = Depends(super_)):
     note(request, "config.reload", os.environ.get("RAMEN_CONFIG", "-"), ["scope:global"])
     applied = apply_config()
     st = request.app.state
-    st.oauth, st.auth_env = st.oauth.from_env(), st.auth_env.from_env()
+    st.auth_env = st.auth_env.from_env()
+    await providers.refresh(st, force=True, rebuild=True)  # D50: env + the store doc
     st.mailer = await mail_mod.build_mailer(st.store)  # layers config/smtp back over the fresh env read (N2)
     return respond(request, {"applied": sorted(applied)})
 
@@ -359,6 +361,67 @@ async def set_role_map(request: Request, provider: str, body: m.RoleMapChange, p
     )
 
 
+def _auth_out(request: Request, auth) -> dict:
+    st = request.app.state
+    return {**auth.public(), "providers": st.oauth.providers(), "mail": st.mailer.backend}
+
+
+@r.get("/config/oauth-providers")
+async def get_oauth_providers(request: Request, p: Principal = Depends(super_)):
+    """D50: every identity provider, masked (`has_secret`, never the secret); `source` is `config` or `env`."""
+    return await providers.describe(svc(request).store)
+
+
+@r.put("/config/oauth-providers/{name}")
+async def put_oauth_provider(request: Request, name: str, body: m.ProviderIn, p: Principal = Depends(super_)):
+    """D50: add or edit a provider (Entra ID, Google Workspace, any OIDC issuer). Omit `client_secret` to keep the
+    stored one. The registry and the login page follow at once; a same-named env provider is overridden."""
+    return await _put_provider(request, name, body.model_dump())
+
+
+@r.post("/config/oauth-providers")
+async def post_oauth_provider(request: Request, body: m.ProviderCreate, p: Principal = Depends(super_)):
+    """The Config page's form: `PUT /config/oauth-providers/{name}` with the name in the body."""
+    return await _put_provider(request, body.name.strip().lower(), body.model_dump(exclude={"name"}))
+
+
+async def _put_provider(request: Request, name: str, body: dict):
+    from .auth_routes import auth_settings
+
+    st = request.app.state
+    doc = await providers.load(st.store)
+    try:
+        entry = providers.clean(name, body, doc.get(name))
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    doc[name] = entry
+    tags = [f"provider:{name}", f"issuer:{entry['issuer']}", f"groups_source:{entry['groups_source']}"]
+    tags.append("secret:set" if body.get("client_secret") else "secret:kept")
+    note(request, "config.oauth_provider", name, tags)
+    auth_doc = await st.store.get("config", "auth") or {}
+    auth_doc.setdefault("groups_source", {})[name] = entry["groups_source"]  # one truth for settings.source_of
+    await st.store.put("config", "auth", auth_doc)
+    await auth_settings(request)
+    return respond(request, await providers.save(st, doc))
+
+
+@r.delete("/config/oauth-providers/{name}")
+async def delete_oauth_provider(request: Request, name: str, p: Principal = Depends(super_)):
+    """D50: remove a provider set here; one that exists only in the environment answers 409."""
+    from ..auth.oauth import env_providers
+    from ..errors import conflict, not_found
+
+    st = request.app.state
+    doc = await providers.load(st.store)
+    if name not in doc:
+        if name in env_providers():
+            raise conflict(f"Provider {name!r} is set by the environment (RAMEN_OAUTH_{name.upper()}_*)")
+        raise not_found("provider")
+    doc.pop(name)
+    note(request, "config.oauth_provider", name, [f"provider:{name}", "removed"])
+    return respond(request, await providers.save(st, doc))
+
+
 @r.put("/config/auth/groups-source/{provider}")
 async def set_groups_source(request: Request, provider: str, body: m.GroupsSource, p: Principal = Depends(super_)):
     """§21.3 (D47): read a provider's groups from the ID token (`claim`) or from its API at every sign-in (`lookup`:
@@ -380,6 +443,10 @@ async def set_groups_source(request: Request, provider: str, body: m.GroupsSourc
     doc.setdefault("groups_source", {})[provider] = source
     note(request, "config.auth", f"groups-source:{provider}", [f"groups_source:{source}"])
     await st.store.put("config", "auth", doc)
+    pdoc = await providers.load(st.store)
+    if provider in pdoc:  # D50: a provider set on the Config page carries its group source in its own entry too
+        pdoc[provider]["groups_source"] = source
+        await providers.save(st, pdoc)
     return respond(
         request,
         {**(await auth_settings(request)).public(), "providers": st.oauth.providers(), "mail": st.mailer.backend},

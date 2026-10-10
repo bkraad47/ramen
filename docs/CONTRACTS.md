@@ -605,6 +605,14 @@ tools:                  # per-tool opt-in; a tool not listed is never checked
   failure (non-2xx, timeout 10 s) is a 502 `could not read your groups from <provider>` — nobody is signed in with
   stale groups. Config page: "Group source" select per provider (store doc `config/auth.groups_source[<provider>]`,
   env wins only when the doc has no value).
+- **Providers are managed on the Config page (the user, 2026-10-10; D50).** A super admin adds, edits and removes
+  identity providers in the browser: store doc `config/oauth_providers = {"<name>": {issuer, client_id, client_secret,
+  scopes, groups_source, allow_unverified}}`, the secret encrypted at rest like SMTP's and never read back;
+  `GET /api/v1/config/oauth-providers` (masked), `PUT /api/v1/config/oauth-providers/{name}` (omit `client_secret` to
+  keep it), `DELETE`; audited `config.oauth_provider`. `RAMEN_OAUTH_<NAME>_*` still works and is shown as source `env`;
+  the store doc wins per provider name. The registry and the login page follow a change at once (no restart). Config
+  page card "Identity providers (Entra ID, Google Workspace)", with the group-source select and the role-mapping rules
+  next to it, so everything about a provider is in one place.
 - **Membership from either side.** A user document carries `idp_memberships` (`{group: role}`, rewritten on every SSO
   login when the provider has a mapping) and `manual_memberships` (set on the Users page / `PUT|DELETE
   /groups/{g}/members/{uid}`). Effective `memberships` = `idp_memberships` overlaid by `manual_memberships` (an admin's

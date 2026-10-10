@@ -19,6 +19,19 @@ def metadata_url(p: dict) -> str | None:
     return None
 
 
+def env_providers(env=None) -> dict[str, dict]:
+    """`RAMEN_OAUTH_<NAME>_<FIELD>` → `{name: {field: value}}` (fields lower-cased; TTL variables are not providers)."""
+    env = env or os.environ
+    found: dict[str, dict] = {}
+    for k, v in env.items():
+        if k in NOT_PROVIDERS:  # C8 token lifetimes share the prefix but configure no provider
+            continue
+        if k.startswith("RAMEN_OAUTH_") and k.count("_") >= 3:
+            _, _, name, field = k.split("_", 3)
+            found.setdefault(name.lower(), {})[field.lower()] = v
+    return found
+
+
 class OAuthRegistry:
     def __init__(self, providers: dict[str, dict], transport=None):
         self._cfg = {
@@ -65,15 +78,11 @@ class OAuthRegistry:
 
     @classmethod
     def from_env(cls, env=None, transport=None):
-        env = env or os.environ
-        found: dict[str, dict] = {}
-        for k, v in env.items():
-            if k in NOT_PROVIDERS:  # C8 token lifetimes share the prefix but configure no provider
-                continue
-            if k.startswith("RAMEN_OAUTH_") and k.count("_") >= 3:
-                _, _, name, field = k.split("_", 3)
-                found.setdefault(name.lower(), {})[field.lower()] = v
-        return cls(found, transport)
+        return cls(env_providers(env), transport)
+
+    def config(self, name: str) -> dict | None:
+        """What the provider was registered from (secret included: callers mask)."""
+        return dict(self._cfg[name]) if name in self._cfg else None
 
     @property
     def enabled(self) -> bool:

@@ -129,24 +129,26 @@ def test_oauth_links_existing_user_and_keeps_role(demo):
     assert len([u for u in demo.get("/api/v1/users").json() if u["email"] == "ga@x"]) == 1
 
 
-def test_oauth_rejects_unverified_or_missing_email_and_bad_code(demo):
+def test_oauth_rejects_a_bad_code_and_signs_in_an_unverified_email(demo):
     idp = FakeIdp({"email": "x@y", "email_verified": False})
     demo.app.state.oauth = registry(idp)
     with TestClient(demo.app) as anon:
         state = start(anon, idp)
         r = anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False)
-        assert r.status_code == 403 and "verified" in r.text
+        assert r.status_code == 303  # D51: Entra never sends email_verified; the email itself identifies the person
+        assert anon.get("/api/v1/me").json()["email"] == "x@y"
         state = start(anon, idp)
         assert anon.get(f"/auth/idp/callback?code=bad&state={state}", follow_redirects=False).status_code == 401
         assert anon.get("/auth/nope/login").status_code == 404
         assert anon.get("/auth/nope/callback?code=1&state=2").status_code == 404
         assert anon.get("/auth/idp/callback?error=access_denied&state=x", follow_redirects=False).status_code == 401
-    idp2 = FakeIdp({"name": "no email"})
+    idp2 = FakeIdp({"name": "no email"})  # the fake still mints `sub-1`, which x@y signed in with above: same person
     demo.app.state.oauth = registry(idp2)
     with TestClient(demo.app) as anon:
         state = start(anon, idp2)
-        assert anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False).status_code == 403
-    assert not [u for u in demo.get("/api/v1/users").json() if u["email"] == "x@y"]
+        assert anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False).status_code == 303
+        assert anon.get("/api/v1/me").json()["email"] == "x@y"  # D51: found by the provider's stable id
+    assert [u for u in demo.get("/api/v1/users").json() if u["email"] == "x@y"]
 
 
 def test_provider_callback_uses_the_public_url_behind_a_tls_terminating_edge(demo, monkeypatch):

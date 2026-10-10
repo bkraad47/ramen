@@ -81,7 +81,11 @@ class Accounts:
 
     @staticmethod
     def out(u: dict) -> dict:
-        return {**public(u), "memberships": memberships_of(u), "sources": sources_of(u)}
+        return {
+            **{k: v for k, v in public(u).items() if k != "provider_key"},
+            "memberships": memberships_of(u),
+            "sources": sources_of(u),
+        }
 
     async def _check_memberships(self, p: Principal, memberships: dict, super_: bool) -> None:
         """D41: a super admin grants anything; a group admin grants viewer / mcp_user in groups they administer."""
@@ -196,15 +200,27 @@ class Accounts:
             return dict(u.get("manual_memberships") or {})
         return memberships_of(u)
 
-    async def upsert_sso_user(self, email, memberships=None, super_=False, provider="oauth", authoritative=False):
+    async def upsert_sso_user(
+        self, email, memberships=None, super_=False, provider="oauth", authoritative=False, provider_id=""
+    ):
         """Link by verified email or create with the mapped memberships. With `authoritative` (D38: the provider
         has a role mapping) the mapped memberships rewrite the IdP side (`idp_memberships`, `idp_super`, §21.3) on
         every login; what an admin set by hand (`manual_memberships`) stays and wins per group. A change of the
         effective set ends the person's other sessions."""
         m = dict(memberships or {})
-        found = await self.store.list("users", {"email": email})
+        key = f"{provider}:{provider_id}" if provider_id else ""
+        found = await self.store.list("users", {"email": email}) if email else []
+        if not found and key:  # D51: no email, or the email changed — the provider's stable id is the account
+            found = await self.store.list("users", {"provider_key": key})
         if found:
             u = found[0]
+            changed = False
+            if key and u.get("provider_key") != key and u.get("provider", "password") in (provider, "password"):
+                u["provider_key"], changed = key, True
+            if email and u.get("email") == key:  # D51: the email arrived later; the account keeps its id
+                u["email"], changed = email, True
+            if changed:
+                await self.store.put("users", u["id"], u)
             if not authoritative:
                 return u
             before = (is_super(u), memberships_of(u))
@@ -218,7 +234,8 @@ class Accounts:
             return await self.store.put("users", u["id"], u)
         doc = summarize(
             {
-                "email": email,
+                "email": email or key,  # D51: shown as `<provider>:<id>` where an email would be
+                "provider_key": key,
                 "role": "viewer",
                 "idp_super": bool(super_),
                 "idp_memberships": m,

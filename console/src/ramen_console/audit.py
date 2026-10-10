@@ -2,6 +2,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from . import roles
+from .auth import providers
 from .auth.apikeys import HEADER
 from .auth.sessions import COOKIE
 from .util import now, uid
@@ -29,6 +30,7 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
         request.state.principal = None
         request.state.audit = None
         await roles.load(st.store)  # D48: custom roles rank as their base in every gate below
+        await providers.refresh(st)  # D50: identity providers set on another replica appear within the TTL
         if request.headers.get(HEADER):
             request.state.principal = await st.accounts.principal_for_key(request.headers[HEADER])
         else:  # V1.4: the session carries the user's epoch and dies when the stored one moves on

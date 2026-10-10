@@ -219,6 +219,8 @@ class Accounts:
                 u["provider_key"], changed = key, True
             if email and u.get("email") == key:  # D51: the email arrived later; the account keeps its id
                 u["email"], changed = email, True
+            if u.get("provider", "password") not in ("password", provider):  # show the provider used last
+                u["provider"], changed = provider, True
             if changed:
                 await self.store.put("users", u["id"], u)
             if not authoritative:

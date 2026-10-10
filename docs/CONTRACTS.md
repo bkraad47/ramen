@@ -595,9 +595,10 @@ tools:                  # per-tool opt-in; a tool not listed is never checked
 - **Group source per provider.** `RAMEN_OAUTH_<NAME>_GROUPS = claim` (default, today's behaviour: the role claim is
   read from the ID token/userinfo) or `lookup`. With `lookup` the callback fetches the person's groups with the
   access token and injects them as claim `groups` (overriding any token `groups`): provider `entra` → Microsoft Graph
-  `GET https://graph.microsoft.com/v1.0/me/memberOf?$select=id,displayName` (values: every `id` and `displayName`;
-  follows `@odata.nextLink`; scope `User.Read` added when absent — Graph lists it as sufficient; set
-  `RAMEN_OAUTH_ENTRA_SCOPES` yourself if your tenant wants `GroupMember.Read.All`); provider `google` → Cloud
+  `GET https://graph.microsoft.com/v1.0/me/memberOf?$select=id,displayName` (values: every `id`, plus `displayName`
+  when Graph returns it — with `User.Read` alone it returns ids only, verified live 2026-10-10, so rules should name
+  ids; follows `@odata.nextLink`; scope `User.Read` added when absent; add `GroupMember.Read.All` to
+  `RAMEN_OAUTH_ENTRA_SCOPES` to map on display names); provider `google` → Cloud
   Identity `GET https://cloudidentity.googleapis.com/v1/groups/-/memberships:searchDirectGroups?query=member_key_id=='<email>'`
   (values: each `groupKey.id` (the group email) and `group` name; scope
   `https://www.googleapis.com/auth/cloud-identity.groups.readonly` added when absent). Other providers: `lookup` is a

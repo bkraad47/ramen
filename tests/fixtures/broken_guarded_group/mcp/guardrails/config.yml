@@ -1,0 +1,5 @@
+models: []
+rails:
+  input:
+    flows:
+      - this flow is not defined anywhere

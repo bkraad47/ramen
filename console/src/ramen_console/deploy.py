@@ -3,7 +3,7 @@ import json
 import logging
 import os
 
-from . import baseuri, compat, github_app, golden, regions, toolaccess
+from . import baseuri, compat, github_app, golden, regions, roles, toolaccess
 from .cloud.base import GateError
 from .services import Services
 from .util import now, uid
@@ -62,6 +62,7 @@ async def run_deploy(
         cases = await _golden_cases(svc, group, job)
         prev = env.get("last_deploy") or {}
         blocked = await svc.blocked_regions()
+        custom_roles = await roles.load(svc.store, force=True)
         gates: dict[str, dict] = {}
         for z in zones:
             zdoc = await svc.store.get("zones", z) or {}
@@ -77,6 +78,7 @@ async def run_deploy(
                 "RAMEN_VERBOSE": "1" if env.get("verbose") else "0",
                 "RAMEN_BLOCKED": ",".join(Services.blocked_for_zone(env, z)),  # U5: env-wide plus this zone's
                 "RAMEN_TOOL_ACCESS": toolaccess.compact(env.get("tool_access")),  # C10: env-wide, every zone
+                "RAMEN_ROLES": roles.compact(custom_roles),  # D48: custom role → base, so the node can rank a kind
                 **vars_,
             }
             if mcp:
@@ -193,6 +195,12 @@ def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
         return cfg.get(f"{prefix}{name}") if g == group else None
 
     async def gate(result, call):
+        # §21.2: a group that opted into guardrails never deploys with a broken guardrails file — the worker reports
+        # the load error (`errors: [{"package": "guardrails", ...}]`), the console refuses the deploy
+        for e in (result or {}).get("errors") or []:
+            if isinstance(e, dict) and e.get("package") == "guardrails":
+                log_.append(f"{now()} zone {zone}: guardrails did not load: {e.get('reason')}")
+                raise GateError(f"guardrails did not load on the canary: {e.get('reason')}")
         if stable is not None and (new := compat.manifest_of(result)) is not None:
             d = compat.diff(stable, new)
             info["compat"] = {**d, "against": stable["hash"], "forced": False}

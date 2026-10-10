@@ -65,7 +65,25 @@ async def login(
     user = await request.app.state.accounts.authenticate(email, password)
     if not user:
         return await _login_page(request, 401, error="Invalid email or password", next=next)
+    if refused := await _oauth_only(request, user, auth):
+        return refused
     return _login_response(request, user, next)
+
+
+async def _oauth_only(request: Request, user: dict, auth) -> Response | None:
+    """§21.4 (D48): a person holding an `oauth_only` role signs in through a provider, never with a password or a
+    sign-in link; the break-glass bootstrap admin is exempt. Checked only after the credential proved right, so a
+    wrong password reveals no account policy."""
+    from .. import roles
+
+    st = request.app.state
+    await roles.load(st.store)
+    if user.get("email") == auth.admin_email or not roles.requires_oauth(user):
+        return None
+    providers = st.oauth.providers()
+    note(request, "login", user["email"], ["oauth_only", *(f"provider:{p}" for p in providers)], user=user["email"])
+    msg = "This account signs in with " + (", ".join(providers) if providers else "an OAuth provider (none configured)")
+    return await _login_page(request, 403, error=msg)
 
 
 @r.get("/logout")
@@ -143,6 +161,8 @@ async def magic_login(request: Request, token: str):
     note(request, "login.magic", user["email"] if user else "-", user=user["email"] if user else None)
     if not user:
         raise ApiError(400, "This sign-in link is invalid, expired or already used")
+    if refused := await _oauth_only(request, user, await auth_settings(request)):
+        return refused
     return _login_response(request, user)
 
 
@@ -178,11 +198,29 @@ async def oauth_callback(request: Request, name: str):
     if not info.get("email"):
         info = dict(await client.userinfo(token=token))
     email = (info.get("email") or "").strip().lower()
-    note(request, "login.oauth", email or "-", [f"provider:{name}"], user=email or "-")
+    tags = [f"provider:{name}"]
+    note(request, "login.oauth", email or "-", tags, user=email or "-")
     trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
     if not email or (info.get("email_verified") is not True and not trusted):
         raise ApiError(403, "The provider did not return a verified email")
     auth = await auth_settings(request)
+    if auth.source_of(name) == "lookup":  # §21.3: the provider's API, not the token, says which groups
+        from ..auth import groups
+
+        st = request.app.state
+        tags.append("groups:lookup")
+        try:
+            info["groups"] = await groups.lookup(
+                name,
+                token.get("access_token") or "",
+                email,
+                st.oauth.groups_url(name),
+                transport=getattr(st, "groups_transport", None),
+            )
+        except groups.LookupError as e:
+            note(request, "login.oauth", email, [*tags, "error:groups"], user=email)
+            raise ApiError(502, str(e)) from e
+        note(request, "login.oauth", email, tags, user=email)  # the audit row says the groups were looked up
     super_, memberships = auth.map_memberships(name, info)
     # the bootstrap super admin is the break-glass account: a provider's rules never demote it
     authoritative = auth.has_mapping(name) and email != auth.admin_email

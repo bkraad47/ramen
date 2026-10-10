@@ -1,0 +1,19 @@
+{
+  "type": "tool",
+  "name": "word_count",
+  "description": "Count the characters, words and lines of a text and return the three counts as an object. Pure and stateless: the text is not stored or sent anywhere; no auth beyond the group's key. Words are whitespace-separated runs; lines are newline-separated (a trailing newline does not add a line); characters are Unicode code points including whitespace. Use it when a model needs an exact count rather than an estimate; it does not tokenise or detect language.",
+  "callable": "count",
+  "input": {
+    "text": {"type": "string", "description": "the text to count; may be empty, which yields zeros"}
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "characters": {"type": "integer", "description": "Unicode code points, whitespace included"},
+      "words": {"type": "integer", "description": "whitespace-separated runs"},
+      "lines": {"type": "integer", "description": "newline-separated lines; 0 for an empty text"}
+    },
+    "required": ["characters", "words", "lines"]
+  },
+  "error": {"type": "string"}
+}

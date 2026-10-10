@@ -88,7 +88,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         "group.html",
         group=g,
         envs=envs,
-        kinds=toolaccess.KINDS,
+        kinds=toolaccess.kinds(),
         tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
         known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,

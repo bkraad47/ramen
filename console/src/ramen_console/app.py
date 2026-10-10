@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, alerts, baseuri, scheduler
+from . import __version__, alerts, baseuri, rbac, roles, scheduler
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth.bootstrap import ensure_super_admin
@@ -60,7 +60,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await ensure_super_admin(app.state.store)
-        await app.state.accounts.migrate_memberships()  # 0.5.95 (D41): per-group roles on pre-existing users
+        await roles.load(app.state.store, force=True)  # D48: custom roles before any membership is read
+        await app.state.accounts.migrate_memberships()  # 0.5.95 (D41) and 0.7.5 (§21.3) membership shapes
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),
@@ -98,6 +99,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
+        custom_roles=rbac.custom_roles,  # D48: templates list custom roles after the built-ins
         password_rule=f"Use {PASSWORD_RULE}.",
         u=baseuri.u,
     )

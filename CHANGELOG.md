@@ -3,6 +3,40 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.7.5] — guardrails in the worker, your identity provider's groups, roles you define
+- **Guardrails, per tool, inside the runtime.** A group repo's `mcp/guardrails.yaml` opts tools into a check before the
+  call and after the result, run in the Python runtime next to the tool. Two engines: `nemo` runs
+  [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails in-process (deterministic Colang flows
+  with your own actions, or LLM-backed rails with your model and key from `mcp/env.yaml`); `policy` is a `policy.py`
+  of your own with `pre(tool, arguments)` and `post(tool, arguments, result)`. A blocked call is a normal tool error
+  the agent can read (`guardrail blocked: pre: <message>`), the tool never ran or its output never left the pod, the
+  result carries `_meta.ramen.guardrail`, and the worker's access log names the stage (`guardrail_pre`,
+  `guardrail_post`). Fail-closed by default; a broken engine blocks the opted-in tools and fails the deploy. Nothing is
+  copied from anyone's gateway: the hook runs where the tool runs. The demo repo ships rails that block prompt-injection
+  phrases on the way in and the word "secret" on the way out, at no model cost.
+- **The runtime is Python 3.12 now, pinned to 3.12 only.** NeMo Guardrails does not run on 3.14 and it belongs in the
+  sidecar, not in a third process. Worker and Glama images are `python:3.12-slim`; the console stays on 3.14;
+  `scripts/check_versions.py` keeps the pin and the Dockerfiles in step.
+- **Groups from Entra ID or Google Workspace at sign-in.** A provider's **Group source** can be `lookup`: the console
+  reads the person's groups from Microsoft Graph (`/me/memberOf`, ids and display names) or Cloud Identity (group
+  emails and names) with their access token and maps them to a role per Ramen group with the existing rules. A failed
+  lookup is a `502` and no session, never stale groups. The memberships an admin set on the Users page stay next to
+  the provider's: the provider rewrites its own at every sign-in, the admin's entry wins where both name a group, and a
+  person removed from the provider's group loses that membership at the next sign-in unless an admin kept it. The
+  Users page shows the source of each membership. Any provider works on any cloud.
+- **Custom roles.** Config → Roles: a name, a base (Group Admin, Viewer or MCP User, which is what the console lets it
+  do), a label and an **OAuth only** switch. Use the name in memberships, provider rules and per-tool access; the
+  person's token carries it and the worker matches a tool-access entry by the name or its base. OAuth-only roles refuse
+  password and magic-link sign-in (`403 This account signs in with <provider>`). A role in use cannot be deleted (`409`).
+- Verified live on GKE and EKS with the analyst token over Streamable HTTP and over the stdio bridge, and with a real
+  Entra ID tenant (groups lookup, removal from a group); Google Workspace against a fake Cloud Identity only.
+- Details: `mcp/guardrails.yaml` keys `engine`, `config`, `fail` (closed|open), `timeout_s` (≤120), `tools: {<tool>:
+  {pre, post}}`; load/reload result and `Admin/Metrics` carry `guardrails: {engine, fail, tools}` (not in the manifest
+  hash); `RAMEN_OAUTH_<NAME>_GROUPS=claim|lookup`, `RAMEN_OAUTH_<NAME>_GROUPS_URL`; user documents gain
+  `idp_memberships` and `manual_memberships`; `GET|PUT|DELETE /api/v1/config/roles[/{name}]`; workers get `RAMEN_ROLES`
+  (`{name: base}`) next to `RAMEN_TOOL_ACCESS`; the golden gate's reason carries a blocked tool's error text.
+  Contract: `docs/CONTRACTS.md` §21.
+
 ## [0.7.2] — the rest of the r/selfhosted list
 - **Per-tool access.** Group admins decide, per environment and tool, who may *see* it in `tools/list` and who may
   *call* it: group keys, group admins, viewers, MCP users (super admins always may). A tool a caller may not list is

@@ -10,6 +10,9 @@ one every guide deploys.
 mcp/
   requirements.txt                   pip requirements the worker installs on load
   env.yaml                           environment for your code, rendered from the group's secrets
+  tests.yaml                         golden tools/call cases, run on the canary before stable takes the code (0.7.0)
+  guardrails.yaml                    which tools get a pre/post check and with which engine (0.7.5)
+  guardrails/                        the NeMo rails config (config.yml, *.co, actions.py) or your policy.py
   tools/<name>/<name>.py             the callable
   tools/<name>/<name>.json           the contract: type, name, description, callable, input, output, error
   tools/<name>/utils/                optional helpers; this folder is on sys.path, so `import calculator_utils` works
@@ -84,6 +87,13 @@ cases:
 matched field by field) or `exact` (the whole result). `args` may reference the group's secrets as
 `{{$group.VAR}}`; the console resolves them before the call. A JSON-RPC error counts as a failure. A group without
 an MCP key skips the cases with a warning; a malformed file fails the deploy before any zone changes.
+
+## Guardrails
+
+`mcp/guardrails.yaml` (0.7.5) opts tools into a check before the call and after the result, run in the runtime next
+to the tool: NeMo Guardrails rails or a `policy.py` of your own, per tool, fail-closed by default. The golden cases
+run through them, so a case whose arguments a rail blocks fails the gate with the rail's message. The whole story,
+with the demo repo's deterministic rails, is on [Guardrails](guardrails.md).
 
 ## Resources and prompts
 

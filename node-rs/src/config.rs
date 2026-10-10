@@ -19,6 +19,7 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_LOG_FILE",
     "RAMEN_BLOCKED",
     "RAMEN_TOOL_ACCESS",
+    "RAMEN_ROLES",
     "RAMEN_ALLOWED_ORIGINS",
     "RAMEN_REDIS_ITEM_URL",
     "RAMEN_REDIS_SCOPE_URL",
@@ -43,6 +44,22 @@ pub fn parse_tool_access(text: &str) -> Result<HashMap<String, ToolAccess>, Stri
     serde_json::from_str(text).map_err(|e| {
         format!("RAMEN_TOOL_ACCESS must be a JSON object of tool → {{list, call}}: {e}")
     })
+}
+
+/// `RAMEN_ROLES` (§21.4, 0.7.5): compact JSON `{"<custom role>": "<base role>"}` written by the console deploy. A
+/// caller whose kind is a custom role matches a `RAMEN_TOOL_ACCESS` list that names the role or its base.
+pub fn parse_roles(text: &str) -> Result<HashMap<String, String>, String> {
+    let m: HashMap<String, String> = serde_json::from_str(text)
+        .map_err(|e| format!("RAMEN_ROLES must be a JSON object of role → base role: {e}"))?;
+    if let Some((k, v)) = m
+        .iter()
+        .find(|(_, v)| !["group_admin", "viewer", "mcp_user"].contains(&v.as_str()))
+    {
+        return Err(format!(
+            "RAMEN_ROLES: {k:?} has base {v:?}; a base is group_admin, viewer or mcp_user"
+        ));
+    }
+    Ok(m)
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +98,8 @@ pub struct Config {
     pub blocked: Vec<String>,
     /// C10: per-tool list/call permissions by caller kind (`RAMEN_TOOL_ACCESS`); empty = every tool unrestricted.
     pub tool_access: HashMap<String, ToolAccess>,
+    /// §21.4: custom role → base role (`RAMEN_ROLES`); empty = only the built-in kinds exist.
+    pub roles: HashMap<String, String>,
     /// §16.1: browser `Origin` values allowed on `/mcp` (`RAMEN_ALLOWED_ORIGINS`, comma list; `*` = any).
     /// Empty = every request that carries an `Origin` header is refused (DNS-rebinding defence).
     pub allowed_origins: Vec<String>,
@@ -228,6 +247,9 @@ impl Config {
             blocked: list("RAMEN_BLOCKED"),
             tool_access: get("RAMEN_TOOL_ACCESS")
                 .map_or(Ok(HashMap::new()), |t| parse_tool_access(&t))?,
+            roles: get("RAMEN_ROLES")
+                .filter(|t| !t.trim().is_empty())
+                .map_or(Ok(HashMap::new()), |t| parse_roles(&t))?,
             allowed_origins: list("RAMEN_ALLOWED_ORIGINS"),
             session_secret: get("RAMEN_SESSION_SECRET").filter(|s| !s.is_empty()),
             session_ttl_secs: num("RAMEN_SESSION_TTL_SECS", 1800)?.max(1),
@@ -404,6 +426,36 @@ mod tests {
             );
         }
         assert!(DEPLOY_KEYS.contains(&"RAMEN_TOOL_ACCESS"));
+    }
+
+    /// §21.4 (0.7.5): `RAMEN_ROLES` maps custom roles to their base; a bad base or shape is a config error.
+    #[test]
+    fn roles_parse_the_json_map_and_are_deploy_scoped() {
+        assert!(Config::from_map(&HashMap::new()).unwrap().roles.is_empty());
+        let m: HashMap<_, _> = [("RAMEN_ROLES".to_string(), "".to_string())].into();
+        assert!(Config::from_map(&m).unwrap().roles.is_empty());
+        let m: HashMap<_, _> = [(
+            "RAMEN_ROLES".to_string(),
+            r#"{"analyst":"viewer","ops":"group_admin"}"#.to_string(),
+        )]
+        .into();
+        let c = Config::from_map(&m).unwrap();
+        assert_eq!(c.roles["analyst"], "viewer");
+        assert_eq!(c.roles["ops"], "group_admin");
+        for bad in [
+            "not json",
+            "[1]",
+            r#"{"a": 1}"#,
+            r#"{"a": "super_admin"}"#,
+            r#"{"a": "key"}"#,
+        ] {
+            let m: HashMap<_, _> = [("RAMEN_ROLES".to_string(), bad.to_string())].into();
+            assert!(
+                Config::from_map(&m).unwrap_err().contains("RAMEN_ROLES"),
+                "{bad}"
+            );
+        }
+        assert!(DEPLOY_KEYS.contains(&"RAMEN_ROLES"));
     }
 
     #[test]

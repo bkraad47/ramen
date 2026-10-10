@@ -1,0 +1,9 @@
+{
+  "type": "tool",
+  "name": "plain_tool",
+  "description": "Answer with its text unchanged. Not listed in mcp/guardrails.yaml: no rail ever sees it.",
+  "callable": "plain",
+  "input": {"text": {"type": "string", "description": "what to answer"}},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

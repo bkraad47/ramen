@@ -24,10 +24,13 @@ def manifest_of(result) -> dict | None:
     """C3: `{"hash", "tools", "resources", "prompts"}` from a reload result; None when it reported no manifest."""
     if not isinstance(result, dict) or not any(k in result for k in ("tools", "resources", "prompts")):
         return None
-    return {
+    m = {
         "hash": result.get("hash") or manifest_hash(result),
         **{k: list(result.get(k) or []) for k in ("tools", "resources", "prompts")},
     }
+    if isinstance(result.get("guardrails"), dict):  # §21.2: shown per zone, never part of the hash or the diff
+        m["guardrails"] = result["guardrails"]
+    return m
 
 
 def diff(old: dict | None, new: dict | None) -> dict:

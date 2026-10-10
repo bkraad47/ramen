@@ -3,7 +3,19 @@ import hmac
 from .auth import apikeys
 from .auth.passwords import hash_password, verify_password
 from .errors import conflict, forbidden, invalid, not_found
-from .rbac import GROUP_ROLES, RANK, ROLES, Principal, can, memberships_of, principal_from, summarize
+from .rbac import (
+    Principal,
+    can,
+    group_roles,
+    is_group_role,
+    is_role,
+    is_super,
+    memberships_of,
+    principal_from,
+    rank,
+    sources_of,
+    summarize,
+)
 from .security import check_password
 from .storage.base import Store
 from .util import now, public, uid
@@ -69,7 +81,7 @@ class Accounts:
 
     @staticmethod
     def out(u: dict) -> dict:
-        return {**public(u), "memberships": memberships_of(u)}
+        return {**public(u), "memberships": memberships_of(u), "sources": sources_of(u)}
 
     async def _check_memberships(self, p: Principal, memberships: dict, super_: bool) -> None:
         """D41: a super admin grants anything; a group admin grants viewer / mcp_user in groups they administer."""
@@ -77,8 +89,8 @@ class Accounts:
         for g, r in memberships.items():
             if g not in known:
                 raise invalid(f"Unknown group {g!r}")
-            if r not in GROUP_ROLES:
-                raise invalid(f"Role must be one of {', '.join(GROUP_ROLES)} (or super_admin for the whole console)")
+            if not is_group_role(r):
+                raise invalid(f"Role must be one of {', '.join(group_roles())} (or super_admin for the whole console)")
         if p.role == "super_admin":
             return
         if super_:
@@ -88,22 +100,24 @@ class Accounts:
                 raise forbidden(f"You may grant viewer or mcp_user in groups you administer, not {r} in {g}")
 
     def _visible_to(self, p: Principal) -> set[str]:
-        return {g for g, r in p.memberships.items() if RANK[r] >= RANK["viewer"]}
+        return {g for g, r in p.memberships.items() if rank(r) >= rank("viewer")}
 
     async def can_manage(self, p: Principal, target: dict) -> bool:
         """May `p` act on this user's account (password, delete)? Super admins always, except on each other's
         passwords; group admins on members (never super admins) of a group they administer."""
         if p.role == "super_admin":
             return True
-        if target.get("role") == "super_admin":
+        if is_super(target):
             return False
         return any(can(p, "group_admin", g) for g in memberships_of(target))
 
     async def migrate_memberships(self) -> int:
-        """One-time (0.5.95): documents written before D41 get their `memberships` from `role` + `groups`."""
+        """One-time: documents written before D41 (0.5.95) get `memberships` from `role` + `groups`; documents from
+        before 0.7.5 (§21.3) get `manual_memberships` = their memberships and an empty `idp_memberships`."""
         n = 0
         for u in await self.store.list("users"):
-            if "memberships" not in u:
+            if "manual_memberships" not in u and "idp_memberships" not in u:
+                u["manual_memberships"], u["idp_memberships"] = memberships_of(u), {}
                 await self.store.put("users", u["id"], summarize(u))
                 n += 1
         return n
@@ -119,7 +133,15 @@ class Accounts:
         out = []
         for u in await self.store.list("users"):
             if (r := memberships_of(u).get(group)) is not None:
-                out.append({"id": u["id"], "email": u["email"], "role": r, "provider": u.get("provider", "password")})
+                out.append(
+                    {
+                        "id": u["id"],
+                        "email": u["email"],
+                        "role": r,
+                        "provider": u.get("provider", "password"),
+                        "source": sources_of(u)[group],
+                    }
+                )
         return sorted(out, key=lambda x: x["email"])
 
     async def create_user(
@@ -127,8 +149,8 @@ class Accounts:
     ) -> dict:
         if await self.store.list("users", {"email": email}):
             raise conflict(f"User {email} exists")
-        if role not in ROLES:
-            raise invalid(f"Role must be one of {', '.join(ROLES)}")
+        if not is_role(role):
+            raise invalid(f"Role must be one of super_admin, {', '.join(group_roles())}")
         super_ = role == "super_admin" and memberships is None
         m = dict(memberships) if memberships is not None else ({} if super_ else {g: role for g in groups})
         await self._check_memberships(p, m, super_)
@@ -138,7 +160,8 @@ class Accounts:
             {
                 "email": email,
                 "role": "super_admin" if super_ else role,
-                "memberships": m,
+                "manual_memberships": m,
+                "idp_memberships": {},
                 "created": now(),
                 "provider": provider,
                 "password_hash": hash_password(password) if password else "",
@@ -151,39 +174,55 @@ class Accounts:
         u = await self.store.get("users", uid_)
         if not u:
             raise not_found("user")
-        if u.get("role") == "super_admin":
+        if is_super(u):
             raise invalid("A super admin has every group already")
         if role is not None:
             await self._check_memberships(p, {group: role}, False)
         elif not can(p, "group_admin", group):
             raise forbidden(f"Requires Group Admin on group {group}")
-        m = memberships_of(u)
+        m = self._manual(u)
         if role is None:
-            m.pop(group, None)
+            m.pop(group, None)  # §21.3: an IdP-given membership in this group, if any, stands
         else:
             m[group] = role
-        u["memberships"] = m
+        u["manual_memberships"] = m
         await self.store.put("users", uid_, await self.bump_epoch(summarize(u)))
         return self.out(u)
 
+    @staticmethod
+    def _manual(u: dict) -> dict[str, str]:
+        """The console-set side of a user's memberships (§21.3); an un-migrated document's are all manual."""
+        if "manual_memberships" in u or "idp_memberships" in u:
+            return dict(u.get("manual_memberships") or {})
+        return memberships_of(u)
+
     async def upsert_sso_user(self, email, memberships=None, super_=False, provider="oauth", authoritative=False):
         """Link by verified email or create with the mapped memberships. With `authoritative` (D38: the provider
-        has a role mapping) the mapped memberships replace the stored ones on every login."""
+        has a role mapping) the mapped memberships rewrite the IdP side (`idp_memberships`, `idp_super`, §21.3) on
+        every login; what an admin set by hand (`manual_memberships`) stays and wins per group. A change of the
+        effective set ends the person's other sessions."""
         m = dict(memberships or {})
         found = await self.store.list("users", {"email": email})
         if found:
             u = found[0]
-            same = (u.get("role") == "super_admin") == super_ and memberships_of(u) == m
-            if not authoritative or same:
+            if not authoritative:
                 return u
-            u["role"] = "super_admin" if super_ else "viewer"
-            u["memberships"] = m
-            return await self.store.put("users", u["id"], summarize(u))
+            before = (is_super(u), memberships_of(u))
+            u["manual_memberships"] = self._manual(u)
+            u["idp_memberships"], u["idp_super"] = m, bool(super_)
+            if u.get("role") == "super_admin" and not u.get("manual_super"):
+                u["role"] = "viewer"  # a mapped super admin from before 0.7.5 is re-decided by the mapping
+            summarize(u)
+            if (is_super(u), memberships_of(u)) != before:
+                await self.bump_epoch(u)
+            return await self.store.put("users", u["id"], u)
         doc = summarize(
             {
                 "email": email,
-                "role": "super_admin" if super_ else "viewer",
-                "memberships": m,
+                "role": "viewer",
+                "idp_super": bool(super_),
+                "idp_memberships": m,
+                "manual_memberships": {},
                 "created": now(),
                 "provider": provider,
                 "password_hash": "",
@@ -223,18 +262,18 @@ class Accounts:
             for g, r in memberships.items():
                 if g not in known:
                     raise invalid(f"Unknown group {g!r}")
-                if r not in GROUP_ROLES:
-                    raise invalid(f"Role must be one of {', '.join(GROUP_ROLES)}")
-            u["memberships"], u["role"] = dict(memberships), "viewer"
+                if not is_group_role(r):
+                    raise invalid(f"Role must be one of {', '.join(group_roles())}")
+            u["manual_memberships"], u["role"], u["manual_super"] = dict(memberships), "viewer", False
         elif role or groups is not None:
-            if role and role not in ROLES:
+            if role and not is_role(role):
                 raise invalid("Unknown role")
             role = role or (u.get("role") if u.get("role") != "super_admin" else "viewer")
             if role == "super_admin":
-                u["role"], u["memberships"] = "super_admin", {}
+                u["role"], u["manual_memberships"], u["manual_super"] = "super_admin", {}, True
             else:
                 gs = list(groups) if groups is not None else list(memberships_of(u))
-                u["role"], u["memberships"] = role, {g: role for g in gs}
+                u["role"], u["manual_memberships"], u["manual_super"] = role, {g: role for g in gs}, False
         summarize(u)
         if (u.get("role"), memberships_of(u)) != before:  # V1.4: a scope change revokes the old sessions
             await self.bump_epoch(u)
@@ -279,10 +318,10 @@ class Accounts:
             raise invalid(f"Client type must be one of {', '.join(apikeys.CLIENT_TYPES)}")
         if client_type == "agent" and not groups:
             raise invalid("An agent key must name at least one group")
-        if p.role != "super_admin" and (RANK[role] > RANK[p.role] or any(g not in p.groups for g in groups)):
-            raise forbidden("API key scope cannot exceed your own")
-        if role not in ROLES:
+        if not is_role(role):
             raise invalid("Unknown role")
+        if p.role != "super_admin" and (rank(role) > rank(p.role) or any(g not in p.groups for g in groups)):
+            raise forbidden("API key scope cannot exceed your own")
         raw, kid, h = apikeys.mint(client_type)
         doc = {
             "name": name,
@@ -324,7 +363,7 @@ class Accounts:
                 "created": now(),
             }
         else:
-            if role not in ROLES:
+            if not is_role(role):
                 raise invalid("Unknown role")
             doc = {
                 "kind": "permission_request",
@@ -373,12 +412,13 @@ class Accounts:
             m, grp = memberships_of(u), r.get("group")
             r["prior_role"] = u.get("role")
             if r["role"] == "super_admin":
-                u["role"] = "super_admin"
+                u["role"], u["manual_super"] = "super_admin", True
             elif grp:
                 r["prior_membership"] = m.get(grp)
-                if m.get(grp) is None or RANK[r["role"]] > RANK[m[grp]]:
-                    m[grp] = r["role"]
-                u["memberships"] = m
+                mm = self._manual(u)
+                if m.get(grp) is None or rank(r["role"]) > rank(m[grp]):
+                    mm[grp] = r["role"]
+                u["manual_memberships"] = mm
             await self.store.put("users", u["id"], await self.bump_epoch(summarize(u)))
         r.update(status="approved", approved_by=by, approved=now())
         return await self.store.put("activity", rid, r)
@@ -409,16 +449,17 @@ class Accounts:
             u = await self.store.get("users", r["user"])
             if u:
                 if r.get("role") == "super_admin" and u.get("role") == "super_admin":
-                    u["role"] = r.get("prior_role") if r.get("prior_role") in GROUP_ROLES else "viewer"
+                    u["role"] = r.get("prior_role") if is_group_role(r.get("prior_role")) else "viewer"
+                    u["manual_super"] = False
                 elif r.get("group"):
-                    m = memberships_of(u)
+                    m = self._manual(u)
                     if r.get("prior_membership") is None:
                         m.pop(r["group"], None)
                     else:
                         m[r["group"]] = r["prior_membership"]
-                    u["memberships"] = m
-                    if not m:  # back to the label they had before the grant
-                        u["role"] = r.get("prior_role") if r.get("prior_role") in GROUP_ROLES else "viewer"
+                    u["manual_memberships"] = m
+                    if not memberships_of(u):  # back to the label they had before the grant
+                        u["role"] = r.get("prior_role") if is_group_role(r.get("prior_role")) else "viewer"
                 await self.store.put("users", u["id"], await self.bump_epoch(summarize(u)))
         r.update(status="revoked", revoked_by=by, revoked=now())
         return await self.store.put("activity", rid, r)

@@ -111,6 +111,24 @@ def main() -> int:
         path = a.root / rel
         if path.exists() and len(desc := json.loads(path.read_text()).get("description", "")) > 100:
             bad.append(f"{rel}: description is {len(desc)} characters (registry limit 100)")
+    # D45 (0.7.5): the runtime is pinned to one Python minor (nemoguardrails needs < 3.14); the worker and Glama
+    # images must build on that same minor, or a release ships a runtime its own image cannot install.
+    pin = read(a.root / "runtime-py/pyproject.toml", ("project", "requires-python")) or ""
+    minor = re.search(r">=\s*(3\.\d+)\s*,\s*<\s*3\.(\d+)", pin)
+    rows.append(("runtime-py python", pin or "(none)"))
+    if not minor or int(minor.group(2)) != int(minor.group(1).split(".")[1]) + 1:
+        bad.append(f"runtime-py/pyproject.toml: requires-python {pin!r} must pin one minor, e.g. '>=3.12,<3.13'")
+    else:
+        for rel in ("node-rs/Dockerfile", "glama/Dockerfile", "glama/Dockerfile.standalone"):
+            path = a.root / rel
+            if not path.exists():
+                rows.append((rel, "(missing)"))
+                continue
+            bases = sorted(set(re.findall(r"^FROM python:(\d+\.\d+)", path.read_text(), re.M)))
+            rows.append((f"{rel} python", ", ".join(bases) or "(none)"))
+            for b in bases:
+                if b != minor.group(1):
+                    bad.append(f"{rel}: FROM python:{b} but the runtime is pinned to {minor.group(1)}")
     if a.tag:
         t = a.tag.removeprefix("v")
         rows.append(("tag", t))

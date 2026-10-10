@@ -24,6 +24,16 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   the provider's: the provider rewrites its own at every sign-in, the admin's entry wins where both name a group, and a
   person removed from the provider's group loses that membership at the next sign-in unless an admin kept it. The
   Users page shows the source of each membership. Any provider works on any cloud.
+- **Identity providers on the Config page.** A super admin adds Entra ID, Google Workspace or any OIDC provider in the
+  browser (issuer, client id, secret, scopes, group source); the secret is encrypted in the store and never shown
+  again, the login button appears without a restart, and the environment variables remain a second source that the
+  page overrides per name. `GET|PUT|POST|DELETE /api/v1/config/oauth-providers`, audited `config.oauth_provider`.
+- **The provider's email is the account.** Entra ID never sends `email_verified`, so the old rule refused every Entra
+  sign-in; now the email the provider returns is the account (the worker's log line names it on every MCP call), and a
+  provider that returns no email gets an account keyed on its stable id (`entra:<oid>`, adopting the email when one
+  arrives). `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is ignored. The provider callback is built from the console's public
+  address, so a TLS-terminating load balancer no longer makes Entra answer `AADSTS50011`. All three found by the first
+  live Entra sign-in on GKE and EKS.
 - **Custom roles.** Config → Roles: a name, a base (Group Admin, Viewer or MCP User, which is what the console lets it
   do), a label and an **OAuth only** switch. Use the name in memberships, provider rules and per-tool access; the
   person's token carries it and the worker matches a tool-access entry by the name or its base. OAuth-only roles refuse

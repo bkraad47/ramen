@@ -44,8 +44,12 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   do), a label and an **OAuth only** switch. Use the name in memberships, provider rules and per-tool access; the
   person's token carries it and the worker matches a tool-access entry by the name or its base. OAuth-only roles refuse
   password and magic-link sign-in (`403 This account signs in with <provider>`). A role in use cannot be deleted (`409`).
-- Verified live on GKE and EKS with the analyst token over Streamable HTTP and over the stdio bridge, and with a real
-  Entra ID tenant (groups lookup, removal from a group); Google Workspace against a fake Cloud Identity only.
+- Verified live on GKE and EKS: the 33-check run (deploy with the demo repo's NeMo rails and golden cases, custom roles,
+  tool access by name and base, the console token over Streamable HTTP and over the stdio bridge), Microsoft Entra ID
+  sign-in with the groups lookup on both clouds (including removal from and return to a group, and the bridge acting as
+  that person), and Google sign-in on GKE. Google Workspace groups: fake Cloud Identity only.
+- Console layout: every sign-in button is one width and named for its provider; the provider, role-mapping and role
+  forms are label/field tables; stylesheet links carry the version so an upgrade is never hidden behind a cache.
 - Details: `mcp/guardrails.yaml` keys `engine`, `config`, `fail` (closed|open), `timeout_s` (≤120), `tools: {<tool>:
   {pre, post}}`; load/reload result and `Admin/Metrics` carry `guardrails: {engine, fail, tools}` (not in the manifest
   hash); `RAMEN_OAUTH_<NAME>_GROUPS=claim|lookup`, `RAMEN_OAUTH_<NAME>_GROUPS_URL`; user documents gain

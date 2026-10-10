@@ -172,8 +172,11 @@ def _client(request: Request, name: str):
     return client
 
 
-async def oauth_login(request: Request, name: str):
+async def oauth_login(request: Request, name: str, next: str = "/"):
     client = _client(request, name)
+    # An MCP client's consent page (`/oauth/authorize?...`) sends the person here with `next`; carry it across the
+    # provider round trip or an SSO user lands on the home page and the client never gets its code (0.7.5 live run).
+    request.session["ramen_next"] = safe_next(next)
     try:
         callback = request.url_for("oauth_callback", name=name)
         # The provider must see the public https address: the base URI, else RAMEN_PUBLIC_URL, else the request —
@@ -231,7 +234,7 @@ async def oauth_callback(request: Request, name: str):
     user = await request.app.state.accounts.upsert_sso_user(
         email, memberships, super_, provider=name, authoritative=authoritative, provider_id=provider_id
     )
-    return _login_response(request, user)
+    return _login_response(request, user, request.session.pop("ramen_next", "/"))
 
 
 def _provider_id(name: str, info: dict) -> str:

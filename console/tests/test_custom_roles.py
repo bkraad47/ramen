@@ -5,12 +5,16 @@ password and magic-link sign-in."""
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from ramen_console import rbac, roles, toolaccess
+from ramen_console.auth.oauth import OAuthRegistry
 from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 from tests.test_blocked import fake_sync, wait_job  # noqa: F401 - pytest fixtures
+from tests.test_idp_groups import _env
+from tests.test_oauth_flow import FakeIdp
 from tests.test_tool_access import _claims
 
 ROLES_URL = "/api/v1/config/roles"
@@ -102,6 +106,18 @@ def test_a_role_in_use_cannot_be_deleted(demo):
     assert r.status_code == 409 and "tool access" in r.json()["detail"]
     demo.put(TA_URL, json={})
     assert demo.delete(f"{ROLES_URL}/analyst").status_code == 200
+
+
+def test_a_role_a_provider_rule_names_cannot_be_deleted(demo):
+    demo.app.state.oauth = OAuthRegistry.from_env(_env(), transport=httpx.MockTransport(FakeIdp({}).handler))
+    demo.put(f"{ROLES_URL}/analyst", json={"base": "viewer"})
+    rm = "/api/v1/config/auth/role-map/entra"
+    assert demo.put(rm, json={"value": "g-1", "role": "analyst", "groups": ["demo"]}).status_code == 200
+    r = demo.delete(f"{ROLES_URL}/analyst")
+    assert r.status_code == 409 and "role-map rule entra:g-1" in r.json()["detail"], r.text
+    assert demo.put(rm, json={"remove": "g-1"}).status_code == 200
+    assert demo.delete(f"{ROLES_URL}/analyst").status_code == 200
+    assert demo.put(rm, json={"value": "g-1", "role": "analyst"}).status_code == 422, "a deleted role is unknown"
 
 
 def test_custom_role_is_a_membership_a_tool_access_kind_and_a_token_claim(demo):

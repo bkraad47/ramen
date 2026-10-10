@@ -64,7 +64,7 @@ result as claim `groups`, replacing whatever the token said.
 | Provider | Call | Values you can map | Scope added |
 |---|---|---|---|
 | `entra` | Microsoft Graph `GET /v1.0/me/memberOf` (paged) | every group's **object id**; display names too, but only when the app has `GroupMember.Read.All` — with `User.Read` alone Graph returns ids only (verified live) | `User.Read` |
-| `google` | Cloud Identity `groups/-/memberships:searchDirectGroups` for the person's email | every group's email **and** name | `cloud-identity.groups.readonly` |
+| `google` | Cloud Identity `groups/-/memberships:searchDirectGroups` for the person's email | every group's email, its `groups/<id>` resource name and its display name | `cloud-identity.groups.readonly` |
 
 Set `RAMEN_OAUTH_<NAME>_GROUPS=lookup` or choose **Group source** per provider on the Config page. If the lookup
 fails (the API said no, or did not answer in ten seconds) the sign-in fails with `502 could not read your groups

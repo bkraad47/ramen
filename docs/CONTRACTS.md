@@ -537,3 +537,125 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   logs a WARNING `ramen.drift` (digest) and shows red on the group page's Drift card. No automatic rollback.
 - **Not built (D44).** Per-user upstream credentials (tools acting as the person against Google/Microsoft) need a token
   broker and IdP consent in the console; deferred to a minor release.
+
+## 21. v0.7.5 — guardrails in the runtime, identity federation, custom roles (binding)
+Ramen's own design (D45–D48). Nothing here is derived from another product. Every item ships with positive,
+negative and combination tests (the brief's acceptance bar); the combinations are listed at the end.
+
+### 21.1 Runtime on Python 3.12 (D45)
+- `runtime-py` `requires-python = ">=3.12,<3.13"` — 3.12 only, because the flagship guardrails engine (NeMo
+  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim`; CI runtime jobs
+  (`runtime`, `node-conformance`, compose, kind) install 3.12. The console stays on 3.14. `scripts/check_versions.py`
+  fails when a runtime pin and the Dockerfiles disagree.
+
+### 21.2 Guardrails (D46) — `mcp/guardrails.yaml` in the group repo
+```yaml
+engine: nemo            # nemo | policy | none (default none: the file may be absent)
+config: mcp/guardrails  # nemo: a NeMo rails config dir (config.yml, *.co, actions.py); policy: dir holding policy.py
+fail: closed            # closed (default) | open — what a hook error/timeout means
+timeout_s: 10           # per hook call, default 10, max 120
+tools:                  # per-tool opt-in; a tool not listed is never checked
+  word_count: {pre: true, post: true}
+  unit_convert: {pre: true}        # post defaults false
+```
+- Hook points, both inside `Executor.call_tool`: **pre** runs after argument validation and secret substitution and
+  before the tool function (payload: tool name + canonical JSON of the *redacted* arguments — `{{$group.VAR}}`
+  references stay as written, the secret value never reaches an engine); **post** runs after output validation
+  (payload: tool name, the same as-written arguments, and the result text or the canonical JSON of
+  `structuredContent` when present, with every resolved secret value replaced by `***` — the client's copy is untouched).
+- Engines. `nemo`: `ramen_runtime.guardrails.nemo` loads `RailsConfig.from_path(config)` once per `runtime.load` and
+  calls `generate(messages, options={"rails": ["input"]})` for pre (user message = payload, `name` = tool) and
+  `options={"rails": ["output"]}` for post (user = pre payload, assistant = result). Blocked ⇔ an activated rail
+  stopped; the engine's message is the bot message. Importing `nemoguardrails` is the `[nemo]` extra
+  (`ramen-runtime[nemo]`), installed in the worker image; `engine: nemo` without it, or a config that fails to load,
+  is reported in the load result (`errors: [{"package": "guardrails", "reason": "..."}]`), the tools still load, and
+  every opted-in tool answers blocked (`guardrail unavailable: ...`) until a load succeeds — a broken engine never
+  means an unguarded tool, whatever `fail` says (`fail` governs call-time errors only). `policy`: `policy.py` in
+  `config` exports `pre(tool: str, arguments: dict) -> None | str` and/or `post(tool, arguments, result) -> None | str`;
+  a returned string blocks with that message; `None` allows; an exception = hook error (→ `fail`).
+- Verdict. Allowed → the call proceeds unchanged (engines never rewrite). Blocked → the tool result
+  `{"content": [{"type": "text", "text": "guardrail blocked: <pre|post>: <message>"}], "isError": true,
+  "_meta": {"ramen": {"guardrail": {"stage": "pre"|"post", "engine": "nemo"|"policy"}}}}` — a tool-call outcome
+  (§2), not a JSON-RPC error; a post block never returns the tool's output. Hook error/timeout with `fail: closed` →
+  blocked with message `guardrail unavailable: <reason>`; with `fail: open` → the call proceeds and the runtime logs
+  `warn guardrail_error`. Runtime log line per hook: `guardrail tool=<t> stage=<s> verdict=allow|block|error ms=<n>`
+  — never the payload.
+- Node: a result carrying `_meta.ramen.guardrail` is logged with reason `guardrail_pre` / `guardrail_post` (access
+  log, both transports); `_meta` stays on the result for the client. Order on `tools/call`: tool access (C10) first,
+  then node-side argument validation, then the runtime (pre → tool → output schema → post).
+- `runtime.load` result and `Admin/Reload` carry `guardrails: {"engine": "<e>", "fail": "...", "tools": {<tool>: ["pre","post"]}}`
+  (`{"engine": "none", "tools": {}}` when absent); it is NOT part of the manifest hash (C1). The group page's Manifest
+  section shows "Guardrails: nemo · word_count (pre, post), unit_convert (pre)" per zone. Golden cases (C3) run
+  through the hooks like any call: a case whose tool is blocked by a rail fails the gate with the rail's message
+  (that is the point of a test case).
+- LLM-backed rails (`models:` in NeMo's config.yml) take their API keys from `mcp/env.yaml` (0.6.0: exported into the
+  runtime process before load). The demo repo ships deterministic rails (no model, no cost).
+
+### 21.3 Identity federation (D47)
+- **Group source per provider.** `RAMEN_OAUTH_<NAME>_GROUPS = claim` (default, today's behaviour: the role claim is
+  read from the ID token/userinfo) or `lookup`. With `lookup` the callback fetches the person's groups with the
+  access token and injects them as claim `groups` (overriding any token `groups`): provider `entra` → Microsoft Graph
+  `GET https://graph.microsoft.com/v1.0/me/memberOf?$select=id,displayName` (values: every `id`, plus `displayName`
+  when Graph returns it — with `User.Read` alone it returns ids only, verified live 2026-10-10, so rules should name
+  ids; follows `@odata.nextLink`; scope `User.Read` added when absent; add `GroupMember.Read.All` to
+  `RAMEN_OAUTH_ENTRA_SCOPES` to map on display names); provider `google` → Cloud
+  Identity `GET https://cloudidentity.googleapis.com/v1/groups/-/memberships:searchDirectGroups?query=member_key_id=='<email>'`
+  (values: each `groupKey.id` (the group email) and `group` name; scope
+  `https://www.googleapis.com/auth/cloud-identity.groups.readonly` added when absent). Other providers: `lookup` is a
+  startup error. The lookup URL base is overridable (`RAMEN_OAUTH_<NAME>_GROUPS_URL`) so tests use a fake. A lookup
+  failure (non-2xx, timeout 10 s) is a 502 `could not read your groups from <provider>` — nobody is signed in with
+  stale groups. Config page: "Group source" select per provider (store doc `config/auth.groups_source[<provider>]`,
+  env wins only when the doc has no value).
+- **Providers are managed on the Config page (the user, 2026-10-10; D50).** A super admin adds, edits and removes
+  identity providers in the browser: store doc `config/oauth_providers = {"<name>": {issuer, client_id, client_secret,
+  scopes, groups_source}}`, the secret encrypted at rest like SMTP's and never read back;
+  `GET /api/v1/config/oauth-providers` (masked), `PUT /api/v1/config/oauth-providers/{name}` (omit `client_secret` to
+  keep it), `DELETE`; audited `config.oauth_provider`. `RAMEN_OAUTH_<NAME>_*` still works and is shown as source `env`;
+  the store doc wins per provider name. The registry and the login page follow a change at once (no restart). Config
+  page card "Identity providers (Entra ID, Google Workspace)", with the group-source select and the role-mapping rules
+  next to it, so everything about a provider is in one place.
+- **The provider's email is the account (the user, 2026-10-10; D51).** No `email_verified` requirement: the account is
+  the `email` claim (or a `preferred_username` containing `@`); with no email the account is keyed on the provider's
+  stable id (Entra `oid`+`tid`, else `sub`) as `provider_key = "<provider>:<id>"`, shown in place of the email until one
+  arrives; neither → 403. `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is read nowhere. The provider callback is
+  `public_url(request) + /auth/<name>/callback` (base URI → `RAMEN_PUBLIC_URL` → request), never the request scheme alone.
+- **Membership from either side.** A user document carries `idp_memberships` (`{group: role}`, rewritten on every SSO
+  login when the provider has a mapping) and `manual_memberships` (set on the Users page / `PUT|DELETE
+  /groups/{g}/members/{uid}`). Effective `memberships` = `idp_memberships` overlaid by `manual_memberships` (an admin's
+  entry for a group wins, whatever the IdP says; an admin entry absent → the IdP role stands). Super admin via the
+  mapping is `idp_super`; set by hand stays `role: super_admin`. Users page shows the source per membership
+  (`via entra`, `set here`). Documents from before 0.7.5: `memberships` → `manual_memberships`. Negative: a person
+  removed from the IdP group loses that membership at the next login (sessions: epoch bump as today) unless an admin
+  entry exists.
+- **IdP and cloud independent.** Any configured provider works on any adapter; nothing in `cloud/` reads provider
+  settings (test: both providers configured on the local adapter; GCP/AWS adapters' env unchanged).
+
+### 21.4 Custom roles (D48)
+- `config/roles` store doc: `{"<name>": {"base": "group_admin"|"viewer"|"mcp_user", "label": "...", "oauth_only": bool}}`;
+  `GET /api/v1/config/roles`, `PUT /api/v1/config/roles/{name}` (body `{base, label?, oauth_only?}`), `DELETE`
+  (super admin; audited `config.roles`). Name `^[a-z][a-z0-9_]{1,31}$`, not a built-in. Delete → 409 while any user
+  membership, role-mapping rule or tool-access entry uses the name.
+- A custom role is usable wherever a group role is: `memberships` (both sides), role-mapping rules, tool-access kinds.
+  Console authorization uses the **base** (`rbac.can`); the token's `role` claim is the custom name; the worker gets
+  `RAMEN_ROLES` (compact JSON `{name: base}`, deploy-time, every zone). Node: a caller's kind matches a tool-access
+  list when the list names the kind **or its base**; an unknown name with no `RAMEN_ROLES` entry matches nothing
+  (fails closed, as 0.7.2).
+- **Per-role OAuth enforcement.** `oauth_only: true` → a person who holds that role in any group (either side) cannot
+  sign in with a password or a magic link: `/login` answers 403 `This account signs in with <provider list>`; the
+  OAuth AS login step (A2 password MCP users) is the same endpoint, so MCP clients land on the provider too. The
+  break-glass bootstrap admin is exempt (as for mappings). The built-in roles cannot be made `oauth_only`.
+- Config page: a "Roles" card (list, add, remove); the Users page, role-mapping and tool-access selects list custom
+  roles after the built-ins.
+
+### 21.5 Acceptance (combinations, besides each item's positive and negative tests)
+1. NeMo pre rail + tool access on the same tool: a kind that may not call gets `-32003` (access first, no hook run);
+   an allowed kind with a blocked payload gets the guardrail `isError` result; log reasons `tool_denied` vs
+   `guardrail_pre`; both transports.
+2. IdP mapping (fake provider, `lookup` against a fake Graph/Cloud Identity server) → custom role `analyst`
+   (`oauth_only`) → the person's token carries `role: analyst`; the worker lists/calls per a tool-access entry naming
+   `analyst`; the same person's password login is 403; over Streamable HTTP and over the stdio bridge (`--oauth`).
+3. Removed from the IdP group → next login: membership gone, token no longer carries the role, worker denies; an admin
+   `manual_memberships` entry keeps it.
+4. `fail: closed` with the engine broken (`engine: nemo` config dir missing a flow) → every opted-in tool blocked,
+   unlisted tools unaffected; `fail: open` → calls proceed, `guardrail_error` logged.
+5. Golden case on a guarded tool with a payload the rail blocks → deploy gate fails with the rail's message.

@@ -28,7 +28,7 @@ A worker runs two processes with one job each.
   or broken by user code: the gRPC surface, key checking, source-range checking, the blocked-name filter,
   concurrency bounding, deadlines, health and the access log. It is a small, statically linked binary with no
   interpreter and no user code in its address space.
-- **`ramen_runtime` (Python 3.14)** owns everything users write: `pip install`, proto validation, argument
+- **`ramen_runtime` (Python 3.12)** owns everything users write: `pip install`, proto validation, argument
   validation, secret substitution and the call itself.
 
 They talk over newline-delimited JSON-RPC on stdin/stdout ([contract §2](../CONTRACTS.md)) — no socket, no port,

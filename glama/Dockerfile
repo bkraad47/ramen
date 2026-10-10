@@ -9,12 +9,12 @@ COPY node-rs/Cargo.toml node-rs/Cargo.lock node-rs/build.rs ./
 COPY node-rs/src ./src
 RUN cargo build --release && cp target/release/ramen-node /ramen-node
 
-FROM python:3.14-slim
+FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
  && git clone --depth 1 https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \
  && useradd -r -u 10001 -m -d /home/ramen ramen && chown -R ramen:ramen /buckets
 COPY runtime-py /opt/ramen-runtime
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check /opt/ramen-runtime \
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[nemo]' \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 COPY glama/start.sh /usr/local/bin/ramen-stdio

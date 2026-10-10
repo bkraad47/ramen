@@ -29,6 +29,7 @@ oauth:
     issuer: https://login.microsoftonline.com/<tenant>/v2.0
     client_id: ...
     client_secret: ...
+    groups: lookup                           # RAMEN_OAUTH_ENTRA_GROUPS: read groups from Graph at sign-in (0.7.5)
 smtp:
   host: smtp.example.com                     # RAMEN_SMTP_{HOST,PORT,USER,PASSWORD,FROM,TLS}
   from: ramen@example.com
@@ -125,7 +126,9 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_ADMIN_EMAIL`, `RAMEN_ADMIN_PASSWORD` | console | The bootstrap super admin, re-applied on every start. `RAMEN_ADMIN_FORCE_PASSWORD=1` is the break-glass. |
 | `RAMEN_COOKIE_SECURE` | console | `1` on a public console: secure cookies and HSTS. Plain http gets a 301 for GET and a 403 otherwise when a proxy terminated it; the cloud edges have no port 80 at all. |
 | `RAMEN_LOGIN_RATE_LIMIT` | console | Failed sign-ins per address per minute, default 20. |
-| `RAMEN_OAUTH_<NAME>_*` | console | An OIDC provider: issuer, client id and secret, scopes. |
+| `RAMEN_OAUTH_<NAME>_*` | console | An OIDC provider: issuer, client id and secret, scopes. Since 0.7.5 a super admin saves providers on the Config page's *Identity providers* card instead (the page wins over the environment per name); `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is ignored: the provider's email is the account, verified flag or not. |
+| `RAMEN_OAUTH_<NAME>_GROUPS` | console | `claim` (default) or `lookup`: read the person's groups from Microsoft Graph (`entra`) or Cloud Identity (`google`) at sign-in instead of the token (0.7.5). `RAMEN_OAUTH_<NAME>_GROUPS_URL` overrides the API base including its version (`https://graph.microsoft.com/v1.0`, `https://cloudidentity.googleapis.com/v1`), for tests. The Config page's *Group source* wins. |
+| `RAMEN_TOOL_ACCESS`, `RAMEN_ROLES` | worker | Written by the console on deploy: per-tool list/call kinds (0.7.2) and the custom roles with their base (0.7.5), so the node can match a token's role against both. |
 | `RAMEN_SMTP_*` | console | Mail for magic links and warning digests. |
 | `RAMEN_MCP_KEYS`, `RAMEN_ALLOWED_CIDRS`, `RAMEN_ADMIN_KEY`, `RAMEN_BLOCKED` | worker | Written by the console on deploy. Never set by hand in the cloud. |
 | `RAMEN_VERBOSE` | worker | `1` logs full request and response bodies. Toggle per environment on the group page. |

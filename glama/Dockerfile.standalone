@@ -1,20 +1,20 @@
 # Paste-in Dockerfile for Glama's server settings: same image as glama/Dockerfile, but it clones Ramen itself, so it
 # needs no build context. REF pins the release.
 FROM rust:1.98.1-slim-bookworm AS build
-ARG REF=v0.6.23
+ARG REF=v0.7.5
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
  && git clone --depth 1 --branch "$REF" https://github.com/bkraad47/ramen /src
 WORKDIR /src/node-rs
 RUN cargo build --release && cp target/release/ramen-node /ramen-node
 
-FROM python:3.14-slim
+FROM python:3.12-slim
 COPY --from=build /src/runtime-py /opt/ramen-runtime
 COPY --from=build /src/glama/start.sh /usr/local/bin/ramen-stdio
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
  && git clone --depth 1 https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \
  && useradd -r -u 10001 -m -d /home/ramen ramen && chown -R ramen:ramen /buckets \
- && python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check /opt/ramen-runtime \
+ && python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[nemo]' \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
 USER ramen
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1

@@ -1,0 +1,9 @@
+# CONTRACTS §21.2 fixture: NeMo rails, deterministic (no model), fail closed.
+engine: nemo
+config: mcp/guardrails
+fail: closed
+timeout_s: 10
+tools:
+  word_count: {pre: true, post: true}
+  echo_tool: {pre: true, post: true}
+  demo_calculator_tool: {pre: true}

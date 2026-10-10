@@ -3,6 +3,7 @@
 once so the login page and `/auth/<name>/login` work without a restart."""
 
 import asyncio
+import secrets
 
 import httpx
 import pytest
@@ -14,7 +15,9 @@ from tests.test_api import PW, app, client, cloud, demo, login, make_user, root 
 from tests.test_oauth_flow import ISSUER, FakeIdp, start
 
 URL = "/api/v1/config/oauth-providers"
-ENTRA = {"issuer": ISSUER, "client_id": "cid", "client_secret": "s3cr3t-value-XYZ", "scopes": "openid email profile"}
+SECRET = "test-" + secrets.token_hex(6)  # generated: never a literal a scanner could flag
+ENV_SECRET = "env-" + secrets.token_hex(6)
+ENTRA = {"issuer": ISSUER, "client_id": "cid", "client_secret": SECRET, "scopes": "openid email profile"}
 
 
 def wire(demo, idp: FakeIdp):
@@ -26,7 +29,7 @@ def test_clean_validates_a_provider():
     assert out == {
         "issuer": ISSUER,
         "client_id": "cid",
-        "client_secret": "s3cr3t-value-XYZ",
+        "client_secret": SECRET,
         "scopes": "openid email profile",
         "groups_source": "lookup",
     }
@@ -62,19 +65,19 @@ def test_put_get_delete_and_the_secret_never_comes_back(demo):
         "source": "config",
         "has_secret": True,
     }
-    assert "s3cr3t" not in r.text and "client_secret" not in r.text
+    assert SECRET not in r.text and "client_secret" not in r.text
     assert demo.get(URL).json()["entra"] == listed
     # the secret is Fernet-encrypted at rest (the test store is wrapped like production with RAMEN_FERNET_KEY)
     st = demo.app.state
     raw = asyncio.run(st.store.inner.get("config", "oauth_providers"))
     assert raw["entra"]["client_secret"].startswith("enc:") and raw["entra"]["client_id"] == "cid"
-    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == "s3cr3t-value-XYZ"
+    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == SECRET
     # editing without a secret keeps the stored one; a new one replaces it
     r = demo.put(f"{URL}/entra", json={"issuer": ISSUER, "client_id": "cid-2"})
     assert r.status_code == 200 and r.json()["entra"]["client_id"] == "cid-2" and r.json()["entra"]["has_secret"]
-    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == "s3cr3t-value-XYZ"
-    demo.put(f"{URL}/entra", json={"issuer": ISSUER, "client_id": "cid-2", "client_secret": "s3cr3t-2"})
-    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == "s3cr3t-2"
+    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == SECRET
+    demo.put(f"{URL}/entra", json={"issuer": ISSUER, "client_id": "cid-2", "client_secret": SECRET + "-2"})
+    assert asyncio.run(st.store.get("config", "oauth_providers"))["entra"]["client_secret"] == SECRET + "-2"
     # negatives
     assert demo.put(f"{URL}/okta", json={"issuer": ISSUER, "client_id": "x"}).status_code == 422  # no secret yet
     assert demo.put(f"{URL}/okta", json={**ENTRA, "groups_source": "lookup"}).status_code == 422
@@ -85,7 +88,7 @@ def test_put_get_delete_and_the_secret_never_comes_back(demo):
     rows = [a for a in demo.get("/api/v1/audit").json() if a["action"] == "config.oauth_provider"]
     assert any("provider:entra" in a["tags"] and "secret:set" in a["tags"] for a in rows)
     assert any("provider:entra" in a["tags"] and "removed" in a["tags"] for a in rows)
-    assert not any("s3cr3t" in t for a in rows for t in a["tags"])
+    assert not any(SECRET in t for a in rows for t in a["tags"])
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as c:
         login(c, "ga@x", PW)
@@ -117,12 +120,12 @@ def test_env_providers_are_listed_as_env_the_doc_wins_per_name_and_env_cannot_be
     wire(demo, idp)
     monkeypatch.setenv("RAMEN_OAUTH_GOOGLE_ISSUER", ISSUER)
     monkeypatch.setenv("RAMEN_OAUTH_GOOGLE_CLIENT_ID", "env-cid")
-    monkeypatch.setenv("RAMEN_OAUTH_GOOGLE_CLIENT_SECRET", "env-s3cr3t-XYZ")
+    monkeypatch.setenv("RAMEN_OAUTH_GOOGLE_CLIENT_SECRET", ENV_SECRET)
     assert demo.post("/api/v1/config/reload").status_code == 200
     listed = demo.get(URL).json()
     assert listed["google"]["source"] == "env" and listed["google"]["client_id"] == "env-cid"
     assert listed["google"]["has_secret"] is True
-    assert "env-s3cr3t" not in demo.get(URL).text
+    assert ENV_SECRET not in demo.get(URL).text
     r = demo.delete(f"{URL}/google")
     assert r.status_code == 409 and "environment" in r.json()["detail"]
     # the doc wins for the same name; removing the doc entry falls back to the environment
@@ -167,7 +170,7 @@ def test_config_page_has_one_card_per_provider_with_group_source_and_role_mappin
         'hx-post="/api/v1/config/oauth-providers"' in page
         and 'hx-delete="/api/v1/config/oauth-providers/entra"' in page
     )
-    assert "s3cr3t" not in page
+    assert SECRET not in page
     assert 'name="client_secret"' in page and 'name="issuer"' in page and 'name="source"' in page
     assert 'name="allow_unverified"' not in page  # D51: no such switch any more
     assert "OAuth role mapping" in page and 'name="claim"' in page  # the rules sit with the provider

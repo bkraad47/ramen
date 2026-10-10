@@ -1,7 +1,7 @@
 """OAuth 2.1 authorization-server routes (CONTRACTS §16.3): discovery, consent, code exchange and refresh."""
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ..audit import note
 from ..auth import csrf
@@ -41,6 +41,28 @@ async def authorize_page(request: Request, p: Principal = Depends(viewer)):
     )
 
 
+def _back_to_client(request: Request, target: str):
+    """Hand the browser to the client's redirect URI. A `303` is right for a web client and for anything that follows
+    redirects itself, but browsers in 2026 drop a redirect from a public https page to a loopback `http://` address
+    (Chromium: the form POST ends `ERR_ABORTED`, the page never moves), which is exactly where Claude Code, the bridge
+    and every RFC 8252 native client listen. A script-driven navigation from the page is still allowed, so a browser
+    form submission (`Sec-Fetch-Mode: navigate`) to a loopback target gets a page that navigates itself; programmatic
+    callers keep the `303` (found by the 0.7.5 live Entra run on GKE)."""
+    from urllib.parse import urlsplit
+
+    browser = request.headers.get("sec-fetch-mode") == "navigate"
+    if not browser or urlsplit(target).hostname not in ("127.0.0.1", "localhost", "::1"):
+        return RedirectResponse(target, 303)
+    safe = target.replace("\\", "\\\\").replace("'", "\\'").replace("<", "%3C").replace(">", "%3E")
+    body = (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Returning to your application</title>"
+        f"</head><body style='font-family:sans-serif'><p>Returning to your application… "
+        f"<a href='{safe}'>continue</a> if nothing happens.</p>"
+        f"<script>location.replace('{safe}')</script></body></html>"
+    )
+    return HTMLResponse(body, headers={"Cache-Control": "no-store"})
+
+
 @r.post("/oauth/authorize")
 async def authorize_decide(
     request: Request,
@@ -55,10 +77,10 @@ async def authorize_decide(
     params = {"state": a["state"]} if a["state"] else {}
     if decision != "allow":
         note(request, "oauth.authorize", a["scope"], tags + ["decision:deny"])
-        return RedirectResponse(with_params(a["redirect_uri"], {**params, "error": "access_denied"}), 303)
+        return _back_to_client(request, with_params(a["redirect_uri"], {**params, "error": "access_denied"}))
     code = await server(request).issue_code(p, a)
     note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"])
-    return RedirectResponse(with_params(a["redirect_uri"], {**params, "code": code}), 303)
+    return _back_to_client(request, with_params(a["redirect_uri"], {**params, "code": code}))
 
 
 @r.post("/oauth/token")

@@ -13,8 +13,15 @@
 {% for name, cr in custom_roles().items() %}<tr><th><code>{{ name }}</code> <span class="muted">{{ cr.label }}</span></th><td>{{ role_label(cr.base) }}</td><td>{{ 'yes' if cr.oauth_only else 'no' }}</td>
 <td><form class="inline" hx-delete="{{ base }}/api/v1/config/roles/{{ name }}" hx-confirm="Remove the role {{ name }}?" hx-swap="none"><button class="act danger">Remove role</button></form></td></tr>
 {% else %}<tr><td colspan="4" class="muted">No custom roles</td></tr>{% endfor %}
-<tr><th>Add role</th><td colspan="2"><form class="inline controls" id="new-role" hx-post="{{ base }}/api/v1/config/roles" hx-ext="json" hx-swap="none"><label>Name<input name="name" required pattern="[a-z][a-z0-9_]{1,31}" placeholder="analyst"></label><label>Label<input name="label" placeholder="Analyst"></label><label>Base<select name="base"><option value="mcp_user">MCP User</option><option value="viewer">Viewer</option><option value="group_admin">Group Admin</option></select></label><label>OAuth only<select name="oauth_only"><option value="false">no</option><option value="true">yes</option></select></label></form></td>
-<td><button class="act" form="new-role">Add role</button></td></tr></table></div>
+</table>
+<h3>Add a role</h3>
+<form id="new-role" hx-post="{{ base }}/api/v1/config/roles" hx-ext="json" hx-swap="none"><table class="formtable">
+<tr><th><label for="nr-name">Name</label></th><td><input id="nr-name" name="name" required pattern="[a-z][a-z0-9_]{1,31}" placeholder="analyst"></td><td class="muted">lowercase a–z, 0–9, _; what tokens and tool access use</td></tr>
+<tr><th><label for="nr-label">Label</label></th><td><input id="nr-label" name="label" placeholder="Analyst"></td><td class="muted">how it is shown</td></tr>
+<tr><th><label for="nr-base">Base</label></th><td><select id="nr-base" name="base"><option value="mcp_user">MCP User</option><option value="viewer">Viewer</option><option value="group_admin">Group Admin</option></select></td><td class="muted">what it may do in the console</td></tr>
+<tr><th><label for="nr-oauth">OAuth only</label></th><td><select id="nr-oauth" name="oauth_only"><option value="false">no</option><option value="true">yes</option></select></td><td class="muted">yes: people holding it must sign in through a provider</td></tr>
+<tr><th></th><td><button class="act" type="submit">Add role</button></td><td></td></tr>
+</table></form></div>
 <div class="card"><h2 style="margin-top:0">Identity providers (Entra ID, Google Workspace)</h2><p class="muted">Sign-in providers, set here or by <code>RAMEN_OAUTH_&lt;NAME&gt;_*</code> in the environment (a provider set here replaces the environment's of the same name). Name them <code>entra</code> or <code>google</code> to get group lookup at sign-in; any other OpenID Connect issuer works with the groups claim. The client secret is write-only and encrypted at rest. A person signs in under the email the provider returns; without one, under the provider's stable id. Changes apply at once — the login page shows one button per provider.</p>
 <table><tr><th>Provider</th><th>Issuer</th><th>Client id</th><th>Set by</th><th>Secret</th><th>Group source</th><th></th></tr>
 {% for name, pd in provider_details.items() %}<tr><td><code>{{ name }}</code></td><td>{{ pd.issuer }}</td><td><code>{{ pd.client_id }}</code></td><td>{{ 'Config page' if pd.source == 'config' else 'environment' }}</td><td>{{ 'set' if pd.has_secret else 'missing' }}</td><td>{{ pd.groups_source }}</td>

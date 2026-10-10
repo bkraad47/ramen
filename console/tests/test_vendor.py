@@ -20,7 +20,7 @@ def test_htmx_is_the_unminified_2_0_4_build_and_vendor_md_matches():
 
 def test_pages_load_the_readable_build_and_the_json_extension_still_works(demo):
     page = demo.get("/config").text
-    assert '/static/htmx.js"' in page and "htmx.min.js" not in page
+    assert '/static/htmx.js?v=' in page and "htmx.min.js" not in page
     assert demo.get("/static/htmx.js").status_code == 200
     assert demo.get("/static/htmx.min.js").status_code == 404
     assert "htmx.defineExtension('json'" in page  # base.html's extension rides on the public htmx API

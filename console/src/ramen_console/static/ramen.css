@@ -102,3 +102,10 @@ table.formtable td.muted{font-size:12px}
 table.formtable td .act{width:180px}
 .settings table.formtable input,.settings table.formtable select{width:100%;font-size:12px}
 .settings table.formtable th{width:7.5em}
+/* 0.7.5: the sign-in card is one column of fixed-width rows; nothing drifts with label or button text length */
+.login .signin-form{display:flex;flex-direction:column;gap:12px;margin:0}
+.login .field{display:flex;flex-direction:column;gap:4px;width:100%}
+.login .field label{font-size:12px;color:var(--muted)}
+.login .field input{width:100%;box-sizing:border-box;margin:0}
+.login .signin-link{display:block;text-align:center;font-size:12px;color:var(--muted)}
+.login .signin-magic{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}

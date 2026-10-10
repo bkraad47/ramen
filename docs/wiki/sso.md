@@ -24,7 +24,14 @@ anywhere. The provider is a few environment variables on the console.
 | Issuer | `https://login.microsoftonline.com/<tenant id>/v2.0` | `https://accounts.google.com` |
 | Groups | `groups` claim (Token configuration → add groups claim), **or** the lookup below | the lookup below (Google puts no groups in the ID token); or scope on `hd`, the hosted domain |
 
-Console environment, or the config file, for each provider name (`entra`, `google`):
+Then, as a super admin, **Config → Identity providers (Entra ID, Google Workspace)**: pick the name (`entra`,
+`google`, or your own for any other OIDC provider), paste the issuer, client id and client secret, choose the group
+source, save. The secret is encrypted in the store and never shown again; the login page shows the new button at
+once, no restart. `GET|PUT|DELETE /api/v1/config/oauth-providers/{name}` is the same thing for scripts; every change
+is audited as `config.oauth_provider`.
+
+The environment still works, for installs that keep secrets out of the store, and shows on the card as source `env`
+(a provider saved on the page wins over the environment of the same name):
 
 ```sh
 RAMEN_OAUTH_<NAME>_ISSUER=<issuer>
@@ -34,8 +41,13 @@ RAMEN_OAUTH_<NAME>_SCOPES=openid email profile       # optional; the lookup adds
 RAMEN_OAUTH_<NAME>_GROUPS=lookup                     # 0.7.5: claim (default) | lookup
 ```
 
-The login page shows one button per configured provider. The provider must mark the email as verified;
-`RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED=1` relaxes that.
+**Who the person is.** The account is the email the provider returns (`email`, or a `preferred_username` that is one);
+every MCP call then carries that account in the worker's log line, which is the accountability Ramen needs. Ramen
+does not ask the provider to swear the email is verified: Entra ID never sends `email_verified`, and 0.7.5's first
+live sign-in was refused for exactly that until the rule changed. A provider that returns no email at all gets an
+account keyed on its stable id (Entra `oid` in the tenant, Google `sub`), shown as `<provider>:<id>` until an email
+arrives. The console's public address must be the https one people use (Config → Public address, or
+`RAMEN_PUBLIC_URL`), or the provider is sent an `http://` callback and refuses it (Entra: `AADSTS50011`).
 
 ## 2. Where the groups come from
 
@@ -102,7 +114,9 @@ The built-in roles cannot be made OAuth-only; make a custom one on the base you 
 
 | Symptom | Likely cause |
 |---|---|
-| The provider's button does not appear on the login page | The four `RAMEN_OAUTH_<NAME>_*` variables are not all set, so the provider was not configured |
+| The provider's button does not appear on the login page | The provider was not saved on the Config page, or the `RAMEN_OAUTH_<NAME>_*` variables are not all set |
+| Microsoft says `AADSTS50011`, redirect URI `http://…` does not match | The console does not know its public https address: set Config → Public address, or `RAMEN_PUBLIC_URL`, to the URL people use, and register that `https://<console>/auth/entra/callback` on the app |
+| Sign-in works but the account shows as `entra:<id>` instead of an email | The provider returned no email claim; add the `email` optional claim on the app registration (Entra) and the account adopts it at the next sign-in |
 | `502 could not read your groups from entra` | Graph refused the token: the app registration lacks `User.Read`, or admin consent is required in your tenant. Check the audit line's tags |
 | Sign-in succeeds but the person sees only their own account page | Their groups matched no rule (ids and display names both work with the lookup; check the spelling) |
 | A rule demoted everyone, including you | Start the console with `RAMEN_ADMIN_FORCE_PASSWORD=1`, sign in as the bootstrap super admin, fix the rules |

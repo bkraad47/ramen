@@ -607,12 +607,17 @@ tools:                  # per-tool opt-in; a tool not listed is never checked
   env wins only when the doc has no value).
 - **Providers are managed on the Config page (the user, 2026-10-10; D50).** A super admin adds, edits and removes
   identity providers in the browser: store doc `config/oauth_providers = {"<name>": {issuer, client_id, client_secret,
-  scopes, groups_source, allow_unverified}}`, the secret encrypted at rest like SMTP's and never read back;
+  scopes, groups_source}}`, the secret encrypted at rest like SMTP's and never read back;
   `GET /api/v1/config/oauth-providers` (masked), `PUT /api/v1/config/oauth-providers/{name}` (omit `client_secret` to
   keep it), `DELETE`; audited `config.oauth_provider`. `RAMEN_OAUTH_<NAME>_*` still works and is shown as source `env`;
   the store doc wins per provider name. The registry and the login page follow a change at once (no restart). Config
   page card "Identity providers (Entra ID, Google Workspace)", with the group-source select and the role-mapping rules
   next to it, so everything about a provider is in one place.
+- **The provider's email is the account (the user, 2026-10-10; D51).** No `email_verified` requirement: the account is
+  the `email` claim (or a `preferred_username` containing `@`); with no email the account is keyed on the provider's
+  stable id (Entra `oid`+`tid`, else `sub`) as `provider_key = "<provider>:<id>"`, shown in place of the email until one
+  arrives; neither → 403. `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is read nowhere. The provider callback is
+  `public_url(request) + /auth/<name>/callback` (base URI → `RAMEN_PUBLIC_URL` → request), never the request scheme alone.
 - **Membership from either side.** A user document carries `idp_memberships` (`{group: role}`, rewritten on every SSO
   login when the provider has a mapping) and `manual_memberships` (set on the Users page / `PUT|DELETE
   /groups/{g}/members/{uid}`). Effective `memberships` = `idp_memberships` overlaid by `manual_memberships` (an admin's

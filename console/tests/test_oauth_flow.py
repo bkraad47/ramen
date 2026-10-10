@@ -84,7 +84,7 @@ def start(client: TestClient, idp: FakeIdp, name="idp") -> str:
     assert r.status_code == 302, r.text
     q = parse_qs(urlsplit(r.headers["location"]).query)
     assert r.headers["location"].startswith(f"{ISSUER}/authorize?") and q["client_id"] == ["cid"]
-    assert q["redirect_uri"] == ["http://testserver/auth/idp/callback"] and q["response_type"] == ["code"]
+    assert q["redirect_uri"] == [f"http://testserver/auth/{name}/callback"] and q["response_type"] == ["code"]
     idp.nonce = q["nonce"][0]  # openid is always requested (SEC-06), so a nonce is always issued and verified
     assert q["code_challenge_method"] == ["S256"] and len(q["code_challenge"][0]) >= 43  # PKCE
     idp.challenge = q["code_challenge"][0]

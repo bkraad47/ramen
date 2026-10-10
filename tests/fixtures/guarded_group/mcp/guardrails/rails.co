@@ -1,0 +1,14 @@
+define flow check blocked words
+  $blocked = execute check_blocked_words
+  if $blocked
+    bot refuse to respond
+    stop
+
+define flow check output words
+  $blocked = execute check_output_words
+  if $blocked
+    bot refuse to respond
+    stop
+
+define bot refuse to respond
+  "blocked by policy"

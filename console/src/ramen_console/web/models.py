@@ -198,6 +198,22 @@ class RoleMapChange(ListFields):
     remove: str | None = None
 
 
+class ProviderIn(BaseModel):
+    """D50: an identity provider set on the Config page. `client_secret` omitted = keep the stored one."""
+
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str | None = None
+    scopes: str | None = None
+    groups_source: str | None = None
+
+
+class ProviderCreate(ProviderIn):
+    """The Config page's form: the same, with the name in the body."""
+
+    name: str
+
+
 class GroupsSource(BaseModel):
     """§21.3: where a provider's groups come from — `claim` (the ID token / userinfo) or `lookup` (its API)."""
 

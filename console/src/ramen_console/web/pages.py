@@ -6,6 +6,7 @@ from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolac
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
+from ..auth import providers as providers_mod
 from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
@@ -262,6 +263,7 @@ async def config(request: Request, p: Principal = Depends(super_)):
         config_file=os.environ.get("RAMEN_CONFIG"),
         rules=rules,
         providers=request.app.state.oauth.providers(),
+        provider_details=await providers_mod.describe(store),  # D50
         auth=await auth_settings(request),
         oauth_clients=await request.app.state.oauth_server.clients(),
         mail=request.app.state.mailer.backend,

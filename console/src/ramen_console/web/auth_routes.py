@@ -1,5 +1,3 @@
-import os
-
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
@@ -199,12 +197,16 @@ async def oauth_callback(request: Request, name: str):
     info = dict(token.get("userinfo") or {})
     if not info.get("email"):
         info = dict(await client.userinfo(token=token))
-    email = (info.get("email") or "").strip().lower()
+    email = (info.get("email") or info.get("preferred_username") or "").strip().lower()
+    if "@" not in email:
+        email = ""
+    # D51: an email (verified or not — Entra never says) identifies the person; without one, the provider's stable id
+    provider_id = _provider_id(name, info)
+    if not email and not provider_id:
+        raise ApiError(403, "The provider returned neither an email nor a stable subject")
+    who = email or f"{name}:{provider_id}"
     tags = [f"provider:{name}"]
-    note(request, "login.oauth", email or "-", tags, user=email or "-")
-    trusted = os.environ.get(f"RAMEN_OAUTH_{name.upper()}_ALLOW_UNVERIFIED", "0") == "1"
-    if not email or (info.get("email_verified") is not True and not trusted):
-        raise ApiError(403, "The provider did not return a verified email")
+    note(request, "login.oauth", who, tags, user=who)
     auth = await auth_settings(request)
     if auth.source_of(name) == "lookup":  # §21.3: the provider's API, not the token, says which groups
         from ..auth import groups
@@ -227,9 +229,16 @@ async def oauth_callback(request: Request, name: str):
     # the bootstrap super admin is the break-glass account: a provider's rules never demote it
     authoritative = auth.has_mapping(name) and email != auth.admin_email
     user = await request.app.state.accounts.upsert_sso_user(
-        email, memberships, super_, provider=name, authoritative=authoritative
+        email, memberships, super_, provider=name, authoritative=authoritative, provider_id=provider_id
     )
     return _login_response(request, user)
+
+
+def _provider_id(name: str, info: dict) -> str:
+    """D51: the provider's stable id for the person — Entra `oid` within `tid`, Google and plain OIDC `sub`."""
+    if info.get("oid"):
+        return f"{info.get('tid') or '-'}/{info['oid']}"
+    return str(info.get("sub") or "")
 
 
 for path in ALIASES:

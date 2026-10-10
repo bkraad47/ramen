@@ -122,22 +122,27 @@ def test_worker_pods_are_labelled_for_external_log_monitors():
             assert labels.get("ramen.io/group") == "demo" and labels.get("ramen.io/zone") == "a"
 
 
-def test_oidc_requires_verified_email(monkeypatch):
+def test_oidc_signs_in_an_email_without_email_verified_and_refuses_an_anonymous_token(monkeypatch):
+    """D51 (0.7.5): Entra never sends `email_verified`; an email identifies the person, a stable id otherwise."""
     with _app(
         monkeypatch,
         RAMEN_OAUTH_OIDC_CLIENT_ID="cid",
         RAMEN_OAUTH_OIDC_CLIENT_SECRET="sec",
         RAMEN_OAUTH_OIDC_METADATA_URL="https://issuer/.well-known/openid-configuration",
     ) as c:
+        answers = {"userinfo": {"email": "sso@x"}}  # no email_verified claim
 
         class FakeClient:
             async def authorize_access_token(self, request):
-                return {"userinfo": {"email": "sso@x"}}  # no email_verified claim
+                return answers
+
+            async def userinfo(self, token):
+                return answers["userinfo"]
 
         monkeypatch.setattr(c.app.state.oauth, "client", lambda name: FakeClient() if name == "oidc" else None)
-        assert c.get("/auth/oidc/callback?code=x&state=y", follow_redirects=False).status_code == 403
-        monkeypatch.setenv("RAMEN_OAUTH_OIDC_ALLOW_UNVERIFIED", "1")
         assert c.get("/auth/oidc/callback?code=x&state=y", follow_redirects=False).status_code == 303
+        answers["userinfo"] = {"name": "anonymous"}  # neither email nor sub: nobody to attribute calls to
+        assert c.get("/auth/oidc/callback?code=x&state=y", follow_redirects=False).status_code == 403
 
 
 def test_oauth_token_endpoint_is_rate_limited_and_authorize_queries_are_redacted():

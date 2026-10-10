@@ -17,7 +17,7 @@ jobs:
       - name: ruff (ruff.toml) on console, runtime-py, tests, scripts, deploy/local
         run: |
           for d in console tests; do (cd "$d" && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .); done
-          (cd runtime-py && UV_PYTHON=$RUNTIME_PYTHON uv sync --all-extras && uv run ruff check . && uv run ruff format --check .)
+          (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .)
           (cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local)
 
   versions:
@@ -93,7 +93,7 @@ jobs:
       - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
       - name: runtime-py venv (sidecar, Python 3.12 — D45)
         run: |
-          (cd runtime-py && UV_PYTHON=$RUNTIME_PYTHON uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
+          (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
           echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
       - name: "install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)"
         run: |
@@ -184,7 +184,7 @@ jobs:
       - name: Runtime venv for sidecar conformance (Python 3.12 — D45)
         run: |
           if [ -f runtime-py/pyproject.toml ]; then
-            (cd runtime-py && UV_PYTHON=$RUNTIME_PYTHON uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
+            (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv pip install pip)   # deps.py shells out to `python -m pip`; a uv-managed venv has no pip by default (I13)
             echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
           fi
       - name: "install ramen-mcp-bridge from PyPI (v0.5.7: no longer in runtime-py, own repo/package)"

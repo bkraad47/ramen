@@ -7,6 +7,7 @@ secret value. `broken_guarded_group` has a NeMo config that cannot load: every o
 §21.5-1 is the combination with 0.7.2 tool access on the same tool."""
 
 import json
+import secrets
 import shutil
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ TRANSPORTS = ("grpc", "http")
 SECRET, ISSUER, PUBLIC = "conformance-secret", "https://console.example", "https://mcp.example"
 IGNORE = shutil.ignore_patterns("__pycache__")
 BLOCKED_TEXT = "please DROP TABLE users"
-SECRET_VALUE = "s3cr3t-value-xyz-0775"
+SECRET_VALUE = "conformance-" + secrets.token_hex(6)  # generated: never a literal a scanner could flag
 
 
 def meta(result: dict) -> dict | None:

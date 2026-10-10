@@ -14,6 +14,7 @@ from ramen_console.auth.oauth import OAuthRegistry
 from ramen_console.auth.settings import AuthSettings
 from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 from tests.test_oauth_flow import ISSUER, FakeIdp, start
+from tests.test_oauth_server import consent, exchange, pkce, refresh, register
 from tests.test_tool_access import _claims
 
 GRAPH = "https://graph.test/v1.0"
@@ -235,6 +236,35 @@ def test_memberships_from_both_sides_and_removal_from_the_idp_group(demo):
     assert demo.get("/api/v1/groups/demo/members").json() == [
         m for m in demo.get("/api/v1/groups/demo/members").json() if m["email"] != "dev@corp.test"
     ]
+
+
+def test_removed_from_the_idp_group_a_refresh_token_from_before_dies_at_the_next_sign_in(demo):
+    """Brief negative + §21.5-3: the MCP client's refresh token minted while the person was in the group stops minting
+    once a sign-in has seen them removed (epoch bump), and the person can no longer consent for that group."""
+    idp, graph = FakeIdp({"email": "dev@corp.test", "email_verified": True}), FakeGraph()
+    _wire(demo, idp, graph)
+    demo.put("/api/v1/config/auth/role-map/entra", json={"claim": "groups"})
+    demo.put("/api/v1/config/auth/role-map/entra", json={"value": "g-1", "role": "mcp_user", "groups": ["demo"]})
+    cid = register(demo)
+    with TestClient(demo.app) as person:
+        state = start(person, idp, "entra")
+        assert (
+            person.get(f"/auth/entra/callback?code=good-code&state={state}", follow_redirects=False).status_code == 303
+        )
+        verifier, challenge = pkce()
+        tok = exchange(demo, cid, consent(person, cid, challenge), verifier).json()
+    assert tok["access_token"] and tok["refresh_token"]
+    tok = refresh(demo, cid, tok["refresh_token"]).json()  # still in the group: the client renews silently
+    assert "refresh_token" in tok, tok
+    demo.app.state.groups_transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"value": []}))
+    r, me = _sso(demo, idp)
+    assert r.status_code == 303 and me["memberships"] == {}
+    r = refresh(demo, cid, tok["refresh_token"])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant", r.text
+    assert any(
+        a["action"] == "oauth.denied" and "reason:sessions_revoked" in a["tags"]
+        for a in demo.get("/api/v1/audit").json()
+    )
 
 
 def test_old_documents_migrate_their_memberships_to_the_manual_side(demo):

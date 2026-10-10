@@ -3,11 +3,14 @@ Graph / Google Cloud Identity), memberships from both sides (`idp_memberships` r
 `manual_memberships` set in the console and winning per group), and the two providers side by side on any adapter."""
 
 import asyncio
+import re
+from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import ramen_console.cloud as cloud_pkg
 from ramen_console import rbac
 from ramen_console.auth import groups
 from ramen_console.auth.oauth import OAuthRegistry
@@ -357,3 +360,16 @@ def test_both_providers_configured_on_the_local_adapter(demo):
     assert demo.app.state.oauth.providers() == ["entra", "google"]
     # nothing cloud-specific: the adapter is `local` here, and the config page lists both the same way
     assert demo.get("/api/v1/config/auth").json()["providers"] == ["entra", "google"]
+
+
+def test_no_cloud_adapter_reads_identity_provider_settings():
+    """§21.3 "IdP and cloud independent": provider settings live in the console's auth layer only, so Entra works on GKE
+    and EKS and Google Workspace on either; the adapters' worker env carries the console's own issuer, nothing else."""
+    marker = re.compile(r"RAMEN_OAUTH_(?!ISSUER\b)|oauth_providers|groups_source|ROLE_MAP|ROLE_CLAIM|auth\.groups")
+    hits = [
+        f"{p.name}:{n}"
+        for p in sorted(Path(cloud_pkg.__file__).parent.glob("*.py"))
+        for n, line in enumerate(p.read_text().splitlines(), 1)
+        if marker.search(line)
+    ]
+    assert hits == [], hits

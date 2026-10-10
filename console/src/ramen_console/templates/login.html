@@ -4,8 +4,8 @@
 {% if auth.password_login or auth.force_password %}<form method="post" action="{{ base }}/login"><input type="hidden" name="next" value="{{ next }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 {% if not auth.password_login %}<p class="muted">Password login is disabled; break-glass for the bootstrap super admin only.</p>{% endif %}
 <label>Email<input name="email" type="email" required autofocus></label><br>
-<label>Password<input name="password" type="password" required></label><br><br><button type="submit">Sign in</button>
+<label>Password<input name="password" type="password" required></label><br><br><button class="signin" type="submit">Sign in</button>
 {% if mail %} <a class="btn ghost sm" href="{{ base }}/auth/reset">Forgot password?</a>{% endif %}</form>{% endif %}
-{% for prov in providers %}<p><a class="btn ghost" href="{{ base }}/auth/{{ prov }}/login?next={{ next|urlencode }}">Sign in with {{ prov }}</a></p>{% endfor %}
+{% if providers %}<div class="signin-providers">{% for prov in providers %}<a class="btn ghost signin" href="{{ base }}/auth/{{ prov }}/login?next={{ next|urlencode }}">Sign in with {{ provider_label(prov) }}</a>{% endfor %}</div>{% endif %}
 {% if auth.magic_link and mail %}<form method="post" action="{{ base }}/auth/magic"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>Email me a sign-in link<input name="email" type="email" required></label> <button class="ghost" type="submit">Send link</button></form>{% endif %}
 </div></body></html>

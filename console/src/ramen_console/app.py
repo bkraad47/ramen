@@ -102,6 +102,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
+        provider_label=lambda n: {"entra": "Microsoft Entra ID", "google": "Google"}.get(n, n),
         custom_roles=rbac.custom_roles,  # D48: templates list custom roles after the built-ins
         password_rule=f"Use {PASSWORD_RULE}.",
         u=baseuri.u,

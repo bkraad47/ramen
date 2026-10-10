@@ -60,7 +60,7 @@ result as claim `groups`, replacing whatever the token said.
 
 | Provider | Call | Values you can map | Scope added |
 |---|---|---|---|
-| `entra` | Microsoft Graph `GET /v1.0/me/memberOf` (paged) | every group's object id **and** its display name | `User.Read` |
+| `entra` | Microsoft Graph `GET /v1.0/me/memberOf` (paged) | every group's **object id**; display names too, but only when the app has `GroupMember.Read.All` — with `User.Read` alone Graph returns ids only (verified live) | `User.Read` |
 | `google` | Cloud Identity `groups/-/memberships:searchDirectGroups` for the person's email | every group's email **and** name | `cloud-identity.groups.readonly` |
 
 Set `RAMEN_OAUTH_<NAME>_GROUPS=lookup` or choose **Group source** per provider on the Config page. If the lookup
@@ -78,8 +78,8 @@ rule makes the person a super admin. Custom roles appear in the role list after 
 
 | Claim value | Role | Groups |
 |---|---|---|
-| `AD-Platform-Admins` (an Entra display name) or `0b7f…` (its id) | `group_admin` | `demo, analytics` |
-| `AD-Analysts` | `analyst` (a custom role) | `analytics` |
+| `9edc3dc1-…` (an Entra group's object id; the display name works only with `GroupMember.Read.All`) | `group_admin` | `demo, analytics` |
+| `de27d6f1-…` | `analyst` (a custom role) | `analytics` |
 | `mcp-users@example.com` (a Google group) | `mcp_user` | `demo` |
 
 Scoping Google Workspace without groups: claim `hd`, value `example.com`, role `mcp_user` in `demo` lets everyone in

@@ -32,8 +32,14 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   sign-in; now the email the provider returns is the account (the worker's log line names it on every MCP call), and a
   provider that returns no email gets an account keyed on its stable id (`entra:<oid>`, adopting the email when one
   arrives). `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is ignored. The provider callback is built from the console's public
-  address, so a TLS-terminating load balancer no longer makes Entra answer `AADSTS50011`. All three found by the first
-  live Entra sign-in on GKE and EKS.
+  address, so a TLS-terminating load balancer no longer makes Entra answer `AADSTS50011`. The provider button carries
+  `next`, so a person sent by an MCP client returns to its consent page. All found by the first live Entra sign-in on
+  GKE and EKS.
+- **Native MCP clients get their code again.** Browsers now drop a consent redirect from a public https page to a
+  loopback `http://127.0.0.1` address, which is where Claude Code, the bridge and every RFC 8252 client listen; the
+  console's Allow answered a `303` and the browser silently stayed put. A browser form submission to a loopback
+  redirect now receives a page that navigates itself; web clients and scripts keep the `303`. With Microsoft Graph and
+  `User.Read` alone the group lookup yields ids, not names, so map on group ids (documented).
 - **Custom roles.** Config → Roles: a name, a base (Group Admin, Viewer or MCP User, which is what the console lets it
   do), a label and an **OAuth only** switch. Use the name in memberships, provider rules and per-tool access; the
   person's token carries it and the worker matches a tool-access entry by the name or its base. OAuth-only roles refuse

@@ -146,6 +146,21 @@ def test_unlisted_tool_and_unlisted_stage_are_untouched(tmp_path):
     assert not any(s[0] == "post" and s[1] == "demo_calculator_tool" for s in seen)
 
 
+def test_hooks_run_only_on_validated_arguments_and_validated_output(tmp_path):
+    """§21.2 order: argument validation → pre → tool → output schema → post. An invalid call never reaches a rail."""
+    b = bucket_with(tmp_path, YAML.format(fail="closed", timeout=5), policy=POLICY)
+    write_pkg(b, "tools", "echo_tool", ECHO, "def f(text):\n    return 42 if text == 'bad' else text\n")
+    ex, _ = executor(b)
+    seen = ex.guard.engine._pre.__globals__["SEEN"]
+    r = ex.call_tool("echo_tool", {"text": 7})
+    assert r["isError"] and r["content"][0]["text"].startswith("invalid arguments: text"), r
+    assert seen == [], "pre never sees arguments that failed the schema"
+    r = ex.call_tool("echo_tool", {"text": "bad"})
+    assert r["isError"] and r["content"][0]["text"].startswith("invalid output"), r
+    assert [s[0] for s in seen] == ["pre"], "post never sees an output that failed its schema"
+    assert "_meta" not in r
+
+
 def test_hooks_see_secret_references_never_values(tmp_path, monkeypatch):
     monkeypatch.setenv("RAMEN_SECRET_G__K", "hunter2")
     ex, _ = executor(bucket_with(tmp_path, YAML.format(fail="closed", timeout=5), policy=POLICY))

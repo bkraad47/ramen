@@ -6,11 +6,14 @@ group, and keep the memberships an admin set by hand next to the ones the provid
 (0.7.5 [custom roles](users-access.md#custom-roles)), and a role can insist on the provider: people who hold it
 cannot sign in with a password.
 
-!!! info "What has been run against a real tenant"
-    0.7.5 was signed into through a live Entra ID tenant with the groups lookup on (a throwaway app registration
-    and two test groups; a person removed from a group lost the membership at the next sign-in). Google Workspace
-    is covered by tests against a fake Cloud Identity endpoint only; the maintainer has no Workspace tenant. If you
-    run it, please open an issue with what worked.
+!!! info "What has been run against real providers (0.7.5)"
+    **Microsoft Entra ID**, on GKE and on EKS, through a throwaway app registration and two test groups with the
+    groups lookup on: sign-in mapped group ids to Group Admin and to an OAuth-only custom role; a person removed from a
+    group lost that membership at the next sign-in and got it back when re-added; the bridge then signed the same
+    person in (`--oauth`), and the worker listed and refused tools by that role. **Google** sign-in, on GKE, with the
+    provider added on the Config page: mapped on `email`, same account as Entra, and the bridge's tool list followed
+    the Google role. **Google Workspace groups** (the Cloud Identity lookup) are covered by tests against a fake
+    endpoint only: the maintainer's Google account has no Workspace. If you run it, please open an issue.
 
 Nothing here depends on the cloud the console runs on: Entra ID works on GKE, Workspace on EKS, both at once
 anywhere. The provider is a few environment variables on the console.

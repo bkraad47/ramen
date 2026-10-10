@@ -1,8 +1,8 @@
 """D47 (0.7.5, CONTRACTS §21.3): a person's groups read from the identity provider at sign-in, for providers whose
 ID token does not carry them. `entra` → Microsoft Graph `/me/memberOf` (every `id` and `displayName`, all pages);
-`google` → Cloud Identity `searchDirectGroups` by the person's email (each group email and name, all pages). The
-values replace the `groups` claim the role mapping reads. Any failure is a `LookupError` (→ 502): nobody is signed in
-with stale or missing groups."""
+`google` → Cloud Identity `searchDirectGroups` by the person's email (each group email, `group` resource name and
+display name, all pages). The values replace the `groups` claim the role mapping reads. Any failure is a
+`LookupError` (→ 502): nobody is signed in with stale or missing groups."""
 
 import httpx
 
@@ -64,10 +64,9 @@ async def _google(http: httpx.AsyncClient, base: str, email: str) -> list[str]:
             raise LookupError(f"could not read your groups from google: Cloud Identity answered {r.status_code}")
         body = r.json()
         for m in body.get("memberships") or []:
-            if (m.get("groupKey") or {}).get("id"):
-                out.append(str(m["groupKey"]["id"]))
-            if m.get("displayName"):
-                out.append(str(m["displayName"]))
+            for v in ((m.get("groupKey") or {}).get("id"), m.get("group"), m.get("displayName")):
+                if v:
+                    out.append(str(v))
         if not body.get("nextPageToken"):
             return out
         params = {**params, "pageToken": body["nextPageToken"]}

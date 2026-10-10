@@ -80,7 +80,8 @@ def test_google_lookup_searches_direct_groups_by_email():
         )
 
     out = asyncio.run(groups.lookup("google", "at-1", "a@corp.test", CI, transport=httpx.MockTransport(handler)))
-    assert out == ["devs@corp.test", "Developers", "ops@corp.test"]
+    # §21.3: the group email (`groupKey.id`), the `group` resource name, and the display name when Google sends one
+    assert out == ["devs@corp.test", "groups/1", "Developers", "ops@corp.test", "groups/2"]
 
 
 def test_lookup_failures_are_a_502_and_other_providers_cannot_lookup():

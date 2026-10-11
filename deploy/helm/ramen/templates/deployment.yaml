@@ -43,6 +43,13 @@ metadata:
   labels: {{- include "ramen.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.console.replicas }}
+  # 0.7.5: a console rollout took the only pod down before the load balancer could reach the new one (GKE attaches a
+  # new zone's NEG ~2 min late → "unconditional drop overload"). Never drop below one ready pod, keep the new one
+  # ready for minReadySeconds before the old one goes, and let the old one drain (preStop) before it exits.
+  minReadySeconds: {{ .Values.console.minReadySeconds | default 90 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
   selector:
     matchLabels: {{- include "ramen.selector" . | nindent 6 }}
   template:
@@ -74,3 +81,4 @@ spec:
           resources: {{- toYaml .Values.console.resources | nindent 12 }}
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 12 }
+          lifecycle: { preStop: { exec: { command: ["sleep", "15"] } } }

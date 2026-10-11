@@ -242,8 +242,9 @@ def test_mail_links_follow_the_base(demo, maildir):
     sent = mails(maildir)
     assert len(sent) == 3
     for kind, msg in zip(("reset", "reset", "magic"), sent, strict=True):
-        assert f"{BASE}/auth/{kind}/" in msg.get_content()
-        assert "https://console.test" not in msg.get_content()  # the setting wins over RAMEN_PUBLIC_URL
+        assert f"{BASE}/auth/{kind}/" in msg.get_body(("plain",)).get_content()
+        text = msg.get_body(("plain",)).get_content()
+        assert "https://console.test" not in text  # the setting wins over RAMEN_PUBLIC_URL
 
 
 def test_oauth_login_callback_follows_the_base(demo, monkeypatch):

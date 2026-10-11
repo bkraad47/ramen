@@ -41,6 +41,7 @@ async def create_user(request: Request, body: m.UserIn, p: Principal = Depends(a
         mail = await st.mailer.send(
             body.email,
             *invite_mail(base, body.email, f"{base}/auth/reset/{st.tokens.issue('reset', doc['id'], nonce)}", p.name),
+            base=base,
         )
         doc["invite"] = {k: v for k, v in mail.items() if k != "path"}
     return respond(request, doc, 201)

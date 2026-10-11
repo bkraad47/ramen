@@ -102,6 +102,9 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
+        # the cloud this console runs on (RAMEN_CLOUD): the Zones and Config pages offer only its zones and regions
+        cloud_kind=lambda: os.environ.get("RAMEN_CLOUD", "local"),
+        cloud_label=lambda k: {"gcp": "GCP", "aws": "AWS", "azure": "Azure", "local": "Local"}.get(k, k),
         provider_label=lambda n: {"entra": "Microsoft Entra ID", "google": "Google"}.get(n, n),
         custom_roles=rbac.custom_roles,  # D48: templates list custom roles after the built-ins
         password_rule=f"Use {PASSWORD_RULE}.",

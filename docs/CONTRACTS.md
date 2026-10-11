@@ -695,3 +695,38 @@ from object storage, the console manages everything through the cloud's APIs and
 - **Docs.** `wiki/deploy-azure.md` step by step (mirror of deploy-gcp.md), README/home "GKE, EKS and AKS".
 - **Acceptance.** Unit tests with fakes for every Azure API call (as `fakes_gcp.py`/`fakes_aws.py`), the 33-check
   `verify075.py` run on a live AKS deploy with Entra sign-in, then teardown.
+
+### 21.7 Autoscaling by Ramen, not by the cloud (D55 — the user, 2026-10-11)
+Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no cloud autoscaler is involved.
+- **Bounds.** Per group × zone: `min_count` is always 1; `max_count` (≥ 1, default = current `count`) is set by a super
+  admin or a group admin of that group — `PUT /api/v1/groups/{g}/zones/{z}/workers {"max_count": n}` (viewers and MCP
+  users get 403 and never see the control). `count` stays the current target, always clamped to [1, `max_count`]; a
+  manual `count` outside the bounds is a 422. Audited `workers.max_count`.
+- **No HPA.** The adapters stop writing `HorizontalPodAutoscaler` objects and delete an existing `worker` HPA on the next
+  apply/scale; the worker Helm chart's `hpa` is off by default. The stable Deployment's `replicas` = `count`; the canary
+  stays at 1.
+- **Decision** (`autoscale.decide(workers, state, w, now)`, pure, unit-tested): per worker the node's metrics give
+  `inflight` and the `max_inflight` it runs with (the snapshot adds `max_inflight`), plus `total` calls; the console keeps
+  the previous `total` per pod and the time in `workers.autoscale_state` to derive calls per second.
+  - **Up** by one when any ready worker is `high` (inflight > 80 % of its limit) or the zone's mean inflight ≥ 50 %, and
+    `count < max_count`.
+  - **Down** by one when every ready worker is `low` (< 30 %) for 3 consecutive rebalances and the zone's call rate per
+    worker after removing one would stay below the up threshold, and `count > 1`.
+  - **Cooldown**: no change within 120 s of the previous one (`RAMEN_AUTOSCALE_COOLDOWN_SECS`); a worker that is `down`
+    (not answering) never counts as low.
+  - The result `{action: up|down|hold, from, to, reason}` is returned by rebalance, written to the worker doc, audited
+    `workers.autoscale` (user `scheduler` or the person), and shown on the group page.
+- **Who runs it.** Manual: the Rebalance button / `POST …/rebalance` (group admin+). Scheduled: the Config page's
+  scheduler, which now rebalances every group × zone each interval (not only the skewed ones), so it scales up and back
+  down on its own. The load-balancer leg of rebalance (GCP capacity scaler, AWS/Azure weights where present) is unchanged.
+- **UI.** Group page (zone actions) and the Zones and workers page: "Workers: <count> (min 1, max [n])" with an input and
+  Save for super admins and group admins only, the last autoscale decision and its reason; read-only count for others.
+- **Audit and logs (the user).** Every action is audited with the actor (a person, an API key, or `scheduler`), the
+  group/zone and tags: `workers.max_count` (`from:`, `to:`), `workers.count` (manual), `workers.rebalance` (who pressed
+  it), `workers.autoscale` for every up/down (`action:`, `from:`, `to:`, `reason:`), refused changes with
+  `error:forbidden|invalid`. A `hold` is not audited (it would flood the log) but is kept as the last decision on the
+  worker doc. Each scale change also logs one console line `ramen.autoscale` (INFO; WARNING when a zone sits at
+  `max_count` under high load, which the warning digest carries).
+- **Load tests** (`scripts/load_test.py`): drive concurrent `tools/call` against one zone through the edge until the zone
+  reaches `max_count`, then stop and confirm it scales down to 1; plus bursts, a max of 1, a group admin changing the max
+  mid-test, and a viewer refused. Run on GKE, EKS and AKS; results in `reports/cloud-v0.7.5.md`.

@@ -60,7 +60,7 @@
 
   <rect class="bx" x="772" y="104" width="316" height="92"/>
   <text x="788" y="132" class="h">Load balancer</text>
-  <text x="788" y="154" class="b">GKE Gateway, AWS ALB</text>
+  <text x="788" y="154" class="b">GKE Gateway, AWS ALB, Envoy on AKS</text>
   <text x="788" y="176" class="b">TLS ends here, gRPC health check</text>
 
   <!-- what that hop really is -->
@@ -90,12 +90,12 @@
 
   <rect class="bx" x="812" y="488" width="264" height="56"/>
   <text x="826" y="510" class="h">ramen_runtime</text>
-  <text x="826" y="530" class="b">Python 3.14, runs your code</text>
+  <text x="826" y="530" class="b">Python 3.12: your code, guardrails</text>
 
   <!-- the bucket feeds the runtime -->
   <rect class="bx" x="420" y="398" width="252" height="86"/>
   <text x="436" y="424" class="h">Group bucket</text>
-  <text x="436" y="446" class="b mono">gs:// s3:// /buckets/</text>
+  <text x="436" y="446" class="b mono">gs:// s3:// az:// /buckets/</text>
   <text x="436" y="468" class="b">tools, resources, prompts</text>
 
   <path class="flow" d="M672,441 H742 V516 H804" marker-end="url(#a-coral)"/>
@@ -113,10 +113,10 @@
   <rect class="bx" x="32" y="604" width="620" height="170"/>
   <text x="52" y="634" class="h">Console: FastAPI, Jinja2, HTMX, and the same actions over the API</text>
   <text x="52" y="660" class="b">groups, environments, zones, users and their role per group</text>
-  <text x="52" y="682" class="b">canary deploys, rebalance, IP rules and throttles per zone</text>
+  <text x="52" y="682" class="b">canary deploys, autoscaling, IP rules and throttles per zone</text>
   <text x="52" y="704" class="b">MCP keys, API keys, OAuth clients, secrets that are never shown</text>
   <text x="52" y="726" class="b">one audit line for every action</text>
-  <text x="52" y="752" class="m">state in Firestore, DynamoDB or Postgres; secret values in the cloud secret store</text>
+  <text x="52" y="752" class="m">state in Firestore, DynamoDB, Table Storage or Postgres; secrets in the cloud secret store</text>
 
   <path class="mgmt" d="M480,604 V492" marker-end="url(#a-mute)"/>
   <text x="494" y="556" class="m">upload on deploy</text>

@@ -13,6 +13,14 @@
       "captured_for": "0.7.5",
       "page": "Backups: preview, restore, restore and prune"
     },
+    "config-identity.png": {
+      "captured_for": "0.7.5",
+      "page": "Config: identity providers with the group source, and the role mapping"
+    },
+    "config-roles.png": {
+      "captured_for": "0.7.5",
+      "page": "Config: custom roles (name, base, OAuth only)"
+    },
     "config.png": {
       "captured_for": "0.7.5",
       "page": "Config: the public address (base URI), authentication, the permission catalogue, service-account rules"
@@ -28,6 +36,14 @@
     "environments.png": {
       "captured_for": "0.7.5",
       "page": "Environments with the last deploy flattened"
+    },
+    "group-autoscale.png": {
+      "captured_for": "0.7.5",
+      "page": "Group page: zone actions with count, max (autoscale up to) and the last autoscale decision"
+    },
+    "group-signin.png": {
+      "captured_for": "0.7.5",
+      "page": "Group page: How MCP users sign in, generated for this install (group key, accounts, Entra ID)"
     },
     "group.png": {
       "captured_for": "0.7.5",
@@ -63,7 +79,7 @@
     },
     "zones.png": {
       "captured_for": "0.7.5",
-      "page": "Zones and workers: the zones and the live workers per group"
+      "page": "Zones and workers: this cloud's zones, the workers per group with their max"
     }
   },
   "ui_contract": "0.7.5"

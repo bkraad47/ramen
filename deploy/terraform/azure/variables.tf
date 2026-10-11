@@ -27,7 +27,7 @@ variable "kubernetes_version" {
 }
 variable "node_size" {
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_B2s_v2"
   description = "Cheap first: 2 vCPU / 4 GiB burstable."
 }
 variable "node_count" {

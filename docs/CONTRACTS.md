@@ -666,7 +666,7 @@ from object storage, the console manages everything through the cloud's APIs and
 - **Selection.** `RAMEN_CLOUD=azure`; zone provider `azure`; zones named `<region>-<n>` (`eastus-1`, availability zones
   1–3); `regions.json` gains an `azure` list; Config "Blocked regions" and the Zones page list Azure like the others.
 - **Infrastructure** (`deploy/terraform/azure`, azurerm + helm providers): resource group `ramen-<suffix>`, AKS (free
-  tier control plane, one system pool `Standard_B2s` × 2, autoscale ≤ 3, OIDC issuer + Workload Identity on, Azure CNI
+  tier control plane, one system pool `Standard_B2s_v2` × 2, autoscale ≤ 3, OIDC issuer + Workload Identity on, Azure CNI
   overlay), ACR Basic, a storage account with blob container `groups` and Table Storage table `ramen` (the store), Key
   Vault (RBAC mode) for secrets, a static public IP + DNS label for the edge, the console's user-assigned managed
   identity with a federated credential for `ramen-system/console`, role assignments scoped to the resource group only.

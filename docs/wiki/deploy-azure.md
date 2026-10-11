@@ -5,7 +5,7 @@ code, Key Vault for secrets, and an Envoy Gateway edge on a static public IP wit
 free `sslip.io` hostname. Since 0.7.5 ([CONTRACTS §21.6](../CONTRACTS.md)); the shape is the same as on GCP and
 AWS: one cluster per install, and a namespace plus a managed identity per group and zone, made by the console.
 
-Cost while it runs, cheap first: the AKS control plane is free (free tier), two `Standard_B2s` nodes (about
+Cost while it runs, cheap first: the AKS control plane is free (free tier), two `Standard_B2s_v2` nodes (about
 $0.08 an hour together), a Standard public IP and load balancer rule (about $0.03 an hour), ACR Basic (about $0.17 a
 day), and storage and Key Vault at cents. Tear it down when you are done.
 
@@ -25,18 +25,21 @@ done
 az vm list-usage --location eastus -o table | grep -i "BS Family\|Total Regional"   # 4 B-series cores free at least
 ```
 
-**Check that your subscription has availability zones in the region.** Many subscriptions, new and trial ones
-especially, have none for a given size in some regions, and AKS then fails with `AvailabilityZoneNotSupported ... The
-supported zones for location 'eastus' are ''`. Ramen zones are availability zones (`westus2-1`), so pick a region
-where this prints zone numbers, and set `location` in `terraform.tfvars` to it:
+**Availability zones and VM sizes depend on the subscription.** Many subscriptions, new and trial ones especially,
+get `AvailabilityZoneNotSupported ... The supported zones for location '<region>' are ''` from AKS even where plain
+VMs list zones, and some refuse older sizes (`The VM size of Standard_B2s is not allowed in your subscription`). The
+0.7.5 run met both in `eastus` and `westus2` and ran with:
 
-```sh
-az vm list-skus --location westus2 --size Standard_B2s --resource-type virtualMachines --query "[0].locationInfo[0].zones" -o tsv
+```hcl
+location   = "westus2"
+node_size  = "Standard_B2s_v2"   # the default; the error message lists the sizes your subscription allows
+node_max   = 2                   # a 4-core quota fits two 2-core nodes
+node_zones = []                  # no availability zones for AKS in this subscription
 ```
 
-The 0.7.5 run used `westus2`: in that subscription `eastus`, `eastus2`, `centralus` and `westus3` had no zones for
-`Standard_B2s`, while `westus2`, `westeurope` and `australiaeast` had all three. With a 4-core quota keep `node_max`
-at 2.
+With `node_zones = []` Terraform sets `azure.zonal=false`, the console gets `RAMEN_AZURE_ZONAL=0`, and a Ramen zone
+on Azure (`westus2-1`) is a logical placement: its workers run on any node instead of being pinned to an Azure
+availability zone. Where AKS does offer zones, leave `node_zones = ["1"]` (add `"2"`, `"3"` for more Ramen zones).
 
 Whoever runs Terraform needs Owner on the subscription (or Contributor plus User Access Administrator): Terraform
 creates role assignments for the console's identity.

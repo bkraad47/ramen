@@ -53,6 +53,30 @@ resource "aws_subnet" "public" {
   })
 }
 
+# destroy only: the VPC CNI can leave a terminated node's interface behind, which blocks deleting the subnets (0.7.5).
+# The node group depends on this, so destroy runs node group → sweep → subnets. Needs the aws CLI (as helm.tf does).
+resource "terraform_data" "eni_sweep" {
+  input      = { vpc = aws_vpc.ramen.id, region = var.region }
+  depends_on = [aws_subnet.public]
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    command    = "bash ${path.module}/scripts/eni_sweep.sh ${self.input.vpc} ${self.input.region}"
+  }
+}
+
+# destroy only: EKS can leave its `eks-cluster-sg-<name>-<n>` group behind, which blocks deleting the VPC (0.7.5).
+# The cluster depends on this, so destroy runs cluster → sweep → VPC.
+resource "terraform_data" "sg_sweep" {
+  input      = { vpc = aws_vpc.ramen.id, region = var.region, name = var.name }
+  depends_on = [aws_vpc.ramen]
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    command    = "bash ${path.module}/scripts/eni_sweep.sh ${self.input.vpc} ${self.input.region} cluster-sg ${self.input.name}"
+  }
+}
+
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.ramen.id
   route {
@@ -104,7 +128,7 @@ resource "aws_eks_cluster" "ramen" {
     bootstrap_cluster_creator_admin_permissions = true
   }
   tags       = local.tags
-  depends_on = [aws_iam_role_policy_attachment.cluster]
+  depends_on = [aws_iam_role_policy_attachment.cluster, terraform_data.sg_sweep]
 }
 
 resource "aws_iam_role" "node" {
@@ -147,7 +171,7 @@ resource "aws_eks_node_group" "ramen" {
   }
   update_config { max_unavailable = 1 }
   tags       = local.tags
-  depends_on = [aws_iam_role_policy_attachment.node]
+  depends_on = [aws_iam_role_policy_attachment.node, terraform_data.eni_sweep]
 }
 
 # --- IRSA: OIDC provider for the cluster (console, LB controller, Fluent Bit and per-group worker roles trust it) ---

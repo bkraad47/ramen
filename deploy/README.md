@@ -190,6 +190,7 @@ rolls the workers, then associates the ACL with the ALB (retried in the backgrou
 helm uninstall ramen -n ramen-system                    # the controller deletes the ALB (wait ~2 min before destroy)
 kubectl delete ns -l ramen.io/group                     # worker namespaces + their Ingresses
 terraform -chdir=deploy/terraform/aws destroy           # EKS, VPC, bucket (force_destroy), table, ECR (force_delete), roles, cert
+                                                        # + sweeps leftover node interfaces and the EKS cluster SG
 # leftovers the console created outside Terraform, if any: IAM roles under /ramen/, WAFv2 ip sets/web ACL `ramen`, secrets ramen/*
 ```
 Live run found one real gap: the worker IRSA role the console creates (`ramen-demo-a` in this test, path `/ramen/`) sets

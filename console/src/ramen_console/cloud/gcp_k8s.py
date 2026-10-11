@@ -115,9 +115,17 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_pro
                     {"maxUnavailable": 0, "maxSurge": 1} if track == "stable" else {"maxUnavailable": 1, "maxSurge": 0}
                 ),
             },
-            "template": {"metadata": {"labels": labels}, "spec": pod},
+            # 0.7.5: Ramen decides the worker count (§21.7); the cluster autoscaler must not evict a worker to empty a
+            # node — a zone at count 1 would go dark. Ramen's own scale-down still frees nodes.
+            "template": {
+                "metadata": {"labels": labels, "annotations": {SAFE_TO_EVICT: "false"}},
+                "spec": pod,
+            },
         },
     }
+
+
+SAFE_TO_EVICT = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 
 
 def route_headers(group, zone) -> list[dict]:

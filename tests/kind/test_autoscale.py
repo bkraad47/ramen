@@ -45,8 +45,15 @@ def test_max_count_is_set_by_admins_and_refused_to_viewers(admin, stack, group, 
         page = viewer.page(f"/groups/{group}").text
         assert 'name="max_count"' not in page, "a viewer can see the autoscale max control"
     assert admin.get("workers", group=group, zone=zone).json()["max_count"] == MAX
-    # refused before the handler, so the entry carries the request line, the viewer and the reason (§21.7 audit)
-    refused = [e for e in audit_entries(admin) if e.get("user") == email and "/workers" in str(e.get("target", ""))]
+    # §21.7 audit: the refusal is recorded under the scaling action itself (`workers.max_count`), target
+    # `<group>/<zone>`, ok=false with error:forbidden — the audit filter for workers.* finds it
+    refused = [
+        e
+        for e in audit_entries(admin)
+        if e.get("user") == email
+        and str(e.get("action", "")).startswith("workers.")
+        and e.get("target") == f"{group}/{zone}"
+    ]
     assert refused and all(e.get("ok") is False for e in refused), refused[-3:]
     assert any("error:forbidden" in e.get("tags", []) for e in refused), refused[-3:]
 

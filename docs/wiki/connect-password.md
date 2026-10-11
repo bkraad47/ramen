@@ -27,5 +27,15 @@ Follow [What the person does](connect-oauth.md#what-the-person-does) with the cl
 browser step shows the console's own login page rather than an identity provider's, and that is the only visible
 difference.
 
+The commands are the same for every client: Claude Code over Streamable HTTP with `claude mcp add-json …
+"oauth":{"clientId":…}`, or any client through `uvx ramen-mcp-bridge@latest … --oauth https://<edge>
+--client-id <client id>`. A group admin copies them, filled in for the install, from the group page's **How MCP
+users sign in** card (section *Ramen accounts*).
+
+A password account cannot connect this way if it holds a custom role marked **OAuth only** in any group: the login
+step answers `403 This account signs in with <provider>` and the person must use the provider button
+([Entra ID and Workspace](sso.md#5-roles-that-require-the-provider)). If password login is switched off on the
+Config page, only identity-provider accounts can sign in.
+
 Every call the client makes is logged as `user:<id>`, never as a key id. Removing the person from the group, or
 disabling the account, ends their tokens at once.

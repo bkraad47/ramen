@@ -5,6 +5,13 @@ code, Key Vault for secrets, and an Envoy Gateway edge on a static public IP wit
 free `sslip.io` hostname. Since 0.7.5 ([CONTRACTS §21.6](../CONTRACTS.md)); the shape is the same as on GCP and
 AWS: one cluster per install, and a namespace plus a managed identity per group and zone, made by the console.
 
+!!! info "What has been run (0.7.5, 2026-10-11)"
+    One install in `westus2` on two `Standard_B2s_v2` nodes with `node_zones = []`: the Let's Encrypt certificate was
+    publicly trusted on the first try, the demo deploy and its edge route worked at once, the 33-check verification
+    passed (NeMo rails, custom roles, tool access, Streamable HTTP and the bridge), Microsoft Entra ID sign-in with the
+    groups lookup worked through the consent link, and the autoscaling load tests passed with no 5xx
+    ([Autoscaling](autoscaling.md#load-tests)). Torn down afterwards.
+
 Cost while it runs, cheap first: the AKS control plane is free (free tier), two `Standard_B2s_v2` nodes (about
 $0.08 an hour together), a Standard public IP and load balancer rule (about $0.03 an hour), ACR Basic (about $0.17 a
 day), and storage and Key Vault at cents. Tear it down when you are done.
@@ -53,10 +60,13 @@ cd ../../..
 ```
 
 Terraform creates the resource group `ramen-<suffix>`, the AKS cluster (OIDC issuer and workload identity on, Azure
-CNI overlay, one node pool in zone 1), ACR, the storage account with the `groups` container and the `ramen` table,
+CNI overlay, one node pool in the zones of `node_zones`, or none), ACR, the storage account with the `groups` container and the `ramen` table,
 Key Vault in RBAC mode, the edge's static public IP, the console's user-assigned identity with its federated
 credential for `ramen-system/console`, and installs Envoy Gateway and cert-manager into the cluster. About fifteen
 minutes. `terraform output helm_set` prints every Helm value the next steps need.
+
+If the first apply stops with a `404` on the federated identity credential, Azure had not finished creating the
+identity: run `terraform apply` again (the 0.7.5 run needed exactly that second apply).
 
 ## 2. Images
 
@@ -100,8 +110,9 @@ tests the flow against the staging CA first.
 ## 4. The first zone, group and deploy
 
 Sign in at `https://<public_hostname>/` as `admin@ramen.local`, then the same steps as on GCP: a zone with
-provider `azure` and region `eastus-1` (AKS names zones `<location>-<n>`; the node pool must have a node in that
-zone, which is zone 1 by default), the `demo` group from the demo repo, an environment on that zone, an MCP key, a
+provider `azure` and region `eastus-1` (Ramen names Azure zones `<location>-<n>`; with `node_zones` set, the node
+pool must have a node in that zone, zone 1 by default; with `node_zones = []` any name of the location works, the
+0.7.5 run used `westus2-1`), the `demo` group from the demo repo, an environment on that zone, an MCP key, a
 canary deploy. Creating the environment makes the namespace `ramen-demo-<zone>`, a user-assigned identity
 `ramen-demo-<zone>` with a federated credential for the namespace's `worker` service account, its role assignments
 (blob reader on the `groups` container, Key Vault Secrets User on exactly the group's secrets), and an HTTPRoute on
@@ -141,7 +152,11 @@ console's sync (each worker loads only its group's prefix) and for secrets the p
   console mirrors it at the edge as an Envoy Gateway `SecurityPolicy` on the zone's route. The Envoy Service keeps
   the client's address (`externalTrafficPolicy: Local`), so workers trust one forwarded hop.
 - **Logs**: read from the pods through the Kubernetes API; no Log Analytics workspace is needed.
-- **Upgrade the console**: push the images, then `kubectl -n ramen-system rollout restart deploy/console`.
+- **Upgrade the console**: push the images, then `kubectl -n ramen-system rollout restart deploy/console`. The
+  rollout keeps one ready pod and drains the old one for 40 s, so the edge never answers without a backend.
+- **Scaling**: set a max per zone on the group page and turn on the scheduler on the Config page; Ramen scales the
+  workers between 1 and the max, and the AKS cluster autoscaler (`node_max`) adds nodes for them
+  ([Autoscaling](autoscaling.md)).
 
 ## Teardown
 
@@ -161,5 +176,7 @@ purges the Key Vault (soft delete would otherwise keep its name for a week). Che
 - The certificate stays `False` while Let's Encrypt cannot reach port 80 of the public IP: check
   `kubectl -n ramen-system describe challenge`, or use `azure.tls=selfsigned`.
 - A zone needs a node in its availability zone. A Ramen zone `eastus-2` with the node pool only in zone 1 leaves its
-  workers `Pending`; add `"2"` to `node_zones` and apply.
+  workers `Pending`; add `"2"` to `node_zones` and apply. On a cluster without zones the console sends
+  `nodeSelector: null`, which also clears a zone pin an earlier deploy left.
+- `AvailabilityZoneNotSupported` or a refused VM size: see Prerequisites (`node_zones = []`, `Standard_B2s_v2`).
 - A client that omits the two headers gets the console, not a worker.

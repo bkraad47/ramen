@@ -7,7 +7,7 @@ group, and keep the memberships an admin set by hand next to the ones the provid
 cannot sign in with a password.
 
 !!! info "What has been run against real providers (0.7.5)"
-    **Microsoft Entra ID**, on GKE and on EKS, through a throwaway app registration and two test groups with the
+    **Microsoft Entra ID**, on GKE, EKS and AKS, through a throwaway app registration and two test groups with the
     groups lookup on: sign-in mapped group ids to Group Admin and to an OAuth-only custom role; a person removed from a
     group lost that membership at the next sign-in and got it back when re-added; the bridge then signed the same
     person in (`--oauth`), and the worker listed and refused tools by that role. **Google** sign-in, on GKE, with the
@@ -16,7 +16,7 @@ cannot sign in with a password.
     endpoint only: the maintainer's Google account has no Workspace. If you run it, please open an issue.
 
 Nothing here depends on the cloud the console runs on: Entra ID works on GKE, Workspace on EKS, both at once
-anywhere. The provider is a few environment variables on the console.
+anywhere. A super admin sets a provider up on the Config page; environment variables remain a second source.
 
 ## 1. Register the console as an OIDC client
 
@@ -32,6 +32,11 @@ Then, as a super admin, **Config → Identity providers (Entra ID, Google Worksp
 source, save. The secret is encrypted in the store and never shown again; the login page shows the new button at
 once, no restart. `GET|PUT|DELETE /api/v1/config/oauth-providers/{name}` is the same thing for scripts; every change
 is audited as `config.oauth_provider`.
+
+<figure markdown>
+![The Identity providers card with the group source and role mapping](../img/config-identity.png){ .ramen-shot }
+<figcaption>Config → Identity providers: an Entra ID provider with the groups lookup, and two rules on group object ids.</figcaption>
+</figure>
 
 The environment still works, for installs that keep secrets out of the store, and shows on the card as source `env`
 (a provider saved on the page wins over the environment of the same name):
@@ -134,7 +139,15 @@ Signing out of Ramen does not sign the person out of the provider; the next sign
 
 ## 7. What the person gets
 
-An MCP user signs in through the provider only to approve an OAuth client for a zone of their groups. Claude Code,
-Claude Desktop, Cursor and the bridge do that flow by themselves; the console's login page hands off to the
-provider. The token the client receives carries the person's role in the group, custom roles included, so the
+An MCP user signs in through the provider only to approve an OAuth client for a zone of their groups. Claude Code
+and the bridge do that flow by themselves; the console's login page hands off to the provider and, since 0.7.5,
+brings the person back to the client's consent page afterwards (`next` survives the round trip). After *Allow*, a
+browser that came from a native client gets a small page that sends it on to the client's loopback address
+(`http://127.0.0.1:<port>`): browsers silently drop a direct redirect from a public https page to a loopback http
+address, which left Claude Code and the bridge waiting for a code that never came. Web clients and scripts still get
+the plain `303`.
+
+Admins find the exact commands for their install on the group page: **How MCP users sign in** has one section per
+provider with the rules that reach that group, its member count, and copy-ready commands for Claude Code (over
+HTTP, or through the bridge) and for Cursor and VS Code through the bridge ([Connect with OAuth](connect-oauth.md)). The token the client receives carries the person's role in the group, custom roles included, so the
 worker can apply [per-tool access](groups-zones.md) to it. [Connect with OAuth](connect-oauth.md) has the client side.

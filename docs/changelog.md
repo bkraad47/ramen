@@ -9,7 +9,15 @@ they are marked.
 
 | Version | Date | What changed |
 |---|---|---|
-| **0.6.0** | 2026-10-03 | Deleting a zone or an environment tears the deployment down for real. HTTPS only at the edge. `mcp/env.yaml` rendered from secrets. A stuck rollout names the pending pod, and the canary rolls in place. The AWS edge IP rule fixed to match the group header. |
+| **0.7.5** | not tagged yet | Guardrails in the worker (NeMo Guardrails or your own policy), groups from Entra ID and Google Workspace at sign-in, custom and OAuth-only roles, identity providers on the Config page, Azure (AKS) as the third cloud, autoscaling by Ramen between 1 and an admin's max, salted hashes at rest, bridge 0.3.0. |
+| 0.7.2 | 2026-10-07 | Per-tool access (who may see and who may call each tool), clients told about a rollout, a drift signal. |
+| 0.7.1 | 2026-10-05 | Golden cases skip blocked tools; CI fixes. |
+| 0.7.0 | 2026-10-05 | Your tests gate your rollout: schema compatibility gate, golden cases, output schemas, token expiry mid-task. |
+| 0.6.23 | 2026-10-05 | A self-contained image for MCP directories (Glama). |
+| 0.6.21 | 2026-10-05 | A registry listing that says what Ramen is for. |
+| 0.6.2 | 2026-10-05 | Ramen on the official MCP registry. |
+| 0.6.1 | 2026-10-05 | A base URI for every link, fixes from fresh GCP and AWS runs, deploy from GitHub Actions. |
+| 0.6.0 | 2026-10-03 | Deleting a zone or an environment tears the deployment down for real. HTTPS only at the edge. `mcp/env.yaml` rendered from secrets. A stuck rollout names the pending pod, and the canary rolls in place. The AWS edge IP rule fixed to match the group header. |
 | 0.5.95 | 2026-10-03 | Roles per group: one person can be a Group Admin of one group and an MCP User of another. Bridge 0.2.0 signs a person in with `--oauth`. |
 | 0.5.94 | 2026-10-03 | Zones and blocked packages became checkbox dropdowns on the group page. |
 | 0.5.93 | 2026-10-03 | Role mapping from an identity provider, the `mcp_user` role, scoped service-account permissions, and every settings form fixed to work under the console's content-security policy. |

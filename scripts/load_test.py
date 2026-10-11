@@ -331,7 +331,7 @@ async def main() -> int:
             "console",
             not bad,
             f"console /readyz answered 200 {console_seen['ok']} times"
-            + (f", and not 200 {len(bad)} times, first at {bad[0][0]} s ({bad[0][1]})" if bad else ", never anything else"),
+            + (f", not 200 {len(bad)} times, first at {bad[0][0]} s ({bad[0][1]})" if bad else ", never anything else"),
             extra={"console_failures": bad},
         )
     finally:

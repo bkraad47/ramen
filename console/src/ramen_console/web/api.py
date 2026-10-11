@@ -424,4 +424,8 @@ async def zone_drift(request: Request, group: str, zone: str, tail: int = 500, p
 def _once(label: str, value: str) -> str:
     from markupsafe import escape
 
-    return f'<div class="once"><strong>{label} (shown once):</strong> <code>{escape(value)}</code></div>'
+    # data-hold-secs: the page keeps this on screen for a minute, counting down, then reloads (0.7.5)
+    return (
+        f'<div class="once" data-hold-secs="60"><strong>{label} (shown once — copy it now):</strong> '
+        f"<code>{escape(value)}</code></div>"
+    )

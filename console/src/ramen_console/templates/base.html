@@ -25,8 +25,18 @@ document.body.addEventListener('htmx:sendError',()=>{const t=document.getElement
 function ramenSaved(){const t=document.getElementById('toast');t.textContent='Saved';t.classList.add('ok');t.style.display='block';setTimeout(()=>{t.style.display='none';t.classList.remove('ok')},2500)}
 // beforeOnLoad, not afterRequest: htmx reloads the page for HX-Refresh before afterRequest fires, and a flag set
 // after unload has begun is lost.
+// 0.7.5 (the user): every successful button reloads the page so it shows the new state. A response that must stay
+// readable says how long with data-hold-secs: a new API / MCP key 60 s (counting down), a restore 20 s, a preview 0 =
+// never. Deploy and the rest reload at once; the "Saved" flash rides sessionStorage across the reload.
+function ramenReload(){try{sessionStorage.setItem('ramenFlash','1')}catch(_){}location.reload()}
+function ramenHold(secs){const t=document.getElementById('toast');let left=secs;
+ const tick=()=>{t.textContent='This page refreshes in '+left+' s — copy anything you need now';t.classList.add('ok');t.style.display='block';
+  if(left<=0){ramenReload();return}left-=1;setTimeout(tick,1000)};tick()}
 document.body.addEventListener('htmx:beforeOnLoad',e=>{const d=e.detail,x=d.xhr,v=((d.requestConfig||{}).verb||'get').toLowerCase();if(!x||v==='get'||x.status<200||x.status>=300)return;
- if(x.getResponseHeader('HX-Refresh')==='true'){try{sessionStorage.setItem('ramenFlash','1')}catch(_){}}else ramenSaved()});
+ if(x.getResponseHeader('HX-Refresh')==='true'){try{sessionStorage.setItem('ramenFlash','1')}catch(_){}return}
+ const m=/data-hold-secs="(\d+)"/.exec(x.responseText||'');
+ if(m){const n=parseInt(m[1],10);if(n>0)setTimeout(()=>ramenHold(n),50);else ramenSaved();return}
+ ramenReload()});
 // W2: polling elements carry data-auto; once loaded, their polls are dropped while auto refresh is off. A trigger
 // filter like every 60s[window.ramenAuto] would need eval, which the CSP forbids.
 document.body.addEventListener('htmx:beforeRequest',e=>{const el=e.detail.elt;if(el&&el.dataset&&'auto' in el.dataset){if(el.dataset.loaded&&!window.ramenAuto){e.preventDefault();return}el.dataset.loaded='1'}});

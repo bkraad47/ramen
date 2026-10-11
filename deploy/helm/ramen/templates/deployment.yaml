@@ -1,5 +1,20 @@
 {{- $env := dict }}
-{{- if eq .Values.provider "aws" }}
+{{- if eq .Values.provider "azure" }}
+{{- /* CONTRACTS §21.6 console env; provider=azure forces the three backend selectors, the rest defaults from azure.*/ -}}
+{{- $env = merge (dict) (dict "RAMEN_STORE" "azuretables" "RAMEN_CLOUD" "azure" "RAMEN_SECRETS_BACKEND" "azure") .Values.console.env (dict
+  "RAMEN_AZURE_SUBSCRIPTION_ID" (.Values.azure.subscriptionId | toString)
+  "RAMEN_AZURE_RESOURCE_GROUP" .Values.azure.resourceGroup
+  "RAMEN_AZURE_LOCATION" .Values.region
+  "RAMEN_AZURE_STORAGE_ACCOUNT" .Values.azure.storageAccount
+  "RAMEN_AZURE_KEY_VAULT" .Values.azure.keyVault
+  "RAMEN_AZURE_OIDC_ISSUER" .Values.azure.oidcIssuer
+  "RAMEN_AZURE_TLS" .Values.azure.tls
+  "RAMEN_PUBLIC_URL" (printf "https://%s" .Values.azure.publicHostname)
+  "RAMEN_GROUPS_BUCKET" (printf "az://%s/groups" .Values.azure.storageAccount)
+  "RAMEN_IMAGE_WORKER" (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.image.tag | toString))
+  "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
+  "RAMEN_COOKIE_SECURE" "1") }}
+{{- else if eq .Values.provider "aws" }}
 {{- /* CONTRACTS §8 console env; provider=aws forces the three backend selectors, the rest defaults from aws.*/ -}}
 {{- $env = merge (dict) (dict "RAMEN_STORE" "dynamodb" "RAMEN_CLOUD" "aws" "RAMEN_SECRETS_BACKEND" "aws") .Values.console.env (dict
   "RAMEN_AWS_REGION" .Values.region
@@ -32,6 +47,9 @@ spec:
   template:
     metadata:
       labels: {{- include "ramen.labels" . | nindent 8 }}
+        {{- if eq .Values.provider "azure" }}
+        azure.workload.identity/use: "true"   # the webhook injects the federated token for the console identity
+        {{- end }}
       annotations:
         checksum/secret: {{ .Values.console.secrets | toJson | sha256sum | trunc 16 }}
     spec:

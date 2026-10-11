@@ -18,6 +18,9 @@ spec:
       labels: {{- include "rw.labels" $root | nindent 8 }}
         app: worker
         ramen.io/track: {{ $t.track }}
+        {{- if eq $root.Values.provider "azure" }}
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       serviceAccountName: {{ $root.Values.serviceAccount.name }}
       nodeSelector: { topology.kubernetes.io/zone: {{ include "rw.az" $root | quote }} }

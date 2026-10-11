@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/img/logo.png" width="380" alt="Project Ramen"></p>
 
-<p align="center">Multizone, highly available, enterprise-grade <b>MCP server</b> for GCP and AWS Kubernetes.<br>
+<p align="center">Multizone, highly available, enterprise-grade <b>MCP server</b> for GCP, AWS and Azure Kubernetes.<br>
 Rust MCP node + Python 3.12 runtime workers, Streamable HTTP at the edge and gRPC inside, managed from a FastAPI console.</p>
 
 <p align="center">
@@ -192,6 +192,7 @@ Full write-up: [Transport and what secures each hop](https://bkraad47.github.io/
 |---|---|---|
 | **GCP** — GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP, gRPC health checks), Cloud Armor | verified on a throwaway project every release, most recently 0.6.1: two zones, OAuth, the Redis throttle shared across zones, real zone teardown | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
 | **AWS** — EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC and HTTP/1.1 target groups), WAF (Terraform or CloudFormation) | applied to a real account since 0.5.6; bridge server-tested in 0.5.8 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
+| **Azure** — AKS (workload identity), Table Storage, Blob Storage, Key Vault, Envoy Gateway (Gateway API, header-routed gRPC and Streamable HTTP) with a Let's Encrypt certificate (since 0.7.5) | new in 0.7.5 | [docs](https://bkraad47.github.io/ramen/wiki/deploy-azure/) |
 | **Local** — docker compose | CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
 Bring-up on GCP is `terraform apply` → `make push` → `helm upgrade --install` → add a zone and a group in the

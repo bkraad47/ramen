@@ -6,20 +6,26 @@ ramen.io/group: {{ .Values.group | quote }}
 ramen.io/zone: {{ .Values.zone | quote }}
 {{- end -}}
 {{- define "rw.image" -}}
-{{- if eq .Values.provider "aws" -}}
+{{- if eq .Values.provider "azure" -}}
+{{ default (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.tag | toString)) .Values.image }}
+{{- else if eq .Values.provider "aws" -}}
 {{ default (printf "%s.dkr.ecr.%s.amazonaws.com/ramen/worker:%s" (.Values.aws.account | toString) .Values.aws.region (.Values.tag | toString)) .Values.image }}
 {{- else -}}
 {{ default (printf "%s-docker.pkg.dev/%s/ramen/worker:%s" .Values.region .Values.project (.Values.tag | toString)) .Values.image }}
 {{- end -}}
 {{- end -}}
 {{- define "rw.az" -}}
+{{- if eq .Values.provider "azure" -}}{{ .Values.azure.zone }}{{- else -}}
 {{ ternary .Values.aws.zone .Values.gcpZone (eq .Values.provider "aws") }}
+{{- end -}}
 {{- end -}}
 {{- define "rw.gsa" -}}
 {{ default (printf "ramen-%s-%s@%s.iam.gserviceaccount.com" .Values.group .Values.zone .Values.project) .Values.serviceAccount.gsa }}
 {{- end -}}
 {{- define "rw.bucketUri" -}}
-{{- if eq .Values.provider "aws" -}}
+{{- if eq .Values.provider "azure" -}}
+{{ default (printf "az://%s/groups/%s" .Values.azure.storageAccount .Values.group) .Values.bucketUri }}
+{{- else if eq .Values.provider "aws" -}}
 {{ default (printf "s3://ramen-%s-groups/%s" (.Values.aws.account | toString) .Values.group) .Values.bucketUri }}
 {{- else -}}
 {{ default (printf "gs://ramen-%s-groups/%s" .Values.project .Values.group) .Values.bucketUri }}
@@ -31,6 +37,6 @@ ramen.io/zone: {{ .Values.zone | quote }}
 {{- if ne (toString .Values.trustProxyHops) "" -}}
 {{ .Values.trustProxyHops }}
 {{- else -}}
-{{ ternary "1" "2" (eq .Values.provider "aws") }}
+{{ ternary "1" "2" (or (eq .Values.provider "aws") (eq .Values.provider "azure")) }}
 {{- end -}}
 {{- end -}}

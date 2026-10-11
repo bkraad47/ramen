@@ -109,7 +109,7 @@ async def reset_request(request: Request, email: str = Form(), _=Depends(csrf.cs
     if started and st.mailer.enabled:
         user, nonce = started
         link = f"{base_url(request)}/auth/reset/{st.tokens.issue('reset', user['id'], nonce)}"
-        await st.mailer.send(email, *reset_mail(base_url(request), link))
+        await st.mailer.send(email, *reset_mail(base_url(request), link), base=base_url(request))
     return st.templates.TemplateResponse(request, "reset.html", {"stage": "sent", "mail": st.mailer.enabled})
 
 
@@ -143,7 +143,7 @@ async def magic_request(request: Request, email: str = Form(), _=Depends(csrf.cs
     if started and st.mailer.enabled:
         user, nonce = started
         link = f"{base_url(request)}/auth/magic/{st.tokens.issue('magic', user['id'], nonce)}"
-        await st.mailer.send(email, *magic_mail(base_url(request), link))
+        await st.mailer.send(email, *magic_mail(base_url(request), link), base=base_url(request))
     return await _login_page(request, msg="If that account exists, a sign-in link has been emailed")
 
 

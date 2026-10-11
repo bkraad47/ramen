@@ -565,8 +565,10 @@ async def get_regions_config(request: Request, p: Principal = Depends(super_)):
 @r.put("/config/regions")
 async def set_regions_config(request: Request, body: m.RegionsConfig, p: Principal = Depends(super_)):
     """C7: regions no zone may be created in or deployed to; a zone already there fails its next deploy."""
-    try:
-        blocked = regions.clean({p: getattr(body, p) or [] for p in regions.PROVIDERS})
+    current = await svc(request).blocked_regions()
+    try:  # a provider the form did not send (the Config card shows only this console's cloud) keeps its list
+        sent = {p: getattr(body, p) for p in regions.PROVIDERS}
+        blocked = regions.clean({p: (v if v is not None else current.get(p, [])) for p, v in sent.items()})
     except ValueError as e:
         raise invalid(str(e)) from e
     note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])

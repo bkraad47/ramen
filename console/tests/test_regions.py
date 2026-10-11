@@ -66,11 +66,13 @@ def test_config_api_round_trips_and_validates(demo):
     r = demo.put(URL, json={"gcp": ["us-west1", "", "us-west1"], "aws": ["eu-west-1"]})
     assert r.status_code == 200, r.text
     assert r.json()["blocked"] == {"gcp": ["us-west1"], "aws": ["eu-west-1"], "azure": []}
+    # a provider left out of the body keeps its list: the Config card only shows this console's cloud (0.7.5)
     assert demo.put(URL, json={"blocked": {"gcp": ["us-east1"]}}).json()["blocked"] == {
         "gcp": ["us-east1"],
-        "aws": [],
+        "aws": ["eu-west-1"],
         "azure": [],
     }
+    assert demo.put(URL, json={"aws": []}).json()["blocked"]["aws"] == []  # an empty list still clears
     r = demo.put(URL, json={"gcp": ["mars-1"]})
     assert r.status_code == 422 and "mars-1" in r.json()["detail"]
     assert demo.put(URL, json={"gcp": "us-west1,us-west2"}).json()["blocked"]["gcp"] == ["us-west1", "us-west2"]
@@ -120,26 +122,40 @@ def test_a_deploy_refuses_a_zone_whose_region_was_blocked_later(demo, caplog):
     )
 
 
-def test_config_page_has_a_blocked_regions_card_with_one_dropdown_per_provider(demo):
+def test_config_page_shows_only_this_consoles_cloud_in_blocked_regions(demo, monkeypatch):
+    """0.7.5 (the user): a console runs on one cloud, so the card lists that cloud's regions only."""
     demo.put(URL, json={"gcp": ["us-west1"]})
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     page = demo.get("/config").text
-    assert "Blocked regions" in page
-    assert '<details class="multi" id="blocked-gcp">' in page and '<details class="multi" id="blocked-aws">' in page
-    assert '<details class="multi" id="blocked-azure">' in page
-    assert 'name="gcp" value="us-west1" checked' in page and 'name="aws" value="eu-west-1">' in page
-    assert 'hx-put="/api/v1/config/regions"' in page
+    assert "Blocked regions" in page and 'hx-put="/api/v1/config/regions"' in page
+    assert '<details class="multi" id="blocked-gcp">' in page and 'name="gcp" value="us-west1" checked' in page
+    assert 'id="blocked-aws"' not in page and 'id="blocked-azure"' not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "azure")
+    page = demo.get("/config").text
+    assert 'id="blocked-azure"' in page and 'id="blocked-gcp"' not in page and "Azure regions blocked" in page
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    assert "no cloud regions to block" in demo.get("/config").text
 
 
-def test_zones_page_offers_the_providers_zones_minus_blocked_regions(demo):
+def test_zones_page_offers_only_this_consoles_cloud_minus_blocked_regions(demo, monkeypatch):
+    """0.7.5 (the user): the add-zone form is specific to the cloud the console runs on."""
     demo.put(URL, json={"gcp": ["us-west1"], "aws": ["eu-west-1"], "azure": ["westeurope"]})
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     page = demo.get("/zones").text
-    assert "<option>eastus-1</option>" in page and "westeurope-1" not in page
     assert '<optgroup label="us-central1">' in page and "<option>us-central1-a</option>" in page
     assert "us-west1-a" not in page and '<optgroup label="us-west1">' not in page
-    assert "<option>eu-west-2a</option>" in page and "eu-west-1a" not in page
-    assert 'name="region" placeholder="local"' in page  # local stays free text
-    assert page.count('hx-post="/api/v1/zones"') == 4  # one JS-free form per provider
-    assert "Blocked by a super admin: gcp us-west1 · aws eu-west-1 · azure westeurope" in page
+    assert "eu-west-2a" not in page and "eastus-1" not in page and 'placeholder="local"' not in page
+    assert page.count('hx-post="/api/v1/zones"') == 1 and "Add GCP zone" in page
+    assert "Blocked by a super admin: us-west1" in page and "eu-west-1" not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "aws")
+    page = demo.get("/zones").text
+    assert "<option>eu-west-2a</option>" in page and "eu-west-1a" not in page and "us-central1-a" not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "azure")
+    page = demo.get("/zones").text
+    assert "<option>eastus-1</option>" in page and "westeurope-1" not in page and "Add Azure zone" in page
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    page = demo.get("/zones").text
+    assert 'name="region" placeholder="local"' in page and page.count('hx-post="/api/v1/zones"') == 1
     make_user(demo, "v@x", "viewer", ["demo"])
     from fastapi.testclient import TestClient
 

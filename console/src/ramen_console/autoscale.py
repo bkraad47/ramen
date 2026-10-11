@@ -5,16 +5,21 @@ worker doc itself and the clock in, a decision and the next state out. Signals p
 in-flight calls against the node's limit (`max_inflight`, 32 for workers older than 0.7.5) and calls per second derived
 from the node's `total` counter between two rebalances.
 
-- **Up** by one: any worker `high` (inflight > 80 %), the zone's mean inflight ≥ 50 %, or the call rate per worker at or
-  above `RAMEN_AUTOSCALE_TARGET_RPS` (default 50) — and `count < max_count`.
+- **Up**: any worker `high` (inflight > 80 %), the zone's mean inflight ≥ 50 %, or the call rate per worker at or above
+  `RAMEN_AUTOSCALE_TARGET_RPS` (default 50) — and `count < max_count`. The step is proportional (0.7.5 load
+  tests): enough workers to bring the busiest signal back to its threshold,
+  `ceil(ready × max(mean/50 %, rate per worker/target))`, at least one more, at most `max_count`.
 - **Down** by one: every ready worker `low` with a known rate, the projected mean inflight and rate per worker with one
   worker fewer still under the up thresholds, for `DOWN_STREAK` (3) consecutive rebalances — and `count > 1`.
-- **Cooldown**: no change within `RAMEN_AUTOSCALE_COOLDOWN_SECS` (120) of the previous change.
+- **Cooldown**: no scale-up within `RAMEN_AUTOSCALE_UP_COOLDOWN_SECS` (30) of the previous change, no scale-down within
+  `RAMEN_AUTOSCALE_COOLDOWN_SECS` (120). Up fast, down carefully: a GKE load test needed 309 s to reach 3 with a single
+  120 s cooldown, and calls were refused (`inflight`) all that time.
 - A `count` above `max_count` (the max was lowered) is clamped down at once, cooldown or not.
 """
 
 from __future__ import annotations
 
+import math
 import os
 
 MIN_COUNT = 1
@@ -25,6 +30,10 @@ DEFAULT_MAX_INFLIGHT = 32
 
 def cooldown_secs() -> float:
     return float(os.environ.get("RAMEN_AUTOSCALE_COOLDOWN_SECS", "120"))
+
+
+def up_cooldown_secs() -> float:
+    return float(os.environ.get("RAMEN_AUTOSCALE_UP_COOLDOWN_SECS", "30"))
 
 
 def target_rps() -> float:
@@ -60,10 +69,13 @@ def observe(workers: list[dict], state: dict, now: float) -> tuple[list[dict], f
     return ready, (rate if known else None), totals
 
 
-def decide(workers: list[dict], state: dict | None, w: dict, now: float, cooldown: float | None = None) -> tuple:
+def decide(
+    workers: list[dict], state: dict | None, w: dict, now: float, cooldown: float | None = None, up_cooldown=None
+) -> tuple:
     """→ (decision, next_state). decision = {action: up|down|hold, from, to, reason, rate, mean_pct, at}."""
     state = dict(state or {})
     cooldown = cooldown_secs() if cooldown is None else cooldown
+    up_cooldown = up_cooldown_secs() if up_cooldown is None else up_cooldown
     count, hi = bounds(w)
     raw = int(w["count"]) if w.get("count") is not None else MIN_COUNT
     ready, rate, totals = observe(workers, state, now)
@@ -95,7 +107,8 @@ def decide(workers: list[dict], state: dict | None, w: dict, now: float, cooldow
     if not ready:
         nxt["low_streak"] = 0
         return out("hold", count, "no ready workers")
-    cooling = now - float(state.get("last_change") or 0) < cooldown
+    since = now - float(state.get("last_change") or 0)
+    cooling = since < cooldown
     hot = [x["id"] for x in ready if x.get("load") == "high"]
     rps = target_rps()
     up_why = (
@@ -111,9 +124,11 @@ def decide(workers: list[dict], state: dict | None, w: dict, now: float, cooldow
         nxt["low_streak"] = 0
         if count >= hi:
             return out("hold", count, f"{up_why}, at max_count {hi}")
-        if cooling:
+        if since < up_cooldown:
             return out("hold", count, f"{up_why}, cooling down")
-        return out("up", count + 1, up_why)
+        pressure = max(mean / UP_MEAN_PCT, (per_worker / rps) if per_worker is not None else 0.0, 1.0)
+        want = min(hi, max(count + 1, math.ceil(len(ready) * pressure)))
+        return out("up", want, up_why)
     all_low = all(x.get("load") == "low" for x in ready)
     if not all_low or rate is None or count <= MIN_COUNT:
         nxt["low_streak"] = 0

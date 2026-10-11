@@ -216,6 +216,26 @@ async def main() -> int:
     want = set(a.only.split(","))
     results, report = [], {"args": vars(a), "scenarios": {}}
     t0 = time.time()
+    # 0.7.5: the console must stay reachable the whole time — an autoscaler node scale-down once evicted its only pod
+    # and the edge answered "unconditional drop overload" (503) to the UI while workers were scaling down.
+    import threading
+
+    console_seen = {"ok": 0, "bad": [], "stop": False}
+
+    def watch_console():
+        with httpx.Client(verify=verify, timeout=10) as w:
+            while not console_seen["stop"]:
+                try:
+                    code = w.get(f"{a.console.rstrip('/')}/readyz").status_code
+                except httpx.HTTPError as e:
+                    code = type(e).__name__
+                if code == 200:
+                    console_seen["ok"] += 1
+                else:
+                    console_seen["bad"].append([round(time.time() - t0, 1), code])
+                time.sleep(2)
+
+    threading.Thread(target=watch_console, daemon=True).start()
 
     def record(name, ok, detail, rows=None, extra=None):
         if extra and "load" in extra and not extra["load"].get("ok"):
@@ -305,7 +325,17 @@ async def main() -> int:
                 else "count did not follow the lowered max",
                 rows,
             )
+        console_seen["stop"] = True
+        bad = console_seen["bad"]
+        record(
+            "console",
+            not bad,
+            f"console /readyz answered 200 {console_seen['ok']} times"
+            + (f", and not 200 {len(bad)} times, first at {bad[0][0]} s ({bad[0][1]})" if bad else ", never anything else"),
+            extra={"console_failures": bad},
+        )
     finally:
+        console_seen["stop"] = True
         r.api(
             "PUT",
             "/config/scheduler",

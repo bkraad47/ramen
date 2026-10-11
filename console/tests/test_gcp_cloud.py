@@ -1076,3 +1076,15 @@ async def test_revoking_project_roles_without_project_iam_admin_is_reported_not_
     with pytest.raises(ApiError) as e:
         await cloud.apply_sa_permissions("demo", "a", [])
     assert e.value.status_code == 502
+
+
+def test_worker_pods_are_not_evictable_by_the_cluster_autoscaler():
+    """0.7.5 live run: an Autopilot node scale-down evicted a single pod and the edge answered 'unconditional drop
+    overload'. Ramen owns the worker count, so the autoscaler must not move workers to empty a node."""
+    from ramen_console.cloud.gcp_k8s import manifests
+
+    docs = manifests("demo", "a", {"region": "", "count": 1, "size": "s"}, "img", "gs://b/demo", None)
+    for d in docs:
+        if d["kind"] == "Deployment":
+            ann = d["spec"]["template"]["metadata"].get("annotations") or {}
+            assert ann.get("cluster-autoscaler.kubernetes.io/safe-to-evict") == "false", d["metadata"]["name"]

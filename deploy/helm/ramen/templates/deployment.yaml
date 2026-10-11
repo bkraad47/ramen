@@ -53,6 +53,10 @@ spec:
         {{- end }}
       annotations:
         checksum/secret: {{ .Values.console.secrets | toJson | sha256sum | trunc 16 }}
+        # 0.7.5: the console is one pod (deploy jobs live in its memory); a cluster-autoscaler node scale-down evicted it
+        # on GKE Autopilot and the edge answered "unconditional drop overload" until it came back. GKE, EKS and AKS
+        # autoscalers all honour this annotation and leave the node alone.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }

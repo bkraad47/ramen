@@ -194,6 +194,23 @@ async def main() -> int:
     if not key:
         print("FAIL: could not mint a group key")
         return 2
+    envs = [
+        e
+        for e in r.api("GET", "/environments").json()
+        if e.get("group") == a.group and a.zone in (e.get("zones") or [])
+    ]
+    if not envs:
+        print(f"FAIL: no environment of {a.group} runs on zone {a.zone}")
+        return 2
+    job = r.api("POST", f"/groups/{a.group}/environments/{envs[0]['name']}/deploy", {"canary": True}).json().get("id")
+    for _ in range(180):  # the new key reaches the workers with the deploy
+        time.sleep(5)
+        st = r.api("GET", f"/jobs/{job}").json().get("status")
+        if st and st != "running":
+            break
+    print(f"deploy for the new key: {st}", flush=True)
+    if st != "ok":
+        return 2
     sched = r.api("GET", "/config/scheduler").json()
     r.api("PUT", "/config/scheduler", {"enabled": True, "interval_seconds": a.scheduler_interval})
     want = set(a.only.split(","))
@@ -201,14 +218,18 @@ async def main() -> int:
     t0 = time.time()
 
     def record(name, ok, detail, rows=None, extra=None):
+        if extra and "load" in extra and not extra["load"].get("ok"):
+            ok, detail = False, detail + " — no call succeeded, so nothing was tested"
         results.append((name, ok))
         print(f"{'PASS' if ok else 'FAIL'}: {name} — {detail}", flush=True)
         report["scenarios"][name] = {"ok": ok, "detail": detail, "timeline": rows or [], **(extra or {})}
 
     try:
         if "viewer" in want:
-            email, pw = f"load-viewer-{secrets.token_hex(3)}@ramen.local", "Load-Test-" + secrets.token_urlsafe(10)
+            email, pw = f"load-viewer-{secrets.token_hex(3)}@ramen.local", "Load-Test-9!" + secrets.token_urlsafe(10)
             u = r.api("POST", "/users", {"email": email, "password": pw, "memberships": {a.group: "viewer"}})
+            if u.status_code >= 300:
+                record("viewer", False, f"could not create the viewer: {u.status_code} {u.text[:120]}")
             v = Ramen(a.console, a.edge, verify, a.group, a.zone)
             v.login(email, pw)
             code = v.set_max(9).status_code

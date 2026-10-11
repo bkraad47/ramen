@@ -259,3 +259,15 @@ def test_every_branded_page_shows_the_mark_not_the_wordmark(demo):
     for name, html in pages.items():
         assert 'src="/static/logo-mark.png"' in html, name
         assert "/static/logo.png" not in html, name
+
+
+def test_every_successful_action_reloads_and_keys_stay_a_minute(demo):
+    """0.7.5 (the user): any button reloads the page on success; a new API or MCP key stays on screen for 60 s with a
+    countdown first; a restore result 20 s; a dry-run preview never reloads."""
+    page = demo.get("/groups/demo").text
+    assert "function ramenReload()" in page and "function ramenHold(secs)" in page and "data-hold-secs" in page
+    h = {"HX-Request": "true", "X-Ramen-CSRF": demo.cookies.get("ramen_csrf", "")}
+    r = demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "k-hold"}, headers=h)
+    assert r.status_code == 201 and 'data-hold-secs="60"' in r.text and "rmk_" in r.text
+    r = demo.post("/api/v1/api-keys", json={"name": "a-hold", "client_type": "devops"}, headers=h)
+    assert r.status_code == 201 and 'data-hold-secs="60"' in r.text and "rmn_" in r.text

@@ -235,7 +235,9 @@ def _restore_html(r: dict) -> str:
         for c, v in r["restored"].items()
     )
     parts = [
-        f'<div class="once"><strong>{head}</strong> (release {escape(r["release_version"])})',
+        # a preview never reloads the page; a real restore stays readable for 20 s, then the page reloads (0.7.5)
+        f'<div class="once" data-hold-secs="{0 if r["dry_run"] else 20}"><strong>{head}</strong>'
+        f" (release {escape(r['release_version'])})",
         "<table><tr><th>Collection</th><th>Created</th><th>Updated</th><th>Unchanged</th>"
         f"<th>Not in the backup</th></tr>{rows}</table>",
     ]

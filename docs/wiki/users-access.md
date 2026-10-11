@@ -57,7 +57,7 @@ audited.
 
 ## How a person signs in
 
-Password and magic link are on by default. A super admin can add Microsoft Entra ID or Google Workspace on the
+Password sign-in is on by default; magic-link sign-in (a one-time link by email) is off until a super admin switches it on on the Config page, and needs mail configured. A super admin can add Microsoft Entra ID or Google Workspace on the
 Config page and map claim values to roles per group; see [Entra ID and Workspace](sso.md). Disabling password
 login needs another way in first, or the break-glass `RAMEN_ADMIN_FORCE_PASSWORD=1`.
 

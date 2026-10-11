@@ -18,11 +18,15 @@ def make_store(firestore_client=None) -> Store:
         from .dynamodb import DynamoStore
 
         store = DynamoStore.from_env()
+    elif kind == "azuretables":
+        from .azuretables import TableStore
+
+        store = TableStore.from_env()
     elif kind == "postgres":
         from .postgres import PostgresStore
 
         store = PostgresStore.from_env()
     else:
-        raise ValueError(f"unknown RAMEN_STORE={kind!r}; use memory|firestore|dynamodb|postgres")
+        raise ValueError(f"unknown RAMEN_STORE={kind!r}; use memory|firestore|dynamodb|postgres|azuretables")
     key = os.environ.get("RAMEN_FERNET_KEY")
     return EncryptedStore(store, FieldCipher(key)) if key else store

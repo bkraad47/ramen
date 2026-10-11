@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --extra gcp --extra aws --no-install-project
+RUN uv sync --frozen --no-dev --extra gcp --extra aws --extra azure --no-install-project
 COPY src ./src
 COPY entrypoint.sh ./
-RUN uv sync --frozen --no-dev --extra gcp --extra aws && echo "$RAMEN_VERSION" > /app/VERSION \
+RUN uv sync --frozen --no-dev --extra gcp --extra aws --extra azure && echo "$RAMEN_VERSION" > /app/VERSION \
  && mkdir -p /data/buckets /data/backups && chown -R ramen:ramen /app /data
 USER ramen
 ENV RAMEN_BUCKET_ROOT=/data/buckets RAMEN_BACKUP_ROOT=/data/backups RAMEN_CONSOLE_PORT=8000

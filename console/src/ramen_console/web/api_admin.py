@@ -566,7 +566,7 @@ async def get_regions_config(request: Request, p: Principal = Depends(super_)):
 async def set_regions_config(request: Request, body: m.RegionsConfig, p: Principal = Depends(super_)):
     """C7: regions no zone may be created in or deployed to; a zone already there fails its next deploy."""
     try:
-        blocked = regions.clean({"gcp": body.gcp or [], "aws": body.aws or []})
+        blocked = regions.clean({p: getattr(body, p) or [] for p in regions.PROVIDERS})
     except ValueError as e:
         raise invalid(str(e)) from e
     note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])

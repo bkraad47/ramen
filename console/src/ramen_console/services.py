@@ -170,7 +170,7 @@ class Services:
         return sorted(await self.store.list("zones"), key=lambda z: z["name"])
 
     async def blocked_regions(self) -> dict[str, list[str]]:
-        """C7: `config/regions` → `{"gcp": [...], "aws": [...]}`, both keys always present."""
+        """C7: `config/regions` → `{"gcp": [...], "aws": [...], "azure": [...]}`, every provider always present."""
         doc = (await self.store.get("config", regions.DOC) or {}).get("blocked") or {}
         return {p: list(doc.get(p) or []) for p in regions.PROVIDERS}
 

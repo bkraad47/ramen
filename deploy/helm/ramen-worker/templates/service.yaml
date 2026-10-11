@@ -4,7 +4,7 @@ metadata:
   name: worker
   namespace: {{ include "rw.ns" . }}
   labels: {{- include "rw.labels" . | nindent 4 }}
-  {{- if ne .Values.provider "aws" }}
+  {{- if eq .Values.provider "gcp" }}
   annotations:
     cloud.google.com/neg: '{"exposed_ports": {"{{ .Values.port }}": {"name": "ramen-{{ .Values.group }}-{{ .Values.zone }}"}}}'
   {{- end }}

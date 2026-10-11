@@ -1,0 +1,9 @@
+# Deterministic rails for the runtime's tests: no model, custom actions only.
+models: []
+rails:
+  input:
+    flows:
+      - block injection
+  output:
+    flows:
+      - block leaked secrets

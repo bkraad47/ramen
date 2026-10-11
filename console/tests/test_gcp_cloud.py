@@ -71,12 +71,11 @@ def test_manifests_shape():
         "Service",
         "Deployment",
         "Deployment",
-        "HorizontalPodAutoscaler",
         "HTTPRoute",
         "HealthCheckPolicy",
     ]
     assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
-    route = docs[7]
+    route = docs[6]
     assert route["apiVersion"] == "gateway.networking.k8s.io/v1" and route["metadata"] == {
         "name": "worker",
         "namespace": "ramen-demo-a",
@@ -100,7 +99,7 @@ def test_manifests_shape():
     ]
     assert not any("/ramen.v1.Admin" in json.dumps(m) for m in rule["matches"])
     assert "filters" not in rule and rule["backendRefs"] == [{"name": "worker", "port": 8080}]
-    hcp = docs[8]
+    hcp = docs[7]
     assert hcp["apiVersion"] == "networking.gke.io/v1" and hcp["spec"]["targetRef"]["name"] == "worker"
     assert hcp["spec"]["default"]["config"] == {"type": "GRPC", "grpcHealthCheck": {"port": 8080}}
     svc = docs[3]
@@ -120,7 +119,7 @@ def test_manifests_shape():
     assert docs[5]["metadata"]["name"] == "worker-canary" and docs[5]["spec"]["replicas"] == 0
     assert docs[2]["metadata"]["annotations"]["iam.gke.io/gcp-service-account"].startswith("ramen-demo-a@")
     assert "ramen-demo-a" in docs[3]["metadata"]["annotations"]["cloud.google.com/neg"]
-    assert docs[6]["spec"]["minReplicas"] == 2 and docs[6]["spec"]["maxReplicas"] == 4
+    assert docs[4]["spec"]["replicas"] == 2 and not any(d["kind"] == "HorizontalPodAutoscaler" for d in docs)  # §21.7
     no_zone = manifests("demo", "a", {"region": "", "size": "xl", "count": 1}, "img", "gs://b/demo")
     assert "nodeSelector" not in no_zone[4]["spec"]["template"]["spec"]
     assert no_zone[4]["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["s"]
@@ -421,9 +420,9 @@ async def test_rebalance(cloud, fk):
     )
     b = fk.compute_state["backend"]["backends"]
     assert b[0]["capacityScaler"] == 0.5 and b[1]["capacityScaler"] == 1.0
-    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
-    r = await cloud.rebalance("demo", "a")
-    assert r["scaled_to"] == 3 and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+    fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]["spec"]["replicas"] = 3
+    r = await cloud.rebalance("demo", "a")  # §21.7: the adapter's rebalance no longer resets replicas (no HPA)
+    assert "scaled_to" not in r and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
 
 
 async def test_rebalance_fallback_name(cloud, fk):
@@ -531,7 +530,16 @@ async def test_refresh_and_scale(cloud, fk):
     dep = obj(fk, "Deployment", "ramen-demo-a", "worker")
     assert dep["spec"]["replicas"] == 4
     assert dep["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"] == SIZES["l"]
-    assert obj(fk, "HorizontalPodAutoscaler", "ramen-demo-a", "worker")["spec"]["minReplicas"] == 4
+    assert ("HorizontalPodAutoscaler", "ramen-demo-a", "worker") not in fk.k8s.objs  # §21.7: no HPA
+
+
+async def test_an_hpa_from_before_0_7_5_is_deleted_on_the_next_scale(cloud, fk):
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")] = {"spec": {"minReplicas": 2}}
+    await cloud.scale("demo", "a", {**SPEC, "count": 3})
+    assert ("HorizontalPodAutoscaler", "ramen-demo-a", "worker") not in fk.k8s.objs
+    assert ("delete", "HorizontalPodAutoscaler", "ramen-demo-a", "worker") in fk.k8s.calls
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
 
 
 @pytest.fixture
@@ -857,10 +865,8 @@ async def test_rebalance_hands_off_to_background_when_backend_stays_busy(cloud, 
     fk.compute_state["bs_not_ready"] = 10  # more than the 6 synchronous attempts
     r = await cloud.rebalance("demo", "a")
     assert r["ok"] and not r["applied"] and "pending" in r["note"] and r["backend_service"] == "gkegw1-ramen-demo-a"
-    import asyncio
-
-    for t in list(getattr(cloud, "_bg", ())):
-        await asyncio.wrap_future(t) if hasattr(t, "result") and not isinstance(t, asyncio.Future) else t
+    for t in list(getattr(cloud, "_bg", ())):  # run_in_executor futures: await each, nothing is left to timing
+        await t
     assert fk.compute_state["bs_not_ready"] == 0
 
 
@@ -975,10 +981,8 @@ async def test_apply_sa_permissions_without_project_iam_admin(cloud, fk, monkeyp
 
 
 async def test_rebalance_degrades_when_the_compute_api_is_unreachable(cloud, fk):
-    """§7: the load-balancer leg never fails the call, whatever the compute API does — and the HPA
-    re-scale, which needs no cloud API, must survive it (D-CONSOLE-1, found on kind)."""
+    """§7: the load-balancer leg never fails the call, whatever the compute API does (D-CONSOLE-1, found on kind)."""
     await cloud.attach_zone("demo", "a", SPEC)
-    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
 
     class NoCreds(Exception):
         pass
@@ -989,8 +993,7 @@ async def test_rebalance_degrades_when_the_compute_api_is_unreachable(cloud, fk)
     fk.compute_state["find_raises"] = boom
     r = await cloud.rebalance("demo", "a")
     assert r["ok"] and r["applied"] is False and "NoCreds" in r["note"]
-    assert r["scaled_to"] == 3, "the HPA re-scale must not be lost with the load-balancer leg"
-    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+    assert obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 2  # untouched (§21.7)
     out = await cloud.set_ip_rules("demo", "a", ["10.0.0.0/8"])
     assert out["ok"] and out["attached"] is False and "enforced at the node" in out["note"]
     # the control that matters reached the node even though no cloud call could be made
@@ -1073,3 +1076,15 @@ async def test_revoking_project_roles_without_project_iam_admin_is_reported_not_
     with pytest.raises(ApiError) as e:
         await cloud.apply_sa_permissions("demo", "a", [])
     assert e.value.status_code == 502
+
+
+def test_worker_pods_are_not_evictable_by_the_cluster_autoscaler():
+    """0.7.5 live run: an Autopilot node scale-down evicted a single pod and the edge answered 'unconditional drop
+    overload'. Ramen owns the worker count, so the autoscaler must not move workers to empty a node."""
+    from ramen_console.cloud.gcp_k8s import manifests
+
+    docs = manifests("demo", "a", {"region": "", "count": 1, "size": "s"}, "img", "gs://b/demo", None)
+    for d in docs:
+        if d["kind"] == "Deployment":
+            ann = d["spec"]["template"]["metadata"].get("annotations") or {}
+            assert ann.get("cluster-autoscaler.kubernetes.io/safe-to-evict") == "false", d["metadata"]["name"]

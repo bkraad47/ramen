@@ -8,7 +8,7 @@ metadata:
   namespace: {{ include "rw.ns" . }}
   labels: {{- include "rw.labels" . | nindent 4 }}
 spec:
-  parentRefs: [{ name: {{ .Values.route.gateway }}, namespace: {{ .Values.route.gatewayNamespace }} }]
+  parentRefs: [{ name: {{ .Values.route.gateway }}, namespace: {{ .Values.route.gatewayNamespace }}{{ if eq .Values.provider "azure" }}, sectionName: https{{ end }} }]
   rules:
     - matches:
         {{- range .Values.route.paths }}
@@ -18,6 +18,7 @@ spec:
             - { name: ramen-zone, value: {{ $.Values.zone | quote }} }
         {{- end }}
       backendRefs: [{ name: worker, port: {{ .Values.port }} }]
+{{- if eq .Values.provider "gcp" }}
 ---
 apiVersion: networking.gke.io/v1
 kind: HealthCheckPolicy
@@ -32,4 +33,5 @@ spec:
       type: GRPC
       grpcHealthCheck: { port: {{ .Values.port }} }
   targetRef: { group: "", kind: Service, name: worker }
+{{- end }}
 {{- end }}

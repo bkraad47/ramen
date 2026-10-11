@@ -471,3 +471,38 @@ def test_api_keys_cannot_authorize_and_loopback_clients_may_pick_a_port(demo):
     assert r.status_code == 303
     q = parse_qs(urlparse(r.headers["location"]).query)
     assert q == {"app": ["1"], "state": ["s"], "error": ["access_denied"]}
+
+
+def test_consent_hands_a_loopback_client_a_self_navigating_page_and_a_web_client_a_303(demo):
+    """0.7.5 live Entra run: browsers drop a 303 from a public https page to http://127.0.0.1 (Chromium aborts the
+    form POST), so native clients such as the bridge and Claude Code never got their code. A loopback redirect gets a
+    page that navigates by script; any other redirect keeps the plain 303."""
+    cid = register(demo)
+    verifier, challenge = pkce()
+    r = authorize(demo, cid, challenge)
+    assert r.status_code == 200
+    form = {k: v for k, v in dict(r.request.url.params).items()} | {"decision": "allow"}
+    form["csrf_token"] = demo.cookies.get("ramen_csrf", "")
+    browser = {"Sec-Fetch-Mode": "navigate"}  # what a real browser's form submission carries
+    r = demo.post("/oauth/authorize", data=form, headers=browser, follow_redirects=False)
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"], r.text[:200]
+    assert "location.replace('http://127.0.0.1" in r.text and "code=" in r.text and "<script>" in r.text
+    assert "href='http://127.0.0.1" in r.text  # the fallback link
+    # a programmatic caller (the bridge's own fake browser in tests, scripts) still gets the plain 303
+    r = authorize(demo, cid, challenge)
+    form = {k: v for k, v in dict(r.request.url.params).items()} | {"decision": "allow"}
+    form["csrf_token"] = demo.cookies.get("ramen_csrf", "")
+    r = demo.post("/oauth/authorize", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("http://127.0.0.1:9999/callback?")
+    web = demo.post(
+        "/api/v1/oauth/clients",
+        json={"name": "web", "redirect_uris": ["https://app.example/cb"]},
+        headers={"X-Ramen-CSRF": demo.cookies.get("ramen_csrf", "")},
+    )
+    assert web.status_code == 201, web.text
+    r = authorize(demo, web.json()["client_id"], challenge, redirect="https://app.example/cb")
+    assert r.status_code == 200
+    form = {k: v for k, v in dict(r.request.url.params).items()} | {"decision": "allow"}
+    form["csrf_token"] = demo.cookies.get("ramen_csrf", "")
+    r = demo.post("/oauth/authorize", data=form, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("https://app.example/cb?")

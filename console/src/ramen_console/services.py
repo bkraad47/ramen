@@ -1,4 +1,8 @@
-from . import regions
+import logging
+import time
+
+from . import autoscale, regions
+from .audit import write_audit
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
 from .errors import conflict, forbidden, invalid, not_found
@@ -9,6 +13,8 @@ from .secrets.base import SecretsBackend, StoreBackend
 from .security import generate_key_secret
 from .storage.base import Store
 from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, parse_image, public, uid
+
+log = logging.getLogger("ramen.autoscale")
 
 
 def clean_blocked(names) -> list[str]:
@@ -170,7 +176,7 @@ class Services:
         return sorted(await self.store.list("zones"), key=lambda z: z["name"])
 
     async def blocked_regions(self) -> dict[str, list[str]]:
-        """C7: `config/regions` → `{"gcp": [...], "aws": [...]}`, both keys always present."""
+        """C7: `config/regions` → `{"gcp": [...], "aws": [...], "azure": [...]}`, every provider always present."""
         doc = (await self.store.get("config", regions.DOC) or {}).get("blocked") or {}
         return {p: list(doc.get(p) or []) for p in regions.PROVIDERS}
 
@@ -372,12 +378,49 @@ class Services:
             if group not in await self._zone_users(z):
                 await self.detach_zone(group, z)
 
-    async def rebalance(self, group, zone):
+    async def rebalance(self, group, zone, user: str = "-", ip: str = "-"):
+        """The load-balancer leg (the adapter), then §21.7 autoscaling: `autoscale.decide` on the zone's live metrics,
+        and on up/down the stable Deployment's replicas through `cloud.scale`. Every up/down is audited
+        `workers.autoscale` under `user` (a person, a key, or `scheduler`) and logged `ramen.autoscale`."""
         if not await self.store.get("groups", group):
             raise not_found("group")
         if not await self.store.get("zones", zone):
             raise not_found("zone")
-        return await self.cloud.rebalance(group, zone)
+        out = await self.cloud.rebalance(group, zone)
+        out["autoscale"] = await self.autoscale(group, zone, user=user, ip=ip)
+        return out
+
+    async def autoscale(self, group, zone, user: str = "-", ip: str = "-", now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        w = await self.worker_config(group, zone)
+        try:
+            live = await self.cloud.workers(group, zone)
+        except Exception as e:  # noqa: BLE001 - a dead API must not fail the rebalance; nothing is changed
+            return {"action": "hold", "from": w.get("count", 1), "to": w.get("count", 1), "reason": f"no metrics: {e}"}
+        decision, state = autoscale.decide(live, w.get("autoscale_state"), w, now)
+        w["autoscale_state"], w["last_autoscale"] = state, decision
+        if decision["action"] != "hold":
+            w["count"] = decision["to"]
+        await self.store.put("workers", w["id"], w)
+        target = f"{group}/{zone}"
+        if decision["action"] != "hold":
+            decision["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
+            tags = [f"group:{group}", f"zone:{zone}", f"action:{decision['action']}", f"from:{decision['from']}"]
+            tags += [f"to:{decision['to']}", f"reason:{decision['reason']}"]
+            await write_audit(
+                self.store, user=user, ip=ip, action="workers.autoscale", target=target, ok=True, tags=tags
+            )
+            log.info(
+                "autoscale %s %s %s→%s (%s)",
+                target,
+                decision["action"],
+                decision["from"],
+                decision["to"],
+                decision["reason"],
+            )
+        elif "at max_count" in decision["reason"]:
+            log.warning("autoscale %s pinned at max_count under load: %s", target, decision["reason"])
+        return decision
 
     async def worker_config(self, group, zone) -> dict:
         if not await self.store.get("zones", zone):
@@ -387,11 +430,14 @@ class Services:
             "group": group,
             "zone": zone,
             "count": 1,
+            "max_count": 1,
             "size": "s",
             "allowed_sizes": [],
         }
 
-    async def set_workers(self, group, zone, p: Principal, count=None, size=None, allowed_sizes=None) -> dict:
+    async def set_workers(
+        self, group, zone, p: Principal, count=None, size=None, allowed_sizes=None, max_count=None
+    ) -> dict:
         w = await self.worker_config(group, zone)
         if allowed_sizes is not None:
             if p.role != "super_admin":
@@ -406,9 +452,16 @@ class Services:
             if not normalize_size(size):
                 raise invalid("Size must be one of s|m|l")
             w["size"] = size
+        w.setdefault("max_count", max(1, int(w.get("count") or 1)))
+        if max_count is not None:  # §21.7: super admins and group admins (the route's gate); min is always 1
+            if max_count < 1:
+                raise invalid("max_count must be 1 or more (the minimum is always 1)")
+            w["max_count"] = max_count
+            if int(w.get("count") or 1) > max_count:  # a lower max clamps the running count down at once
+                w["count"] = max_count
         if count is not None:
-            if count < 1:
-                raise invalid("Count must be 1 or more")
+            if count < 1 or count > int(w["max_count"]):
+                raise invalid(f"Count must be between 1 and max_count ({w['max_count']})")
             w["count"] = count
         doc = await self.store.put("workers", w["id"], w)
         doc["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
@@ -424,6 +477,7 @@ class Services:
                 "group": z["group"],
                 "zone": z["zone"],
                 "count": 1,
+                "max_count": 1,
                 "size": "s",
                 "allowed_sizes": [],
             }

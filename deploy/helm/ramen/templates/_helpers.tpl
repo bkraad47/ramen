@@ -9,7 +9,9 @@ app.kubernetes.io/name: ramen-console
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- define "ramen.image" -}}
-{{- if eq .Values.provider "aws" -}}
+{{- if eq .Values.provider "azure" -}}
+{{ printf "%s:%s" (default (printf "%s/ramen/console" .Values.azure.acr) .Values.image.repository) (.Values.image.tag | toString) }}
+{{- else if eq .Values.provider "aws" -}}
 {{ printf "%s:%s" (default (printf "%s.dkr.ecr.%s.amazonaws.com/ramen/console" (.Values.aws.account | toString) .Values.region) .Values.image.repository) (.Values.image.tag | toString) }}
 {{- else -}}
 {{ printf "%s:%s" (default (printf "%s-docker.pkg.dev/%s/ramen/console" .Values.region .Values.project) .Values.image.repository) (.Values.image.tag | toString) }}

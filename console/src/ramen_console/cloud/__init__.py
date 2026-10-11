@@ -17,4 +17,8 @@ def make_cloud() -> Cloud:
         from .aws import AwsCloud
 
         return AwsCloud.from_env()
-    raise ValueError(f"unknown RAMEN_CLOUD={kind!r}; use local|gcp|aws")
+    if kind == "azure":
+        from .azure import AzureCloud
+
+        return AzureCloud.from_env()
+    raise ValueError(f"unknown RAMEN_CLOUD={kind!r}; use local|gcp|aws|azure")

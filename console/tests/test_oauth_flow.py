@@ -84,7 +84,7 @@ def start(client: TestClient, idp: FakeIdp, name="idp") -> str:
     assert r.status_code == 302, r.text
     q = parse_qs(urlsplit(r.headers["location"]).query)
     assert r.headers["location"].startswith(f"{ISSUER}/authorize?") and q["client_id"] == ["cid"]
-    assert q["redirect_uri"] == ["http://testserver/auth/idp/callback"] and q["response_type"] == ["code"]
+    assert q["redirect_uri"] == [f"http://testserver/auth/{name}/callback"] and q["response_type"] == ["code"]
     idp.nonce = q["nonce"][0]  # openid is always requested (SEC-06), so a nonce is always issued and verified
     assert q["code_challenge_method"] == ["S256"] and len(q["code_challenge"][0]) >= 43  # PKCE
     idp.challenge = q["code_challenge"][0]
@@ -129,21 +129,52 @@ def test_oauth_links_existing_user_and_keeps_role(demo):
     assert len([u for u in demo.get("/api/v1/users").json() if u["email"] == "ga@x"]) == 1
 
 
-def test_oauth_rejects_unverified_or_missing_email_and_bad_code(demo):
+def test_oauth_rejects_a_bad_code_and_signs_in_an_unverified_email(demo):
     idp = FakeIdp({"email": "x@y", "email_verified": False})
     demo.app.state.oauth = registry(idp)
     with TestClient(demo.app) as anon:
         state = start(anon, idp)
         r = anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False)
-        assert r.status_code == 403 and "verified" in r.text
+        assert r.status_code == 303  # D51: Entra never sends email_verified; the email itself identifies the person
+        assert anon.get("/api/v1/me").json()["email"] == "x@y"
         state = start(anon, idp)
         assert anon.get(f"/auth/idp/callback?code=bad&state={state}", follow_redirects=False).status_code == 401
         assert anon.get("/auth/nope/login").status_code == 404
         assert anon.get("/auth/nope/callback?code=1&state=2").status_code == 404
         assert anon.get("/auth/idp/callback?error=access_denied&state=x", follow_redirects=False).status_code == 401
-    idp2 = FakeIdp({"name": "no email"})
+    idp2 = FakeIdp({"name": "no email"})  # the fake still mints `sub-1`, which x@y signed in with above: same person
     demo.app.state.oauth = registry(idp2)
     with TestClient(demo.app) as anon:
         state = start(anon, idp2)
-        assert anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False).status_code == 403
-    assert not [u for u in demo.get("/api/v1/users").json() if u["email"] == "x@y"]
+        assert anon.get(f"/auth/idp/callback?code=good-code&state={state}", follow_redirects=False).status_code == 303
+        assert anon.get("/api/v1/me").json()["email"] == "x@y"  # D51: found by the provider's stable id
+    assert [u for u in demo.get("/api/v1/users").json() if u["email"] == "x@y"]
+
+
+def test_provider_callback_uses_the_public_url_behind_a_tls_terminating_edge(demo, monkeypatch):
+    """0.7.5 cloud run: TLS ends at the load balancer, so the request says http://; the provider must still be sent
+    the public https callback (Entra answers AADSTS50011 otherwise). Base URI wins, then RAMEN_PUBLIC_URL."""
+    idp = FakeIdp({"email": "dev@corp.test", "email_verified": True})
+    demo.app.state.oauth = registry(idp)
+    monkeypatch.setenv("RAMEN_PUBLIC_URL", "https://console.example")
+    with TestClient(demo.app) as anon:
+        r = anon.get("/auth/idp/login", follow_redirects=False)
+        q = parse_qs(urlsplit(r.headers["location"]).query)
+        assert q["redirect_uri"] == ["https://console.example/auth/idp/callback"]
+
+
+def test_provider_sign_in_returns_to_next_so_an_mcp_consent_page_is_reached(demo, monkeypatch):
+    """0.7.5 live run: an MCP client sends the person to /oauth/authorize, which redirects an anonymous person to
+    /login?next=…; the provider button must carry `next` across the round trip or the person lands on the home page
+    and the client never gets its code."""
+    idp = FakeIdp({"email": "dev@corp.test", "email_verified": True})
+    demo.app.state.oauth = registry(idp)
+    target = "/oauth/authorize?client_id=x&state=y"
+    with TestClient(demo.app) as anon:
+        page = anon.get("/login", params={"next": target}).text
+        assert "/auth/idp/login?next=/oauth/authorize%3Fclient_id%3Dx%26state%3Dy" in page
+        r = anon.get("/auth/idp/login", params={"next": target}, follow_redirects=False)
+        q = parse_qs(urlsplit(r.headers["location"]).query)
+        idp.nonce, idp.challenge = q["nonce"][0], q["code_challenge"][0]
+        r = anon.get(f"/auth/idp/callback?code=good-code&state={q['state'][0]}", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].endswith(target), r.headers.get("location")

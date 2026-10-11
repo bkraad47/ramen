@@ -75,7 +75,6 @@ def test_manifests_shape():
         "Service",
         "Deployment",
         "Deployment",
-        "HorizontalPodAutoscaler",
         "Ingress",
         "Ingress",
     ]
@@ -95,7 +94,7 @@ def test_manifests_shape():
         and dep["spec"]["replicas"] == 2
     )
     assert docs[6]["metadata"]["name"] == "worker-canary" and docs[6]["spec"]["replicas"] == 0
-    ing = docs[8]
+    ing = docs[7]
     ann = ing["metadata"]["annotations"]
     assert ing["spec"]["ingressClassName"] == "alb" and ann["alb.ingress.kubernetes.io/group.name"] == "ramen"
     assert (
@@ -303,9 +302,9 @@ async def test_rebalance(cloud, fk):
     r = await cloud.rebalance("demo", "a")
     assert r["load"] == "low" and r["weights"]["worker-canary"] == 0
     fk.k8s.ready = True
-    fk.k8s.objs[("HorizontalPodAutoscaler", "ramen-demo-a", "worker")]["spec"]["minReplicas"] = 3
-    r = await cloud.rebalance("demo", "a")
-    assert r["scaled_to"] == 3 and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
+    fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]["spec"]["replicas"] = 3
+    r = await cloud.rebalance("demo", "a")  # §21.7: no HPA floor any more; the console's autoscale owns replicas
+    assert "scaled_to" not in r and obj(fk, "Deployment", "ramen-demo-a", "worker")["spec"]["replicas"] == 3
     del fk.k8s.objs[("Ingress", "ramen-demo-a", "worker")]
     assert (await cloud.rebalance("demo", "a"))["weights"]["ingress"] is None
 

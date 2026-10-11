@@ -1,4 +1,5 @@
-"""N1: background job that watches zone load and rebalances when it skews to one worker."""
+"""N1 + §21.7: background job that rebalances every group × zone each interval — the load-balancer leg and the
+console's autoscaling (up to `max_count` under load, back down to 1 when quiet). Audited as user `scheduler`."""
 
 import asyncio
 import contextlib
@@ -26,7 +27,9 @@ async def set_config(store, **fields) -> dict:
 
 
 async def tick(svc: Services) -> list[dict]:
-    """One scan: rebalance any (group, zone) pair whose load has skewed to one worker."""
+    """One scan: rebalance every (group, zone) pair; the autoscale decision inside it scales up or down (§21.7).
+    A skewed (`high`) pair is audited `scheduler.rebalance` as before; every scale change is audited
+    `workers.autoscale` by `Services.autoscale` itself."""
     cfg = await get_config(svc.store)
     if not cfg["enabled"]:
         return []
@@ -36,22 +39,22 @@ async def tick(svc: Services) -> list[dict]:
     for group, zone in sorted(pairs):
         try:
             load = cell_load(await svc.cloud.workers(group, zone))
+            result = await svc.rebalance(group, zone, user="scheduler")
         except Exception as e:  # noqa: BLE001 - a dead worker/API must not stop the scan
-            log.warning("scheduler: workers(%s, %s) failed: %s", group, zone, e)
+            log.warning("scheduler: rebalance(%s, %s) failed: %s", group, zone, e)
             continue
-        if load != "high":
-            continue
-        result = await svc.rebalance(group, zone)
-        await write_audit(
-            svc.store,
-            user="scheduler",
-            ip="-",
-            action="scheduler.rebalance",
-            target=f"{group}/{zone}",
-            ok=bool(result.get("ok", True)),
-            tags=["scheduler", "auto"],
-        )
-        fired.append({"group": group, "zone": zone, "result": result})
+        scaled = (result.get("autoscale") or {}).get("action") in ("up", "down")
+        if load == "high" or scaled:
+            await write_audit(
+                svc.store,
+                user="scheduler",
+                ip="-",
+                action="scheduler.rebalance",
+                target=f"{group}/{zone}",
+                ok=bool(result.get("ok", True)),
+                tags=["scheduler", "auto", f"load:{load}"],
+            )
+        fired.append({"group": group, "zone": zone, "load": load, "result": result})
     return fired
 
 

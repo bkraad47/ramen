@@ -1,0 +1,13 @@
+{
+  "type": "tool",
+  "name": "demo_calculator_tool",
+  "description": "Add, subtract, multiply or divide two numbers.",
+  "callable": "calculator_func",
+  "input": {
+    "var1": {"type": "number", "description": "first operand"},
+    "var2": {"type": "number", "description": "second operand"},
+    "func": {"enum": ["add", "subtract", "multiply", "divide"], "description": "operation"}
+  },
+  "output": {"type": "number"},
+  "error": {"type": "string"}
+}

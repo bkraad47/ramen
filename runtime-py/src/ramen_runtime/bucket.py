@@ -1,15 +1,18 @@
-"""Bucket prefix → local dir sync (CONTRACTS §7 gs://, §8 s3://). md5-based: downloads changed/new objects,
-deletes stale files. Local state (`.ramen*`, `__pycache__`) is left alone. Auth is ADC / Workload Identity on
-GCP and the default boto3 chain (IRSA in EKS) on AWS."""
+"""Bucket prefix → local dir sync (CONTRACTS §7 gs://, §8 s3://, §21.6 az://). md5-based: downloads changed/new
+objects, deletes stale files. Local state (`.ramen*`, `__pycache__`) is left alone. Auth is ADC / Workload Identity on
+GCP, the default boto3 chain (IRSA in EKS) on AWS, and DefaultAzureCredential (AKS workload identity) on Azure, where
+the URI is `az://<storage account>/<container>/<prefix>`; `RAMEN_AZURE_BLOB_ENDPOINT` overrides the account URL
+(`https://<account>.blob.core.windows.net`), e.g. for Azurite."""
 
 import base64
 import hashlib
+import os
 from pathlib import Path
 
 from .log import log
 
 KEEP = (".ramen", "__pycache__")
-SCHEMES = ("gs://", "s3://")
+SCHEMES = ("gs://", "s3://", "az://")
 
 
 class SyncError(RuntimeError):
@@ -20,16 +23,31 @@ def scheme(uri: str) -> str:
     for s in SCHEMES:
         if uri.startswith(s):
             return s[:2]
-    raise ValueError(f"bucket uri must start with gs:// or s3://: {uri}")
+    raise ValueError(f"bucket uri must start with gs://, s3:// or az://: {uri}")
 
 
 def parse_uri(uri: str) -> tuple[str, str]:
-    scheme(uri)
+    """(bucket, prefix); on az:// the bucket is `<account>/<container>` and the prefix what follows the container."""
+    kind = scheme(uri)
     name, _, prefix = uri[5:].partition("/")
+    if kind == "az":
+        container, _, prefix = prefix.partition("/")
+        if not name or not container:
+            raise ValueError(f"az:// uri needs a storage account and a container: {uri}")
+        name = f"{name}/{container}"
     return name, prefix.strip("/")
 
 
-def _client(kind: str):
+def _client(kind: str, name: str = ""):
+    if kind == "az":
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.storage.blob import BlobServiceClient
+        except ImportError as e:
+            raise SyncError("azure-storage-blob is not installed (pip install 'ramen-runtime[azure]')") from e
+        account = name.split("/", 1)[0]
+        url = os.environ.get("RAMEN_AZURE_BLOB_ENDPOINT") or f"https://{account}.blob.core.windows.net"
+        return BlobServiceClient(url, credential=DefaultAzureCredential())
     if kind == "s3":
         try:
             import boto3
@@ -69,16 +87,29 @@ def _s3_objects(client, name, prefix):
             yield o["Key"], digest, lambda p, k=o["Key"]: client.download_file(name, k, p)
 
 
+def _az_objects(client, name, prefix):
+    container = client.get_container_client(name.split("/", 1)[1])
+    for blob in container.list_blobs(name_starts_with=f"{prefix}/" if prefix else None):
+        md5 = getattr(blob.content_settings, "content_md5", None) if blob.content_settings else None
+        digest = bytes(md5).hex() if md5 else None  # blobs written in blocks may carry none: always re-download
+
+        def download(path, n=blob.name):
+            with open(path, "wb") as f:
+                container.download_blob(n).readinto(f)
+
+        yield blob.name, digest, download
+
+
 def sync(uri: str, dest: Path, client=None) -> dict:
     kind = scheme(uri)
     name, prefix = parse_uri(uri)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    client = client or _client(kind)
+    client = client or _client(kind, name)
     strip = len(prefix) + 1 if prefix else 0
     wanted: set[Path] = set()
     downloaded = unchanged = 0
-    objects = _s3_objects if kind == "s3" else _gcs_objects
+    objects = {"s3": _s3_objects, "az": _az_objects}.get(kind, _gcs_objects)
     for key, digest, download in objects(client, name, prefix):
         rel = key[strip:]
         if not rel or rel.endswith("/"):

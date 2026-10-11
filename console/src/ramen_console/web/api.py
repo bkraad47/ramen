@@ -239,6 +239,15 @@ async def job(request: Request, jid: str, p: Principal = Depends(viewer)):
     return j
 
 
+def _admin_or_refuse(p: Principal, group: str) -> None:
+    """Scaling is for super admins and the group's admins; viewers reach the handler so the refusal is audited under
+    the scaling action itself (§21.7) rather than as a bare route."""
+    from fastapi import HTTPException
+
+    if not can(p, "group_admin", group):
+        raise HTTPException(403, f"Requires Group Admin on group {group}")
+
+
 @r.get("/groups/{group}/zones/{zone}/workers")
 async def workers(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
     from ..util import public
@@ -249,15 +258,34 @@ async def workers(request: Request, group: str, zone: str, p: Principal = Depend
 
 
 @r.put("/groups/{group}/zones/{zone}/workers")
-async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(admin_g)):
-    note(request, "workers.scale", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).set_workers(group, zone, p, body.count, body.size, body.allowed_sizes))
+async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(viewer_g)):
+    """§21.7: `max_count` (min is always 1), a manual `count` inside [1, max], sizes. Each is audited with from/to,
+    a refused attempt too (under the same action, `error:forbidden`), so the audit page's filter finds it."""
+    s = svc(request)
+    allowed = can(p, "group_admin", group)
+    # a refused caller never reaches the zone lookup, so a viewer cannot learn which zones exist (403, never 404)
+    before = await s.worker_config(group, zone) if allowed else None
+    tags = [f"group:{group}", f"zone:{zone}"]
+    if body.max_count is not None:
+        old = [f"from:{before.get('max_count', before.get('count', 1))}"] if before else []
+        note(request, "workers.max_count", f"{group}/{zone}", [*tags, *old, f"to:{body.max_count}"])
+    elif body.count is not None:
+        old = [f"from:{before.get('count', 1)}"] if before else []
+        note(request, "workers.count", f"{group}/{zone}", [*tags, *old, f"to:{body.count}"])
+    else:
+        note(request, "workers.scale", f"{group}/{zone}", tags)
+    _admin_or_refuse(p, group)
+    doc = await s.set_workers(group, zone, p, body.count, body.size, body.allowed_sizes, body.max_count)
+    return respond(request, doc)
 
 
 @r.post("/groups/{group}/zones/{zone}/rebalance")
-async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(admin_g)):
-    note(request, "rebalance", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).rebalance(group, zone))
+async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
+    note(request, "workers.rebalance", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}"])
+    _admin_or_refuse(p, group)
+    from ..audit import client_ip
+
+    return respond(request, await svc(request).rebalance(group, zone, user=p.name, ip=client_ip(request)))
 
 
 @r.put("/groups/{group}/zones/{zone}/ip-rules")
@@ -399,4 +427,8 @@ async def zone_drift(request: Request, group: str, zone: str, tail: int = 500, p
 def _once(label: str, value: str) -> str:
     from markupsafe import escape
 
-    return f'<div class="once"><strong>{label} (shown once):</strong> <code>{escape(value)}</code></div>'
+    # data-hold-secs: the page keeps this on screen for a minute, counting down, then reloads (0.7.5)
+    return (
+        f'<div class="once" data-hold-secs="60"><strong>{label} (shown once — copy it now):</strong> '
+        f"<code>{escape(value)}</code></div>"
+    )

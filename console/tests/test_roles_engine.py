@@ -271,3 +271,64 @@ def test_role_matrix(demo):
             if got != expect:
                 bad.append((role, method, path, got, expect))
     assert bad == [], bad
+
+
+def test_the_sign_in_card_is_built_from_the_install(demo, monkeypatch):
+    """0.7.5: the group page's "How MCP users sign in" shows the group key, Ramen accounts and each identity provider
+    with this install's host, the group's zones, the registered client id and the provider rules for this group."""
+    import secrets
+
+    from tests.test_oauth_flow import FakeIdp, registry
+
+    entra = {"RAMEN_OAUTH_ENTRA_ISSUER": "https://login.example/t/v2.0", "RAMEN_OAUTH_ENTRA_CLIENT_ID": "c"}
+    entra["RAMEN_OAUTH_ENTRA_CLIENT_SECRET"] = secrets.token_hex(4)
+    demo.app.state.oauth = registry(FakeIdp({}), **entra)
+    monkeypatch.setenv("RAMEN_AUTH_OAUTH_ENTRA_ROLE_CLAIM", "groups")
+    monkeypatch.setenv("RAMEN_AUTH_OAUTH_ENTRA_ROLE_MAP", "g-admins=group_admin:demo;g-other=viewer:elsewhere")
+    demo.app.state.auth_env = demo.app.state.auth_env.from_env()
+    h = {"X-Ramen-CSRF": demo.cookies.get("ramen_csrf", "")}
+    cid = demo.post(
+        "/api/v1/oauth/clients", json={"name": "bridge", "redirect_uris": ["http://127.0.0.1/callback"]}, headers=h
+    )
+    page = demo.get("/groups/demo").text
+    assert "<b>Group key</b>" in page and "<b>Ramen accounts</b>" in page
+    assert (
+        "<b>Microsoft Entra ID</b>" in page
+        and "<b>Google Workspace</b>" in page
+        and "not set up on this console" in page
+    )
+    assert cid.json()["client_id"] in page and "--key &lt;rmk_ key&gt;" in page
+    for label in (
+        "Claude Code",
+        "Cursor — ~/.cursor/mcp.json",
+        "VS Code / GitHub Copilot — .vscode/mcp.json",
+        "Claude Code — through the bridge (stdio)",
+        "Claude Code — Streamable HTTP",
+        "MCP bridge — run it yourself (any stdio client)",
+    ):
+        assert f'<div class="codebox-label">{label}' in page, label
+    assert page.count('<div class="codebox">') >= 5 + 4 + 4  # key, accounts, entra
+    assert "claude mcp add ramen-demo-zone-a -- uvx ramen-mcp-bridge@latest --target" in page
+    assert "<code>g-admins</code>" in page and "g-other" not in page  # only rules that reach this group
+    assert "--group demo" in page and "mcp:demo:" in page
+
+
+def test_the_sign_in_guide_prefers_a_local_client_and_labels_boxes_per_zone():
+    from types import SimpleNamespace
+
+    from ramen_console.web import signin_guide as g
+
+    clients = [
+        {"client_id": "web1", "name": "portal", "redirect_uris": ["https://app.example/cb"]},
+        {"client_id": "t1", "name": "verify075", "redirect_uris": ["http://127.0.0.1:9999/callback"]},
+        {"client_id": "b1", "name": "claude-code-bridge", "redirect_uris": ["http://127.0.0.1/callback"]},
+    ]
+    assert g.pick_client(clients)["client_id"] == "b1"
+    assert g.pick_client(clients[:2])["client_id"] == "t1" and g.pick_client([]) is None
+    auth = SimpleNamespace(
+        role_map={}, role_claim={}, source_of=lambda n: "claim", password_login=True, magic_link=False
+    )
+    out = g.build("https://edge.example", "demo", ["a", "b"], clients, auth, [], [])
+    labels = [b["label"] for b in out["key_boxes"]]
+    assert "Claude Code · zone a" in labels and "MCP bridge — run it yourself (any stdio client) · zone b" in labels
+    assert [p["name"] for p in out["providers"]] == ["entra", "google"] and not out["providers"][0]["configured"]

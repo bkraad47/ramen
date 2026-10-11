@@ -1,7 +1,7 @@
 """U20: multiple workers across multiple zones, each serving independently.
 
-Every assertion here is about *independence*: separate namespaces, separate Deployments, separate HPAs, separate
-node pools, separate gRPC endpoints, and routing metadata that names the zone the caller reached.
+Every assertion here is about *independence*: separate namespaces, separate Deployments, separate worker counts,
+separate node pools, separate gRPC endpoints, and routing metadata that names the zone the caller reached.
 """
 
 import json

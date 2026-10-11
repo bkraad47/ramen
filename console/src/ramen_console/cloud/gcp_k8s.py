@@ -81,8 +81,18 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_pro
                 "resources": {"requests": res, "limits": res},
                 # grpc.health.v1: "" / ramen.v1.Mcp = SERVING once runtime.load succeeded (readiness),
                 # ramen.v1.Admin = process alive (liveness) so a slow load never gets the pod killed
-                "readinessProbe": {"grpc": {"port": PORT}, "periodSeconds": 5, "failureThreshold": 60},
-                "livenessProbe": {"grpc": {"port": PORT, "service": "ramen.v1.Admin"}, "periodSeconds": 10},
+                "readinessProbe": {
+                    "grpc": {"port": PORT},
+                    "periodSeconds": 5,
+                    "timeoutSeconds": 5,
+                    "failureThreshold": 60,
+                },
+                "livenessProbe": {
+                    "grpc": {"port": PORT, "service": "ramen.v1.Admin"},
+                    "periodSeconds": 10,
+                    "timeoutSeconds": 5,
+                    "failureThreshold": 6,
+                },
                 "volumeMounts": [{"name": "bucket", "mountPath": "/data/bucket"}],
             }
         ],
@@ -105,9 +115,17 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_pro
                     {"maxUnavailable": 0, "maxSurge": 1} if track == "stable" else {"maxUnavailable": 1, "maxSurge": 0}
                 ),
             },
-            "template": {"metadata": {"labels": labels}, "spec": pod},
+            # 0.7.5: Ramen decides the worker count (§21.7); the cluster autoscaler must not evict a worker to empty a
+            # node — a zone at count 1 would go dark. Ramen's own scale-down still frees nodes.
+            "template": {
+                "metadata": {"labels": labels, "annotations": {SAFE_TO_EVICT: "false"}},
+                "spec": pod,
+            },
         },
     }
+
+
+SAFE_TO_EVICT = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 
 
 def route_headers(group, zone) -> list[dict]:
@@ -171,7 +189,6 @@ def rolebinding(group, zone, ksa_namespace="ramen-system", ksa="console") -> dic
 def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
     ns = ns_name(group, zone)
     labels = {"ramen.io/group": group, "ramen.io/zone": zone}
-    count = int(spec.get("count", 1))
     ksa = {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
@@ -206,22 +223,6 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
         },
         _deployment(ns, "worker", "stable", group, zone, spec, image, bucket_uri),
         _deployment(ns, "worker-canary", "canary", group, zone, spec, image, bucket_uri),
-        {
-            "apiVersion": "autoscaling/v2",
-            "kind": "HorizontalPodAutoscaler",
-            "metadata": {"name": "worker", "namespace": ns, "labels": labels},
-            "spec": {
-                "scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "worker"},
-                "minReplicas": count,
-                "maxReplicas": max(int(spec.get("max_count") or 0), count * 2),
-                "metrics": [
-                    {
-                        "type": "Resource",
-                        "resource": {"name": "cpu", "target": {"type": "Utilization", "averageUtilization": 70}},
-                    }
-                ],
-            },
-        },
         httproute(group, zone),
         healthcheckpolicy(group, zone),
     ]
@@ -246,9 +247,7 @@ def helm_manifests(chart, project, group, zone, spec, image, bucket_uri, gsa=Non
         "replicas": count,
         "serviceAccount.gsa": gsa or "",
         "secret.create": "false",
-        "hpa.enabled": "true",
-        "hpa.minReplicas": count,
-        "hpa.maxReplicas": max(int(spec.get("max_count") or 0), count * 2),
+        "hpa.enabled": "false",  # §21.7: the console scales workers (rebalance), not an HPA
     }
     cmd = ["helm", "template", "ramen-worker", str(chart), "--namespace", ns]
     for k, v in values.items():
@@ -406,6 +405,19 @@ class Kube:
                 raise
             body = {**doc, "spec": {k: v for k, v in doc.get("spec", {}).items() if k not in keep}} if keep else doc
             patch(m["name"], m["namespace"], body) if namespaced else patch(m["name"], body)
+
+    def delete(self, kind, ns, name) -> bool:
+        """Delete one object; False when it was not there (404). Used to drop the pre-0.7.5 worker HPA (§21.7)."""
+        fn = {"HorizontalPodAutoscaler": self.c.autoscaling.delete_namespaced_horizontal_pod_autoscaler}.get(kind)
+        if fn is None:
+            raise ValueError(f"delete not supported for {kind}")
+        try:
+            fn(name, ns)
+            return True
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) == 404:
+                return False
+            raise
 
     def read(self, kind, ns, name) -> dict | None:
         _, _, read, namespaced = self._fns(kind)

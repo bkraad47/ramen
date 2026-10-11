@@ -140,11 +140,11 @@ def test_every_rendered_page_routes_links_through_the_base(demo, maildir):
     for p, html in pages.items():
         assert unprefixed(html) == [], p
         assert len(LINK.findall(html)) > 0 or p.startswith("/ui/"), p
-    assert 'href="/ramen/static/ramen.css"' in pages["/groups"] and 'href="/ramen/"' in pages["/groups"]
+    assert 'href="/ramen/static/ramen.css?v=' in pages["/groups"] and 'href="/ramen/"' in pages["/groups"]
     assert 'href="/ramen/api/v1/groups?format=csv"' in pages["/groups"]
     assert f'"url":"{BASE}/mcp"' in pages["mcp_user"] and f"--oauth {BASE} " in pages["/groups/demo"]
     # unset: today's root paths, untouched
-    assert 'href="/static/ramen.css"' in unset["/groups"] and 'hx-get="/ui/dashboard"' in unset["/"]
+    assert 'href="/static/ramen.css?v=' in unset["/groups"] and 'hx-get="/ui/dashboard"' in unset["/"]
     assert not any("/ramen/" in html for html in unset.values())
 
 
@@ -242,8 +242,9 @@ def test_mail_links_follow_the_base(demo, maildir):
     sent = mails(maildir)
     assert len(sent) == 3
     for kind, msg in zip(("reset", "reset", "magic"), sent, strict=True):
-        assert f"{BASE}/auth/{kind}/" in msg.get_content()
-        assert "https://console.test" not in msg.get_content()  # the setting wins over RAMEN_PUBLIC_URL
+        assert f"{BASE}/auth/{kind}/" in msg.get_body(("plain",)).get_content()
+        text = msg.get_body(("plain",)).get_content()
+        assert "https://console.test" not in text  # the setting wins over RAMEN_PUBLIC_URL
 
 
 def test_oauth_login_callback_follows_the_base(demo, monkeypatch):

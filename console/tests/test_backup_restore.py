@@ -115,7 +115,7 @@ def test_a_backup_from_a_newer_release_is_refused_unless_forced(demo, tmp_path):
 
 
 def test_reconcile_reapplies_the_restored_zones(demo):
-    assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 3}).status_code == 200
+    assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 3, "max_count": 3}).status_code == 200
     bid = backup(demo)
     assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 1}).status_code == 200
 
@@ -147,8 +147,8 @@ def _path(client, bid) -> str:
 
 async def test_reconcile_survives_a_bad_zone_and_reports_what_the_cloud_still_runs(demo, monkeypatch):
     """One unreachable zone must not abandon the rest, and namespaces the backup never knew about are reported."""
-    assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2}).status_code == 200
-    assert demo.put("/api/v1/groups/demo/zones/zone-b/workers", json={"count": 2}).status_code == 200
+    assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2, "max_count": 2}).status_code == 200
+    assert demo.put("/api/v1/groups/demo/zones/zone-b/workers", json={"count": 2, "max_count": 2}).status_code == 200
     bid = backup(demo)
     path = _path(demo, bid)
     data = json.loads(open(path).read())

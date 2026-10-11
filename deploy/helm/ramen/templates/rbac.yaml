@@ -27,6 +27,12 @@ rules:
     resources: [clusterroles]
     resourceNames: [ramen-console-zone]
     verbs: [bind]
+  {{- if eq .Values.provider "azure" }}
+  # §21.6: per-zone edge IP rules mirrored as Envoy Gateway SecurityPolicies, and per-route timeouts
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies, backendtrafficpolicies]
+    verbs: [get, list, watch, create, patch, update, delete]
+  {{- end }}
   {{- if eq .Values.provider "aws" }}
   - apiGroups: [networking.k8s.io]
     resources: [ingresses]

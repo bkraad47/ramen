@@ -155,3 +155,73 @@ def test_console_may_ask_which_web_acl_guards_the_alb():
     console = cf[cf.index("ConsoleRole:") :]
     block = re.search(r"Action: \[[^\]]*wafv2:GetWebACLForResource[^\]]*\]\n\s*Resource: (.*)", console)
     assert block and block.group(1).strip() == '"*"', block and block.group(0)
+
+
+def _fake_aws(tmp_path, enis: str):
+    """A fake `aws`: `describe-network-interfaces` prints `enis` (id<TAB>status<TAB>description lines), deletes log."""
+    log = tmp_path / "aws-calls"
+    aws = tmp_path / "bin" / "aws"
+    aws.parent.mkdir(exist_ok=True)
+    data = tmp_path / "enis"
+    data.write_text(enis)
+    aws.write_text(
+        f'#!/bin/sh\necho "$*" >> {log}\ncase "$*" in\n'
+        f"  *describe-network-interfaces*|*describe-security-groups*) cat {data} ;;\nesac\n"
+    )
+    aws.chmod(0o755)
+    return log
+
+
+def test_eni_sweep_deletes_only_detached_cni_interfaces(tmp_path):
+    """0.7.5 AWS teardown: a terminated node's VPC CNI interface stayed `available` and blocked the subnet delete."""
+    log = _fake_aws(
+        tmp_path,
+        "eni-cni\tavailable\taws-K8S-i-0d99\neni-alb\tavailable\tELB app/k8s-ramen\neni-busy\tin-use\taws-K8S-i-0aa\n",
+    )
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "RAMEN_ENI_WAIT_TRIES": "1"}
+    r = subprocess.run(
+        ["bash", str(ROOT / "deploy/terraform/aws/scripts/eni_sweep.sh"), "vpc-1", "us-east-1"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    calls = log.read_text()
+    assert "vpc-id,Values=vpc-1" in calls and "--region us-east-1" in calls
+    assert "--network-interface-id eni-cni" in calls
+    assert "id eni-alb" not in calls  # load balancer interfaces belong to AWS, not to the sweep
+    assert "id eni-busy" not in calls
+
+
+def test_terraform_destroy_sweeps_enis_between_node_group_and_subnets():
+    tf = (ROOT / "deploy/terraform/aws/main.tf").read_text()
+    assert 'resource "terraform_data" "eni_sweep"' in tf
+    block = tf.split('resource "terraform_data" "eni_sweep"')[1].split("\nresource ")[0]
+    assert "when       = destroy" in block or "when = destroy" in block
+    assert "scripts/eni_sweep.sh" in block and "aws_subnet.public" in block
+    node = tf.split('resource "aws_eks_node_group" "ramen"')[1].split("\nresource ")[0]
+    assert "terraform_data.eni_sweep" in node  # the node group goes first, then the sweep, then the subnets
+
+
+def test_sweep_deletes_the_leftover_eks_cluster_security_group(tmp_path):
+    """0.7.5: EKS left `eks-cluster-sg-<name>-<n>` behind after the cluster was gone; it blocks deleting the VPC."""
+    log = _fake_aws(tmp_path, "")
+    sgs = tmp_path / "enis"
+    sgs.write_text("sg-eks\teks-cluster-sg-ramen-1082\nsg-def\tdefault\nsg-other\teks-cluster-sg-other-1\n")
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "RAMEN_ENI_WAIT_TRIES": "1"}
+    script = ROOT / "deploy/terraform/aws/scripts/eni_sweep.sh"
+    r = subprocess.run(
+        ["bash", str(script), "vpc-1", "us-east-1", "cluster-sg", "ramen"], env=env, capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stderr
+    calls = log.read_text()
+    assert "describe-security-groups" in calls and "--group-id sg-eks" in calls
+    assert "sg-def" not in calls and "sg-other" not in calls
+
+
+def test_terraform_destroy_sweeps_the_cluster_sg_between_cluster_and_vpc():
+    tf = (ROOT / "deploy/terraform/aws/main.tf").read_text()
+    block = tf.split('resource "terraform_data" "sg_sweep"')[1].split("\nresource ")[0]
+    assert "when       = destroy" in block and "cluster-sg" in block and "aws_vpc.ramen" in block
+    cluster = tf.split('resource "aws_eks_cluster" "ramen"')[1].split("\nresource ")[0]
+    assert "terraform_data.sg_sweep" in cluster

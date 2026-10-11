@@ -422,6 +422,18 @@ wheels = [
 ]
 
 [[package]]
+name = "joserfc"
+version = "1.7.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/19/94/80fea1514b7c6d7d37804d3fe9ca81455f633347fc98731bd71ffe1faa17/joserfc-1.7.5.tar.gz", hash = "sha256:d5ff536e658e17664f8c1b1ab60dc4aa62aa973fcef1edd33cc44bda45d6f5ea", size = 234990, upload-time = "2026-08-29T13:05:42.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/67/c5/82addfd375e5ee6520644e0553e4aadde92d668c4fc99cc716d337fe7bb3/joserfc-1.7.5-py3-none-any.whl", hash = "sha256:add2c2c84e8373b084d526a8b53daba5d7a513a118cd2dcd9fc9f979d0922159", size = 71269, upload-time = "2026-08-29T13:05:40.718Z" },
+]
+
+[[package]]
 name = "jsonschema"
 version = "4.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -711,13 +723,14 @@ wheels = [
 
 [[package]]
 name = "ramen-tests"
-version = "0.7.2"
+version = "0.7.5"
 source = { editable = "." }
 dependencies = [
     { name = "grpcio" },
     { name = "grpcio-health-checking" },
     { name = "grpcio-reflection" },
     { name = "httpx" },
+    { name = "joserfc" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "protobuf" },
@@ -739,6 +752,7 @@ requires-dist = [
     { name = "grpcio-health-checking", specifier = ">=1.75" },
     { name = "grpcio-reflection", specifier = ">=1.75" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "joserfc", specifier = ">=1.0" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "mcp", specifier = ">=2,<3" },
     { name = "protobuf", specifier = ">=6" },

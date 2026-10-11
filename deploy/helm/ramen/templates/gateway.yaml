@@ -1,4 +1,4 @@
-{{- if and .Values.gateway.enabled (ne .Values.provider "aws") }}
+{{- if and .Values.gateway.enabled (eq .Values.provider "gcp") }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

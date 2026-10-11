@@ -1,11 +1,13 @@
 {% extends "base.html" %}{% from "partials/table.html" import table %}{% from "partials/multi.html" import multi %}{% block title %}Users{% endblock %}
 {% block body %}
 {% set member_role_opts = [('mcp_user', 'MCP User'), ('viewer', 'Viewer')] + ([('group_admin', 'Group Admin')] if p.role == 'super_admin' else []) %}
+{% for cname, cr in custom_roles().items() %}{% if p.role == 'super_admin' or cr.base != 'group_admin' %}{% set _ = member_role_opts.append((cname, cr.label)) %}{% endif %}{% endfor %}
 {% if is_admin %}<div class="card"><details><summary class="btn">Create user</summary>
 <p class="muted">The person gets the chosen role in each chosen group (a super admin needs no groups). Roles are per group: change them in the tables below.</p>
 <form class="inline" hx-post="{{ base }}/api/v1/users" hx-ext="json" hx-swap="none">
 <label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>
 {% set role_opts = [('viewer', 'Viewer'), ('mcp_user', 'MCP User — connects MCP clients only')] %}{% if p.role == 'super_admin' %}{% set role_opts = role_opts + [('group_admin', 'Group Admin'), ('super_admin', 'Super Admin')] %}{% endif %}
+{% for cname, cr in custom_roles().items() %}{% if p.role == 'super_admin' or cr.base != 'group_admin' %}{% set _ = role_opts.append((cname, cr.label ~ ' (' ~ role_label(cr.base) ~ ')')) %}{% endif %}{% endfor %}
 {{ multi('role', role_opts, ['viewer'], 'new-role', 'Role', single=True) }}
 {% set group_opts = [] %}{% for g in groups %}{% if g.id in admin_groups %}{% set _ = group_opts.append((g.id, g.name)) %}{% endif %}{% endfor %}{{ multi('groups', group_opts, [], 'new-groups', 'Groups', 'No groups') }}
 <button>Create user</button></form></details></div>{% endif %}
@@ -15,7 +17,8 @@
 <table><tr><th>Email</th><th>Role</th><th>Signs in with</th>{% if g.id in admin_groups %}<th>Actions</th>{% endif %}</tr>
 {% for u in members[g.id] %}<tr><td>{{ u.email }}</td>
 {% set editable = g.id in admin_groups and (p.role == 'super_admin' or u.memberships[g.id] != 'group_admin') %}
-<td>{% if editable %}<form class="inline" hx-put="{{ base }}/api/v1/groups/{{ g.id }}/members/{{ u.id }}" hx-ext="json" hx-swap="none">{{ multi('role', member_role_opts, [u.memberships[g.id]], 'role-' ~ g.id ~ '-' ~ u.id, '', single=True) }}<button class="sm ghost">Set role</button></form>{% else %}{{ role_label(u.memberships[g.id]) }}{% endif %}</td>
+<td>{% if editable %}<form class="inline" hx-put="{{ base }}/api/v1/groups/{{ g.id }}/members/{{ u.id }}" hx-ext="json" hx-swap="none">{{ multi('role', member_role_opts, [u.memberships[g.id]], 'role-' ~ g.id ~ '-' ~ u.id, '', single=True) }}<button class="sm ghost">Set role</button></form>{% else %}{{ role_label(u.memberships[g.id]) }}{% endif %}
+{% if (u.sources or {}).get(g.id) == 'idp' %}<span class="muted source" title="Given by the sign-in provider's role mapping; set a role here to override it">via {{ u.provider }}</span>{% elif u.sources %}<span class="muted source" title="Set in the console; stays whatever the provider says">set here</span>{% endif %}</td>
 <td>{{ u.provider or 'password' }}</td>
 {% if g.id in admin_groups %}<td>{% if editable %}<button class="sm danger" hx-delete="{{ base }}/api/v1/groups/{{ g.id }}/members/{{ u.id }}" hx-confirm="Remove {{ u.email }} from {{ g.name }}?" hx-swap="none">Remove</button>{% else %}<span class="muted">Group admins are set by a super admin</span>{% endif %}</td>{% endif %}</tr>
 {% else %}<tr><td colspan="4" class="muted">No members yet</td></tr>{% endfor %}</table>

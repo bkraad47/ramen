@@ -6,6 +6,7 @@ from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolac
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
+from ..auth import providers as providers_mod
 from ..logview import parse_log
 from ..policy import permissions as perm
 from ..rbac import Principal, can, require
@@ -55,7 +56,8 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
     # B4: every worker of a zone must serve the same manifest (C2 `manifest_hash`; absent on pre-0.7.0 workers)
     hashes = {x.get("metrics", {}).get("manifest_hash") for x in w["live"]} - {None, ""}
     w["manifest_mismatch"] = len(hashes) > 1
-    return render(request, "partials/workers.html", w=w)
+    group_admin = can(p, "group_admin", group)  # §21.7: only they see and set the max; others see the count
+    return render(request, "partials/workers.html", w=w, group=group, zone=zone, can_scale=group_admin)
 
 
 @r.get("/ui/groups/{group}/zones/{zone}/drift")
@@ -88,7 +90,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         "group.html",
         group=g,
         envs=envs,
-        kinds=toolaccess.KINDS,
+        kinds=toolaccess.kinds(),
         tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
         known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,
@@ -105,6 +107,22 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         ],
         providers=request.app.state.oauth.providers(),
         public_url=base_url(request),
+        signin=await mcp_signin(request, group, envs),
+    )
+
+
+async def mcp_signin(request: Request, group: str, envs: list[dict]) -> dict:
+    """The data behind the group page's "How MCP users sign in" card (0.7.5), see `signin_guide`."""
+    from . import signin_guide
+
+    return signin_guide.build(
+        base_url(request),
+        group,
+        sorted({z for e in envs for z in e.get("zones") or []}),
+        await request.app.state.oauth_server.clients(),
+        await auth_settings(request),
+        await accounts(request).list_members(group),
+        request.app.state.oauth.providers(),
     )
 
 
@@ -262,6 +280,7 @@ async def config(request: Request, p: Principal = Depends(super_)):
         config_file=os.environ.get("RAMEN_CONFIG"),
         rules=rules,
         providers=request.app.state.oauth.providers(),
+        provider_details=await providers_mod.describe(store),  # D50
         auth=await auth_settings(request),
         oauth_clients=await request.app.state.oauth_server.clients(),
         mail=request.app.state.mailer.backend,

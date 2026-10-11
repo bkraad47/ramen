@@ -156,7 +156,9 @@ def test_deploy_canary_failure_in_job(demo, fk, monkeypatch, state):
 def test_workers_sizes_and_ui(demo, fk):
     r = demo.get("/api/v1/groups/demo/zones/a/workers").json()
     assert r["size"] == "s" and r["count"] == 1 and r["live"][0]["track"] == "stable" and r["live"][0]["load"] == "even"
-    r = demo.put("/api/v1/groups/demo/zones/a/workers", json={"count": 2, "size": "m", "allowed_sizes": "s,m"})
+    r = demo.put(
+        "/api/v1/groups/demo/zones/a/workers", json={"count": 2, "max_count": 2, "size": "m", "allowed_sizes": "s,m"}
+    )
     assert r.status_code == 200 and r.json()["allowed_sizes"] == ["s", "m"] and r.json()["cloud"]["ok"]
     dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
     assert (

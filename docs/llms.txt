@@ -1,8 +1,8 @@
 # Ramen
 
-> Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server and MCP gateway for Kubernetes on GKE (GCP) and EKS (AWS). A git repo of Python tools, resources and prompts becomes a fleet of MCP workers behind a cloud load balancer. A Rust node speaks Streamable HTTP (`POST /mcp`) and JSON-RPC 2.0 over gRPC on one port; a Python 3.14 runtime runs the code; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth, IP rules, throttling and audit. Deployed and verified end to end on GKE and EKS for this release. BSD-3-Clause. Version 0.7.2.
+> Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server and MCP gateway for Kubernetes on GKE (GCP), EKS (AWS) and AKS (Azure, since 0.7.5). A git repo of Python tools, resources and prompts becomes a fleet of MCP workers behind a cloud load balancer. A Rust node speaks Streamable HTTP (`POST /mcp`) and JSON-RPC 2.0 over gRPC on one port; a Python 3.12 runtime runs the code with optional per-tool guardrails (NVIDIA NeMo Guardrails rails or a `policy.py`, before the call and after the result); a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group and custom roles, OAuth 2.1 sign-in with Microsoft Entra ID and Google Workspace groups (identity federation), autoscaling of workers between 1 and an admin-set max, IP rules, throttling and audit. Deployed and verified end to end on GKE, EKS and AKS for this release (Entra ID live on all three; Google Workspace groups against a fake only). BSD-3-Clause. Version 0.7.5.
 
-Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth token, plus `ramen-group` and `ramen-zone` headers the load balancer routes on. Standard MCP clients (Claude Code, Claude Desktop, Cursor, the mcp SDK) connect directly over HTTP with a group key; Claude Code also signs a person in with OAuth 2.1 + PKCE (the console is the authorization server; no dynamic client registration, so Claude Desktop and Cursor cannot complete OAuth on their own). Stdio-only clients use `ramen-mcp-bridge` (PyPI), which carries a key or signs the person in with `--oauth` (`--ca <pem>` verifies a self-signed edge and console). Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json`; deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll stable.
+Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth token, plus `ramen-group` and `ramen-zone` headers the load balancer routes on. Standard MCP clients (Claude Code, Cursor, VS Code / GitHub Copilot, the mcp SDK) connect directly over HTTP with a group key; Claude Code also signs a person in with OAuth 2.1 + PKCE (`claude mcp add-json … "oauth":{"clientId":…}`; the console is the authorization server; no dynamic client registration, so Cursor, VS Code and Claude Desktop sign a person in through the bridge). Stdio clients use `ramen-mcp-bridge` (PyPI; `uvx ramen-mcp-bridge@latest`, e.g. `claude mcp add <name> -- uvx ramen-mcp-bridge@latest --target <edge>:443 --tls --oauth https://<edge> --client-id <id> --group <g> --zone <z>`), which carries a key (`--key`) or signs the person in with `--oauth`; bridge 0.3.0 keeps tokens in memory (or `--keychain`), forgets them after 30 idle minutes and returns a needed sign-in as JSON-RPC error -32001 with the URL. The group page generates these commands per install. Tools live in a git repo under `mcp/tools/<name>/<name>.py` + `<name>.json`; deploys sync the repo to a bucket, roll a canary worker, smoke-test, then roll stable.
 
 ## Docs
 
@@ -12,15 +12,18 @@ Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth t
 - [How it works](https://bkraad47.github.io/ramen/how-it-works/): the architecture and every feature with where it is managed
 - [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/): Terraform, images, Helm, first zone and group, the console's service account and access controls, teardown
 - [Deploy on AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/): the same on EKS with DynamoDB, S3, Secrets Manager and an ALB
-- [Groups, zones and regions](https://bkraad47.github.io/ramen/wiki/groups-zones/): the model, deploying, scaling, rebalance, blocked packages, IP rules
+- [Deploy on Azure](https://bkraad47.github.io/ramen/wiki/deploy-azure/): the same on AKS with Table Storage, Blob Storage, Key Vault and an Envoy Gateway edge
+- [Groups, zones and regions](https://bkraad47.github.io/ramen/wiki/groups-zones/): the model, deploying, scaling, rebalance, per-tool access, blocked packages, IP rules
+- [Autoscaling](https://bkraad47.github.io/ramen/wiki/autoscaling/): Ramen scales workers between 1 and a max per zone (no HPA): decision rules, cooldowns, audit, load-test results on GKE, EKS and AKS
+- [Guardrails](https://bkraad47.github.io/ramen/wiki/guardrails/): `mcp/guardrails.yaml`, NeMo Guardrails rails or a `policy.py`, per tool, pre and post, fail-closed
 - [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/): layout, the JSON contract, resources and prompts, secrets in code, local testing, worker images
 - [Secrets](https://bkraad47.github.io/ramen/wiki/secrets/): scopes, `{{$group.NAME}}`, `mcp/env.yaml`, backends
-- [Users and access](https://bkraad47.github.io/ramen/wiki/users-access/): roles per group, the Users page, service-account permissions, audit and logs
-- [Connect with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/): registering a client, Claude Code, Claude Desktop, Cursor, the bridge
+- [Users and access](https://bkraad47.github.io/ramen/wiki/users-access/): roles per group, custom and OAuth-only roles, memberships from the IdP and from admins, service-account permissions, audit and logs
+- [Connect with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/): registering a client; Claude Code over HTTP; Cursor, VS Code, Claude Desktop through the bridge; bridge token storage
 - [Connect with a password](https://bkraad47.github.io/ramen/wiki/connect-password/): a password account through the same flow
 - [API keys and the API](https://bkraad47.github.io/ramen/wiki/api-keys/): `rmk_` versus `rmn_`, the OpenAPI page at `/api/docs`, a cheat sheet
 - [Throttling with Redis](https://bkraad47.github.io/ramen/wiki/throttling/): per-IP and per-token limits shared across zones
-- [Entra ID and Google Workspace](https://bkraad47.github.io/ramen/wiki/sso/): OIDC sign-in and claim-to-role rules (untested against a real tenant)
+- [Entra ID and Google Workspace](https://bkraad47.github.io/ramen/wiki/sso/): providers on the Config page, group lookup through Microsoft Graph or Cloud Identity, role rules by group id, OAuth-only roles, troubleshooting (AADSTS50011)
 - [Backups](https://bkraad47.github.io/ramen/wiki/backups/): create, preview, restore, prune, reconcile
 - [Deploy from GitHub Actions](https://bkraad47.github.io/ramen/wiki/deploy-github-actions/): a least-privilege `rmn_` API key as a repo secret, a workflow that deploys the group on push and waits for the job
 - [Configuration](https://bkraad47.github.io/ramen/wiki/configuration/): the config file, the public address (base URI) and running behind a path-prefix proxy, the state store, every variable that matters, restricting actions
@@ -36,5 +39,5 @@ Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth t
 
 - [ramen](https://github.com/bkraad47/ramen): console/ (FastAPI), node-rs/ (Rust, tonic), runtime-py/ (Python), proto/, deploy/ (compose, Helm, Terraform, CloudFormation), skills/, tests/
 - [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge): the stdio bridge, `pip install ramen-mcp-bridge`
-- [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group): the demo group repo, one tool, one resource, one prompt, an `env.yaml`
+- [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group): the demo group repo: three tools, a resource, a prompt, an `env.yaml`, golden cases and deterministic NeMo rails
 - [Releases](https://github.com/bkraad47/ramen/releases)

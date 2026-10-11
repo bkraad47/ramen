@@ -15,15 +15,19 @@ pub struct Policy<'a> {
     pub blocked: &'a [String],
     pub tool_access: &'a HashMap<String, ToolAccess>,
     pub kind: &'a str,
+    /// §21.4: custom role → base role (`RAMEN_ROLES`); a list naming either admits the caller.
+    pub roles: &'a HashMap<String, String>,
 }
 
 impl Policy<'_> {
     fn allows(&self, name: &str, which: fn(&ToolAccess) -> &Vec<String>) -> bool {
         self.kind == SUPER_ADMIN
-            || self
-                .tool_access
-                .get(name)
-                .is_none_or(|a| which(a).iter().any(|k| k == self.kind))
+            || self.tool_access.get(name).is_none_or(|a| {
+                let base = self.roles.get(self.kind);
+                which(a)
+                    .iter()
+                    .any(|k| k == self.kind || base.is_some_and(|b| b == k))
+            })
     }
     /// Whether `tools/list` shows this tool to the caller (the blocked list is applied separately).
     pub fn tool_listable(&self, name: &str) -> bool {
@@ -310,6 +314,12 @@ pub fn target_name(method: &str, params: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// No custom roles (the 0.7.2 world): every test that is not about §21.4 runs with this.
+    fn no_roles() -> &'static HashMap<String, String> {
+        static NONE: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        NONE.get_or_init(HashMap::new)
+    }
+
     #[test]
     fn blocked_matches_name_or_uri() {
         let b = vec!["calc".to_string(), "ramen://demo/readme".to_string()];
@@ -421,6 +431,7 @@ mod tests {
         let p = |kind: &'static str| Policy {
             blocked: &[],
             tool_access: &m,
+            roles: no_roles(),
             kind,
         };
         assert!(p("key").tool_listable("calc") && p("key").tool_callable("calc"));
@@ -453,6 +464,44 @@ mod tests {
         assert_eq!(p("mcp_user").denial("tools/call", &json!({})), None);
     }
 
+    /// §21.4 (0.7.5): a custom role matches a list that names it or its base; an unknown kind with no
+    /// `RAMEN_ROLES` entry still matches nothing.
+    #[test]
+    fn custom_roles_match_by_name_or_base() {
+        let m = access(
+            r#"{"calc":{"list":["viewer"],"call":["analyst"]},"ops_only":{"list":["ops"],"call":["ops"]}}"#,
+        );
+        let roles: HashMap<String, String> = [
+            ("analyst".to_string(), "viewer".to_string()),
+            ("ops".to_string(), "group_admin".to_string()),
+        ]
+        .into();
+        let p = |kind: &'static str| Policy {
+            blocked: &[],
+            tool_access: &m,
+            kind,
+            roles: &roles,
+        };
+        // analyst: listable via its base (viewer), callable by name
+        assert!(p("analyst").tool_listable("calc") && p("analyst").tool_callable("calc"));
+        // a plain viewer may list but not call; group_admin is not named anywhere on calc
+        assert!(p("viewer").tool_listable("calc") && !p("viewer").tool_callable("calc"));
+        assert!(!p("group_admin").tool_listable("calc"));
+        // ops is named directly; its base (group_admin) is not, so a plain group_admin sees nothing
+        assert!(p("ops").tool_listable("ops_only") && p("ops").tool_callable("ops_only"));
+        assert!(!p("group_admin").tool_listable("ops_only"));
+        // an unknown role with no RAMEN_ROLES entry fails closed, as in 0.7.2
+        assert!(!p("stranger").tool_listable("calc") && !p("stranger").tool_callable("calc"));
+        assert_eq!(
+            p("stranger").denial("tools/call", &json!({"name": "calc"})),
+            Some("tool_hidden")
+        );
+        assert_eq!(
+            p("analyst").denial("tools/call", &json!({"name": "calc"})),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn tools_list_is_filtered_per_kind_and_calls_are_hidden_or_forbidden() {
         let sc = sidecar();
@@ -467,6 +516,7 @@ mod tests {
             let p = Policy {
                 blocked: &[],
                 tool_access: &m,
+                roles: no_roles(),
                 kind,
             };
             async move {
@@ -489,6 +539,7 @@ mod tests {
         let p = Policy {
             blocked: &[],
             tool_access: &m,
+            roles: no_roles(),
             kind: "mcp_user",
         };
         let e = dispatch(&sc, &p, "tools/call", &call).await.unwrap_err();
@@ -499,6 +550,7 @@ mod tests {
         let p = Policy {
             blocked: &[],
             tool_access: &m,
+            roles: no_roles(),
             kind: "viewer",
         };
         let e = dispatch(&sc, &p, "tools/call", &call).await.unwrap_err();
@@ -510,6 +562,7 @@ mod tests {
         let p = Policy {
             blocked: &[],
             tool_access: &m,
+            roles: no_roles(),
             kind: "mcp_user",
         };
         assert_eq!(

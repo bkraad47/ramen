@@ -1,0 +1,9 @@
+{
+  "type": "tool",
+  "name": "echo_tool",
+  "description": "Answer with the text it was given. Exists so a post-call rail has an output to judge.",
+  "callable": "echo",
+  "input": {"text": {"type": "string", "description": "what to echo back"}},
+  "output": {"type": "string"},
+  "error": {"type": "string"}
+}

@@ -717,6 +717,9 @@ Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no 
     a worker that is `down` (not answering) never counts as low. The up step is proportional —
     `ceil(ready × max(mean/50 %, rate per worker/target))`, at least +1, at most `max_count` — down is always −1 (load
     tests on GKE: one-at-a-time steps with one 120 s cooldown took 309 s to reach 3 while calls were refused).
+  - **Capacity counts every ready pod**, the canary included, so a zone at `count` 1 measures load across two pods; the
+    proportional step is therefore slightly conservative (observed on AKS: a saturated 1+canary zone asks for 4, clamped
+    to `max_count`).
   - **Probes**: worker readiness and liveness use a 5 s timeout and liveness tolerates 6 misses — the 1 s default made
     Kubernetes restart CPU-saturated workers mid-load on GKE.
   - The result `{action: up|down|hold, from, to, reason}` is returned by rebalance, written to the worker doc, audited

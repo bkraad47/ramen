@@ -81,8 +81,8 @@ rule makes the person a super admin. Custom roles appear in the role list after 
 
 | Claim value | Role | Groups |
 |---|---|---|
-| `9edc3dc1-…` (an Entra group's object id; the display name works only with `GroupMember.Read.All`) | `group_admin` | `demo, analytics` |
-| `de27d6f1-…` | `analyst` (a custom role) | `analytics` |
+| `<group object id>` (an Entra group's object id; the display name works only with `GroupMember.Read.All`) | `group_admin` | `demo, analytics` |
+| `<another group object id>` | `analyst` (a custom role) | `analytics` |
 | `mcp-users@example.com` (a Google group) | `mcp_user` | `demo` |
 
 Scoping Google Workspace without groups: claim `hd`, value `example.com`, role `mcp_user` in `demo` lets everyone in

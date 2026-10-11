@@ -15,6 +15,7 @@ PROVIDERS = {
     "google": ("Google Workspace", "https://accounts.google.com", "Cloud Identity"),
 }
 LOOPBACK = ("http://127.0.0.1", "http://localhost")
+BRIDGE = "ramen-mcp-bridge@latest"  # uvx form: always the newest release (a cached uvx may otherwise run an old one)
 
 
 def pick_client(clients: list[dict]) -> dict | None:
@@ -47,8 +48,14 @@ def key_boxes(url: str, host: str, group: str, zone: str) -> list[dict]:
             "text": _json({"servers": {name: {"type": "http", "url": f"{url}/mcp", "headers": headers}}}),
         },
         {
-            "label": "MCP bridge — stdio clients",
-            "text": f"ramen-mcp-bridge --target {host}:443 --tls --key <rmk_ key> --group {group} --zone {zone}",
+            "label": "Claude Code — through the bridge (stdio)",
+            "text": f"claude mcp add {name} -- uvx ramen-mcp-bridge@latest --target {host}:443 --tls \\\n"
+            f"  --key <rmk_ key> --group {group} --zone {zone}",
+        },
+        {
+            "label": "MCP bridge — run it yourself (any stdio client)",
+            "text": f"uvx ramen-mcp-bridge@latest --target {host}:443 --tls \\\n"
+            f"  --key <rmk_ key> --group {group} --zone {zone}",
         },
     ]
 
@@ -82,10 +89,18 @@ def oauth_boxes(url: str, host: str, group: str, zone: str, client_id: str) -> l
             )
             + "'",
         },
-        {"label": "MCP bridge — command", "text": "ramen-mcp-bridge " + " ".join(bridge_args)},
+        {
+            "label": "Claude Code — through the bridge (stdio)",
+            "text": f"claude mcp add {name} -- uvx ramen-mcp-bridge@latest --target {host}:443 --tls \\\n"
+            f"  --oauth {url} --client-id {client_id} --group {group} --zone {zone}",
+        },
         {
             "label": "Cursor, VS Code / GitHub Copilot, Claude Desktop — through the bridge",
-            "text": _json({"mcpServers": {name: {"command": "ramen-mcp-bridge", "args": bridge_args}}}),
+            "text": _json({"mcpServers": {name: {"command": "uvx", "args": [BRIDGE, *bridge_args]}}}),
+        },
+        {
+            "label": "MCP bridge — run it yourself (any stdio client)",
+            "text": "uvx ramen-mcp-bridge@latest " + " ".join(bridge_args),
         },
     ]
 

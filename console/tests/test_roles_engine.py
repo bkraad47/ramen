@@ -302,12 +302,13 @@ def test_the_sign_in_card_is_built_from_the_install(demo, monkeypatch):
         "Claude Code",
         "Cursor — ~/.cursor/mcp.json",
         "VS Code / GitHub Copilot — .vscode/mcp.json",
-        "MCP bridge — stdio clients",
+        "Claude Code — through the bridge (stdio)",
         "Claude Code — Streamable HTTP",
-        "MCP bridge — command",
+        "MCP bridge — run it yourself (any stdio client)",
     ):
         assert f'<div class="codebox-label">{label}' in page, label
-    assert page.count('<div class="codebox">') >= 4 + 3 + 3  # key, accounts, entra
+    assert page.count('<div class="codebox">') >= 5 + 4 + 4  # key, accounts, entra
+    assert "claude mcp add ramen-demo-zone-a -- uvx ramen-mcp-bridge@latest --target" in page
     assert "<code>g-admins</code>" in page and "g-other" not in page  # only rules that reach this group
     assert "--group demo" in page and "mcp:demo:" in page
 
@@ -329,5 +330,5 @@ def test_the_sign_in_guide_prefers_a_local_client_and_labels_boxes_per_zone():
     )
     out = g.build("https://edge.example", "demo", ["a", "b"], clients, auth, [], [])
     labels = [b["label"] for b in out["key_boxes"]]
-    assert "Claude Code · zone a" in labels and "MCP bridge — stdio clients · zone b" in labels
+    assert "Claude Code · zone a" in labels and "MCP bridge — run it yourself (any stdio client) · zone b" in labels
     assert [p["name"] for p in out["providers"]] == ["entra", "google"] and not out["providers"][0]["configured"]

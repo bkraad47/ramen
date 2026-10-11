@@ -458,4 +458,7 @@ def test_a_cluster_without_availability_zones_does_not_pin_workers(monkeypatch):
         "topology.kubernetes.io/zone": "westus2-1"
     }
     monkeypatch.setenv("RAMEN_AZURE_ZONAL", "0")
-    assert selector(azure_manifests("demo", "w1", spec, "img", "az://a/groups/demo")) is None
+    docs = azure_manifests("demo", "w1", spec, "img", "az://a/groups/demo")
+    dep = next(d for d in docs if d["kind"] == "Deployment")
+    # present and null: the merge patch on an existing Deployment must delete an old zone pin (live run 0.7.5)
+    assert "nodeSelector" in dep["spec"]["template"]["spec"] and selector(docs) is None

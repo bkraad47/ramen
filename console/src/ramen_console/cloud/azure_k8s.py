@@ -37,7 +37,9 @@ def azure_manifests(group, zone, spec, image, bucket_uri, client_id=None) -> lis
             tpl = d["spec"]["template"]
             tpl["metadata"]["labels"][WI_USE] = "true"
             if not zonal():  # a cluster without availability zones: the Ramen zone is a logical placement
-                tpl["spec"].pop("nodeSelector", None)
+                # an explicit null, not a missing key: `Kube.apply` merge-patches an existing Deployment, and only a
+                # null removes a nodeSelector an earlier (zonal) deploy left behind
+                tpl["spec"]["nodeSelector"] = None
             for e in tpl["spec"]["containers"][0]["env"]:
                 if e["name"] == "RAMEN_TRUST_PROXY_HOPS":
                     e["value"] = "1"

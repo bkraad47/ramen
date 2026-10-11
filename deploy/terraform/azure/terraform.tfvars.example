@@ -2,7 +2,7 @@
 subscription_id = "00000000-0000-0000-0000-000000000000" # az account show --query id -o tsv
 location        = "eastus"
 # suffix         = "demo1"          # lowercase, makes the storage account / Key Vault / ACR names; empty = random
-# node_size      = "Standard_B2s"   # cheap first
+# node_size      = "Standard_B2s_v2"   # cheap first
 # node_count     = 2
 # node_max       = 3
 # node_zones     = ["1"]            # a Ramen zone eastus-<n> needs "<n>" here

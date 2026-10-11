@@ -45,7 +45,7 @@ spec:
   replicas: {{ .Values.console.replicas }}
   # 0.7.5: a console rollout took the only pod down before the load balancer could reach the new one (GKE attaches a
   # new zone's NEG ~2 min late → "unconditional drop overload"). Never drop below one ready pod, keep the new one
-  # ready for minReadySeconds before the old one goes, and let the old one drain (preStop) before it exits.
+  # ready for minReadySeconds before the old one goes, and let the old one drain (preStop, 40 s) before it exits.
   minReadySeconds: {{ .Values.console.minReadySeconds | default 90 }}
   strategy:
     type: RollingUpdate
@@ -66,6 +66,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 60   # > the 40 s preStop drain
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: console
@@ -81,4 +82,5 @@ spec:
           resources: {{- toYaml .Values.console.resources | nindent 12 }}
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 12 }
-          lifecycle: { preStop: { exec: { command: ["sleep", "15"] } } }
+          # keeps serving while the load balancer detaches it: 15 s still left ~6 s of 503 on GKE (Gateway NEG detach)
+          lifecycle: { preStop: { exec: { command: ["sleep", "40"] } } }

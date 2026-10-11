@@ -659,3 +659,39 @@ tools:                  # per-tool opt-in; a tool not listed is never checked
 4. `fail: closed` with the engine broken (`engine: nemo` config dir missing a flow) → every opted-in tool blocked,
    unlisted tools unaffected; `fail: open` → calls proceed, `guardrail_error` logged.
 5. Golden case on a guarded tool with a payload the rail blocks → deploy gate fails with the rail's message.
+
+### 21.6 Azure (AKS) as a third deploy target (D54 — the user, 2026-10-11, overrides the AKS part of D49)
+Same shape as GCP and AWS: one cluster per install, a namespace + identity per group/zone, workers load the group's code
+from object storage, the console manages everything through the cloud's APIs and Kubernetes. Cheap first.
+- **Selection.** `RAMEN_CLOUD=azure`; zone provider `azure`; zones named `<region>-<n>` (`eastus-1`, availability zones
+  1–3); `regions.json` gains an `azure` list; Config "Blocked regions" and the Zones page list Azure like the others.
+- **Infrastructure** (`deploy/terraform/azure`, azurerm + helm providers): resource group `ramen-<suffix>`, AKS (free
+  tier control plane, one system pool `Standard_B2s` × 2, autoscale ≤ 3, OIDC issuer + Workload Identity on, Azure CNI
+  overlay), ACR Basic, a storage account with blob container `groups` and Table Storage table `ramen` (the store), Key
+  Vault (RBAC mode) for secrets, a static public IP + DNS label for the edge, the console's user-assigned managed
+  identity with a federated credential for `ramen-system/console`, role assignments scoped to the resource group only.
+  Outputs mirror GCP/AWS (`acr`, `public_hostname` = `<ip-with-dashes>.sslip.io`, `storage_account`, `key_vault`, …).
+- **Edge.** Gateway API through **Envoy Gateway** installed by Terraform (Helm), one `Gateway` on the static IP, the same
+  header-matched `HTTPRoute`s the GKE adapter writes (`ramen-group`/`ramen-zone` → zone service; console default;
+  `/mcp`, `/.well-known/oauth-protected-resource`, gRPC paths) — reuse the GKE route builder. TLS: cert-manager +
+  Let's Encrypt HTTP-01 for the sslip.io name (port 80 answers only ACME and redirects); `RAMEN_AZURE_TLS=selfsigned`
+  falls back to a self-signed cert like AWS. Per-zone IP rules: enforced by the node (authoritative, as everywhere) and
+  mirrored at the edge with an Envoy Gateway `SecurityPolicy` (client-CIDR authorization) per zone route.
+- **Store.** `RAMEN_STORE=azuretables` — one Table Storage table, partition = collection, row = id, the document as
+  encrypted JSON (same `encrypted.py` wrapper); list/query/transaction semantics as `dynamodb.py`.
+- **Secrets.** `RAMEN_SECRETS_BACKEND=azure` — Key Vault secrets named `ramen--<group>--<VAR>` (`_` → `-` with a
+  reversible escape), values never returned to the browser; the zone identity gets *Key Vault Secrets User* on exactly
+  the group's secrets (per-secret role assignment).
+- **Code bucket.** `az://<account>/<container>/<group>` URIs; the runtime's bucket sync (`bucket.py`) supports `az://`
+  with `azure-storage-blob` + `DefaultAzureCredential` (workload identity) — `[azure]` extra in the worker image.
+- **Zone identity.** User-assigned managed identity `ramen-<group>-<zone>` with a federated credential for the zone
+  namespace's service account, *Storage Blob Data Reader* on the container (Azure cannot scope to a blob prefix — the
+  group prefix is enforced by the console's sync and documented), secrets as above. Permission catalogue: the same names
+  with Azure roles (`bucket.write` → Storage Blob Data Contributor, `logs.write` → Monitoring Metrics Publisher, …).
+  `detach_zone` deletes the namespace, the identity and its role assignments.
+- **Logs.** Worker access logs read from the Kubernetes API (pod logs, per zone) — no Log Analytics dependency.
+- **Helm.** `provider=azure` values: workload-identity annotations/labels, the Envoy `Gateway`/`HTTPRoute` for the console,
+  cert-manager `Certificate`/`ClusterIssuer`.
+- **Docs.** `wiki/deploy-azure.md` step by step (mirror of deploy-gcp.md), README/home "GKE, EKS and AKS".
+- **Acceptance.** Unit tests with fakes for every Azure API call (as `fakes_gcp.py`/`fakes_aws.py`), the 33-check
+  `verify075.py` run on a live AKS deploy with Entra sign-in, then teardown.

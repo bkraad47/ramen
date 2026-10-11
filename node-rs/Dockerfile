@@ -1,4 +1,4 @@
-# Worker image: ramen-node (Rust, gRPC) + ramen_runtime (Python 3.12 — pinned, D45: the nemo guardrails extra needs it; gcp+aws+nemo extras) + ramen-mcp-bridge
+# Worker image: ramen-node (Rust, gRPC) + ramen_runtime (Python 3.12 — pinned, D45: the nemo guardrails extra needs it; gcp+aws+azure+nemo extras) + ramen-mcp-bridge
 # (its own repo since v0.5.7; used here only as a generic gRPC health-check CLI for HEALTHCHECK) in one container.
 # Build context = ramen repo root (needs node-rs/, runtime-py/ and proto/):
 #   docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .                       # native
@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.ver
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,nemo]' \
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,azure,nemo]' \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1

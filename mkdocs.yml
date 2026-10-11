@@ -63,6 +63,7 @@ nav:
       - Overview: wiki/index.md
       - Deploy on GCP: wiki/deploy-gcp.md
       - Deploy on AWS: wiki/deploy-aws.md
+      - Deploy on Azure: wiki/deploy-azure.md
       - Groups, zones and regions: wiki/groups-zones.md
       - The MCP repo, structure and local development: wiki/mcp-repo.md
       - Secrets at runtime: wiki/secrets.md

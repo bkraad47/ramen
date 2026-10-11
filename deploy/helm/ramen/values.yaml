@@ -1,7 +1,7 @@
 # helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace -f my-values.yaml
-provider: gcp                # gcp | aws (CONTRACTS §7 / §8). provider=aws verified live on a real account (v0.5.6 N10).
+provider: gcp                # gcp | aws | azure (CONTRACTS §7 / §8 / §21.6). provider=aws verified live on a real account (v0.5.6 N10).
 project: ""                  # GCP project id (required on gcp)
-region: us-central1          # GCP region, or AWS region (e.g. us-east-1) when provider=aws
+region: us-central1          # GCP region, AWS region (us-east-1) when provider=aws, Azure location (eastus) when provider=azure
 aws:                         # provider=aws only (terraform -chdir=deploy/terraform/aws output)
   account: ""                # AWS account id (required): ECR image + groups bucket ramen-<account>-groups defaults
   cluster: ramen             # EKS cluster name (RAMEN_EKS_CLUSTER; CloudWatch log group /aws/containerinsights/<cluster>/application)
@@ -9,8 +9,24 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   certificateArn: ""         # ACM certificate for the ALB HTTPS listener (terraform output certificate_arn; self-signed import)
   albGroup: ramen            # ALB IngressGroup shared by the console Ingress ("/") and every worker Ingress (gRPC, header rules; CONTRACTS §11)
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
+azure:                       # provider=azure only (terraform -chdir=deploy/terraform/azure output helm_set prints all of it)
+  subscriptionId: ""
+  tenantId: ""
+  resourceGroup: ""          # ramen-<suffix>
+  nodeResourceGroup: ""      # MC_..., where the edge's static public IP lives
+  publicIpName: ramen-edge   # the Envoy Gateway Service binds this IP (terraform azurerm_public_ip.edge)
+  publicHostname: ""         # <ip-with-dashes>.sslip.io: the certificate's name and the console's public URL
+  acr: ""                    # <registry>.azurecr.io; images <acr>/ramen/console and <acr>/ramen/worker
+  storageAccount: ""         # blob container `groups` (code bucket, az://) + table `ramen` (RAMEN_STORE=azuretables)
+  keyVault: ""               # RAMEN_SECRETS_BACKEND=azure
+  clientId: ""               # the console's user-assigned identity (workload identity)
+  oidcIssuer: ""             # AKS OIDC issuer: zone identities' federated credentials trust it
+  tls: letsencrypt           # letsencrypt (cert-manager HTTP-01 through the Gateway) | selfsigned
+  acmeEmail: ""
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory   # staging: https://acme-staging-v02.api.letsencrypt.org/directory
+  gatewayClass: ramen-envoy
 image:
-  repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console (gcp) or <account>.dkr.ecr.<region>.amazonaws.com/ramen/console (aws);
+  repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console (gcp), <account>.dkr.ecr.<region>.amazonaws.com/ramen/console (aws) or <acr>/ramen/console (azure);
                              # any reference works on both clouds, e.g. the public docker.io/bkraad47/ramen-console (or ghcr.io/bkraad47/...) — no `make push` needed
   tag: 0.7.5
   pullPolicy: Always          # version tags are re-pushed during development
@@ -38,7 +54,7 @@ console:
     RAMEN_ADMIN_KEY: ""
   existingSecret: ""         # use this Secret instead of rendering console.secrets
 
-gateway:                     # GKE Gateway API (gcp only; on aws the ALB Ingress in templates/ingress-aws.yaml replaces it)
+gateway:                     # GKE Gateway API (gcp only; aws uses the ALB Ingress in templates/ingress-aws.yaml, azure the Envoy Gateway in templates/gateway-azure.yaml)
   enabled: true
   name: ramen
   className: gke-l7-global-external-managed

@@ -166,3 +166,104 @@ def test_load_syncs_when_uri_set(demo_bucket, monkeypatch):
     monkeypatch.setenv("RAMEN_BUCKET_URI", "gs://b/demo")
     r = Server(demo_bucket).load({})
     assert r["sync"]["total"] == 3 and seen == {"uri": "gs://b/demo", "dest": str(demo_bucket)}
+
+
+class FakeAzBlob:
+    def __init__(self, name: str, data: bytes, md5: bool = True):
+        self.name, self.data = name, data
+        digest = bytearray(hashlib.md5(data).digest()) if md5 else None
+        self.content_settings = type("CS", (), {"content_md5": digest})()
+
+
+class FakeAzDownload:
+    def __init__(self, data):
+        self.data = data
+
+    def readinto(self, f):
+        f.write(self.data)
+        return len(self.data)
+
+
+class FakeAzContainer:
+    def __init__(self, blobs, calls):
+        self.blobs, self.calls = blobs, calls
+
+    def list_blobs(self, name_starts_with=None):
+        self.calls.append(("list", name_starts_with))
+        return [b for b in self.blobs if b.name.startswith(name_starts_with or "")]
+
+    def download_blob(self, name):
+        self.calls.append(("download", name))
+        return FakeAzDownload(next(b.data for b in self.blobs if b.name == name))
+
+
+class FakeAzService:
+    def __init__(self, blobs):
+        self.blobs, self.calls, self.containers = blobs, [], []
+
+    def get_container_client(self, container):
+        self.containers.append(container)
+        return FakeAzContainer(self.blobs, self.calls)
+
+
+def test_az_uri_parses_account_container_and_prefix():
+    assert bucket.scheme("az://acct/groups/demo") == "az"
+    assert bucket.parse_uri("az://acct/groups/demo/") == ("acct/groups", "demo")
+    assert bucket.parse_uri("az://acct/groups") == ("acct/groups", "")
+    for bad in ("az://acct", "az:///groups/demo"):
+        with pytest.raises(ValueError):
+            bucket.parse_uri(bad)
+
+
+def test_az_sync_downloads_skips_unchanged_redownloads_without_md5_and_deletes_stale(tmp_path):
+    dest = tmp_path / "bucket"
+    (dest / "mcp").mkdir(parents=True)
+    (dest / "mcp" / "same.py").write_text("same")
+    (dest / "mcp" / "blocky.py").write_text("blocky")
+    (dest / "stale.txt").write_text("old")
+    (dest / ".ramen_requirements.sha256").write_text("keep")
+    svc = FakeAzService(
+        [
+            FakeAzBlob("demo/mcp/same.py", b"same"),
+            FakeAzBlob("demo/mcp/blocky.py", b"blocky", md5=False),  # no stored md5: always fetched again
+            FakeAzBlob("demo/mcp/new.json", b"{}"),
+            FakeAzBlob("demo-other/x", b"x"),  # a sibling prefix must not leak in
+        ]
+    )
+    s = bucket.sync("az://acct/groups/demo", dest, client=svc)
+    assert svc.containers == ["groups"] and ("list", "demo/") in svc.calls
+    assert s == {"uri": "az://acct/groups/demo", "downloaded": 2, "unchanged": 1, "deleted": 1, "total": 3}
+    assert (dest / "mcp" / "new.json").read_text() == "{}" and not (dest / "stale.txt").exists()
+    assert (dest / ".ramen_requirements.sha256").exists() and not (dest / "x").exists()
+
+
+def test_az_client_needs_the_extra_and_honours_the_endpoint_override(monkeypatch):
+    import builtins
+    import sys
+    import types
+
+    real = builtins.__import__
+
+    def no_azure(name, *a, **kw):
+        if name.startswith("azure"):
+            raise ImportError(name)
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_azure)
+    with pytest.raises(bucket.SyncError, match=r"ramen-runtime\[azure\]"):
+        bucket._client("az", "acct/groups")
+    monkeypatch.setattr(builtins, "__import__", real)
+    seen = {}
+    blob = types.ModuleType("azure.storage.blob")
+    blob.BlobServiceClient = lambda url, credential: seen.update(url=url, cred=credential) or "svc"
+    ident = types.ModuleType("azure.identity")
+    ident.DefaultAzureCredential = lambda: "wi"
+    monkeypatch.setitem(sys.modules, "azure.storage.blob", blob)
+    monkeypatch.setitem(sys.modules, "azure.identity", ident)
+    assert bucket._client("az", "acct/groups") == "svc" and seen == {
+        "url": "https://acct.blob.core.windows.net",
+        "cred": "wi",
+    }
+    monkeypatch.setenv("RAMEN_AZURE_BLOB_ENDPOINT", "http://127.0.0.1:10000/devstoreaccount1")
+    bucket._client("az", "acct/groups")
+    assert seen["url"] == "http://127.0.0.1:10000/devstoreaccount1"

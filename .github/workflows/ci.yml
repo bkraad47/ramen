@@ -152,6 +152,32 @@ jobs:
           RAMEN_MCP_KEY: test-key
         run: uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py conformance/test_numpy_deps.py
 
+  iac:
+    # Terraform (fmt + validate, no backend, no credentials) and Helm (lint + render) for every provider: gcp, aws, azure.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - uses: azure/setup-helm@v4
+      - name: terraform fmt + validate (gcp, aws, azure)
+        run: |
+          for p in gcp aws azure; do
+            terraform -chdir="deploy/terraform/$p" fmt -check -diff
+            terraform -chdir="deploy/terraform/$p" init -backend=false -input=false >/dev/null
+            terraform -chdir="deploy/terraform/$p" validate
+          done
+      - name: helm lint + template (gcp, aws, azure)
+        run: |
+          AZ=(--set "provider=azure,region=eastus,azure.nodeResourceGroup=MC_x,azure.clientId=x,azure.publicHostname=h.sslip.io,azure.acr=r.azurecr.io")
+          helm lint deploy/helm/ramen --set project=p
+          helm lint deploy/helm/ramen --set provider=aws --set-string aws.account=123456789012
+          helm lint deploy/helm/ramen "${AZ[@]}"
+          helm template ramen deploy/helm/ramen -n ramen-system "${AZ[@]}" --set azure.tls=selfsigned >/dev/null
+          helm lint deploy/helm/ramen-worker --set project=p
+          helm lint deploy/helm/ramen-worker --set provider=aws --set-string aws.account=123456789012
+          helm lint deploy/helm/ramen-worker --set provider=azure,azure.acr=r.azurecr.io,azure.storageAccount=sa
+
   compose-check:
     # hashFiles() is empty at job level (no checkout yet), so the e2e guard is computed here.
     runs-on: ubuntu-latest

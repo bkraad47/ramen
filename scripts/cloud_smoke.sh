@@ -5,7 +5,8 @@
 # Env: RAMEN_NODE_URL (if no 5th arg), RAMEN_NODE_TLS (1 through a TLS LB), RAMEN_SMOKE_CA (PEM to verify the console
 #      and the LB against; the self-signed cert the deploy made), RAMEN_SMOKE_INSECURE (1: skip TLS verification — a
 #      laptop against a fresh cluster whose cert is not yet at hand; never in CI), RAMEN_SMOKE_GROUP (demo),
-#      RAMEN_SMOKE_ZONE (a), RAMEN_ZONE_PROVIDER (gcp), RAMEN_ZONE_REGION (us-central1-a), RAMEN_SMOKE_ENV (dev),
+#      RAMEN_SMOKE_ZONE (a), RAMEN_ZONE_PROVIDER (gcp | aws | azure), RAMEN_ZONE_REGION (us-central1-a; aws us-east-1a;
+#      azure eastus-1 — AKS zones are <location>-<n>), RAMEN_SMOKE_ENV (dev),
 #      RAMEN_DEMO_REPO, RAMEN_DEPLOY_TIMEOUT (600), RAMEN_SMOKE_POLL (5 s), RAMEN_SMOKE_ADMIN (1: also assert Admin/Reload; needs the worker's
 #      RAMEN_ADMIN_CIDRS to include this host — through an LB it usually does not).
 # admin_key is the worker RAMEN_ADMIN_KEY: Admin/Reload must be UNAUTHENTICATED/PERMISSION_DENIED without it.
@@ -16,7 +17,9 @@ CONSOLE=${1:?usage: cloud_smoke.sh <console_url> <admin_email> <admin_pw> <admin
 EMAIL=${2:?admin_email}; PASS=${3:?admin_pw}; ADMIN_KEY=${4:?admin_key}
 NODE=${5:-${RAMEN_NODE_URL:-}}
 GROUP=${RAMEN_SMOKE_GROUP:-demo}; ZONE=${RAMEN_SMOKE_ZONE:-a}; ENVN=${RAMEN_SMOKE_ENV:-dev}
-PROVIDER=${RAMEN_ZONE_PROVIDER:-gcp}; REGION=${RAMEN_ZONE_REGION:-us-central1-a}
+PROVIDER=${RAMEN_ZONE_PROVIDER:-gcp}
+case "$PROVIDER" in aws) DEFAULT_REGION=us-east-1a ;; azure) DEFAULT_REGION=eastus-1 ;; *) DEFAULT_REGION=us-central1-a ;; esac
+REGION=${RAMEN_ZONE_REGION:-$DEFAULT_REGION}
 REPO=${RAMEN_DEMO_REPO:-https://github.com/bkraad47/ramen-demo-mcp-group}
 TIMEOUT=${RAMEN_DEPLOY_TIMEOUT:-600}
 CONSOLE=${CONSOLE%/}; NODE=${NODE#grpc://}; NODE=${NODE#grpcs://}; NODE=${NODE#http://}; NODE=${NODE#https://}; NODE=${NODE%%/*}

@@ -1,6 +1,6 @@
 ---
 title: Self-hosted MCP for teams
-description: Multizone, highly available MCP server for GCP and AWS Kubernetes. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, secrets, roles and OAuth.
+description: Multizone, highly available MCP server for GCP, AWS and Azure Kubernetes. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, secrets, roles and OAuth.
 hide: [toc]
 ---
 
@@ -15,7 +15,7 @@ hide: [toc]
       "alternateName": "Project Ramen",
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
-      "operatingSystem": "Kubernetes (GKE, EKS), Docker",
+      "operatingSystem": "Kubernetes (GKE, EKS, AKS), Docker",
       "softwareVersion": "0.7.5",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
@@ -23,8 +23,8 @@ hide: [toc]
       "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
       "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
       "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
-      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE and EKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
-      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "author": {
         "@type": "Person",
         "name": "Raad",
@@ -52,7 +52,7 @@ hide: [toc]
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "version": "0.7.5",
-      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, GCP, AWS, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"
       },
@@ -83,7 +83,7 @@ hide: [toc]
 
 <p class="ramen-glama"><a href="https://glama.ai/mcp/servers/bkraad47/ramen"><img width="380" height="200" src="https://glama.ai/mcp/servers/bkraad47/ramen/badge" alt="Ramen on Glama: score, tools and listing"></a></p>
 
-Ramen is a multizone, highly available MCP server for GCP and AWS Kubernetes. Your team keeps **a git repo of
+Ramen is a multizone, highly available MCP server for GCP, AWS and Azure Kubernetes. Your team keeps **a git repo of
 tools, resources and prompts in plain Python**. Ramen turns it into a fleet of MCP workers behind a cloud load
 balancer, with canary deploys, secrets, a role per group, an OAuth front door for Claude Code and the bridge, and a log line
 that says who called what. Underneath it is gRPC, JSON-RPC 2.0 and a Rust node. **You code in Python.**
@@ -91,7 +91,7 @@ that says who called what. Underneath it is gRPC, JSON-RPC 2.0 and a Rust node. 
 <div class="ramen-grid ramen-repos" markdown>
 <div markdown>
 ### [ramen](https://github.com/bkraad47/ramen)
-The server: console, Rust node, Python runtime, Helm charts and Terraform for GCP and AWS. Releases are tagged
+The server: console, Rust node, Python runtime, Helm charts and Terraform for GCP, AWS and Azure. Releases are tagged
 and built by CI.
 </div>
 <div markdown>

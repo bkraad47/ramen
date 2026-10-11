@@ -41,12 +41,12 @@ so a crash, a hang or a leak in tool code costs one respawn rather than the pod 
 |---|---|---|
 | Client → edge (HTTP) | `POST https://<edge>/mcp` | TLS at the load balancer; the credential in `Authorization: Bearer`; a browser `Origin` must be on the zone's allowlist (see [Origin](#origin)); a session id is signed and bound to the credential (see [Sessions](#sessions)). The local compose worker is plain `http://` on the laptop only |
 | Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. The key comes from `RAMEN_MCP_KEY` |
-| Edge → node | GKE Gateway, or an AWS ALB → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group, applied on a real account since 0.5.6 |
+| Edge → node | GKE Gateway, an AWS ALB, or Envoy Gateway on AKS → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group, applied on a real account since 0.5.6; on AKS an Envoy `SecurityPolicy` per zone route (0.7.5) |
 | Edge → node, without a key | `grpc.health.v1.Health`, and gRPC reflection where it is enabled | neither is key-checked or source-range-checked, so health answers anyone who reaches the edge — by design. Reflection would let them enumerate the services too, so it is switched off on deployed workers (`RAMEN_REFLECTION=0` in the chart and both renderers) and answers `UNIMPLEMENTED` there; it stays on locally |
 | Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` (on by default): ingress to the node port only from the console's namespace and the load-balancer / health-check ranges. This — with the hardened container context — is what actually bounds direct access, and what makes the unauthenticated surface above tolerable |
 | Node (every `Mcp/Call`) | the guard in front of your code | bearer key compared byte-for-byte in constant time with no early exit between keys (the length check in front of that compare is *not* constant time, so a key's length can leak); source range checked against `RAMEN_ALLOWED_CIDRS`; blocked names filtered; 4 MiB message cap; `RAMEN_MAX_INFLIGHT` cap |
 | Node → runtime | JSON-RPC on stdio inside the pod | no network surface; the runtime is a child process of the node |
-| Runtime → bucket | read of the group's prefix, by content hash | the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets. The AWS equivalent is an IAM role with IRSA, applied on a real account since 0.5.6 |
+| Runtime → bucket | read of the group's prefix, by content hash | the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets. The AWS equivalent is an IAM role with IRSA, applied on a real account since 0.5.6; on AKS a user-assigned managed identity with workload identity (0.7.5), which can read the whole `groups` container (see below) |
 | Console → node | `Admin/Reload`, `Admin/Metrics`, `Health/Check` on the pod IP | cluster-internal, and plaintext h2c unless the console itself has `RAMEN_WORKER_TLS=1`; `Admin/*` additionally needs `x-ramen-admin-key` and `RAMEN_ADMIN_CIDRS`, and is not routed through the load balancer at all |
 
 ### The bearer key
@@ -128,10 +128,10 @@ that catch people out:
 - **`--insecure` overrides `--tls` and `--ca`** instead of conflicting with them. A leftover `--insecure` in an
   `mcpServers` entry downgrades the connection silently, with no warning and no error.
 - **`--ca <pem>` replaces the trust store**, it does not pin a certificate in the strict sense — the connection
-  still verifies the hostname, it just anchors trust in that PEM. And because the Gateway certificate is
-  self-signed until you supply a domain certificate, `--tls` on its own fails with
-  `CERTIFICATE_VERIFY_FAILED`; in practice `--ca` is required, not optional. That exact mistake cost a run in
-  the 0.3.2 cloud verification. From bridge 0.2.2 the same `--ca` also verifies the console during `--oauth`
+  still verifies the hostname, it just anchors trust in that PEM. GKE (Google-managed, since 0.5.5) and AKS
+  (Let's Encrypt, 0.7.5) serve a publicly trusted certificate, so `--tls` alone works there; the AWS guide's
+  self-signed certificate needs `--ca`, or `--tls` fails with `CERTIFICATE_VERIFY_FAILED` — the mistake that cost a
+  run in the 0.3.2 cloud verification. From bridge 0.2.2 the same `--ca` also verifies the console during `--oauth`
   sign-in; 0.2.1 and older used the system trust store there.
 
 ### Blocked names
@@ -215,7 +215,9 @@ Attaching a zone creates its own cloud identity, bound to the zone's Kubernetes 
 account with `objectViewer` limited to that group's bucket prefix and `secretAccessor` limited to that group's
 secrets, through Workload Identity. Two zones of two groups on the same cluster therefore cannot read each other's
 code or secrets even if the network is misconfigured. The AWS equivalent is an IAM role with IRSA, applied on a real
-account since 0.5.6.
+account since 0.5.6. On Azure (0.7.5) it is a user-assigned managed identity with a federated credential and a
+Key Vault role on each of the group's secrets; Azure cannot scope a blob role to a path, so that identity may read the
+whole `groups` container, and the per-group boundary for code is the console's sync.
 
 The separation is about *contents*, and one edge is worth naming: the IAM condition that scopes the storage role
 matches the group's object prefix **or the bucket resource itself**, because that is what a bucket listing is
@@ -238,6 +240,13 @@ the runtime has actually loaded the group's code.
 This section is the single record. The home page, [How it works](../how-it-works.md) and the
 [threat model](../threat-model.md) each carry one sentence and point here.
 
+- **Verified live in 0.7.5 on GKE, EKS and AKS** (each torn down afterwards): the 33-check run on each — a canary
+  deploy of the demo repo with its NeMo rails and golden cases, custom roles and per-tool access by name and by base,
+  a console token over Streamable HTTP and the same person through the stdio bridge (`--oauth`), the guardrail block
+  with `_meta.ramen.guardrail` on both, and the access-log reasons `guardrail_pre` and `tool_hidden`. Microsoft Entra ID
+  sign-in with the groups lookup on all three, including removal from a group and return; Google sign-in on GKE;
+  Google Workspace groups against a fake only. Autoscaling load tests on all three (64 concurrent calls, max 3, no
+  5xx), and console rollouts under a `/readyz` poll with no failed answer after the drain fix.
 - **Verified live in 0.6.1 on both clouds** (GCP on Firestore, AWS on DynamoDB, two zones each, torn down the
   same day): everything in the 0.6.0 run again, plus the console's base URI host-only on both and with a path
   prefix on GKE (OAuth metadata, links, mail, worker metadata and a `tools/call` with a token through the prefix),
@@ -297,31 +306,56 @@ This section is the single record. The home page, [How it works](../how-it-works
 
 ## Connecting
 
-Standard MCP clients do not see any of this. The front door is a URL and a header:
+Two ways in, and both reach the same pods through the same guards:
+
+| | Streamable HTTP | The bridge (`ramen-mcp-bridge`) |
+|---|---|---|
+| What runs on the client | nothing: a URL and headers | a small stdio MCP server the client starts |
+| Wire to the edge | HTTPS, `POST /mcp` | gRPC over TLS (`--tls`) to `<edge>:443` |
+| Group key (`rmk_`) | `Authorization: Bearer` header | `--key`, or `RAMEN_MCP_KEY` |
+| A person's sign-in (OAuth) | Claude Code (`oauth.clientId` in its config) | every stdio client: `--oauth https://<edge> --client-id <id>` |
+| Use it for | Claude Code, Cursor, VS Code / GitHub Copilot, phones, hosted agents, `curl` | clients that only speak stdio, and a person's sign-in in Cursor, VS Code and Claude Desktop (no dynamic client registration in Ramen) |
+
+The group page's **How MCP users sign in** card (admins, 0.7.5) prints every form below filled in for the install.
+
+With a group key over HTTP:
+
+```sh
+claude mcp add --transport http ramen-demo-a https://<edge>/mcp \
+  --header "Authorization: Bearer <rmk_ key>" --header "ramen-group: demo" --header "ramen-zone: a"
+```
 
 ```json
 {"mcpServers": {"ramen": {"url": "https://<edge>/mcp",
   "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "<g>", "ramen-zone": "<z>"}}}}
 ```
 
-Keep the key in `RAMEN_MCP_KEY` rather than in the file. Leave `Authorization` out and an OAuth-capable client will
-follow the worker's `401` to the console and sign the user in for a token scoped to that person.
+That is Cursor's `~/.cursor/mcp.json`; VS Code / GitHub Copilot's `.vscode/mcp.json` is the same entry under
+`"servers"` with `"type": "http"`. Keep the key in `RAMEN_MCP_KEY` rather than in the file. Leave `Authorization` out
+and an OAuth-capable client follows the worker's `401` to the console; [Connect with OAuth](connect-oauth.md) has the
+person's side.
 
-Clients that only speak stdio use `ramen-mcp-bridge`, a stdio MCP server that forwards each message to `Mcp/Call`
-over gRPC — the compatibility path, unchanged since 0.3.1:
+Through the bridge, with a key or as a person:
 
 ```sh
-RAMEN_MCP_KEY=<key> ramen-mcp-bridge --target <host:port> --group <g> --zone <z> [--tls|--insecure] [--ca <pem>]
+claude mcp add ramen-demo-a -- uvx ramen-mcp-bridge@latest --target <edge>:443 --tls --key <rmk_ key> --group demo --zone a
+claude mcp add ramen-demo-a -- uvx ramen-mcp-bridge@latest --target <edge>:443 --tls \
+  --oauth https://<edge> --client-id <client id> --group demo --zone a
 ```
 
+`uvx …@latest` runs the newest bridge without installing it; `pip install ramen-mcp-bridge` installs it for good.
 Every flag has an environment variable behind it (`RAMEN_BRIDGE_TARGET`, `RAMEN_BRIDGE_GROUP`, `RAMEN_BRIDGE_ZONE`,
-`RAMEN_BRIDGE_TLS`, `RAMEN_BRIDGE_CA`; the key from `RAMEN_MCP_KEY` or `RAMEN_BRIDGE_KEY`). Never pass `--key` on a
-shared machine: a command line is visible to every other user through `ps`.
+`RAMEN_BRIDGE_TLS`, `RAMEN_BRIDGE_CA`, `RAMEN_BRIDGE_OAUTH`, `RAMEN_BRIDGE_CLIENT_ID`; the key from `RAMEN_MCP_KEY` or
+`RAMEN_BRIDGE_KEY`). Never pass `--key` on a shared machine: a command line is visible to every other user through
+`ps`; use the environment variable there. Bridge 0.3.0 keeps a person's token in memory unless `--keychain` or
+`--token-file` says otherwise, forgets it after 30 idle minutes, and answers a call that needs a sign-in with error
+`-32001` carrying the link ([Connect with OAuth](connect-oauth.md#what-the-person-does)).
 
 The local compose stack is the other place to be careful. It publishes the worker on host port 8080 as plaintext
 h2c with an open address allowlist, a committed MCP key and a committed admin key, and no `RAMEN_ADMIN_CIDRS` —
 so on a developer laptop `Admin/Reload` is reachable by anything that can reach the port, using a key that is in
-this repository. That is fine for `make up` on a machine you control and is not a deployment posture.
+this repository. That is fine for `make up` on a machine you control and is not a deployment posture. Locally the
+bridge needs `--target localhost:8080 --insecure`.
 
 Anything that speaks gRPC can skip the bridge and call `ramen.v1.Mcp/Call` directly. Locally, server reflection
 is on, so `grpcurl` works without a local copy of the proto; against a deployed worker it is

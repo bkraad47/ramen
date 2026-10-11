@@ -5,21 +5,25 @@
 | **Group** | A team. One git repo at a ref, one bucket prefix, its secrets, keys, members and service-account rules. Deleting a group destroys its cloud resources. | Super admins create and delete; group admins run it |
 | **Environment** | The group at a git ref, deployed to a set of zones, with a verbose flag, a blocked-package list and the last deploy result. | Group admins |
 | **Zone** | Where workers run. A Kubernetes namespace `ramen-<group>-<zone>` pinned to a cloud zone, with its own service account, load-balancer route and IP rules. `local` is the compose worker. | Super admins create zones; group admins attach them to environments |
-| **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count by admins; size by super admins |
+| **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins |
 
 ## Zones and regions
 
 A zone has a name, a provider and a region. The region is the cloud location the workers pin to: a GCP zone such
-as `us-central1-a`, or an AWS availability zone such as `us-east-1a`. The cluster is regional; a zone is one
+as `us-central1-a`, an AWS availability zone such as `us-east-1a`, or an Azure zone such as `westus2-1` (on an AKS
+cluster without availability zones a Ramen zone there is a logical placement, see [Deploy on
+Azure](deploy-azure.md#prerequisites)). The cluster is regional; a zone is one
 location inside it. Two zones in two locations is what makes a group highly available: a client that fails on
 `ramen-zone: a` retries with `ramen-zone: b` and reaches a different set of pods behind the same hostname.
 
 **Zones and workers → Add zone** creates the record. Nothing runs until a group attaches the zone to an
-environment and deploys. The page lists every zone and the worker counts per group.
+environment and deploys. Since 0.7.5 the form offers only the cloud this console runs on (`RAMEN_CLOUD`), with
+that cloud's zones grouped by region. The page lists every zone, then one row per group × zone with the live
+workers, their load, and for super admins and group admins the **max workers** and the last autoscale decision.
 
 <figure markdown>
 ![The zones page](../img/zones.png){ .ramen-shot }
-<figcaption>Two zones on a live GCP console. The worker counts come from the running pods.</figcaption>
+<figcaption>Zones and workers on a seeded local console: live workers per group × zone, the max, the last decision.</figcaption>
 </figure>
 
 A zone that is deleted, or dropped from the last environment that used it, is torn down for real: the namespace,
@@ -27,12 +31,12 @@ its pods and routes, and the zone's service account or IAM role.
 
 ### Blocked regions (0.7.0)
 
-A super admin can keep workers out of whole regions: **Config → Blocked regions** lists every GCP region and AWS
-region (one checkbox dropdown per provider). A blocked region refuses new zones (`403 Region <r> is blocked by a
+A super admin can keep workers out of whole regions: **Config → Blocked regions** lists the regions of the cloud the
+console runs on (GCP, AWS or Azure; since 0.7.5 only that one, and a save keeps the lists of the others). A blocked region refuses new zones (`403 Region <r> is blocked by a
 super admin`, on the page and at `POST /api/v1/zones`), and a zone that already sits in a region blocked later
 fails its next deploy with the same message in the job log and a server warning, which the warning-email digest
 carries to the people on the notify list. Other zones of the environment still deploy. Group admins cannot change
-the list. `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...]}`; a GCP zone `us-west1-a` belongs to
+the list. `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...], "azure": [...]}`; a GCP zone `us-west1-a` belongs to
 `us-west1`, an AWS availability zone `eu-west-1a` to `eu-west-1`. On the zones page the location is a dropdown of the
 provider's zones grouped by region, minus the blocked ones; `local` zones keep a free-text location.
 
@@ -86,17 +90,20 @@ group page shows each step. A stuck rollout names the pod that is not running an
 
 ## Scaling and sizes
 
-The group page's **Zone actions** card sets the worker **count** per zone. The autoscaler keeps at least that many pods and at
-most twice as many. Super admins set the **size** (`s` 250m CPU and 512Mi, `m` 500m and 1Gi, `l` 1 CPU and 2Gi)
+Since 0.7.5 Ramen scales the workers itself, between **1** and a **max** per zone that super admins and group
+admins set in the group page's **Zone actions** card (*Count (min 1)*, *Max (autoscale up to)*, **Scale workers**) or
+on the Zones page. There is no HPA any more. How it decides, the cooldowns and the load tests are on
+[Autoscaling](autoscaling.md). Super admins set the **size** (`s` 250m CPU and 512Mi, `m` 500m and 1Gi, `l` 1 CPU and 2Gi)
 and the sizes a zone allows.
 
 ## Rebalance
 
 The dashboard shows a load cell per zone and group: `low`, `even`, `high` or `down`, from each node's in-flight
-count, where `low` is under 30% of the node's in-flight cap and `high` is over 80%. **Rebalance** in *Zone actions* adjusts the load balancer: on GCP the backend's capacity scaler, on AWS the
-target-group weights. While the Gateway is still reconciling it answers `applied: false` with a note and retries
-in the background. A super admin can turn on the **auto-rebalance scheduler** on the Config page; each run is
-audited as `scheduler`.
+count, where `low` is under 30% of the node's in-flight cap and `high` is over 80%. **Rebalance and autoscale** in *Zone actions* adjusts the load balancer (on GCP the backend's capacity scaler, on AWS
+the target-group weights) and makes the [autoscaling](autoscaling.md) decision for the zone. While the Gateway is
+still reconciling it answers `applied: false` with a note and retries in the background. A super admin can turn on
+the **auto-rebalance scheduler** on the Config page; since 0.7.5 it visits every group × zone each interval, and each
+run is audited as `scheduler`.
 
 ## Packages per zone
 
@@ -131,7 +138,7 @@ it, so a bad tool can be pulled without a code change.
 ## IP rules
 
 **IP rules** in the group page's *Zone actions* card takes a CIDR list. It becomes the node's allow-list and an edge rule: a Cloud Armor
-policy per group on GCP, a WAF IP set per group on AWS. **The Cloud Armor policy is one per group**, so two zones
+policy per group on GCP, a WAF IP set per group on AWS, an Envoy Gateway `SecurityPolicy` per zone route on AKS. **The Cloud Armor policy is one per group**, so two zones
 of the same group share the edge rule even though their node allow-lists stay separate. An empty list allows
 every source. Include the console's
 own range, because a deploy smoke-tests the worker as an ordinary caller. Changing rules rolls the zone's pods.

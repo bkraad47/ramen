@@ -23,7 +23,7 @@ hide: [toc]
       "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
       "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
       "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
-      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group, OAuth 2.1 sign-in, IP rules, throttling and audit.",
+      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo, with NeMo Guardrails per tool; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group and custom roles, OAuth 2.1 sign-in with Entra ID and Google Workspace groups, autoscaling, IP rules, throttling and audit.",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "author": {
         "@type": "Person",
@@ -101,7 +101,7 @@ signs you in through the console. [On PyPI](https://pypi.org/project/ramen-mcp-b
 </div>
 <div markdown>
 ### [ramen-demo-mcp](https://github.com/bkraad47/ramen-demo-mcp-group)
-The demo group repo every guide deploys: one tool, one resource, one prompt and an `env.yaml`. Point a group at
+The demo group repo every guide deploys: three tools, a resource, a prompt, an `env.yaml`, golden cases and NeMo rails. Point a group at
 it and press Deploy.
 </div>
 </div>
@@ -118,11 +118,16 @@ it and press Deploy.
 - **Guardrails where the tool runs.** Opt a tool into NeMo Guardrails rails, or a policy file of your own, checked
   in the worker before the call and after the result. A blocked call is a readable tool error; the access log names
   the rail.
+- **Build once, deploy on three clouds.** Terraform and Helm for GKE, EKS and AKS, each verified live in 0.7.5 with
+  a publicly trusted certificate on GKE and AKS. The same console, routes and guards on all three.
+- **It scales itself.** Ramen adds workers under load and removes them when it is quiet, between 1 and a max that
+  group admins set per zone. No cloud autoscaler config, every step in the audit log.
 - **Canary by default.** Every deploy rolls one canary pod, smoke-tests it, then rolls the stable pods. A failure
   leaves the old version serving.
-- **Clients connect as themselves.** Claude Code and the bridge sign a person in through the console with OAuth
-  and get a token for one group and zone. Agents and CI use a group key.
-- **Secrets never show.** Values live in Secret Manager, Secrets Manager or the Fernet-encrypted store and reach
+- **Clients connect as themselves.** Claude Code over HTTP, and Cursor, VS Code or Claude Desktop through the bridge,
+  sign a person in through the console (a Ramen password, Entra ID or Google) and get a token for one group and zone.
+  Agents and CI use a group key. The group page prints the exact commands.
+- **Secrets never show.** Values live in Secret Manager, Secrets Manager, Key Vault or the Fernet-encrypted store and reach
   tool code only as environment variables on deploy.
 - **The edge is locked.** The cloud edges listen on 443 only, IP rules apply per zone at the node and at the cloud
   edge, Redis throttles by address and by token, and every console action leaves an audit line.
@@ -131,8 +136,9 @@ it and press Deploy.
 - **Rust where it counts.** The Rust node owns auth, limits and the transport. Your Python runs in a separate
   process it can restart at any time.
 
-**What is verified.** CI proves both transports on real node processes on Linux and Windows, and every release is
-deployed to a throwaway GKE project and a real AWS account emptied the same day, each with two zones, OAuth, the
-bridge and a teardown. Microsoft Entra ID and Google Workspace sign-in is untested against a real tenant.
+**What is verified.** CI proves both transports on real node processes on Linux and Windows. 0.7.5 was deployed to
+GKE, EKS and AKS and passed the same 33 checks on each (NeMo rails, custom roles, tool access, HTTP and the bridge),
+Microsoft Entra ID sign-in with group lookup on all three, Google sign-in on GKE, and autoscaling load tests on all
+three. Google Workspace *groups* are tested against a fake only.
 [What each run covered, hop by hop.](wiki/transport.md#what-is-verified-and-what-is-not)
 Everything in detail is in the [wiki](wiki/index.md).

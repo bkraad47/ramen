@@ -83,7 +83,7 @@ JSON file next to each tool, resources, prompts and local testing.
 A worker is a URL plus two headers. The credential decides whose name the call runs under: a **group key** for
 agents and automation, or **your own sign-in** through OAuth.
 
-### With a group key (Claude Desktop, Cursor, curl)
+### With a group key (Claude Code, Cursor, VS Code, curl)
 
 On the group page, **MCP auth keys → Generate key**. The key is shown once. Deploy once more so the worker
 learns it, then export it:
@@ -97,7 +97,15 @@ export RAMEN_MCP_KEY='rmk_...'
 <figcaption>A key is shown once. Keep it in an environment variable, not in a config file.</figcaption>
 </figure>
 
-Claude Desktop (*Settings → Developer → Edit Config*) and Cursor (*Settings → MCP*) take this entry:
+Claude Code:
+
+```sh
+claude mcp add --transport http ramen-demo http://localhost:8080/mcp \
+  --header "Authorization: Bearer $RAMEN_MCP_KEY" --header "ramen-group: demo" --header "ramen-zone: local"
+```
+
+Cursor (`~/.cursor/mcp.json`) takes this entry; VS Code / GitHub Copilot (`.vscode/mcp.json`) the same under
+`"servers"` with `"type": "http"`:
 
 ```json
 {"mcpServers": {"ramen-demo": {"url": "http://localhost:8080/mcp",
@@ -115,7 +123,8 @@ curl -s http://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H '
 
 ### As yourself (Claude Code, with OAuth)
 
-No shared key. A super admin registers the client on **Config → OAuth clients** with the redirect URI
+No shared key. Your account can be a Ramen password account or, once a super admin has added one on the Config page,
+Microsoft Entra ID or Google ([Entra ID and Workspace](wiki/sso.md)). A super admin registers the client on **Config → OAuth clients** with the redirect URI
 `http://localhost/callback`, and gives you the client id. Your account needs a role in the group, and *MCP User*
 is enough. Then, against the local stack:
 
@@ -137,18 +146,25 @@ address and a cloud zone, and nothing else changes.
 ### Clients that only speak stdio: the bridge
 
 ```sh
-pip install ramen-mcp-bridge
-ramen-mcp-bridge --target localhost:8080 --insecure --key "$RAMEN_MCP_KEY" --group demo --zone local
+uvx ramen-mcp-bridge@latest --target localhost:8080 --insecure --key "$RAMEN_MCP_KEY" --group demo --zone local
+# or, registered in Claude Code:
+claude mcp add ramen-demo-stdio -- uvx ramen-mcp-bridge@latest --target localhost:8080 --insecure \
+  --key "$RAMEN_MCP_KEY" --group demo --zone local
 ```
 
-Put that command in an `mcpServers` entry as `command` and `args`. Against a cloud console it takes
-`--target <edge>:443 --tls`, and `--oauth` instead of `--key` to sign a person in:
-[Connect a client with OAuth](wiki/connect-oauth.md#what-the-person-does).
+`uvx …@latest` runs the newest release without installing it (`pip install ramen-mcp-bridge` also works). In any
+other client put the command in an `mcpServers` entry as `command: "uvx"` and `args`. Against a cloud console it
+takes `--target <edge>:443 --tls`, and `--oauth https://<edge> --client-id <id>` instead of `--key` to sign a person
+in; that is also how Cursor, VS Code and Claude Desktop do a person's sign-in:
+[Connect a client with OAuth](wiki/connect-oauth.md#what-the-person-does). In a cloud, the group page's **How MCP
+users sign in** card prints every command for your install.
 
 ## Where next
 
-- [Deploy on GCP](wiki/deploy-gcp.md) or [AWS](wiki/deploy-aws.md). The console pages are the same; only the
-  addresses change.
+- [Deploy on GCP](wiki/deploy-gcp.md), [AWS](wiki/deploy-aws.md) or [Azure](wiki/deploy-azure.md). The console
+  pages are the same; only the addresses change. Then set a max per zone and let Ramen
+  [autoscale](wiki/autoscaling.md).
+- [Guardrails](wiki/guardrails.md): the demo repo ships NeMo rails on `word_count` from its 0.7.5 release.
 - [Connect with OAuth](wiki/connect-oauth.md) and [connect with a password account](wiki/connect-password.md)
   in detail.
 - [Users and access](wiki/users-access.md), [secrets](wiki/secrets.md), [throttling](wiki/throttling.md).

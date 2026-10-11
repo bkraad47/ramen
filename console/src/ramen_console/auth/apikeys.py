@@ -22,8 +22,19 @@ def prefix_for(client_type: str) -> str:
     return _BY_TYPE.get(client_type, PREFIX)
 
 
-def hash_secret(secret: str) -> str:
-    return hashlib.sha256(secret.encode()).hexdigest()
+SALTED = "s1"  # `s1$<salt hex>$<HMAC-SHA256(salt, secret) hex>`, one random salt per key (0.7.5)
+
+
+def hash_secret(secret: str, salt: str | None = None) -> str:
+    import secrets as pysecrets
+
+    salt = salt or pysecrets.token_hex(16)
+    return f"{SALTED}${salt}${hmac.new(salt.encode(), secret.encode(), hashlib.sha256).hexdigest()}"
+
+
+def needs_upgrade(secret_hash: str) -> bool:
+    """A hash written before 0.7.5 (bare SHA-256): rewritten salted on the key's next successful use."""
+    return not (secret_hash or "").startswith(SALTED + "$")
 
 
 def mint(client_type: str = "devops") -> tuple[str, str, str]:
@@ -48,4 +59,10 @@ def client_type_of(doc: dict, prefix: str | None = None) -> str:
 
 
 def verify(secret: str, secret_hash: str) -> bool:
-    return hmac.compare_digest(hash_secret(secret), secret_hash)
+    secret_hash = secret_hash or ""
+    if needs_upgrade(secret_hash):
+        return bool(secret_hash) and hmac.compare_digest(hashlib.sha256(secret.encode()).hexdigest(), secret_hash)
+    parts = secret_hash.split("$")
+    if len(parts) != 3 or not parts[1] or not parts[2]:
+        return False
+    return hmac.compare_digest(hash_secret(secret, parts[1]), secret_hash)

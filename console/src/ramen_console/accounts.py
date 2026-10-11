@@ -70,6 +70,8 @@ class Accounts:
             return None
         if k.get("prefix") and k["prefix"] != prefix:  # a key may not be replayed under the other client type
             return None
+        if apikeys.needs_upgrade(k["secret_hash"]):  # a pre-0.7.5 unsalted hash: salt it now that we hold the secret
+            await self.store.put("api_keys", kid, {**k, "secret_hash": apikeys.hash_secret(secret)})
         return Principal(
             k["id"],
             k["name"],

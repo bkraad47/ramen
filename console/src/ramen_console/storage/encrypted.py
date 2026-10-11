@@ -10,7 +10,7 @@ SENSITIVE: dict[str, set[str]] = {
     "api_keys": {"secret_hash"},
     "groups": {"github_token", "session_secret", "redis_scope_url"},
     "environments": {"github_token"},
-    "config": {"smtp_password", "github_app_private_key"},
+    "config": {"smtp_password", "github_app_private_key", "token_salt"},
     "workers": {"redis_item_url"},
 }
 # D50: a doc whose SECRET lives one level down, per entry — (collection, key) → the nested field name

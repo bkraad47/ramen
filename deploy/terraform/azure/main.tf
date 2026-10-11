@@ -134,7 +134,7 @@ resource "azurerm_public_ip" "edge" {
   location            = azurerm_resource_group.ramen.location
   allocation_method   = "Static"
   sku                 = "Standard"
-  zones               = ["1", "2", "3"]
+  zones               = length(var.node_zones) > 0 ? ["1", "2", "3"] : null
   domain_name_label   = "${var.name}-${local.suffix}"
 }
 

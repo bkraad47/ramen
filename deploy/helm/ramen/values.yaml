@@ -11,6 +11,7 @@ aws:                         # provider=aws only (terraform -chdir=deploy/terraf
   roleArn: ""                # console IAM role (IRSA); default arn:aws:iam::<account>:role/ramen/ramen-console
 azure:                       # provider=azure only (terraform -chdir=deploy/terraform/azure output helm_set prints all of it)
   subscriptionId: ""
+  zonal: true                 # false when the AKS node pool has no availability zones (RAMEN_AZURE_ZONAL=0)
   tenantId: ""
   resourceGroup: ""          # ramen-<suffix>
   nodeResourceGroup: ""      # MC_..., where the edge's static public IP lives

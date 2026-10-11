@@ -231,12 +231,12 @@ async def test_set_ip_rules_degrades_to_the_node_when_the_edge_api_fails(cloud, 
     assert obj(fk, "Secret", NS, "ramen-deploy")["stringData"]["RAMEN_ALLOWED_CIDRS"] == "10.0.0.0/8"
 
 
-async def test_rebalance_rescales_to_the_hpa_floor(cloud, fk):
+async def test_rebalance_leaves_replicas_to_the_console_autoscaler(cloud, fk):
     await cloud.attach_zone("demo", "eus1", SPEC)
     fk.k8s.objs[("Deployment", NS, "worker")]["spec"]["replicas"] = 5
-    res = await cloud.rebalance("demo", "eus1")
-    assert res["ok"] and res["scaled_to"] == 2 and res["load"] in ("high", "even", "low")
-    assert obj(fk, "Deployment", NS, "worker")["spec"]["replicas"] == 2
+    res = await cloud.rebalance("demo", "eus1")  # §21.7: no HPA floor reset in the adapter
+    assert res["ok"] and "scaled_to" not in res and res["load"] in ("high", "even", "low")
+    assert obj(fk, "Deployment", NS, "worker")["spec"]["replicas"] == 5
 
 
 async def test_detach_zone_removes_namespace_identity_and_its_role_assignments(cloud, fk):

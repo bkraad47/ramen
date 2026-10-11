@@ -37,6 +37,8 @@ sizes:
   s: { cpu: 250m, memory: 512Mi }
   m: { cpu: 500m, memory: 1Gi }
   l: { cpu: "1", memory: 2Gi }
+# §21.7 (0.7.5): the console scales workers itself (rebalance, min 1, max per zone); keep this off. Only for running
+# the chart without a console.
 hpa: { enabled: false, minReplicas: 1, maxReplicas: 4, cpuPercent: 70 }
 # x-forwarded-for hops the node may trust. The client address is the Nth entry counted from the RIGHT,
 # the end a proxy appends to; the left-hand entries are caller-supplied and ignored (CONTRACTS §11).

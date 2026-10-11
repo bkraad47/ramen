@@ -56,7 +56,8 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
     # B4: every worker of a zone must serve the same manifest (C2 `manifest_hash`; absent on pre-0.7.0 workers)
     hashes = {x.get("metrics", {}).get("manifest_hash") for x in w["live"]} - {None, ""}
     w["manifest_mismatch"] = len(hashes) > 1
-    return render(request, "partials/workers.html", w=w)
+    group_admin = can(p, "group_admin", group)  # §21.7: only they see and set the max; others see the count
+    return render(request, "partials/workers.html", w=w, group=group, zone=zone, can_scale=group_admin)
 
 
 @r.get("/ui/groups/{group}/zones/{zone}/drift")

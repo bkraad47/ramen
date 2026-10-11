@@ -708,7 +708,8 @@ Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no 
 - **Decision** (`autoscale.decide(workers, state, w, now)`, pure, unit-tested): per worker the node's metrics give
   `inflight` and the `max_inflight` it runs with (the snapshot adds `max_inflight`), plus `total` calls; the console keeps
   the previous `total` per pod and the time in `workers.autoscale_state` to derive calls per second.
-  - **Up** by one when any ready worker is `high` (inflight > 80 % of its limit) or the zone's mean inflight ≥ 50 %, and
+  - **Up** by one when any ready worker is `high` (inflight > 80 % of its limit), the zone's mean inflight ≥ 50 %, or the
+    calls per second per worker reach `RAMEN_AUTOSCALE_TARGET_RPS` (default 50 — fast tools rarely raise inflight), and
     `count < max_count`.
   - **Down** by one when every ready worker is `low` (< 30 %) for 3 consecutive rebalances and the zone's call rate per
     worker after removing one would stay below the up threshold, and `count > 1`.

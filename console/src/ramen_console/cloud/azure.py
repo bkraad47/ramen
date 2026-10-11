@@ -271,17 +271,11 @@ class AzureCloud(GcpCloud):
     @_guard
     async def rebalance(self, group, zone):
         """The zone Service selects both tracks and Envoy balances across its endpoints, so there is no load-balancer
-        weight to move; what rebalancing does here is bring the stable track back to the HPA's floor."""
-        ns = ns_name(group, zone)
+        weight to move; replicas are the console's autoscaler's (§21.7), so this reports the zone's load only."""
         ws = await self.workers(group, zone)
         loads = [w["load"] for w in ws]
         load = "high" if "high" in loads else ("low" if loads and all(x in ("low", "down") for x in loads) else "even")
         out: dict[str, Any] = {"ok": True, "load": load, "applied": False, "note": "Envoy balances by endpoint"}
-        hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
-        dep = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker")
-        if hpa and dep and dep["spec"].get("replicas") != hpa["spec"].get("minReplicas"):
-            await asyncio.to_thread(self.kube.set_replicas, ns, "worker", hpa["spec"]["minReplicas"])
-            out["scaled_to"] = hpa["spec"]["minReplicas"]
         return out
 
     @_guard

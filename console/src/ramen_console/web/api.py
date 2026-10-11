@@ -250,14 +250,27 @@ async def workers(request: Request, group: str, zone: str, p: Principal = Depend
 
 @r.put("/groups/{group}/zones/{zone}/workers")
 async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(admin_g)):
-    note(request, "workers.scale", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).set_workers(group, zone, p, body.count, body.size, body.allowed_sizes))
+    """§21.7: `max_count` (min is always 1), a manual `count` inside [1, max], sizes. Each is audited with from/to."""
+    s = svc(request)
+    before = await s.worker_config(group, zone)
+    tags = [f"group:{group}", f"zone:{zone}"]
+    if body.max_count is not None:
+        old = before.get("max_count", before.get("count", 1))
+        note(request, "workers.max_count", f"{group}/{zone}", [*tags, f"from:{old}", f"to:{body.max_count}"])
+    elif body.count is not None:
+        note(request, "workers.count", f"{group}/{zone}", [*tags, f"from:{before.get('count', 1)}", f"to:{body.count}"])
+    else:
+        note(request, "workers.scale", f"{group}/{zone}", tags)
+    doc = await s.set_workers(group, zone, p, body.count, body.size, body.allowed_sizes, body.max_count)
+    return respond(request, doc)
 
 
 @r.post("/groups/{group}/zones/{zone}/rebalance")
 async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(admin_g)):
-    note(request, "rebalance", f"{group}/{zone}", [f"group:{group}"])
-    return respond(request, await svc(request).rebalance(group, zone))
+    note(request, "workers.rebalance", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}"])
+    from ..audit import client_ip
+
+    return respond(request, await svc(request).rebalance(group, zone, user=p.name, ip=client_ip(request)))
 
 
 @r.put("/groups/{group}/zones/{zone}/ip-rules")

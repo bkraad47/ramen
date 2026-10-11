@@ -159,7 +159,6 @@ def manifests(
 ) -> list[dict]:
     ns = ns_name(group, zone)
     labels = {"ramen.io/group": group, "ramen.io/zone": zone}
-    count = int(spec.get("count", 1))
     ksa = {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
@@ -179,22 +178,6 @@ def manifests(
         _service(ns, "worker", "stable", labels),
         _service(ns, "worker-canary", "canary", labels),
         *deps,
-        {
-            "apiVersion": "autoscaling/v2",
-            "kind": "HorizontalPodAutoscaler",
-            "metadata": {"name": "worker", "namespace": ns, "labels": labels},
-            "spec": {
-                "scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "worker"},
-                "minReplicas": count,
-                "maxReplicas": max(int(spec.get("max_count") or 0), count * 2),
-                "metrics": [
-                    {
-                        "type": "Resource",
-                        "resource": {"name": "cpu", "target": {"type": "Utilization", "averageUtilization": 70}},
-                    }
-                ],
-            },
-        },
         ingress(group, zone, alb_group, stable, canary),
         ingress(group, zone, alb_group, stable, canary, http=True),
     ]
@@ -221,9 +204,7 @@ def helm_manifests(
         "size": normalize_size(spec.get("size")) or "s",
         "replicas": count,
         "secret.create": "false",
-        "hpa.enabled": "true",
-        "hpa.minReplicas": count,
-        "hpa.maxReplicas": max(int(spec.get("max_count") or 0), count * 2),
+        "hpa.enabled": "false",  # §21.7: the console scales workers (rebalance), not an HPA
     }
     cmd = ["helm", "template", "ramen-worker", str(chart), "--namespace", ns]
     for k, v in values.items():

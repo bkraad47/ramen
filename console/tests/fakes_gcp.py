@@ -286,6 +286,13 @@ class _Hpa:
     def read_namespaced_horizontal_pod_autoscaler(self, name, ns):
         return self.s._read("HorizontalPodAutoscaler", ns, name)
 
+    def delete_namespaced_horizontal_pod_autoscaler(self, name, ns):
+        k = ("HorizontalPodAutoscaler", ns, name)
+        if k not in self.s.objs:
+            raise FakeApiError(404, "NotFound")
+        self.s.calls.append(("delete", *k))
+        del self.s.objs[k]
+
 
 # GCS ------------------------------------------------------------------
 class FakeBlob:

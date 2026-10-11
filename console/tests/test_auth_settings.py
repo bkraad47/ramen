@@ -65,8 +65,9 @@ def test_role_map_from_doc_merges_over_env_per_rule():
 
 def test_role_parsing_errors():
     assert parse_role("group_admin: a , b") == ("group_admin", ["a", "b"]) and parse_role("") == ("viewer", [])
+    assert parse_role("king") == ("king", [])  # a custom role defined later on the Config page (fails closed till then)
     with pytest.raises(ValueError):
-        parse_role("king")
+        parse_role("King of all")
     assert parse_role_map("") == {}
 
 

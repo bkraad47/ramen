@@ -271,3 +271,27 @@ def test_role_matrix(demo):
             if got != expect:
                 bad.append((role, method, path, got, expect))
     assert bad == [], bad
+
+
+def test_the_sign_in_card_is_built_from_the_install(demo, monkeypatch):
+    """0.7.5: the group page's "How MCP users sign in" shows the group key, Ramen accounts and each identity provider
+    with this install's host, the group's zones, the registered client id and the provider rules for this group."""
+    import secrets
+
+    from tests.test_oauth_flow import FakeIdp, registry
+
+    entra = {"RAMEN_OAUTH_ENTRA_ISSUER": "https://login.example/t/v2.0", "RAMEN_OAUTH_ENTRA_CLIENT_ID": "c"}
+    entra["RAMEN_OAUTH_ENTRA_CLIENT_SECRET"] = secrets.token_hex(4)
+    demo.app.state.oauth = registry(FakeIdp({}), **entra)
+    monkeypatch.setenv("RAMEN_AUTH_OAUTH_ENTRA_ROLE_CLAIM", "groups")
+    monkeypatch.setenv("RAMEN_AUTH_OAUTH_ENTRA_ROLE_MAP", "g-admins=group_admin:demo;g-other=viewer:elsewhere")
+    demo.app.state.auth_env = demo.app.state.auth_env.from_env()
+    h = {"X-Ramen-CSRF": demo.cookies.get("ramen_csrf", "")}
+    cid = demo.post(
+        "/api/v1/oauth/clients", json={"name": "bridge", "redirect_uris": ["http://127.0.0.1/callback"]}, headers=h
+    )
+    page = demo.get("/groups/demo").text
+    assert "1. Group key" in page and "2. Ramen accounts" in page and "Microsoft Entra ID" in page
+    assert cid.json()["client_id"] in page and "--key &lt;rmk_ key&gt;" in page
+    assert "<code>g-admins</code>" in page and "g-other" not in page  # only rules that reach this group
+    assert "--group demo" in page and "mcp:demo:" in page

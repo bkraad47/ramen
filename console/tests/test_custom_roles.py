@@ -146,8 +146,9 @@ def test_custom_role_is_a_membership_a_tool_access_kind_and_a_token_claim(demo):
     from ramen_console.auth.settings import parse_role
 
     assert parse_role("analyst:demo") == ("analyst", ["demo"])
+    assert parse_role("nope:demo") == ("nope", ["demo"])  # accepted; ignored at sign-in until defined
     with pytest.raises(ValueError):
-        parse_role("nope:demo")
+        parse_role("No Pe:demo")
 
 
 def test_deploy_hands_every_zone_ramen_roles(demo):
@@ -213,3 +214,25 @@ def test_config_users_and_group_pages_offer_custom_roles(demo):
     wait_job(demo, demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": False}).json()["id"])
     group = demo.get("/groups/demo").text
     assert "Analyst" in group  # a tool-access kind
+
+
+def test_an_env_mapping_may_name_a_custom_role_defined_later_and_it_fails_closed_until_then():
+    """Found rendering the 0.7.5 sign-in card: RAMEN_AUTH_OAUTH_<NAME>_ROLE_MAP naming a custom role crashed the
+    console at start, because custom roles live in the store. Now the name is accepted and ignored until defined."""
+    from ramen_console import rbac
+    from ramen_console.auth.settings import AuthSettings
+
+    env = {"RAMEN_AUTH_OAUTH_ENTRA_ROLE_CLAIM": "groups", "RAMEN_AUTH_OAUTH_ENTRA_ROLE_MAP": "g1=later_role:demo"}
+    s = AuthSettings.from_env(env)
+    rbac.set_custom_roles({})
+    assert s.map_memberships("entra", {"groups": ["g1"]}) == (False, {})
+    rbac.set_custom_roles({"later_role": {"base": "viewer"}})
+    try:
+        assert s.map_memberships("entra", {"groups": ["g1"]}) == (False, {"demo": "later_role"})
+    finally:
+        rbac.set_custom_roles({})
+    try:
+        AuthSettings.from_env({"RAMEN_AUTH_OAUTH_ENTRA_ROLE_MAP": "g1=Not A Role:demo"})
+        raise AssertionError("a malformed role name must still be refused")
+    except ValueError:
+        pass

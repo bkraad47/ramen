@@ -26,7 +26,11 @@ def parse_role_map(text: str) -> dict[str, tuple[str, list[str]]]:
 def parse_role(v: str) -> tuple[str, list[str]]:
     role, _, groups = v.strip().partition(":")
     role = role.strip() or "viewer"
-    if not rbac.is_role(role):
+    # a custom role lives in the store and may be defined after the console starts: accept any well-formed name here,
+    # and let `map_memberships` ignore a name that is still unknown at sign-in (fails closed, never crashes the boot)
+    from ..roles import NAME
+
+    if not rbac.is_role(role) and not NAME.match(role):
         raise ValueError(f"role_map: unknown role {role!r}")
     return role, [g.strip() for g in groups.split(",") if g.strip()]
 
@@ -117,6 +121,8 @@ class AuthSettings:
             if not hit:
                 continue
             role, groups = hit
+            if not rbac.is_role(role):  # a custom role the mapping names but nobody has defined (yet)
+                continue
             if role == "super_admin":
                 super_ = True
                 continue

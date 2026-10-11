@@ -128,12 +128,15 @@ def test_the_service_account_path_is_not_provable_without_iam(admin, stack, grou
 @pytest.fixture(scope="module")
 def zone_count(admin, stack, group):
     """The restore proof scales a zone and brings the scale back through a backup. Whatever it ends on, the zone is
-    handed to the later modules at the count they found it at: the HPA minimum follows this number, and
-    `test_rebalance` needs room above it to scale into."""
+    handed to the later modules at the count and max they found it at. Since 0.7.5 a count must sit within
+    [1, max_count] (CONTRACTS §21.7), so the max is raised first and restored last."""
     zone = stack["zones"][0]
-    before = admin.get("workers", group=group, zone=zone).json().get("count", 1)
+    w = admin.get("workers", group=group, zone=zone).json()
+    before, before_max = w.get("count", 1), w.get("max_count", w.get("count", 1))
+    assert admin.put("workers", {"max_count": max(before_max, 2)}, group=group, zone=zone).status_code == 200
     yield zone
     assert admin.put("workers", {"count": before}, group=group, zone=zone).status_code == 200
+    assert admin.put("workers", {"max_count": before_max}, group=group, zone=zone).status_code == 200
 
 
 def test_restore_puts_a_populated_deployment_back_and_the_zones_keep_serving(admin, stack, group, nodes, zone_count):

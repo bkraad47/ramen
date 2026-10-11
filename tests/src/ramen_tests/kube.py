@@ -63,13 +63,10 @@ def replicas(ns: str, name: str = "worker") -> tuple[int, int]:
     return int(d["spec"].get("replicas", 0)), int((d.get("status") or {}).get("readyReplicas", 0))
 
 
-def hpa(ns: str, name: str = "worker") -> dict:
-    return get("horizontalpodautoscaler", name, ns)
-
-
-def hpa_bounds(ns: str, name: str = "worker") -> tuple[int, int]:
-    h = hpa(ns, name)
-    return int(h["spec"]["minReplicas"]), int(h["spec"]["maxReplicas"])
+def hpa_names(ns: str) -> list[str]:
+    """HorizontalPodAutoscalers in a namespace. Since 0.7.5 (CONTRACTS §21.7) the console scales workers itself and
+    writes none, so a zone namespace must answer []."""
+    return sorted(h["metadata"]["name"] for h in get("horizontalpodautoscaler", ns=ns).get("items", []))
 
 
 def pods(ns: str, selector: str = "app=worker") -> list[dict]:

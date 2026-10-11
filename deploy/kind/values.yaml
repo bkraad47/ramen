@@ -6,7 +6,7 @@ project: kind
 region: us-central1
 image:
   repository: ramen-console          # side-loaded with `kind load docker-image`
-  tag: 0.7.2
+  tag: 0.7.5
   pullPolicy: IfNotPresent
 serviceAccount:
   name: console
@@ -22,9 +22,13 @@ console:
     RAMEN_GCP_PROJECT: kind
     RAMEN_GCP_REGION: us-central1
     RAMEN_GROUPS_BUCKET: ramen-kind-groups
-    RAMEN_IMAGE_WORKER: ramen-worker-kind:0.7.2
+    RAMEN_IMAGE_WORKER: ramen-worker-kind:0.7.5
     STORAGE_EMULATOR_HOST: http://fake-gcs.ramen-system.svc.cluster.local:4443
     RAMEN_DEPLOY_TIMEOUT_SECS: "420"
+    # §21.7 autoscaling: the proofs cannot wait the production 120 s between changes, and the demo calculator is
+    # too fast for inflight alone to rise on a laptop — a lower call-rate target lets real load trip a scale-up
+    RAMEN_AUTOSCALE_COOLDOWN_SECS: "10"
+    RAMEN_AUTOSCALE_TARGET_RPS: "15"
     RAMEN_LOGIN_RATE_LIMIT: "0"      # the security matrix makes many deliberate failed logins
     RAMEN_COOKIE_SECURE: "0"         # no real Gateway/TLS on kind (NodePort, plaintext) — the chart
                                       # default of "1" would stop the session cookie coming back over http

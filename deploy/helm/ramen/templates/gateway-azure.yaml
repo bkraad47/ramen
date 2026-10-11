@@ -1,0 +1,137 @@
+{{- if and .Values.gateway.enabled (eq .Values.provider "azure") }}
+{{- $tls := .Values.azure.tls | default "letsencrypt" }}
+{{- $host := required "azure.publicHostname (terraform output public_hostname)" .Values.azure.publicHostname }}
+# CONTRACTS §21.6: Envoy Gateway on AKS. One Gateway on the static public IP terraform made in the node resource group;
+# port 443 terminates TLS for the console and every zone's header-matched HTTPRoute (same routes as the GKE adapter
+# writes), port 80 serves only the ACME HTTP-01 challenge and a redirect to https.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ .Values.gateway.name }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        # Local keeps the client's own address (no SNAT), so the x-forwarded-for entry Envoy appends is the client:
+        # the node trusts one hop on azure (RAMEN_TRUST_PROXY_HOPS=1), like the AWS ALB.
+        externalTrafficPolicy: Local
+        annotations:
+          service.beta.kubernetes.io/azure-pip-name: {{ .Values.azure.publicIpName | quote }}
+          service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ required "azure.nodeResourceGroup (terraform output node_resource_group)" .Values.azure.nodeResourceGroup | quote }}
+          # Azure LB probes default to HTTP on appProtocol ports; Envoy's listeners answer TLS/redirects, so probe TCP
+          service.beta.kubernetes.io/port_80_health-probe_protocol: tcp
+          service.beta.kubernetes.io/port_443_health-probe_protocol: tcp
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.azure.gatewayClass }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: {{ .Values.gateway.name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ .Values.azure.gatewayClass }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: {{ $host | quote }}
+      allowedRoutes:
+        namespaces: { from: Same }      # only the redirect and cert-manager's ACME solver; zone routes never attach here
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs: [{ kind: Secret, name: {{ .Values.gateway.tlsSecret }} }]
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels: { {{ .Values.gateway.routesLabel }}: "true" }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  parentRefs: [{ name: {{ .Values.gateway.name }}, namespace: {{ .Release.Namespace }}, sectionName: https }]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: / } }]
+      backendRefs: [{ name: console, port: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: console-redirect
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  parentRefs: [{ name: {{ .Values.gateway.name }}, namespace: {{ .Release.Namespace }}, sectionName: http }]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: / } }]
+      filters: [{ type: RequestRedirect, requestRedirect: { scheme: https, statusCode: 301 } }]
+---
+# Console API calls that drive Azure operations (identities, role assignments, rebalance) take longer than Envoy's
+# 15 s route default; worker gRPC calls run up to their own deadline (RAMEN_CALL_TIMEOUT_SECS).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ .Values.gateway.name }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: {{ .Values.gateway.name }} }]
+  timeout:
+    http:
+      requestTimeout: {{ printf "%ds" (int (.Values.console.backendTimeoutSec | default 300)) }}
+---
+{{- if eq $tls "selfsigned" }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ramen-selfsigned
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- else }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ramen-letsencrypt
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  acme:
+    server: {{ .Values.azure.acmeServer }}
+    {{- with .Values.azure.acmeEmail }}
+    email: {{ . | quote }}
+    {{- end }}
+    privateKeySecretRef: { name: ramen-letsencrypt-account }
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs: [{ name: {{ .Values.gateway.name }}, namespace: {{ .Release.Namespace }}, kind: Gateway, sectionName: http }]
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.gateway.tlsSecret }}
+  dnsNames: [{{ $host | quote }}]
+  issuerRef: { kind: Issuer, name: {{ ternary "ramen-selfsigned" "ramen-letsencrypt" (eq $tls "selfsigned") }} }
+{{- end }}

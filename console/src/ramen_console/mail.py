@@ -58,10 +58,21 @@ class Mailer:
     def backend(self) -> str:
         return "off" if not self.host else "file" if self.host.startswith("file://") else "smtp"
 
-    def _message(self, to, subject, body) -> EmailMessage:
+    def _message(self, to, subject, body, action=None, base="", mono=False, alerts=None) -> EmailMessage:
+        """0.7.5: text/plain + a branded text/html alternative with the Ramen logo inline (`cid:ramen-logo`)."""
+        from . import mail_html
+
         m = EmailMessage()
         m["From"], m["To"], m["Subject"], m["Date"] = self.from_, to, subject, now()
-        m.set_content(body)
+        m.set_content(body + mail_html.signature_text(base))
+        if alerts:
+            html = mail_html.render_alerts(subject, alerts, base)
+        else:
+            html = mail_html.render(subject, body, base, action, mono)
+        m.add_alternative(html, subtype="html")
+        logo = mail_html.logo_bytes()
+        if logo:
+            m.get_payload()[1].add_related(logo, "image", "png", cid=f"<{mail_html.LOGO_CID}>", filename="ramen.png")
         return m
 
     def _smtp(self, msg: EmailMessage) -> None:
@@ -76,10 +87,19 @@ class Mailer:
                 server.login(self.user, self.password)
             server.send_message(msg)
 
-    async def send(self, to: str, subject: str, body: str) -> dict:
+    async def send(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        action: str | None = None,
+        base: str = "",
+        mono: bool = False,
+        alerts: list[dict] | None = None,
+    ) -> dict:
         if not self.enabled:
             return {"ok": False, "backend": "off", "error": "mail not configured (RAMEN_SMTP_HOST)"}
-        msg = self._message(to, subject, body)
+        msg = self._message(to, subject, body, action, base or os.environ.get("RAMEN_PUBLIC_URL", ""), mono, alerts)
         try:
             if self.backend == "file":
                 d = Path(self.host[len("file://") :])
@@ -123,21 +143,27 @@ async def build_mailer(store) -> Mailer:
     return Mailer.from_config(await get_smtp_config(store))
 
 
-def invite_mail(base: str, email: str, link: str, by: str) -> tuple[str, str]:
+def invite_mail(base: str, email: str, link: str, by: str) -> tuple[str, str, str]:
     return (
         "You have been invited to the Ramen console",
         f"Hello {email},\n\n{by or 'An administrator'} created a Ramen console account for you.\n"
         f"Set your password here (link valid 24 hours):\n{link}\n\nThen sign in at {base}/login\n",
+        "Set your password",
     )
 
 
-def reset_mail(base: str, link: str) -> tuple[str, str]:
+def reset_mail(base: str, link: str) -> tuple[str, str, str]:
     return (
         "Reset your Ramen console password",
         f"Someone asked to reset the password for this account. If that was you, open (valid 24 hours):\n{link}\n\n"
         f"Otherwise ignore this message; nothing changes until the link is used.\n",
+        "Reset password",
     )
 
 
-def magic_mail(base: str, link: str) -> tuple[str, str]:
-    return ("Your Ramen console sign-in link", f"Sign in with this one-time link (valid 15 minutes):\n{link}\n")
+def magic_mail(base: str, link: str) -> tuple[str, str, str]:
+    return (
+        "Your Ramen console sign-in link",
+        f"Sign in with this one-time link (valid 15 minutes):\n{link}\n",
+        "Sign in to Ramen",
+    )

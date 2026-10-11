@@ -1,11 +1,12 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title><link rel="stylesheet" href="{{ base }}/static/ramen.css"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
 <body><div class="login card"><img src="{{ base }}/static/logo-mark.png" alt="Project Ramen"><h1 style="text-align:center">Console</h1>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}{% if msg %}<div class="ok">{{ msg }}</div>{% endif %}
-{% if auth.password_login or auth.force_password %}<form method="post" action="{{ base }}/login"><input type="hidden" name="next" value="{{ next }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+{% if auth.password_login or auth.force_password %}<form class="signin-form" method="post" action="{{ base }}/login"><input type="hidden" name="next" value="{{ next }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 {% if not auth.password_login %}<p class="muted">Password login is disabled; break-glass for the bootstrap super admin only.</p>{% endif %}
-<label>Email<input name="email" type="email" required autofocus></label><br>
-<label>Password<input name="password" type="password" required></label><br><br><button type="submit">Sign in</button>
-{% if mail %} <a class="btn ghost sm" href="{{ base }}/auth/reset">Forgot password?</a>{% endif %}</form>{% endif %}
-{% for prov in providers %}<p><a class="btn ghost" href="{{ base }}/auth/{{ prov }}/login">Sign in with {{ prov }}</a></p>{% endfor %}
-{% if auth.magic_link and mail %}<form method="post" action="{{ base }}/auth/magic"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><label>Email me a sign-in link<input name="email" type="email" required></label> <button class="ghost" type="submit">Send link</button></form>{% endif %}
+<div class="field"><label for="si-email">Email</label><input id="si-email" name="email" type="email" required autofocus autocomplete="username"></div>
+<div class="field"><label for="si-pw">Password</label><input id="si-pw" name="password" type="password" required autocomplete="current-password"></div>
+<button class="signin" type="submit">Sign in</button>
+{% if mail %}<a class="signin-link" href="{{ base }}/auth/reset">Forgot password?</a>{% endif %}</form>{% endif %}
+{% if providers %}<div class="signin-providers">{% for prov in providers %}<a class="btn ghost signin" href="{{ base }}/auth/{{ prov }}/login?next={{ next|urlencode }}">Sign in with {{ provider_label(prov) }}</a>{% endfor %}</div>{% endif %}
+{% if auth.magic_link and mail %}<form class="signin-form signin-magic" method="post" action="{{ base }}/auth/magic"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><div class="field"><label for="si-magic">Email me a sign-in link</label><input id="si-magic" name="email" type="email" required></div><button class="ghost signin" type="submit">Send link</button></form>{% endif %}
 </div></body></html>

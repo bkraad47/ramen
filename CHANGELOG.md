@@ -3,6 +3,110 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [0.7.5] — guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen
+- **Guardrails, per tool, inside the runtime.** A group repo's `mcp/guardrails.yaml` opts tools into a check before the
+  call and after the result, run in the Python runtime next to the tool. Two engines: `nemo` runs
+  [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails in-process (deterministic Colang flows
+  with your own actions, or LLM-backed rails with your model and key from `mcp/env.yaml`); `policy` is a `policy.py`
+  of your own with `pre(tool, arguments)` and `post(tool, arguments, result)`. A blocked call is a normal tool error
+  the agent can read (`guardrail blocked: pre: <message>`), the tool never ran or its output never left the pod, the
+  result carries `_meta.ramen.guardrail`, and the worker's access log names the stage (`guardrail_pre`,
+  `guardrail_post`). Fail-closed by default; a broken engine blocks the opted-in tools and fails the deploy. Nothing is
+  copied from anyone's gateway: the hook runs where the tool runs. The demo repo ships rails that block prompt-injection
+  phrases on the way in and the word "secret" on the way out, at no model cost.
+- **The runtime is Python 3.12 now, pinned to 3.12 only.** NeMo Guardrails does not run on 3.14 and it belongs in the
+  sidecar, not in a third process. Worker and Glama images are `python:3.12-slim`; the console stays on 3.14;
+  `scripts/check_versions.py` keeps the pin and the Dockerfiles in step.
+- **Groups from Entra ID or Google Workspace at sign-in.** A provider's **Group source** can be `lookup`: the console
+  reads the person's groups from Microsoft Graph (`/me/memberOf`, ids and display names) or Cloud Identity (group
+  emails and names) with their access token and maps them to a role per Ramen group with the existing rules. A failed
+  lookup is a `502` and no session, never stale groups. The memberships an admin set on the Users page stay next to
+  the provider's: the provider rewrites its own at every sign-in, the admin's entry wins where both name a group, and a
+  person removed from the provider's group loses that membership at the next sign-in unless an admin kept it. The
+  Users page shows the source of each membership. Any provider works on any cloud.
+- **Identity providers on the Config page.** A super admin adds Entra ID, Google Workspace or any OIDC provider in the
+  browser (issuer, client id, secret, scopes, group source); the secret is encrypted in the store and never shown
+  again, the login button appears without a restart, and the environment variables remain a second source that the
+  page overrides per name. `GET|PUT|POST|DELETE /api/v1/config/oauth-providers`, audited `config.oauth_provider`.
+- **The provider's email is the account.** Entra ID never sends `email_verified`, so the old rule refused every Entra
+  sign-in; now the email the provider returns is the account (the worker's log line names it on every MCP call), and a
+  provider that returns no email gets an account keyed on its stable id (`entra:<oid>`, adopting the email when one
+  arrives). `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is ignored. The provider callback is built from the console's public
+  address, so a TLS-terminating load balancer no longer makes Entra answer `AADSTS50011`. The provider button carries
+  `next`, so a person sent by an MCP client returns to its consent page. All found by the first live Entra sign-in on
+  GKE and EKS.
+- **Native MCP clients get their code again.** Browsers now drop a consent redirect from a public https page to a
+  loopback `http://127.0.0.1` address, which is where Claude Code, the bridge and every RFC 8252 client listen; the
+  console's Allow answered a `303` and the browser silently stayed put. A browser form submission to a loopback
+  redirect now receives a page that navigates itself; web clients and scripts keep the `303`. With Microsoft Graph and
+  `User.Read` alone the group lookup yields ids, not names, so map on group ids (documented).
+- **Custom roles.** Config → Roles: a name, a base (Group Admin, Viewer or MCP User, which is what the console lets it
+  do), a label and an **OAuth only** switch. Use the name in memberships, provider rules and per-tool access; the
+  person's token carries it and the worker matches a tool-access entry by the name or its base. OAuth-only roles refuse
+  password and magic-link sign-in (`403 This account signs in with <provider>`). A role in use cannot be deleted (`409`).
+- **Azure (AKS) is the third cloud.** `deploy/terraform/azure` builds AKS (free tier, workload identity, Azure CNI
+  overlay), ACR, a storage account with the `groups` blob container and the `ramen` table, Key Vault (RBAC mode), a
+  static IP and the console's managed identity, and installs Envoy Gateway and cert-manager: the edge is Gateway API
+  with the same header-matched routes as GKE and a Let's Encrypt certificate on a free `sslip.io` name
+  (`azure.tls=selfsigned` as a fallback). The console's state is Table Storage (`RAMEN_STORE=azuretables`), secrets are
+  Key Vault (`RAMEN_SECRETS_BACKEND=azure`, `ramen--<group>--<VAR>`), workers load code from `az://`, each zone gets a
+  user-assigned identity with a federated credential and per-secret roles, IP rules are mirrored to an Envoy
+  `SecurityPolicy`, and logs are read from the pods. Subscriptions without AKS availability zones run with
+  `node_zones = []` (`RAMEN_AZURE_ZONAL=0`: a Ramen zone is then a logical placement); the node size defaults to
+  `Standard_B2s_v2`. [Deploy on Azure](https://bkraad47.github.io/ramen/wiki/deploy-azure/).
+- **Ramen scales the workers, not the cloud.** Each group × zone runs between 1 and a **max** that only super admins
+  and group admins set (group page and Zones page; `PUT …/zones/{z}/workers {"max_count": n}`). Rebalance — the
+  button, or the Config page's scheduler, which now visits every zone each interval — reads each worker's in-flight
+  calls against its limit and the call rate, scales up fast (30 s cooldown, a proportional step) and down carefully
+  (one worker per 120 s, after three quiet rounds). No HorizontalPodAutoscaler any more: the adapters delete the old
+  one. Every change is audited (`workers.autoscale` with from, to and reason, by a person or `scheduler`;
+  `workers.max_count`; refused attempts with `error:forbidden`), and a zone pinned at its max under load is a warning
+  the digest mails. Load-tested three rounds on GKE, EKS and AKS (`scripts/load_test.py`, 64 concurrent calls, max 3):
+  every scenario passes, up to 3 in 137–184 s and back to 1 in 601–748 s in the last round, no 5xx. Worker probes take
+  5 s and liveness tolerates 6 misses, because 1 s killed CPU-saturated workers mid-load.
+  [Autoscaling](https://bkraad47.github.io/ramen/wiki/autoscaling/).
+- **The console stays up through node scale-downs and its own rollouts.** Console and worker pods carry
+  `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` (a GKE Autopilot scale-down had evicted the single console
+  pod: "unconditional drop overload" at the edge); a rollout never drops below one ready pod (`maxUnavailable: 0`,
+  `minReadySeconds: 90`) and the old pod drains for 40 s before it stops (60 s grace). Rollouts afterwards answered every
+  `/readyz` poll with 200 on GKE (191/191), EKS (157/157) and AKS (180/180).
+- **"How MCP users sign in", generated per group.** Admins see a card on the group page built from the live install
+  (edge host, the group's zones, a registered OAuth client, each identity provider with the rules that reach this
+  group and its member count): copy-ready boxes for Claude Code, Cursor and VS Code / GitHub Copilot over Streamable
+  HTTP with a group key, `claude mcp add-json … oauth clientId` for a person, and the bridge as `claude mcp add <name>
+  -- uvx ramen-mcp-bridge@latest …` with `--key` or `--oauth` (`@latest`, so a cached uvx never runs an old bridge).
+- **Bridge 0.3.0** ([ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge)): tokens live in memory by
+  default, in the OS keychain with `--keychain`, or in a 0600 file only with `--token-file`; they are forgotten 30
+  minutes after the last call (`--idle-timeout`); when a sign-in is needed while serving, the MCP call answers error
+  `-32001` with the sign-in URL in `data.sign_in_url`, so the AI client can hand the link to the person; the callback
+  tab closes itself.
+- **Salted hashes at rest.** API and MCP key secrets are stored as `s1$<salt>$<HMAC-SHA256>` with a random salt per
+  key; OAuth codes and refresh tokens are stored under an HMAC with a per-install salt, kept Fernet-encrypted in the
+  `config/hashing` document. Passwords stay argon2 (already salted). Hashes from before 0.7.5 still verify, and a
+  key's legacy hash is rewritten salted on its next use.
+- **HTML mail.** Invitations, password resets, magic links and the warning digest are branded HTML (logo, a button
+  plus a copyable address, a signature) with the plain text kept; the digest is one row per alert with a level badge.
+  Verified end to end against a real inbox on GKE (15/15).
+- Console: the Zones page and Config's blocked regions show only the cloud the console runs on (Azure included);
+  every successful button reloads the page, except that a new API or MCP key stays on screen for 60 s with a countdown
+  first (a restore result 20 s, a dry-run preview never reloads); an SSO account shows the provider it used last; env
+  role maps may name a custom role defined later. The Glama image builds on Python 3.12 with NeMo and the demo repo
+  (`DEMO_REF`), verified over stdio: three tools, a resource, a prompt and the rail blocking an injection.
+- Verified live on GKE, EKS and AKS: the 33-check run on each (deploy with the demo repo's NeMo rails and golden cases,
+  custom roles, tool access by name and base, the console token over Streamable HTTP and over the stdio bridge),
+  Microsoft Entra ID sign-in with the groups lookup on all three (including removal from and return to a group, and
+  the bridge acting as that person), and Google sign-in on GKE. Google Workspace groups: fake Cloud Identity only. The
+  kind tests for autoscaling are rewritten but were not run on a kind cluster for this release.
+- Console layout: every sign-in button is one width and named for its provider; the login, Config and Roles forms
+  are label/field tables; stylesheet links carry the version so an upgrade is never hidden behind a cache.
+- Details: `mcp/guardrails.yaml` keys `engine`, `config`, `fail` (closed|open), `timeout_s` (≤120), `tools: {<tool>:
+  {pre, post}}`; load/reload result and `Admin/Metrics` carry `guardrails: {engine, fail, tools}` (not in the manifest
+  hash); `RAMEN_OAUTH_<NAME>_GROUPS=claim|lookup`, `RAMEN_OAUTH_<NAME>_GROUPS_URL`; user documents gain
+  `idp_memberships` and `manual_memberships`; `GET|PUT|DELETE /api/v1/config/roles[/{name}]`; workers get `RAMEN_ROLES`
+  (`{name: base}`) next to `RAMEN_TOOL_ACCESS`; the golden gate's reason carries a blocked tool's error text; the
+  node's metrics add `max_inflight`; `RAMEN_AUTOSCALE_TARGET_RPS` (50), `RAMEN_AUTOSCALE_UP_COOLDOWN_SECS` (30),
+  `RAMEN_AUTOSCALE_COOLDOWN_SECS` (120); `RAMEN_CLOUD=azure` with `RAMEN_AZURE_*`. Contract: `docs/CONTRACTS.md` §21.
+
 ## [0.7.2] — the rest of the r/selfhosted list
 - **Per-tool access.** Group admins decide, per environment and tool, who may *see* it in `tools/list` and who may
   *call* it: group keys, group admins, viewers, MCP users (super admins always may). A tool a caller may not list is

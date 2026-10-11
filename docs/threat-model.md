@@ -38,7 +38,9 @@ management plane. Verification status is the section at the end, and it is the p
 | Another pod reaching a worker directly | A4 | the worker NetworkPolicy admits the node port only from the console namespace and the load balancer's ranges; hardened container context | `deploy/helm/ramen-worker` |
 | Enumerating the services from the edge | A1 | gRPC reflection is off on deployed workers; health and the OAuth resource metadata are the only unauthenticated surface, by design | `grpc.rs::routes`, `http.rs` |
 | A revoked user keeping access | A2 | sessions carry a per-user epoch bumped on password, role and group change, delete, auth-config change and restore; refresh tokens carry the same epoch | `accounts.py`, `oauth_server.py` |
-| Flooding a zone | A1 | `RAMEN_MAX_INFLIGHT` per node (`RESOURCE_EXHAUSTED` / `429`), a 4 MiB message cap, an HPA per zone | `grpc.rs`, `deploy/helm/ramen-worker` |
+| Flooding a zone | A1 | `RAMEN_MAX_INFLIGHT` per node (`RESOURCE_EXHAUSTED` / `429`), a 4 MiB message cap, Ramen's own autoscaling up to the zone's max (0.7.5) | `grpc.rs`, `console/autoscale.py` |
+| Reading credentials from a copy of the store | A2 | passwords argon2; API and MCP key secrets as `s1$<salt>$<HMAC-SHA256>` with a random salt per key; OAuth codes and refresh tokens under an HMAC with a per-install salt kept Fernet-encrypted in `config/hashing` (0.7.5; older hashes still verify, and a key's is rewritten salted on its next use) | `auth/apikeys.py`, `oauth_server.py` |
+| A prompt injection or a leak through a tool | A1, A5 | opt-in guardrails per tool in the worker: NeMo rails or a `policy.py` before the call and after the result, fail-closed (0.7.5) | `runtime-py/.../guardrails.py` |
 
 ## What Ramen does not defend against
 - **A holder of a valid `rmk_` key is that group, until the key is revoked.** Keys are shared secrets; use OAuth

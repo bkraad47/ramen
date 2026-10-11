@@ -1,11 +1,10 @@
 """U21 second half on kind: `rebalance` changes the split between the zones.
 
-What rebalance does (CONTRACTS §7): it reads every worker's reported `load`, decides a capacity scaler for the
-zone's load-balancer backend (0.5 when any worker is `high`, 1.0 otherwise) and pulls the zone's Deployment back to
-its HPA `minReplicas`. On kind there is no Gateway backend service, so the capacity leg answers `applied:false`
-with a note — that degradation is itself contractual and asserted here. The replica leg is fully exercised: after a
-load burst the two zones sit at different replica counts and rebalance moves the loaded one back, which is the
-split changing.
+What rebalance does (CONTRACTS §7, §21.7): it reads every worker's reported `load`, decides a capacity scaler for
+the zone's load-balancer backend (0.5 when any worker is `high`, 1.0 otherwise) and, since 0.7.5, runs the console's
+autoscaling decision, answered as `autoscale: {action, from, to, reason}`. On kind there is no Gateway backend
+service, so the capacity leg answers `applied:false` with a note — that degradation is itself contractual and asserted
+here. The scale-up/scale-down proof under load is test_autoscale.py; this file covers the shapes and the manual count.
 """
 
 import time
@@ -24,7 +23,7 @@ def _rebalance(admin, group, zone) -> dict:
         f"{zone}: {r.status_code} {r.text[:300]}\n"
         "DEFECT D-CONSOLE-1 regressed: GcpCloud.rebalance must catch every exception (not just ApiError) around "
         "the load-balancer leg, so a compute-API problem (no credentials, 401/403, a transient 503) degrades to "
-        "200 {applied:false, note:...} per CONTRACTS §7, and the HPA re-scale below -- which needs no cloud API "
+        "200 {applied:false, note:...} per CONTRACTS §7, and the autoscaling step below -- which needs no cloud API "
         "at all -- still runs. Fixed and regression-tested at the unit level: "
         "console/tests/test_gcp_cloud.py::test_rebalance_degrades_when_the_compute_api_is_unreachable."
     )
@@ -69,32 +68,16 @@ def test_rebalance_under_load_halves_the_capacity_scaler(admin, stack, group, lo
     raise AssertionError(f"no worker reported load=high under load; saw {seen}")
 
 
-def test_rebalance_pulls_the_loaded_zone_back_to_the_hpa_minimum(admin, kube_ready, stack, group, load):
-    hot, cold = stack["zones"][0], stack["zones"][1]
-    hot_ns, cold_ns = kube.ns_name(group, hot), kube.ns_name(group, cold)
-    lo, hi = kube.hpa_bounds(hot_ns)
-    if hi <= lo:
-        pytest.skip(f"HPA {hot_ns}/worker cannot scale (min={lo} max={hi})")
-
-    with load(hot, threads=int(E.env("RAMEN_KIND_LOAD_THREADS", "8"))):
-        deadline = time.monotonic() + 300
-        while kube.replicas(hot_ns)[0] <= lo and time.monotonic() < deadline:
-            time.sleep(5)
-    grown = kube.replicas(hot_ns)[0]
-    assert grown > lo, f"{hot_ns} never scaled above {lo}"
-    before = (grown, kube.replicas(cold_ns)[0])
-
-    body = _rebalance(admin, group, hot)
-    assert body.get("scaled_to") == lo, body
-    deadline = time.monotonic() + 120
-    while kube.replicas(hot_ns)[0] > lo and time.monotonic() < deadline:
-        time.sleep(3)
-    after = (kube.replicas(hot_ns)[0], kube.replicas(cold_ns)[0])
-    assert after[0] == lo, f"{hot_ns} still at {after[0]} after rebalance"
-    assert after != before, f"the split did not change: {before} -> {after}"
+def test_rebalance_answers_an_autoscale_decision_within_the_bounds(admin, stack, group):
+    for zone in stack["zones"]:
+        w = admin.get("workers", group=group, zone=zone).json()
+        d = _rebalance(admin, group, zone)["autoscale"]
+        assert d["action"] in ("up", "down", "hold") and d.get("reason"), d
+        assert 1 <= d["to"] <= max(int(w.get("max_count") or 1), 1), (d, w)
+        assert abs(d["to"] - d["from"]) <= 1, f"autoscale moves one worker at a time: {d}"
 
 
-def test_scaling_a_zone_changes_the_split_without_the_load_balancer(admin, kube_ready, stack, group):
+def test_scaling_a_zone_changes_the_split_without_the_load_balancer(admin, kube_ready, stack, group, bounds):
     """The half of `rebalance` that needs no cloud API: the console writing a zone's replica count.
 
     It runs through the same renderer and the same Kubernetes client, so it stands on its own as proof that the
@@ -102,6 +85,7 @@ def test_scaling_a_zone_changes_the_split_without_the_load_balancer(admin, kube_
     hot, cold = stack["zones"][0], stack["zones"][1]
     hot_ns, cold_ns = kube.ns_name(group, hot), kube.ns_name(group, cold)
     before = (kube.replicas(hot_ns)[0], kube.replicas(cold_ns)[0])
+    bounds(hot, before[0] + 1)  # §21.7: a manual count must sit within [1, max_count]
     r = admin.put("workers", {"count": before[0] + 1}, group=group, zone=hot)
     assert r.status_code == 200, f"{r.status_code} {r.text[:300]}"
     deadline = time.monotonic() + 120
@@ -110,8 +94,7 @@ def test_scaling_a_zone_changes_the_split_without_the_load_balancer(admin, kube_
     after = (kube.replicas(hot_ns)[0], kube.replicas(cold_ns)[0])
     assert after[0] == before[0] + 1, f"{hot_ns} did not scale: {before} -> {after}"
     assert after[1] == before[1], f"{cold_ns} moved too: {before} -> {after}"
-    assert kube.hpa_bounds(hot_ns)[0] == before[0] + 1, "the HPA minimum did not follow the requested count"
-    admin.put("workers", {"count": before[0]}, group=group, zone=hot)
+    assert kube.hpa_names(hot_ns) == [], "the console scales the zone itself; no HPA may come back"
 
 
 def test_rebalance_is_audited(admin, stack, group):
@@ -120,6 +103,6 @@ def test_rebalance_is_audited(admin, stack, group):
     assert r.status_code == 200
     body = r.json()
     entries = body if isinstance(body, list) else body.get("items", [])
-    assert any(e.get("action") == "zone.rebalance" or "rebalance" in str(e.get("action", "")) for e in entries), (
-        "no rebalance entry in the audit log"
+    assert any(e.get("action") == "workers.rebalance" and stack["zones"][0] in e.get("target", "") for e in entries), (
+        "no workers.rebalance entry in the audit log (§21.7: who pressed Rebalance)"
     )

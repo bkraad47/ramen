@@ -1,4 +1,10 @@
-{{- if eq .Values.provider "aws" }}
+{{- if eq .Values.provider "azure" }}
+Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on AKS ({{ .Values.region }}, resource group {{ .Values.azure.resourceGroup }}). CONTRACTS §21.6.
+         kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (lets the console HTTPRoute attach to port 443)
+Edge: Envoy Gateway on public IP {{ .Values.azure.publicIpName }}; certificate: kubectl -n {{ .Release.Namespace }} get certificate console (Ready in ~1-2 min, {{ .Values.azure.tls }})
+      curl https://{{ .Values.azure.publicHostname }}/readyz
+Workers are created by the console per zone (namespace, managed identity, HTTPRoute); gRPC to {{ .Values.azure.publicHostname }}:443 with metadata ramen-group=<g> ramen-zone=<z>.
+{{- else if eq .Values.provider "aws" }}
 Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on EKS {{ .Values.aws.cluster }} ({{ .Values.region }}, account {{ .Values.aws.account }}). Verified live on a real account (v0.5.6 N10).
 ALB: kubectl -n {{ .Release.Namespace }} get ingress console   (ADDRESS after ~3 min) ; curl -k https://<address>/readyz
 Workers: helm template ramen-worker deploy/helm/ramen-worker --set provider=aws,aws.account={{ .Values.aws.account }},aws.region={{ .Values.region }},group=<g>,zone=<z>,aws.zone=<az> | kubectl apply -f -

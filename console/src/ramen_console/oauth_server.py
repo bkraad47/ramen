@@ -110,10 +110,31 @@ def with_params(uri: str, params: dict) -> str:
     return urlunparse(u._replace(query=query))
 
 
-def token_id(raw: str) -> str:
-    """Codes and refresh tokens are stored under their SHA-256, so a copy of the store is not a copy of the tokens
-    (security review 0.5.0 M5)."""
-    return hashlib.sha256((raw or "").encode()).hexdigest()
+def token_id(raw: str, salt: str) -> str:
+    """Codes and refresh tokens are stored under a salted hash, so a copy of the store is not a copy of the tokens
+    (security review 0.5.0 M5). The hash is the lookup id, so the salt is one per install (0.7.5), kept encrypted in
+    the `config/hashing` doc."""
+    return hmac.new(salt.encode(), (raw or "").encode(), hashlib.sha256).hexdigest()
+
+
+def token_ids(raw: str, salt: str) -> list[str]:
+    """Where a token may be stored: its salted id, then the bare SHA-256 every token issued before 0.7.5 used."""
+    return [token_id(raw, salt), hashlib.sha256((raw or "").encode()).hexdigest()]
+
+
+async def token_salt(store) -> str:
+    doc = await store.get("config", "hashing") or {}
+    if not doc.get("token_salt"):
+        doc["token_salt"] = secrets.token_hex(32)
+        await store.put("config", "hashing", doc)
+    return doc["token_salt"]
+
+
+async def _first(tx, collection: str, ids: list[str]) -> dict | None:
+    for i in ids:
+        if rec := await tx.get(collection, i):
+            return rec
+    return None
 
 
 class OAuthServer:
@@ -206,7 +227,7 @@ class OAuthServer:
         user = await self.store.get("users", p.id)
         await self.store.put(
             "oauth_codes",
-            token_id(code),
+            token_id(code, await token_salt(self.store)),
             {
                 "client_id": a["client"]["client_id"],
                 "redirect_uri": a["redirect_uri"],
@@ -233,8 +254,9 @@ class OAuthServer:
 
     async def _exchange_code(self, form: dict, issuer: str) -> dict:
         client = await self.client(form.get("client_id"))
+        salt = await token_salt(self.store)
         async with self.store.transaction() as tx:  # M3: the read and the burn are one step, two racers get one token
-            rec = await tx.get("oauth_codes", token_id(form.get("code")))
+            rec = await _first(tx, "oauth_codes", token_ids(form.get("code"), salt))
             if rec:  # one shot, whatever happens next: a code that reaches this line is never usable again
                 await tx.delete("oauth_codes", rec["id"])
         if (
@@ -254,8 +276,9 @@ class OAuthServer:
 
     async def _refresh(self, form: dict, issuer: str) -> dict:
         client = await self.client(form.get("client_id"))
+        salt = await token_salt(self.store)
         async with self.store.transaction() as tx:
-            rec = await tx.get("oauth_refresh", token_id(form.get("refresh_token")))
+            rec = await _first(tx, "oauth_refresh", token_ids(form.get("refresh_token"), salt))
             if rec and rec.get("used"):
                 # a rotated-out token presented again means two parties hold the chain: the whole family dies (M3)
                 for r in await tx.list("oauth_refresh", {"family": rec["family"]}):
@@ -314,7 +337,7 @@ class OAuthServer:
         refresh = b64url(secrets.token_bytes(32))
         await self.store.put(
             "oauth_refresh",
-            token_id(refresh),
+            token_id(refresh, await token_salt(self.store)),
             {
                 "client_id": client["client_id"],
                 "user": user["id"],

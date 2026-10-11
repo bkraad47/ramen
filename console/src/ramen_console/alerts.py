@@ -18,7 +18,9 @@ class MailAlertHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.name.startswith("ramen.alerts"):
             return  # a flush failure must not feed back into the thing it is trying to report on
-        PENDING.append({"level": record.levelname, "logger": record.name, "message": record.getMessage()})
+        PENDING.append(
+            {"level": record.levelname, "logger": record.name, "message": record.getMessage(), "at": record.created}
+        )
         del PENDING[:-MAX_PENDING]
 
 
@@ -50,7 +52,9 @@ async def flush_alerts(svc: Services, mailer: Mailer) -> list[str]:
         user = await svc.store.get("users", uid)
         if not user:
             continue
-        await mailer.send(user["email"], f"Ramen console: {len(batch)} server warning(s)", body)
+        from .mail_html import digest_subject
+
+        await mailer.send(user["email"], digest_subject(batch), body, alerts=batch)
         sent.append(user["email"])
     return sent
 

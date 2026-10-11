@@ -3,16 +3,16 @@
 import json
 from pathlib import Path
 
-PROVIDERS = ("gcp", "aws")
-DOC = "regions"  # config/regions = {"blocked": {"gcp": [...], "aws": [...]}}
+PROVIDERS = ("gcp", "aws", "azure")
+DOC = "regions"  # config/regions = {"blocked": {"gcp": [...], "aws": [...], "azure": [...]}}
 _DATA = json.loads(Path(__file__).with_name("regions.json").read_text())
 NOTE: str = _DATA["note"]
 REGIONS: dict[str, dict[str, list[str]]] = {p: _DATA[p] for p in PROVIDERS}
 
 
 def zone_name(provider: str, region: str, letter: str) -> str:
-    """GCP zones are `us-central1-a`, AWS availability zones `us-east-1a`."""
-    return f"{region}-{letter}" if provider == "gcp" else f"{region}{letter}"
+    """GCP zones are `us-central1-a`, AWS availability zones `us-east-1a`, Azure availability zones `eastus-1`."""
+    return f"{region}{letter}" if provider == "aws" else f"{region}-{letter}"
 
 
 def zones(provider: str, blocked: list[str] | None = None) -> dict[str, list[str]]:
@@ -27,10 +27,11 @@ def zones(provider: str, blocked: list[str] | None = None) -> dict[str, list[str
 
 def blocked_region(provider: str, value: str, blocked: dict[str, list[str]]) -> str | None:
     """The blocked region `value` (a region or a zone of it) falls in, or None. Matched by prefix on the region: GCP
-    `us-west1-a` → `us-west1`, AWS `eu-west-1a` → `eu-west-1`; `us-west12-a` is not `us-west1`."""
+    `us-west1-a` → `us-west1`, AWS `eu-west-1a` → `eu-west-1`, Azure `eastus-1` → `eastus`; `us-west12-a` is not
+    `us-west1` and `eastus2-1` is not `eastus`."""
     for r in blocked.get(provider, []) if provider in PROVIDERS else []:
         rest = value[len(r) :] if value.startswith(r) else None
-        if rest == "" or (rest and (rest[0] == "-" if provider == "gcp" else rest.isalpha())):
+        if rest == "" or (rest and (rest.isalpha() if provider == "aws" else rest[0] == "-")):
             return r
     return None
 
@@ -40,7 +41,7 @@ def message(region: str) -> str:
 
 
 def clean(blocked: dict) -> dict[str, list[str]]:
-    """Both providers always present, duplicates and blanks dropped; unknown regions raise ValueError."""
+    """Every provider always present, duplicates and blanks dropped; unknown regions raise ValueError."""
     out = {}
     for p in PROVIDERS:
         seen = []

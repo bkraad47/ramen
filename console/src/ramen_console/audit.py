@@ -1,6 +1,8 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from . import roles
+from .auth import providers
 from .auth.apikeys import HEADER
 from .auth.sessions import COOKIE
 from .util import now, uid
@@ -27,6 +29,8 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
         st = request.app.state
         request.state.principal = None
         request.state.audit = None
+        await roles.load(st.store)  # D48: custom roles rank as their base in every gate below
+        await providers.refresh(st)  # D50: identity providers set on another replica appear within the TTL
         if request.headers.get(HEADER):
             request.state.principal = await st.accounts.principal_for_key(request.headers[HEADER])
         else:  # V1.4: the session carries the user's epoch and dies when the stored one moves on
@@ -40,5 +44,9 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
                 or {"action": f"{request.method} {request.url.path}", "target": request.url.path, "tags": []}
             )
             user = meta.pop("user", None) or (p.name if p else "-")
+            code = response.status_code  # §21.7: a refused change says why (403 forbidden, 422 invalid)
+            err = {403: "error:forbidden", 401: "error:unauthorized", 409: "error:conflict", 422: "error:invalid"}
+            if code in err and not any(t.startswith("error:") for t in meta.get("tags", [])):
+                meta["tags"] = [*meta.get("tags", []), err[code]]
             await write_audit(st.store, user=user, ip=client_ip(request), ok=response.status_code < 400, **meta)
         return response

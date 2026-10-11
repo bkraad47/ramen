@@ -9,44 +9,62 @@ PERMISSIONS: dict[str, dict] = {
         "desc": "read the group's code bucket",
         "gcp": ["roles/storage.objectViewer"],
         "aws": ["s3:GetObject", "s3:ListBucket"],
+        "azure": ["Storage Blob Data Reader"],
     },
     "bucket.write": {
         "desc": "write objects in the group's bucket",
         "gcp": ["roles/storage.objectUser"],
         "aws": ["s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+        "azure": ["Storage Blob Data Contributor"],
     },
     "secrets.read": {
         "desc": "read the group's secrets",
         "gcp": ["roles/secretmanager.secretAccessor"],
         "aws": ["secretsmanager:GetSecretValue"],
+        "azure": ["Key Vault Secrets User"],
     },
     "logs.write": {
         "desc": "write application logs",
         "gcp": ["roles/logging.logWriter"],
         "aws": ["logs:CreateLogStream", "logs:PutLogEvents"],
+        "azure": ["Log Analytics Contributor"],
     },
     "metrics.write": {
         "desc": "write custom metrics",
         "gcp": ["roles/monitoring.metricWriter"],
         "aws": ["cloudwatch:PutMetricData"],
+        "azure": ["Monitoring Metrics Publisher"],
     },
-    "pubsub.publish": {"desc": "publish messages", "gcp": ["roles/pubsub.publisher"], "aws": ["sns:Publish"]},
+    "pubsub.publish": {
+        "desc": "publish messages",
+        "gcp": ["roles/pubsub.publisher"],
+        "aws": ["sns:Publish"],
+        "azure": ["Azure Service Bus Data Sender"],
+    },
     "queue.consume": {
         "desc": "consume queue messages",
         "gcp": ["roles/pubsub.subscriber"],
         "aws": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+        "azure": ["Azure Service Bus Data Receiver"],
     },
     "datastore.user": {
         "desc": "read/write the cloud document DB",
         "gcp": ["roles/datastore.user"],
         "aws": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+        "azure": ["Storage Table Data Contributor"],
     },
     "kms.decrypt": {
         "desc": "decrypt with the group's keys",
         "gcp": ["roles/cloudkms.cryptoKeyDecrypter"],
         "aws": ["kms:Decrypt"],
+        "azure": ["Key Vault Crypto User"],
     },
-    "ai.user": {"desc": "call managed AI models", "gcp": ["roles/aiplatform.user"], "aws": ["bedrock:InvokeModel"]},
+    "ai.user": {
+        "desc": "call managed AI models",
+        "gcp": ["roles/aiplatform.user"],
+        "aws": ["bedrock:InvokeModel"],
+        "azure": ["Cognitive Services User"],
+    },
 }
 
 

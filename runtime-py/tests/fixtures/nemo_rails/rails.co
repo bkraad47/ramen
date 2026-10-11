@@ -1,0 +1,17 @@
+define flow block injection
+  $hit = execute looks_like_injection
+  if $hit
+    bot refuse injection
+    stop
+
+define flow block leaked secrets
+  $hit = execute leaks_secret
+  if $hit
+    bot refuse leak
+    stop
+
+define bot refuse injection
+  "the arguments look like a prompt injection"
+
+define bot refuse leak
+  "the result contains a secret"

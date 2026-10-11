@@ -168,6 +168,17 @@ helm uninstall ramen -n ramen-system                 # releases the load balance
 terraform -chdir=deploy/terraform/aws destroy
 ```
 
+`terraform destroy` also cleans up two things EKS can leave behind (0.7.5). The first is a terminated node's network
+interface (`aws-K8S-i-…`), which blocks deleting the subnets. The second is the `eks-cluster-sg-ramen-…` security
+group, which blocks deleting the VPC. `deploy/terraform/aws/scripts/eni_sweep.sh` runs at the right point in the
+destroy and needs the `aws` CLI, as the Helm provider already does. An install applied before 0.7.5 gets these steps on
+its next `terraform apply`. If a destroy still stops on `DependencyViolation`, run the script by hand and destroy again:
+
+```sh
+bash deploy/terraform/aws/scripts/eni_sweep.sh <vpc id> us-east-1                    # node interfaces
+bash deploy/terraform/aws/scripts/eni_sweep.sh <vpc id> us-east-1 cluster-sg ramen   # cluster security group
+```
+
 Check for leftovers: load balancers and target groups, the WAF web ACL and IP sets, CloudWatch log groups, the
 ECR images, the ACM certificate, IAM roles under `/ramen/` and Secrets Manager entries under `ramen/`. If the
 console was down when a group was deleted, its per-zone roles survive: `aws iam list-roles --path-prefix /ramen/`

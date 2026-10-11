@@ -18,39 +18,78 @@ server: PKCE, pre-registered public clients, no client secret, no dynamic regist
 
 ## What the person does
 
-=== "Claude Code"
+The sign-in step is the same whatever the account is: a Ramen password ([connect with a
+password](connect-password.md)), Microsoft Entra ID or Google ([Entra ID and Workspace](sso.md)). The console's
+login page shows a button per provider, and a role marked OAuth-only sends the person to the provider. The client
+side differs only by how the client reaches Ramen:
+
+- **Streamable HTTP**: the client talks to `https://<edge>/mcp` itself. Claude Code can, because it takes a
+  pre-registered client id in its config.
+- **The bridge** (`ramen-mcp-bridge`): a small stdio program the client starts; it does the browser sign-in, keeps
+  the token and forwards each message over gRPC. Cursor, VS Code / GitHub Copilot and Claude Desktop find the OAuth
+  flow on their own but expect dynamic client registration, which the console does not offer, so for a person's
+  sign-in they go through the bridge. `uvx ramen-mcp-bridge@latest` runs the newest release without an install
+  (needs [uv](https://docs.astral.sh/uv/)); `@latest` stops a cached uvx from running an old bridge.
+
+Admins do not need to type these: the group page's **How MCP users sign in** card generates every command below for
+the install's edge host, the group's zones and a registered client id, one section per identity provider.
+
+<figure markdown>
+![How MCP users sign in, generated on the group page](../img/group-signin.png){ .ramen-shot }
+<figcaption>The generated card for a one-zone group: group key, Ramen accounts, and a section per identity provider.</figcaption>
+</figure>
+
+=== "Claude Code (HTTP)"
     ```sh
-    claude mcp add-json ramen-demo '{"type":"http","url":"https://<edge>/mcp",
+    claude mcp add-json ramen-demo-a '{"type":"http","url":"https://<edge>/mcp",
       "headers":{"ramen-group":"demo","ramen-zone":"a"},
       "oauth":{"clientId":"<client id>","scopes":"mcp:demo:a"}}'
     ```
-    Then `/mcp` in Claude Code, pick *ramen-demo*, sign in. The browser opens the console's login page and then
-    the consent page.
+    Then `/mcp` in Claude Code, pick *ramen-demo-a*, sign in. The browser opens the console's login page (or the
+    provider's), then the consent page.
 
-=== "Claude Desktop, Cursor"
-    These clients find the flow by themselves from the worker's `401` and its
-    `/.well-known/oauth-protected-resource` document, but the console does not support dynamic client
-    registration, so they have no way to obtain a client id on their own and need one configured out of band.
-    **Untested.** Until it is, give these clients a group key, or run them through the bridge, which takes
-    `--client-id`.
-    ```json
-    {"mcpServers": {"ramen-demo": {"url": "https://<edge>/mcp",
-      "headers": {"ramen-group": "demo", "ramen-zone": "a"}}}}
-    ```
-
-=== "The bridge (stdio)"
+=== "Claude Code (bridge)"
     ```sh
-    pip install ramen-mcp-bridge
-    ramen-mcp-bridge --target <edge>:443 --tls --oauth https://<edge> --client-id <client id> --group demo --zone a
+    claude mcp add ramen-demo-a -- uvx ramen-mcp-bridge@latest --target <edge>:443 --tls \
+      --oauth https://<edge> --client-id <client id> --group demo --zone a
     ```
+
+=== "Cursor, Claude Desktop"
+    `~/.cursor/mcp.json`, or `claude_desktop_config.json`:
     ```json
-    {"mcpServers": {"ramen-stdio": {"command": "ramen-mcp-bridge",
-      "args": ["--target", "<edge>:443", "--tls", "--oauth", "https://<edge>", "--client-id", "<client id>", "--group", "demo", "--zone", "a"]}}}
+    {"mcpServers": {"ramen-demo-a": {"command": "uvx",
+      "args": ["ramen-mcp-bridge@latest", "--target", "<edge>:443", "--tls", "--oauth", "https://<edge>",
+               "--client-id", "<client id>", "--group", "demo", "--zone", "a"]}}}
     ```
-    The first run opens the browser. The refresh token is kept in `~/.config/ramen-mcp-bridge/` with mode 0600
-    (`%LOCALAPPDATA%\ramen-mcp-bridge` on Windows, from bridge 0.2.1), and later runs need no browser.
-    `--no-browser` prints the sign-in URL instead. Behind a self-signed certificate, such as the AWS guide's, add
-    `--ca <pem>`: from bridge 0.2.2 it verifies the console during sign-in as well as the worker.
+
+=== "VS Code / GitHub Copilot"
+    `.vscode/mcp.json`:
+    ```json
+    {"servers": {"ramen-demo-a": {"type": "stdio", "command": "uvx",
+      "args": ["ramen-mcp-bridge@latest", "--target", "<edge>:443", "--tls", "--oauth", "https://<edge>",
+               "--client-id", "<client id>", "--group", "demo", "--zone", "a"]}}}
+    ```
+
+=== "Any stdio client"
+    ```sh
+    uvx ramen-mcp-bridge@latest --target <edge>:443 --tls --oauth https://<edge> \
+      --client-id <client id> --group demo --zone a
+    ```
+    Run by hand it signs in, then waits silently for MCP messages on stdin; that is normal.
+
+**Where the bridge keeps the token (bridge 0.3.0).** In memory by default: nothing is written to disk, and the
+person signs in again when the client restarts. `--keychain` keeps it in the operating system's secret store (macOS
+Keychain, or a Secret Service such as GNOME Keyring through `secret-tool`); `--token-file <path>` keeps it in a 0600
+file, for automation only. Tokens are forgotten 30 minutes after the last call (`--idle-timeout`, seconds, `0`
+disables). When a sign-in is needed while the client is already running, the bridge does not block: the MCP call
+answers error `-32001` with the sign-in link in `data.sign_in_url`, so the AI client can show the person the link;
+they open it, approve, and the next call works. `--no-browser` prints the link instead of opening a browser. Behind a
+self-signed certificate add `--ca <pem>`; it verifies the console during sign-in as well as the worker. Bridge 0.2.x
+kept the refresh token in `~/.config/ramen-mcp-bridge/`; 0.3.0 no longer does unless asked to.
+
+**With a group key instead** (agents, CI): no sign-in, the key in `Authorization: Bearer`. Over HTTP in every
+client (`claude mcp add --transport http … --header "Authorization: Bearer <rmk_ key>"`, or a `url` + `headers`
+entry for Cursor and VS Code), or through the bridge with `--key`. [Transport](transport.md#connecting) has each form.
 
 <figure markdown>
 ![The consent page](../img/oauth-consent.png){ .ramen-shot }
@@ -65,7 +104,9 @@ when the person's role, password or account changes. The token runs every tool o
 same reach as a group key, with the person's name on every log line.
 
 Since 0.7.2 the token also names the person's `role` in the group, which the worker uses for per-tool access
-([Groups, zones and regions](groups-zones.md#tool-access-072)). The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
+([Groups, zones and regions](groups-zones.md#tool-access-072)); since 0.7.5 that may be a
+[custom role](users-access.md#custom-roles), and a role marked OAuth-only sends the person to the identity provider
+instead of the password form. The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
 every consent decision, and since 0.7.0 every token mint (`oauth.token`), refresh (`oauth.refresh`), a rotated-out
 refresh token presented again (`oauth.refresh_reuse`, which revokes the family) and every refusal (`oauth.denied`
 with its reason). The lifetimes are the console's `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and

@@ -1,4 +1,4 @@
-# Ramen architecture (v0.5.5)
+# Ramen architecture (v0.7.5)
 
 Full version on the docs site: https://bkraad47.github.io/ramen/architecture/ (with per-version pages).
 Binding interface contracts: [docs/CONTRACTS.md](docs/CONTRACTS.md) — §11 is gRPC, §16 is Streamable HTTP.
@@ -9,15 +9,16 @@ Hierarchy: **Group → Environment → Zone → Worker** (D5). One zone first, e
 Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19) — one port, one set of guards.
 
 ```
-browser / rmn_ key ──▶ console (FastAPI, HTTP) ──▶ Store: Firestore | DynamoDB | Postgres | memory
-                            │                       Cloud adapter: local | gcp | aws
-                            │                       Secrets backend: store | gcp | aws
+browser / rmn_ key ──▶ console (FastAPI, HTTP) ──▶ Store: Firestore | DynamoDB | Azure Tables | Postgres | memory
+                            │                       Cloud adapter: local | gcp | aws | azure
+                            │                       Secrets backend: store | gcp | aws | azure (Key Vault)
+                            │                       Autoscaling: rebalance/scheduler → 1..max workers per zone
                             ▼ deploy: git → bucket, canary → stable; gRPC to pods: Admin/Reload, Admin/Metrics, Health/Check
 MCP client ──▶ POST /mcp (Streamable HTTP, bearer key or OAuth token) ──────────────▶ namespace ramen-<group>-<zone>
-stdio client ──▶ ramen-mcp-bridge (stdio ⇄ gRPC) ──▶ LB: GKE Gateway | ALB  ── metadata ramen-group, ramen-zone ──▶ (same pods, same guards)
+stdio client ──▶ ramen-mcp-bridge (stdio ⇄ gRPC) ──▶ LB: GKE Gateway | ALB | Envoy (AKS) ── metadata ramen-group, ramen-zone ──▶ (same pods, same guards)
 grpcurl / gRPC client ─────────────────────────▶   gRPC health checks                                              worker + worker-canary pods:
-                                                                                                                    ramen-node (Rust, tonic :8080) ⇄ ramen_runtime (Python 3.14)
-                                                                                                                    bucket gs:// | s3:// | /buckets/<group>  (synced on load)
+                                                                                                                    ramen-node (Rust, tonic :8080) ⇄ ramen_runtime (Python 3.12, guardrails)
+                                                                                                                    bucket gs:// | s3:// | az:// | /buckets/<group>  (synced on load)
 ```
 
 - **proto/ramen/v1/** `mcp.proto` (`ramen.v1.Mcp/Call`: one JSON-RPC 2.0 message as `bytes body`; `Session` stream
@@ -49,8 +50,9 @@ grpcurl / gRPC client ───────────────────�
   `ramen-worker` (one zone namespace: Service `appProtocol: kubernetes.io/h2c`, header-matched HTTPRoute /
   gRPC-annotated Ingress, gRPC health policy, Role/RoleBinding), Terraform GCP (GKE Autopilot, Firestore, GCS, AR,
   static IP, Certificate Manager managed cert for a free `sslip.io` hostname, GSA with custom role + resource-level
-  IAM) and AWS (EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA with narrowed WAF/IAM, ALB controller, Fluent Bit —
-  **untested**), CloudFormation equivalent.
+  IAM), AWS (EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA with narrowed WAF/IAM, ALB controller, Fluent Bit;
+  applied to a real account since 0.5.6) and Azure (AKS, ACR, Blob + Table Storage, Key Vault, managed identities,
+  Envoy Gateway + cert-manager; 0.7.5), CloudFormation equivalent for AWS.
 - **State** Firestore (GCP default) / DynamoDB (AWS default) / Postgres (self-hosted, `RAMEN_STORE=postgres`,
   v0.5.5) behind one repository interface, Fernet-encrypted sensitive fields (D2, D37).
 - **Exposure** GKE Gateway (global HTTPS LB, static IP, Google-managed cert via Certificate Manager — a free
@@ -69,3 +71,9 @@ grpcurl / gRPC client ───────────────────�
   health states, the bridge via the `mcp` stdio client), e2e and cloud suites against `host:port`, `tests/kind/`
   against a real local multi-zone cluster (autoscale, rebalance, both transports); CI on push, release on `v*`
   tags (D9), docs on push to main.
+- **0.7.5** guardrails per tool in the runtime (`mcp/guardrails.yaml`, NeMo Guardrails or `policy.py`, fail-closed;
+  D45 pins the runtime to Python 3.12); identity providers on the Config page with group lookup through Microsoft
+  Graph or Cloud Identity, memberships from the IdP and from admins (D47, D50, D51); custom roles carried in tokens to
+  the worker (`RAMEN_ROLES`, D48); AKS as a third target with Envoy Gateway, Let's Encrypt, Table Storage, Key Vault,
+  Blob and managed identities (D54); autoscaling by the console between 1 and an admin-set max, no HPA (D55); salted
+  key and token hashes. Contract: [docs/CONTRACTS.md](docs/CONTRACTS.md) §21.

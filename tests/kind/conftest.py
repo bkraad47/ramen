@@ -184,3 +184,43 @@ def load(stack, stable_targets, group):
         return Load(stable_targets[zone], stack["key"], group, zone, threads, transport=transport)
 
     return make
+
+
+# -- §21.7 autoscaling helpers (0.7.5: the console scales the workers, no HPA) ----------------------------------------
+@pytest.fixture
+def bounds(admin, group):
+    """`bounds(zone, max_count)` sets a zone's autoscale ceiling (min is always 1) and restores count and max after the
+    test, so the next module finds the zone as it was."""
+    seen: dict[str, dict] = {}
+
+    def set_max(zone: str, max_count: int) -> dict:
+        if zone not in seen:
+            seen[zone] = admin.get("workers", group=group, zone=zone).json()
+        r = admin.put("workers", {"max_count": max_count}, group=group, zone=zone)
+        assert r.status_code == 200, f"max_count {zone}: {r.status_code} {r.text[:300]}"
+        return r.json()
+
+    yield set_max
+    for zone, w in seen.items():
+        admin.put("workers", {"max_count": max(int(w.get("max_count") or 1), 1)}, group=group, zone=zone)
+        admin.put("workers", {"count": int(w.get("count") or 1)}, group=group, zone=zone)
+
+
+def rebalance_until(admin, group: str, zone: str, done, timeout: float, every: float = 4.0) -> list[dict]:
+    """Press Rebalance every `every` s until `done()` is true; returns the autoscale decisions seen (the timeline a
+    failure message shows). Each press is what a human or the scheduler does (CONTRACTS §21.7)."""
+    decisions: list[dict] = []
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        r = admin.post("rebalance", {}, group=group, zone=zone)
+        assert r.status_code == 200, f"rebalance {zone}: {r.status_code} {r.text[:300]}"
+        decisions.append(r.json().get("autoscale") or {})
+        if done():
+            return decisions
+        time.sleep(every)
+    raise AssertionError(f"rebalance never reached the target in {timeout:.0f}s; decisions: {decisions[-12:]}")
+
+
+def audit_entries(admin) -> list[dict]:
+    body = admin.audit().json()
+    return body if isinstance(body, list) else body.get("items", [])

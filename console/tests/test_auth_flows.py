@@ -31,8 +31,8 @@ def mails(d: Path) -> list[emaillib.message.EmailMessage]:
 
 
 def link(msg, kind) -> str:
-    m = re.search(rf"https://console\.test/auth/{kind}/(\S+)", msg.get_content())
-    assert m, msg.get_content()
+    m = re.search(rf"https://console\.test/auth/{kind}/(\S+)", msg.get_body(("plain",)).get_content())
+    assert m, msg.get_body(("plain",)).get_content()
     return f"/auth/{kind}/{m.group(1)}"
 
 
@@ -87,7 +87,7 @@ def test_invite_and_reset_flow(demo, maildir):
         and inv[0]["From"] == "console@ramen.test"
         and "invited" in inv[0]["Subject"]
     )
-    assert FIRST not in inv[0].get_content()
+    assert FIRST not in inv[0].get_body(("plain",)).get_content()
     set_path = link(inv[0], "reset")
     with TestClient(demo.app) as anon:
         assert anon.get("/auth/reset").status_code == 200

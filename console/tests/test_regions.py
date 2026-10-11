@@ -19,6 +19,8 @@ def test_regions_file_lists_both_providers_with_a_dated_note():
     assert "2026" in data["note"]
     for provider in ("gcp", "aws"):
         assert len(data[provider]) >= 30 and all(v for v in data[provider].values())
+    # D54 (§21.6): Azure regions with availability zones, numbered 1-3
+    assert len(data["azure"]) >= 15 and data["azure"]["eastus"] == ["1", "2", "3"]
     assert data["gcp"]["us-central1"] == ["a", "b", "c", "f"] and data["aws"]["us-east-1"][:3] == ["a", "b", "c"]
     assert regions.REGIONS["gcp"] == data["gcp"]
 
@@ -26,6 +28,7 @@ def test_regions_file_lists_both_providers_with_a_dated_note():
 def test_zone_names_follow_each_providers_convention():
     assert "us-central1-a" in regions.zones("gcp")["us-central1"]
     assert "eu-west-1a" in regions.zones("aws")["eu-west-1"]
+    assert regions.zones("azure")["eastus"] == ["eastus-1", "eastus-2", "eastus-3"]
     assert regions.zones("local") == {}
     assert regions.zones("gcp", blocked=["us-central1"]).get("us-central1") is None
     assert "us-west1" in regions.zones("gcp", blocked=["us-central1"])
@@ -43,6 +46,9 @@ def test_zone_names_follow_each_providers_convention():
         ("aws", "us-east-1", ["eu-west-1"], None),
         ("local", "local", ["local"], None),
         ("gcp", "", ["us-west1"], None),
+        ("azure", "eastus-1", ["eastus"], "eastus"),
+        ("azure", "eastus", ["eastus"], "eastus"),
+        ("azure", "eastus2-1", ["eastus"], None),
     ],
 )
 def test_block_matches_by_region_prefix(provider, value, blocked, hit):
@@ -56,11 +62,17 @@ def test_message_names_the_region():
 def test_config_api_round_trips_and_validates(demo):
     r = demo.get(URL)
     assert r.status_code == 200
-    assert r.json()["blocked"] == {"gcp": [], "aws": []} and "us-central1" in r.json()["regions"]["gcp"]
+    assert r.json()["blocked"] == {"gcp": [], "aws": [], "azure": []} and "us-central1" in r.json()["regions"]["gcp"]
     r = demo.put(URL, json={"gcp": ["us-west1", "", "us-west1"], "aws": ["eu-west-1"]})
     assert r.status_code == 200, r.text
-    assert r.json()["blocked"] == {"gcp": ["us-west1"], "aws": ["eu-west-1"]}
-    assert demo.put(URL, json={"blocked": {"gcp": ["us-east1"]}}).json()["blocked"] == {"gcp": ["us-east1"], "aws": []}
+    assert r.json()["blocked"] == {"gcp": ["us-west1"], "aws": ["eu-west-1"], "azure": []}
+    # a provider left out of the body keeps its list: the Config card only shows this console's cloud (0.7.5)
+    assert demo.put(URL, json={"blocked": {"gcp": ["us-east1"]}}).json()["blocked"] == {
+        "gcp": ["us-east1"],
+        "aws": ["eu-west-1"],
+        "azure": [],
+    }
+    assert demo.put(URL, json={"aws": []}).json()["blocked"]["aws"] == []  # an empty list still clears
     r = demo.put(URL, json={"gcp": ["mars-1"]})
     assert r.status_code == 422 and "mars-1" in r.json()["detail"]
     assert demo.put(URL, json={"gcp": "us-west1,us-west2"}).json()["blocked"]["gcp"] == ["us-west1", "us-west2"]
@@ -110,24 +122,40 @@ def test_a_deploy_refuses_a_zone_whose_region_was_blocked_later(demo, caplog):
     )
 
 
-def test_config_page_has_a_blocked_regions_card_with_one_dropdown_per_provider(demo):
+def test_config_page_shows_only_this_consoles_cloud_in_blocked_regions(demo, monkeypatch):
+    """0.7.5 (the user): a console runs on one cloud, so the card lists that cloud's regions only."""
     demo.put(URL, json={"gcp": ["us-west1"]})
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     page = demo.get("/config").text
-    assert "Blocked regions" in page
-    assert '<details class="multi" id="blocked-gcp">' in page and '<details class="multi" id="blocked-aws">' in page
-    assert 'name="gcp" value="us-west1" checked' in page and 'name="aws" value="eu-west-1">' in page
-    assert 'hx-put="/api/v1/config/regions"' in page
+    assert "Blocked regions" in page and 'hx-put="/api/v1/config/regions"' in page
+    assert '<details class="multi" id="blocked-gcp">' in page and 'name="gcp" value="us-west1" checked' in page
+    assert 'id="blocked-aws"' not in page and 'id="blocked-azure"' not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "azure")
+    page = demo.get("/config").text
+    assert 'id="blocked-azure"' in page and 'id="blocked-gcp"' not in page and "Azure regions blocked" in page
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    assert "no cloud regions to block" in demo.get("/config").text
 
 
-def test_zones_page_offers_the_providers_zones_minus_blocked_regions(demo):
-    demo.put(URL, json={"gcp": ["us-west1"], "aws": ["eu-west-1"]})
+def test_zones_page_offers_only_this_consoles_cloud_minus_blocked_regions(demo, monkeypatch):
+    """0.7.5 (the user): the add-zone form is specific to the cloud the console runs on."""
+    demo.put(URL, json={"gcp": ["us-west1"], "aws": ["eu-west-1"], "azure": ["westeurope"]})
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     page = demo.get("/zones").text
     assert '<optgroup label="us-central1">' in page and "<option>us-central1-a</option>" in page
     assert "us-west1-a" not in page and '<optgroup label="us-west1">' not in page
-    assert "<option>eu-west-2a</option>" in page and "eu-west-1a" not in page
-    assert 'name="region" placeholder="local"' in page  # local stays free text
-    assert page.count('hx-post="/api/v1/zones"') == 3  # one JS-free form per provider
-    assert "Blocked by a super admin: gcp us-west1 · aws eu-west-1" in page
+    assert "eu-west-2a" not in page and "eastus-1" not in page and 'placeholder="local"' not in page
+    assert page.count('hx-post="/api/v1/zones"') == 1 and "Add GCP zone" in page
+    assert "Blocked by a super admin: us-west1" in page and "eu-west-1" not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "aws")
+    page = demo.get("/zones").text
+    assert "<option>eu-west-2a</option>" in page and "eu-west-1a" not in page and "us-central1-a" not in page
+    monkeypatch.setenv("RAMEN_CLOUD", "azure")
+    page = demo.get("/zones").text
+    assert "<option>eastus-1</option>" in page and "westeurope-1" not in page and "Add Azure zone" in page
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    page = demo.get("/zones").text
+    assert 'name="region" placeholder="local"' in page and page.count('hx-post="/api/v1/zones"') == 1
     make_user(demo, "v@x", "viewer", ["demo"])
     from fastapi.testclient import TestClient
 
@@ -141,10 +169,19 @@ def test_services_check_region_reads_the_store(demo):
 
     async def run():
         await svc.store.put("config", "regions", {"blocked": {"gcp": ["us-west1"], "aws": []}})
-        assert await svc.blocked_regions() == {"gcp": ["us-west1"], "aws": []}
+        assert await svc.blocked_regions() == {"gcp": ["us-west1"], "aws": [], "azure": []}
         assert await svc.region_block("gcp", "us-west1-a") == "us-west1"
         assert await svc.region_block("aws", "us-west1-a") is None
         await svc.store.put("config", "regions", {"blocked": {"gcp": ["x"]}})  # a partial doc still answers both
-        assert await svc.blocked_regions() == {"gcp": ["x"], "aws": []}
+        assert await svc.blocked_regions() == {"gcp": ["x"], "aws": [], "azure": []}
 
     asyncio.run(run())
+
+
+def test_a_zone_in_a_blocked_azure_region_is_refused(demo):
+    demo.put(URL, json={"azure": ["westeurope"]})
+    r = demo.post("/api/v1/zones", json={"name": "we1", "provider": "azure", "region": "westeurope-1"})
+    assert r.status_code == 403 and "westeurope" in r.json()["detail"]
+    assert (
+        demo.post("/api/v1/zones", json={"name": "eu1", "provider": "azure", "region": "eastus-1"}).status_code == 201
+    )

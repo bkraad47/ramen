@@ -27,7 +27,7 @@ PORT = int(os.environ.get("RAMEN_SHOTS_PORT", "18100"))
 BASE = f"http://127.0.0.1:{PORT}"
 EMAIL, PASSWORD = "admin@ramen.local", "Shots-Console-1!"
 
-# file -> (path, what the page is, full page or viewport)
+# file -> (path, what the page is, full page (True), viewport (False) or a CSS selector: just that part of the page)
 PAGES = {
     "login.png": ("/login", "Sign-in page", False),
     "dashboard.png": ("/", "Dashboard: load per zone and group", False),
@@ -44,6 +44,28 @@ PAGES = {
         "/config",
         "Config: the public address (base URI), authentication, the permission catalogue, service-account rules",
         True,
+    ),
+    "zones.png": ("/zones", "Zones and workers: this cloud's zones, the workers per group with their max", True),
+    # 0.7.5: the parts of a page the identity, roles and autoscaling docs point at
+    "config-roles.png": (
+        "/config",
+        "Config: custom roles (name, base, OAuth only)",
+        ".card:has(> h2:text-is('Roles'))",
+    ),
+    "config-identity.png": (
+        "/config",
+        "Config: identity providers with the group source, and the role mapping",
+        ".card:has(> h2:has-text('Identity providers'))",
+    ),
+    "group-autoscale.png": (
+        "/groups/demo",
+        "Group page: zone actions with count, max (autoscale up to) and the last autoscale decision",
+        "h2:text-is('Zone actions') + .card",
+    ),
+    "group-signin.png": (  # a one-zone group: two zones double every box
+        "/groups/analytics",
+        "Group page: How MCP users sign in, generated for this install (group key, accounts, Entra ID)",
+        ".signin-guide",
     ),
     # §17.2: the two moments the end-to-end guide needs that a plain page load does not show
     "key-shown.png": ("/api-keys", "The one-time display of a new agent key", False),
@@ -67,7 +89,7 @@ def workers():
     cold = FakeWorker(admin_key="shots", mcp_keys=None).start()
     hot = FakeWorker(admin_key="shots", mcp_keys=None).start()
     cold.metrics = {"inflight": 1, "total": 128, "errors": 0, "load": "low"}
-    hot.metrics = {"inflight": 6, "total": 412, "errors": 1, "load": "even"}
+    hot.metrics = {"inflight": 28, "total": 412, "errors": 1, "load": "high", "max_inflight": 32}
     for w in (cold, hot):
         w.load_result = {
             "tools": [{"name": "demo_calculator_tool", "inputSchema": {"type": "object"}}],
@@ -147,6 +169,33 @@ def seed(client, repo: str | None = None) -> dict:
         json={"tag": "us-central1-docker.pkg.dev/ramen/ramen/worker:demo-3", "note": "pandas 2.3"},
         headers=h(),
     )
+    # 0.7.5: a custom role, an Entra-shaped provider (fictional tenant, never contacted) with the groups lookup and
+    # two rules, a max per zone and one rebalance, so the autoscale controls show a decision
+    client.put(
+        "/api/v1/config/roles/analyst", json={"base": "viewer", "label": "Analyst", "oauth_only": True}, headers=h()
+    )
+    tenant = "00000000-0000-0000-0000-000000000000"
+    client.put(
+        "/api/v1/config/oauth-providers/entra",
+        json={
+            "issuer": f"https://login.microsoftonline.com/{tenant}/v2.0",
+            "client_id": "11111111-2222-3333-4444-555555555555",
+            "client_secret": "not-a-real-secret",
+            "groups_source": "lookup",
+        },
+        headers=h(),
+    )
+    rmap = "/api/v1/config/auth/role-map/entra"
+    client.put(rmap, json={"claim": "groups"}, headers=h())
+    for value, role, groups in (
+        ("6f1c0d2e-0000-4000-8000-00000000a001", "group_admin", ["demo"]),
+        ("6f1c0d2e-0000-4000-8000-00000000a002", "analyst", ["demo", "analytics"]),
+    ):
+        client.put(rmap, json={"value": value, "role": role, "groups": groups}, headers=h())
+    for zone in ("a", "b"):
+        client.put(f"/api/v1/groups/demo/zones/{zone}/workers", json={"max_count": 3}, headers=h())
+    client.put("/api/v1/config/scheduler", json={"enabled": True, "interval_seconds": 60}, headers=h())
+    client.post("/api/v1/groups/demo/zones/b/rebalance", headers=h())
     client.put("/api/v1/config/sa-rules", json={"rules": [{"effect": "deny", "permission": "kms.*"}]}, headers=h())
     client.post("/api/v1/backups", json={"target": "local"}, headers=h())
     client.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": True}, headers=h())
@@ -277,7 +326,13 @@ def capture(
                 except Exception:  # noqa: BLE001 - say what the API answered instead of a blank picture
                     print(f"key-shown: no one-time display; api replies {replies}", file=sys.stderr)
                 page.wait_for_timeout(300)
-            page.screenshot(path=str(out / name), full_page=full)
+            if name == "group-signin.png":  # the Entra section closed by default; open it next to the group key
+                page.evaluate("document.querySelectorAll('.signin-guide details').forEach((d, i) => d.open = i != 1)")
+                page.wait_for_timeout(200)
+            if isinstance(full, str):
+                page.locator(full).first.screenshot(path=str(out / name))
+            else:
+                page.screenshot(path=str(out / name), full_page=full)
             taken.append(name)
             print(f"captured {name} <- {path}")
         browser.close()

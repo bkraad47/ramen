@@ -31,7 +31,7 @@ Group environment (0.6.0): the runtime renders `<bucket>/mcp/env.yaml` (else `en
 Port `RAMEN_CONSOLE_PORT` (default 8000; TLS terminated by ingress/LB; local compose serves https on 8443 with a self-signed cert).
 Storage interface `ramen_console.storage.base.Store` (async): `get/put/delete/list(collection, filters)` + `transaction`. Collections: `users, groups, environments, zones, workers, secrets, api_keys, audit, activity, config, backups`. Adapters: `memory` (tests), `firestore` (honors `FIRESTORE_EMULATOR_HOST`), `dynamodb` (tests use moto). Selected by `RAMEN_STORE=memory|firestore|dynamodb`. Fields marked sensitive (password hashes, secret values, API key hashes, github tokens) are Fernet-encrypted with `RAMEN_FERNET_KEY` before write.
 Cloud interface `ramen_console.cloud.base.Cloud`: `sync_repo(group, repo_url, ref, token) -> bucket_uri`, `deploy(group, env, zone, canary=True)`, `rebalance(group, zone)`, `workers(group, zone) -> [{id, load, metrics}]`, `logs(group, zone, worker=None, tail=500)`, `set_ip_rules(group, zone, cidrs)`, `create_service_account(group, zone)`, `refresh()`. Adapters: `local` (filesystem bucket at `RAMEN_BUCKET_ROOT/<group>`, deploy = write env file + `Admin/Reload` on each worker via `ramen_console.grpcclient` (§11), logs = worker container stdout file), `gcp` (§7), `aws` (§8, untested on a real account). Selected by `RAMEN_CLOUD=local|gcp|aws`.
-Roles (0.5.95, D41: **per group** — `user.memberships: {group: role}`; `role`/`groups` on a user are derived summaries; one person may hold a different role in each group; `rbac.can(p, role, group)` is the one rule, `require()` the one gate for pages and API; Config, API keys, Backups, Audit and group deletion are super-admin only, secrets admin-only, service-account requests are decided by another admin of the group or a super admin): `super_admin` (global), `group_admin` (per group), `viewer` (per group), `mcp_user` (per group; 0.5.92, D39: may only sign in and approve an OAuth client for a zone of their groups — no console page, no API; `/api/v1/me` and `/oauth/authorize` are the only things that answer them). Bootstrap super admin from `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD` on first start. Sessions: signed cookie. Passwords: argon2. API keys: `rmn_<id>_<secret>`, stored hashed, scoped to role+groups, header `X-Ramen-Api-Key` on `/api/v1/*`.
+Roles (0.5.95, D41: **per group** — `user.memberships: {group: role}`; `role`/`groups` on a user are derived summaries; one person may hold a different role in each group; `rbac.can(p, role, group)` is the one rule, `require()` the one gate for pages and API; Config, API keys, Backups, Audit and group deletion are super-admin only, secrets admin-only, service-account requests are decided by another admin of the group or a super admin): `super_admin` (global), `group_admin` (per group), `viewer` (per group), `mcp_user` (per group; 0.5.92, D39: may only sign in and approve an OAuth client for a zone of their groups — no console page, no API; `/api/v1/me` and `/oauth/authorize` are the only things that answer them). Bootstrap super admin from `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD` on first start. Sessions: signed cookie. Passwords: argon2. API keys: `rmn_<id>_<secret>`, stored hashed (0.7.5: §21.8), scoped to role+groups, header `X-Ramen-Api-Key` on `/api/v1/*`.
 Pages (left sidebar): Dashboard (zone→group load map, blue/green/red), Groups, Environments, Zones/Workers, Secrets, Users, API Keys, Logs, Audit, Backups, Config. Theme: coral `#F26B3A` on `#F4F1EC`, logo at `/static/logo.png`. HTMX for partial refresh; no JS build step.
 Every mutating request writes `audit` `{ts, user, ip, action, target, ok, tags}`.
 Probes: `GET /healthz` 200 always; `GET /readyz` 200 once the store answers and a super admin exists, else 503.
@@ -112,7 +112,7 @@ Mirror of §7 with AWS primitives. Everything is built and unit-tested with moto
 - **Email auth (G12)**: SMTP from yaml/env (`RAMEN_SMTP_{HOST,PORT,USER,PASSWORD,FROM,TLS}`); invite email on user create, password reset (`POST /auth/reset`, `POST /auth/reset/{token}`), optional magic-link login (`auth.magic_link: true`). Dev backend `RAMEN_SMTP_HOST=file://<dir>` writes .eml files (tests use it). Never log message bodies.
 - **SA policy engine (F4.2, F6.5)**: super-admin rules `[{effect: allow|deny, permission: <glob>}]` (existing) gate what group admins may request. `POST /api/v1/requests {group, zone, permission}` → super admin `approve` → `Cloud.apply_sa_permissions(group, zone, permissions)` binds the mapped cloud roles (gcp: IAM roles/conditions on the GSA; aws: IAM policy on the role; local: recorded only). Mapping table `ramen_console/policy/permissions.py` (e.g. `bucket.read` → `roles/storage.objectViewer` / `s3:GetObject`). Denied-by-rule requests are rejected with 409 and audited.
 - **Tool blocking (F5.6)**: per environment `blocked: [names]` (`PUT /api/v1/groups/{g}/environments/{e}/blocked`); deploy writes `RAMEN_BLOCKED=<comma list>` into the deploy config; the node removes blocked names from `tools/list`, `resources/list`, `prompts/list` and answers `-32601` for calls to them; the UI packages page has a block/unblock toggle per item (admins).
-- **Hardening (added after the 0.3.0 security audit)**: signing secret = `RAMEN_SESSION_SECRET` → `RAMEN_FERNET_KEY` → a random per-process secret (never a constant; set the env in production); security headers on every response (CSP self+inline, nosniff, DENY framing, referrer same-origin; HSTS when `RAMEN_COOKIE_SECURE=1`); per-IP rate limit on `POST /login`, `/auth/reset*`, `/auth/magic*` (`RAMEN_LOGIN_RATE_LIMIT`, default 20/min → 429); reset/magic tokens redacted from the access log; `next` after login must be a same-origin path; OIDC requires `email_verified: true` unless `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED=1`; CSV exports neutralise formula cells; log queries accept only valid namespace/pod names (422 otherwise). Worker pods: `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp RuntimeDefault, and a per-namespace NetworkPolicy allowing ingress only from `ramen-system` and the load-balancer ranges (GCP `35.191.0.0/16`, `130.211.0.0/22`; AWS the VPC CIDR).
+- **Hardening (added after the 0.3.0 security audit)**: signing secret = `RAMEN_SESSION_SECRET` → `RAMEN_FERNET_KEY` → a random per-process secret (never a constant; set the env in production); security headers on every response (CSP self+inline, nosniff, DENY framing, referrer same-origin; HSTS when `RAMEN_COOKIE_SECURE=1`); per-IP rate limit on `POST /login`, `/auth/reset*`, `/auth/magic*` (`RAMEN_LOGIN_RATE_LIMIT`, default 20/min → 429); reset/magic tokens redacted from the access log; `next` after login must be a same-origin path; OIDC requires `email_verified: true` unless `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED=1` (superseded in 0.7.5 by §21.3/D51: no `email_verified` requirement); CSV exports neutralise formula cells; log queries accept only valid namespace/pod names (422 otherwise). Worker pods: `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp RuntimeDefault, and a per-namespace NetworkPolicy allowing ingress only from `ramen-system` and the load-balancer ranges (GCP `35.191.0.0/16`, `130.211.0.0/22`; AWS the VPC CIDR).
 - **CSRF**: HTML forms carry a per-session token (`ramen_csrf` cookie + hidden field / `X-Ramen-CSRF` header); the JSON API with an API key is exempt.
 
 ## 10. Docs site & release material (v0.3.0, binding)
@@ -537,3 +537,214 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   logs a WARNING `ramen.drift` (digest) and shows red on the group page's Drift card. No automatic rollback.
 - **Not built (D44).** Per-user upstream credentials (tools acting as the person against Google/Microsoft) need a token
   broker and IdP consent in the console; deferred to a minor release.
+
+## 21. v0.7.5 — guardrails in the runtime, identity federation, custom roles (binding)
+Ramen's own design (D45–D48). Nothing here is derived from another product. Every item ships with positive,
+negative and combination tests (the brief's acceptance bar); the combinations are listed at the end.
+
+### 21.1 Runtime on Python 3.12 (D45)
+- `runtime-py` `requires-python = ">=3.12,<3.13"` — 3.12 only, because the flagship guardrails engine (NeMo
+  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim`; CI runtime jobs
+  (`runtime`, `node-conformance`, compose, kind) install 3.12. The console stays on 3.14. `scripts/check_versions.py`
+  fails when a runtime pin and the Dockerfiles disagree.
+
+### 21.2 Guardrails (D46) — `mcp/guardrails.yaml` in the group repo
+```yaml
+engine: nemo            # nemo | policy | none (default none: the file may be absent)
+config: mcp/guardrails  # nemo: a NeMo rails config dir (config.yml, *.co, actions.py); policy: dir holding policy.py
+fail: closed            # closed (default) | open — what a hook error/timeout means
+timeout_s: 10           # per hook call, default 10, max 120
+tools:                  # per-tool opt-in; a tool not listed is never checked
+  word_count: {pre: true, post: true}
+  unit_convert: {pre: true}        # post defaults false
+```
+- Hook points, both inside `Executor.call_tool`: **pre** runs after argument validation and secret substitution and
+  before the tool function (payload: tool name + canonical JSON of the *redacted* arguments — `{{$group.VAR}}`
+  references stay as written, the secret value never reaches an engine); **post** runs after output validation
+  (payload: tool name, the same as-written arguments, and the result text or the canonical JSON of
+  `structuredContent` when present, with every resolved secret value replaced by `***` — the client's copy is untouched).
+- Engines. `nemo`: `ramen_runtime.guardrails.nemo` loads `RailsConfig.from_path(config)` once per `runtime.load` and
+  calls `generate(messages, options={"rails": ["input"]})` for pre (user message = payload, `name` = tool) and
+  `options={"rails": ["output"]}` for post (user = pre payload, assistant = result). Blocked ⇔ an activated rail
+  stopped; the engine's message is the bot message. Importing `nemoguardrails` is the `[nemo]` extra
+  (`ramen-runtime[nemo]`), installed in the worker image; `engine: nemo` without it, or a config that fails to load,
+  is reported in the load result (`errors: [{"package": "guardrails", "reason": "..."}]`), the tools still load, and
+  every opted-in tool answers blocked (`guardrail unavailable: ...`) until a load succeeds — a broken engine never
+  means an unguarded tool, whatever `fail` says (`fail` governs call-time errors only). `policy`: `policy.py` in
+  `config` exports `pre(tool: str, arguments: dict) -> None | str` and/or `post(tool, arguments, result) -> None | str`;
+  a returned string blocks with that message; `None` allows; an exception = hook error (→ `fail`).
+- Verdict. Allowed → the call proceeds unchanged (engines never rewrite). Blocked → the tool result
+  `{"content": [{"type": "text", "text": "guardrail blocked: <pre|post>: <message>"}], "isError": true,
+  "_meta": {"ramen": {"guardrail": {"stage": "pre"|"post", "engine": "nemo"|"policy"}}}}` — a tool-call outcome
+  (§2), not a JSON-RPC error; a post block never returns the tool's output. Hook error/timeout with `fail: closed` →
+  blocked with message `guardrail unavailable: <reason>`; with `fail: open` → the call proceeds and the runtime logs
+  `warn guardrail_error`. Runtime log line per hook: `guardrail tool=<t> stage=<s> verdict=allow|block|error ms=<n>`
+  — never the payload.
+- Node: a result carrying `_meta.ramen.guardrail` is logged with reason `guardrail_pre` / `guardrail_post` (access
+  log, both transports); `_meta` stays on the result for the client. Order on `tools/call`: tool access (C10) first,
+  then node-side argument validation, then the runtime (pre → tool → output schema → post).
+- `runtime.load` result and `Admin/Reload` carry `guardrails: {"engine": "<e>", "fail": "...", "tools": {<tool>: ["pre","post"]}}`
+  (`{"engine": "none", "tools": {}}` when absent); it is NOT part of the manifest hash (C1). The group page's Manifest
+  section shows "Guardrails: nemo · word_count (pre, post), unit_convert (pre)" per zone. Golden cases (C3) run
+  through the hooks like any call: a case whose tool is blocked by a rail fails the gate with the rail's message
+  (that is the point of a test case).
+- LLM-backed rails (`models:` in NeMo's config.yml) take their API keys from `mcp/env.yaml` (0.6.0: exported into the
+  runtime process before load). The demo repo ships deterministic rails (no model, no cost).
+
+### 21.3 Identity federation (D47)
+- **Group source per provider.** `RAMEN_OAUTH_<NAME>_GROUPS = claim` (default, today's behaviour: the role claim is
+  read from the ID token/userinfo) or `lookup`. With `lookup` the callback fetches the person's groups with the
+  access token and injects them as claim `groups` (overriding any token `groups`): provider `entra` → Microsoft Graph
+  `GET https://graph.microsoft.com/v1.0/me/memberOf?$select=id,displayName` (values: every `id`, plus `displayName`
+  when Graph returns it — with `User.Read` alone it returns ids only, verified live 2026-10-10, so rules should name
+  ids; follows `@odata.nextLink`; scope `User.Read` added when absent; add `GroupMember.Read.All` to
+  `RAMEN_OAUTH_ENTRA_SCOPES` to map on display names); provider `google` → Cloud
+  Identity `GET https://cloudidentity.googleapis.com/v1/groups/-/memberships:searchDirectGroups?query=member_key_id=='<email>'`
+  (values: each `groupKey.id` (the group email) and `group` name; scope
+  `https://www.googleapis.com/auth/cloud-identity.groups.readonly` added when absent). Other providers: `lookup` is a
+  startup error. The lookup URL base is overridable (`RAMEN_OAUTH_<NAME>_GROUPS_URL`) so tests use a fake. A lookup
+  failure (non-2xx, timeout 10 s) is a 502 `could not read your groups from <provider>` — nobody is signed in with
+  stale groups. Config page: "Group source" select per provider (store doc `config/auth.groups_source[<provider>]`,
+  env wins only when the doc has no value).
+- **Providers are managed on the Config page (the user, 2026-10-10; D50).** A super admin adds, edits and removes
+  identity providers in the browser: store doc `config/oauth_providers = {"<name>": {issuer, client_id, client_secret,
+  scopes, groups_source}}`, the secret encrypted at rest like SMTP's and never read back;
+  `GET /api/v1/config/oauth-providers` (masked), `PUT /api/v1/config/oauth-providers/{name}` (omit `client_secret` to
+  keep it), `DELETE`; audited `config.oauth_provider`. `RAMEN_OAUTH_<NAME>_*` still works and is shown as source `env`;
+  the store doc wins per provider name. The registry and the login page follow a change at once (no restart). Config
+  page card "Identity providers (Entra ID, Google Workspace)", with the group-source select and the role-mapping rules
+  next to it, so everything about a provider is in one place.
+- **The provider's email is the account (the user, 2026-10-10; D51).** No `email_verified` requirement: the account is
+  the `email` claim (or a `preferred_username` containing `@`); with no email the account is keyed on the provider's
+  stable id (Entra `oid`+`tid`, else `sub`) as `provider_key = "<provider>:<id>"`, shown in place of the email until one
+  arrives; neither → 403. `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is read nowhere. The provider callback is
+  `public_url(request) + /auth/<name>/callback` (base URI → `RAMEN_PUBLIC_URL` → request), never the request scheme alone.
+- **Membership from either side.** A user document carries `idp_memberships` (`{group: role}`, rewritten on every SSO
+  login when the provider has a mapping) and `manual_memberships` (set on the Users page / `PUT|DELETE
+  /groups/{g}/members/{uid}`). Effective `memberships` = `idp_memberships` overlaid by `manual_memberships` (an admin's
+  entry for a group wins, whatever the IdP says; an admin entry absent → the IdP role stands). Super admin via the
+  mapping is `idp_super`; set by hand stays `role: super_admin`. Users page shows the source per membership
+  (`via entra`, `set here`). Documents from before 0.7.5: `memberships` → `manual_memberships`. Negative: a person
+  removed from the IdP group loses that membership at the next login (sessions: epoch bump as today) unless an admin
+  entry exists.
+- **IdP and cloud independent.** Any configured provider works on any adapter; nothing in `cloud/` reads provider
+  settings (test: both providers configured on the local adapter; GCP/AWS adapters' env unchanged).
+
+### 21.4 Custom roles (D48)
+- `config/roles` store doc: `{"<name>": {"base": "group_admin"|"viewer"|"mcp_user", "label": "...", "oauth_only": bool}}`;
+  `GET /api/v1/config/roles`, `PUT /api/v1/config/roles/{name}` (body `{base, label?, oauth_only?}`), `DELETE`
+  (super admin; audited `config.roles`). Name `^[a-z][a-z0-9_]{1,31}$`, not a built-in. Delete → 409 while any user
+  membership, role-mapping rule or tool-access entry uses the name.
+- A custom role is usable wherever a group role is: `memberships` (both sides), role-mapping rules, tool-access kinds.
+  Console authorization uses the **base** (`rbac.can`); the token's `role` claim is the custom name; the worker gets
+  `RAMEN_ROLES` (compact JSON `{name: base}`, deploy-time, every zone). Node: a caller's kind matches a tool-access
+  list when the list names the kind **or its base**; an unknown name with no `RAMEN_ROLES` entry matches nothing
+  (fails closed, as 0.7.2).
+- **Per-role OAuth enforcement.** `oauth_only: true` → a person who holds that role in any group (either side) cannot
+  sign in with a password or a magic link: `/login` answers 403 `This account signs in with <provider list>`; the
+  OAuth AS login step (A2 password MCP users) is the same endpoint, so MCP clients land on the provider too. The
+  break-glass bootstrap admin is exempt (as for mappings). The built-in roles cannot be made `oauth_only`.
+- Config page: a "Roles" card (list, add, remove); the Users page, role-mapping and tool-access selects list custom
+  roles after the built-ins.
+
+### 21.5 Acceptance (combinations, besides each item's positive and negative tests)
+1. NeMo pre rail + tool access on the same tool: a kind that may not call gets `-32003` (access first, no hook run);
+   an allowed kind with a blocked payload gets the guardrail `isError` result; log reasons `tool_denied` vs
+   `guardrail_pre`; both transports.
+2. IdP mapping (fake provider, `lookup` against a fake Graph/Cloud Identity server) → custom role `analyst`
+   (`oauth_only`) → the person's token carries `role: analyst`; the worker lists/calls per a tool-access entry naming
+   `analyst`; the same person's password login is 403; over Streamable HTTP and over the stdio bridge (`--oauth`).
+3. Removed from the IdP group → next login: membership gone, token no longer carries the role, worker denies; an admin
+   `manual_memberships` entry keeps it.
+4. `fail: closed` with the engine broken (`engine: nemo` config dir missing a flow) → every opted-in tool blocked,
+   unlisted tools unaffected; `fail: open` → calls proceed, `guardrail_error` logged.
+5. Golden case on a guarded tool with a payload the rail blocks → deploy gate fails with the rail's message.
+
+### 21.6 Azure (AKS) as a third deploy target (D54 — the user, 2026-10-11, overrides the AKS part of D49)
+Same shape as GCP and AWS: one cluster per install, a namespace + identity per group/zone, workers load the group's code
+from object storage, the console manages everything through the cloud's APIs and Kubernetes. Cheap first.
+- **Selection.** `RAMEN_CLOUD=azure`; zone provider `azure`; zones named `<region>-<n>` (`eastus-1`, availability zones
+  1–3); `regions.json` gains an `azure` list; Config "Blocked regions" and the Zones page list Azure like the others.
+- **Infrastructure** (`deploy/terraform/azure`, azurerm + helm providers): resource group `ramen-<suffix>`, AKS (free
+  tier control plane, one system pool `Standard_B2s_v2` × 2, autoscale ≤ 3, OIDC issuer + Workload Identity on, Azure CNI
+  overlay), ACR Basic, a storage account with blob container `groups` and Table Storage table `ramen` (the store), Key
+  Vault (RBAC mode) for secrets, a static public IP + DNS label for the edge, the console's user-assigned managed
+  identity with a federated credential for `ramen-system/console`, role assignments scoped to the resource group only.
+  Outputs mirror GCP/AWS (`acr`, `public_hostname` = `<ip-with-dashes>.sslip.io`, `storage_account`, `key_vault`, …).
+- **Edge.** Gateway API through **Envoy Gateway** installed by Terraform (Helm), one `Gateway` on the static IP, the same
+  header-matched `HTTPRoute`s the GKE adapter writes (`ramen-group`/`ramen-zone` → zone service; console default;
+  `/mcp`, `/.well-known/oauth-protected-resource`, gRPC paths) — reuse the GKE route builder. TLS: cert-manager +
+  Let's Encrypt HTTP-01 for the sslip.io name (port 80 answers only ACME and redirects); `RAMEN_AZURE_TLS=selfsigned`
+  falls back to a self-signed cert like AWS. Per-zone IP rules: enforced by the node (authoritative, as everywhere) and
+  mirrored at the edge with an Envoy Gateway `SecurityPolicy` (client-CIDR authorization) per zone route.
+- **Store.** `RAMEN_STORE=azuretables` — one Table Storage table, partition = collection, row = id, the document as
+  encrypted JSON (same `encrypted.py` wrapper); list/query/transaction semantics as `dynamodb.py`.
+- **Secrets.** `RAMEN_SECRETS_BACKEND=azure` — Key Vault secrets named `ramen--<group>--<VAR>` (`_` → `-` with a
+  reversible escape), values never returned to the browser; the zone identity gets *Key Vault Secrets User* on exactly
+  the group's secrets (per-secret role assignment).
+- **Code bucket.** `az://<account>/<container>/<group>` URIs; the runtime's bucket sync (`bucket.py`) supports `az://`
+  with `azure-storage-blob` + `DefaultAzureCredential` (workload identity) — `[azure]` extra in the worker image.
+- **Zone identity.** User-assigned managed identity `ramen-<group>-<zone>` with a federated credential for the zone
+  namespace's service account, *Storage Blob Data Reader* on the container (Azure cannot scope to a blob prefix — the
+  group prefix is enforced by the console's sync and documented), secrets as above. Permission catalogue: the same names
+  with Azure roles (`bucket.write` → Storage Blob Data Contributor, `logs.write` → Monitoring Metrics Publisher, …).
+  `detach_zone` deletes the namespace, the identity and its role assignments.
+- **Logs.** Worker access logs read from the Kubernetes API (pod logs, per zone) — no Log Analytics dependency.
+- **Helm.** `provider=azure` values: workload-identity annotations/labels, the Envoy `Gateway`/`HTTPRoute` for the console,
+  cert-manager `Certificate`/`ClusterIssuer`.
+- **Docs.** `wiki/deploy-azure.md` step by step (mirror of deploy-gcp.md), README/home "GKE, EKS and AKS".
+- **Acceptance.** Unit tests with fakes for every Azure API call (as `fakes_gcp.py`/`fakes_aws.py`), the 33-check
+  `verify075.py` run on a live AKS deploy with Entra sign-in, then teardown.
+
+### 21.7 Autoscaling by Ramen, not by the cloud (D55 — the user, 2026-10-11)
+Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no cloud autoscaler is involved.
+- **Bounds.** Per group × zone: `min_count` is always 1; `max_count` (≥ 1, default = current `count`) is set by a super
+  admin or a group admin of that group — `PUT /api/v1/groups/{g}/zones/{z}/workers {"max_count": n}` (viewers and MCP
+  users get 403 and never see the control). `count` stays the current target, always clamped to [1, `max_count`]; a
+  manual `count` outside the bounds is a 422. Audited `workers.max_count`.
+- **No HPA.** The adapters stop writing `HorizontalPodAutoscaler` objects and delete an existing `worker` HPA on the next
+  apply/scale; the worker Helm chart's `hpa` is off by default. The stable Deployment's `replicas` = `count`; the canary
+  stays at 1.
+- **Decision** (`autoscale.decide(workers, state, w, now)`, pure, unit-tested): per worker the node's metrics give
+  `inflight` and the `max_inflight` it runs with (the snapshot adds `max_inflight`), plus `total` calls; the console keeps
+  the previous `total` per pod and the time in `workers.autoscale_state` to derive calls per second.
+  - **Up** by one when any ready worker is `high` (inflight > 80 % of its limit), the zone's mean inflight ≥ 50 %, or the
+    calls per second per worker reach `RAMEN_AUTOSCALE_TARGET_RPS` (default 50 — fast tools rarely raise inflight), and
+    `count < max_count`.
+  - **Down** by one when every ready worker is `low` (< 30 %) for 3 consecutive rebalances and the zone's call rate per
+    worker after removing one would stay below the up threshold, and `count > 1`.
+  - **Cooldown**: up after 30 s (`RAMEN_AUTOSCALE_UP_COOLDOWN_SECS`), down after 120 s (`RAMEN_AUTOSCALE_COOLDOWN_SECS`);
+    a worker that is `down` (not answering) never counts as low. The up step is proportional —
+    `ceil(ready × max(mean/50 %, rate per worker/target))`, at least +1, at most `max_count` — down is always −1 (load
+    tests on GKE: one-at-a-time steps with one 120 s cooldown took 309 s to reach 3 while calls were refused).
+  - **Capacity counts every ready pod**, the canary included, so a zone at `count` 1 measures load across two pods; the
+    proportional step is therefore slightly conservative (observed on AKS: a saturated 1+canary zone asks for 4, clamped
+    to `max_count`).
+  - **Probes**: worker readiness and liveness use a 5 s timeout and liveness tolerates 6 misses — the 1 s default made
+    Kubernetes restart CPU-saturated workers mid-load on GKE.
+  - The result `{action: up|down|hold, from, to, reason}` is returned by rebalance, written to the worker doc, audited
+    `workers.autoscale` (user `scheduler` or the person), and shown on the group page.
+- **Who runs it.** Manual: the Rebalance button / `POST …/rebalance` (group admin+). Scheduled: the Config page's
+  scheduler, which now rebalances every group × zone each interval (not only the skewed ones), so it scales up and back
+  down on its own. The load-balancer leg of rebalance (GCP capacity scaler, AWS/Azure weights where present) is unchanged.
+- **UI.** Group page (zone actions) and the Zones and workers page: "Workers: <count> (min 1, max [n])" with an input and
+  Save for super admins and group admins only, the last autoscale decision and its reason; read-only count for others.
+- **Audit and logs (the user).** Every action is audited with the actor (a person, an API key, or `scheduler`), the
+  group/zone and tags: `workers.max_count` (`from:`, `to:`), `workers.count` (manual), `workers.rebalance` (who pressed
+  it), `workers.autoscale` for every up/down (`action:`, `from:`, `to:`, `reason:`), refused changes with
+  `error:forbidden|invalid`. A `hold` is not audited (it would flood the log) but is kept as the last decision on the
+  worker doc. Each scale change also logs one console line `ramen.autoscale` (INFO; WARNING when a zone sits at
+  `max_count` under high load, which the warning digest carries).
+- **Load tests** (`scripts/load_test.py`): drive concurrent `tools/call` against one zone through the edge until the zone
+  reaches `max_count`, then stop and confirm it scales down to 1; plus bursts, a max of 1, a group admin changing the max
+  mid-test, and a viewer refused. Run on GKE, EKS and AKS; results in `reports/cloud-v0.7.5.md`.
+
+### 21.8 Salted hashes at rest (0.7.5)
+- API and MCP key secrets: `secret_hash = "s1$<salt hex>$<HMAC-SHA256(salt, secret) hex>"`, a random 16-byte salt per
+  key. A hash without the `s1$` prefix is a pre-0.7.5 bare SHA-256: it still verifies, and is rewritten salted on the
+  key's next successful use.
+- OAuth authorization codes and refresh tokens: stored under `HMAC-SHA256(token_salt, raw)`, where `token_salt` is one
+  random 32-byte value per install in the store doc `config/hashing` (Fernet-encrypted like the other sensitive
+  fields). The salt is per install, not per token, because the hash is the lookup id. A lookup tries the salted id,
+  then the bare SHA-256 every pre-0.7.5 token used.
+- Passwords stay argon2 (salted by construction).

@@ -1,5 +1,21 @@
 {{- $env := dict }}
-{{- if eq .Values.provider "aws" }}
+{{- if eq .Values.provider "azure" }}
+{{- /* CONTRACTS §21.6 console env; provider=azure forces the three backend selectors, the rest defaults from azure.*/ -}}
+{{- $env = merge (dict) (dict "RAMEN_STORE" "azuretables" "RAMEN_CLOUD" "azure" "RAMEN_SECRETS_BACKEND" "azure") .Values.console.env (dict
+  "RAMEN_AZURE_SUBSCRIPTION_ID" (.Values.azure.subscriptionId | toString)
+  "RAMEN_AZURE_RESOURCE_GROUP" .Values.azure.resourceGroup
+  "RAMEN_AZURE_LOCATION" .Values.region
+  "RAMEN_AZURE_STORAGE_ACCOUNT" .Values.azure.storageAccount
+  "RAMEN_AZURE_KEY_VAULT" .Values.azure.keyVault
+  "RAMEN_AZURE_OIDC_ISSUER" .Values.azure.oidcIssuer
+  "RAMEN_AZURE_TLS" .Values.azure.tls
+  "RAMEN_AZURE_ZONAL" (ternary "0" "1" (eq (toString .Values.azure.zonal) "false"))
+  "RAMEN_PUBLIC_URL" (printf "https://%s" .Values.azure.publicHostname)
+  "RAMEN_GROUPS_BUCKET" (printf "az://%s/groups" .Values.azure.storageAccount)
+  "RAMEN_IMAGE_WORKER" (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.image.tag | toString))
+  "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
+  "RAMEN_COOKIE_SECURE" "1") }}
+{{- else if eq .Values.provider "aws" }}
 {{- /* CONTRACTS §8 console env; provider=aws forces the three backend selectors, the rest defaults from aws.*/ -}}
 {{- $env = merge (dict) (dict "RAMEN_STORE" "dynamodb" "RAMEN_CLOUD" "aws" "RAMEN_SECRETS_BACKEND" "aws") .Values.console.env (dict
   "RAMEN_AWS_REGION" .Values.region
@@ -27,15 +43,30 @@ metadata:
   labels: {{- include "ramen.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.console.replicas }}
+  # 0.7.5: a console rollout took the only pod down before the load balancer could reach the new one (GKE attaches a
+  # new zone's NEG ~2 min late → "unconditional drop overload"). Never drop below one ready pod, keep the new one
+  # ready for minReadySeconds before the old one goes, and let the old one drain (preStop, 40 s) before it exits.
+  minReadySeconds: {{ .Values.console.minReadySeconds | default 90 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
   selector:
     matchLabels: {{- include "ramen.selector" . | nindent 6 }}
   template:
     metadata:
       labels: {{- include "ramen.labels" . | nindent 8 }}
+        {{- if eq .Values.provider "azure" }}
+        azure.workload.identity/use: "true"   # the webhook injects the federated token for the console identity
+        {{- end }}
       annotations:
         checksum/secret: {{ .Values.console.secrets | toJson | sha256sum | trunc 16 }}
+        # 0.7.5: the console is one pod (deploy jobs live in its memory); a cluster-autoscaler node scale-down evicted it
+        # on GKE Autopilot and the edge answered "unconditional drop overload" until it came back. GKE, EKS and AKS
+        # autoscalers all honour this annotation and leave the node alone.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 60   # > the 40 s preStop drain
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: console
@@ -51,3 +82,5 @@ spec:
           resources: {{- toYaml .Values.console.resources | nindent 12 }}
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
           readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 12 }
+          # keeps serving while the load balancer detaches it: 15 s still left ~6 s of 503 on GKE (Gateway NEG detach)
+          lifecycle: { preStop: { exec: { command: ["sleep", "40"] } } }

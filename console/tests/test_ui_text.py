@@ -163,8 +163,9 @@ def test_each_zone_has_one_actions_section_in_a_fixed_order(demo):
     html = demo.get("/groups/demo").text
     assert html.count('class="zone-actions"') == 2  # zone-a and zone-b
     section = re.search(r'<div class="zone-actions">(.*?)</div>\s*</td>', html, re.S).group(1)
-    order = [m for m in re.findall(r">(Scale workers|IP rules|Create service account|Rebalance|View logs)<", section)]
-    assert order == ["Scale workers", "IP rules", "Create service account", "Rebalance", "View logs"]
+    pat = r">(Scale workers|IP rules|Create service account|Rebalance and autoscale|View logs)<"
+    order = re.findall(pat, section)
+    assert order == ["Scale workers", "IP rules", "Create service account", "Rebalance and autoscale", "View logs"]
 
 
 def test_the_action_buttons_share_one_width_class(demo):
@@ -188,8 +189,10 @@ def test_the_action_buttons_all_share_the_same_colour_style(demo):
 def test_the_zone_actions_fields_have_a_visible_label(demo):
     html = demo.get("/groups/demo").text
     section = re.search(r'<div class="zone-actions">(.*?)</div>\s*</td>', html, re.S).group(1)
-    for field, text in [("count", "Count"), ("size", "Size"), ("allowed_sizes", "Allowed sizes"), ("cidrs", "CIDRs")]:
-        assert re.search(rf"<label[^>]*>{text}\s*<[^>]*name=\"{field}\"", section), field
+    fields = [("count", "Count (min 1)"), ("max_count", "Max (autoscale up to)"), ("size", "Size")]
+    fields += [("allowed_sizes", "Allowed sizes"), ("cidrs", "CIDRs")]
+    for field, text in fields:
+        assert re.search(rf"<label[^>]*>{re.escape(text)}\s*<[^>]*name=\"{field}\"", section), field
 
 
 def test_a_viewer_gets_no_action_buttons(demo, app):  # noqa: F811
@@ -256,3 +259,15 @@ def test_every_branded_page_shows_the_mark_not_the_wordmark(demo):
     for name, html in pages.items():
         assert 'src="/static/logo-mark.png"' in html, name
         assert "/static/logo.png" not in html, name
+
+
+def test_every_successful_action_reloads_and_keys_stay_a_minute(demo):
+    """0.7.5 (the user): any button reloads the page on success; a new API or MCP key stays on screen for 60 s with a
+    countdown first; a restore result 20 s; a dry-run preview never reloads."""
+    page = demo.get("/groups/demo").text
+    assert "function ramenReload()" in page and "function ramenHold(secs)" in page and "data-hold-secs" in page
+    h = {"HX-Request": "true", "X-Ramen-CSRF": demo.cookies.get("ramen_csrf", "")}
+    r = demo.post("/api/v1/groups/demo/mcp-keys", json={"name": "k-hold"}, headers=h)
+    assert r.status_code == 201 and 'data-hold-secs="60"' in r.text and "rmk_" in r.text
+    r = demo.post("/api/v1/api-keys", json={"name": "a-hold", "client_type": "devops"}, headers=h)
+    assert r.status_code == 201 and 'data-hold-secs="60"' in r.text and "rmn_" in r.text

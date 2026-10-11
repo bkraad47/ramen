@@ -147,7 +147,11 @@ class _Rbac:
         return self.s._read("RoleBinding", ns, name)
 
 
-PLURAL_KIND = {"httproutes": "HTTPRoute", "healthcheckpolicies": "HealthCheckPolicy"}
+PLURAL_KIND = {
+    "httproutes": "HTTPRoute",
+    "healthcheckpolicies": "HealthCheckPolicy",
+    "securitypolicies": "SecurityPolicy",
+}
 
 
 class _Custom:
@@ -162,6 +166,13 @@ class _Custom:
 
     def get_namespaced_custom_object(self, group, version, ns, plural, name):
         return self.s._read(PLURAL_KIND[plural], ns, name)
+
+    def delete_namespaced_custom_object(self, group, version, ns, plural, name):
+        k = (PLURAL_KIND[plural], ns, name)
+        if k not in self.s.objs:
+            raise FakeApiError(404, "NotFound")
+        self.s.calls.append(("delete", *k))
+        del self.s.objs[k]
 
 
 def _merge(dst, src):

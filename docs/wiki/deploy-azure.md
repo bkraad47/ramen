@@ -25,6 +25,19 @@ done
 az vm list-usage --location eastus -o table | grep -i "BS Family\|Total Regional"   # 4 B-series cores free at least
 ```
 
+**Check that your subscription has availability zones in the region.** Many subscriptions, new and trial ones
+especially, have none for a given size in some regions, and AKS then fails with `AvailabilityZoneNotSupported ... The
+supported zones for location 'eastus' are ''`. Ramen zones are availability zones (`westus2-1`), so pick a region
+where this prints zone numbers, and set `location` in `terraform.tfvars` to it:
+
+```sh
+az vm list-skus --location westus2 --size Standard_B2s --resource-type virtualMachines --query "[0].locationInfo[0].zones" -o tsv
+```
+
+The 0.7.5 run used `westus2`: in that subscription `eastus`, `eastus2`, `centralus` and `westus3` had no zones for
+`Standard_B2s`, while `westus2`, `westeurope` and `australiaeast` had all three. With a 4-core quota keep `node_max`
+at 2.
+
 Whoever runs Terraform needs Owner on the subscription (or Contributor plus User Access Administrator): Terraform
 creates role assignments for the console's identity.
 

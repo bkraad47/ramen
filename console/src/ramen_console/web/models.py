@@ -262,11 +262,12 @@ class NotifyConfig(ListFields):
 
 
 class RegionsConfig(ListFields):
-    """C7: the blocked regions per provider — as `gcp`/`aws` lists (what the Config card's checkbox dropdowns post)
-    or wrapped in `blocked`, the shape the stored doc has."""
+    """C7: the blocked regions per provider — as `gcp`/`aws`/`azure` lists (what the Config card's checkbox dropdowns
+    post) or wrapped in `blocked`, the shape the stored doc has."""
 
     gcp: list[str] | None = None
     aws: list[str] | None = None
+    azure: list[str] | None = None  # §21.6
 
     @model_validator(mode="before")
     @classmethod

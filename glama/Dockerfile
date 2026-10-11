@@ -10,8 +10,9 @@ COPY node-rs/src ./src
 RUN cargo build --release && cp target/release/ramen-node /ramen-node
 
 FROM python:3.12-slim
+ARG DEMO_REF=main
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
- && git clone --depth 1 https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \
+ && git clone --depth 1 --branch "$DEMO_REF" https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \
  && useradd -r -u 10001 -m -d /home/ramen ramen && chown -R ramen:ramen /buckets
 COPY runtime-py /opt/ramen-runtime
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[nemo]' \

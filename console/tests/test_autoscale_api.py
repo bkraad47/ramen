@@ -155,3 +155,15 @@ def test_a_refused_scaling_attempt_is_audited_under_the_scaling_action(demo):
     assert set(mine) >= {"workers.max_count", "workers.rebalance"}
     for e in mine.values():
         assert "error:forbidden" in e["tags"] and "group:demo" in e["tags"] and "zone:zone-a" in e["tags"]
+
+
+def test_a_viewer_is_refused_before_the_zone_is_looked_up(demo):
+    """CI conformance (security matrix): a viewer scaling an unknown zone got 404, which tells it the zone does not
+    exist. The role check comes first, so every viewer attempt is a 403 and still audited under the action."""
+    make_user(demo, "v-any@x", "viewer", ["demo"])
+    with TestClient(demo.app) as v:
+        login(v, "v-any@x", PW)
+        assert v.put("/api/v1/groups/demo/zones/any/workers", json={"count": 2}).status_code == 403
+        assert v.post("/api/v1/groups/demo/zones/any/rebalance").status_code == 403
+    mine = [a for a in audit(demo, "workers.count") if a["user"] == "v-any@x"]
+    assert mine and "error:forbidden" in mine[0]["tags"] and "zone:any" in mine[0]["tags"]

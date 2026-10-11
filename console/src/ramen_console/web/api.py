@@ -262,13 +262,16 @@ async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn
     """§21.7: `max_count` (min is always 1), a manual `count` inside [1, max], sizes. Each is audited with from/to,
     a refused attempt too (under the same action, `error:forbidden`), so the audit page's filter finds it."""
     s = svc(request)
-    before = await s.worker_config(group, zone)
+    allowed = can(p, "group_admin", group)
+    # a refused caller never reaches the zone lookup, so a viewer cannot learn which zones exist (403, never 404)
+    before = await s.worker_config(group, zone) if allowed else None
     tags = [f"group:{group}", f"zone:{zone}"]
     if body.max_count is not None:
-        old = before.get("max_count", before.get("count", 1))
-        note(request, "workers.max_count", f"{group}/{zone}", [*tags, f"from:{old}", f"to:{body.max_count}"])
+        old = [f"from:{before.get('max_count', before.get('count', 1))}"] if before else []
+        note(request, "workers.max_count", f"{group}/{zone}", [*tags, *old, f"to:{body.max_count}"])
     elif body.count is not None:
-        note(request, "workers.count", f"{group}/{zone}", [*tags, f"from:{before.get('count', 1)}", f"to:{body.count}"])
+        old = [f"from:{before.get('count', 1)}"] if before else []
+        note(request, "workers.count", f"{group}/{zone}", [*tags, *old, f"to:{body.count}"])
     else:
         note(request, "workers.scale", f"{group}/{zone}", tags)
     _admin_or_refuse(p, group)

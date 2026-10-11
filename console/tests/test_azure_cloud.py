@@ -444,3 +444,18 @@ def test_real_clients_build_lazily_once(monkeypatch):
         f"https://{VAULT}.vault.azure.net",
     ) in built
     assert c.arm.token() == "t" and ("token", "https://management.azure.com/.default") in built
+
+
+def test_a_cluster_without_availability_zones_does_not_pin_workers(monkeypatch):
+    """Live run 0.7.5: AKS answered AvailabilityZoneNotSupported in eastus and westus2 for this subscription."""
+
+    def selector(docs):
+        dep = next(d for d in docs if d["kind"] == "Deployment")
+        return dep["spec"]["template"]["spec"].get("nodeSelector")
+
+    spec = {**SPEC, "region": "westus2-1"}
+    assert selector(azure_manifests("demo", "w1", spec, "img", "az://a/groups/demo")) == {
+        "topology.kubernetes.io/zone": "westus2-1"
+    }
+    monkeypatch.setenv("RAMEN_AZURE_ZONAL", "0")
+    assert selector(azure_manifests("demo", "w1", spec, "img", "az://a/groups/demo")) is None

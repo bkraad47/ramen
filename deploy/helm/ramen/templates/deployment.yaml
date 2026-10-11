@@ -9,6 +9,7 @@
   "RAMEN_AZURE_KEY_VAULT" .Values.azure.keyVault
   "RAMEN_AZURE_OIDC_ISSUER" .Values.azure.oidcIssuer
   "RAMEN_AZURE_TLS" .Values.azure.tls
+  "RAMEN_AZURE_ZONAL" (ternary "0" "1" (eq (toString .Values.azure.zonal) "false"))
   "RAMEN_PUBLIC_URL" (printf "https://%s" .Values.azure.publicHostname)
   "RAMEN_GROUPS_BUCKET" (printf "az://%s/groups" .Values.azure.storageAccount)
   "RAMEN_IMAGE_WORKER" (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.image.tag | toString))

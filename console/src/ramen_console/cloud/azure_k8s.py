@@ -10,6 +10,14 @@ WI_USE = "azure.workload.identity/use"
 EG_GROUP, EG_VERSION, SP_PLURAL = "gateway.envoyproxy.io", "v1alpha1", "securitypolicies"
 
 
+def zonal() -> bool:
+    """`RAMEN_AZURE_ZONAL=0` when the AKS node pool has no availability zones (many subscriptions get
+    `AvailabilityZoneNotSupported`): workers are then not pinned to `topology.kubernetes.io/zone`."""
+    import os
+
+    return os.environ.get("RAMEN_AZURE_ZONAL", "1") != "0"
+
+
 def azure_manifests(group, zone, spec, image, bucket_uri, client_id=None) -> list[dict]:
     """GKE manifests adapted: no HealthCheckPolicy or NEG annotation (Envoy health-checks through the readiness probe),
     the zone KSA annotated with the managed identity's client id and pods labelled for the workload-identity webhook,
@@ -28,6 +36,8 @@ def azure_manifests(group, zone, spec, image, bucket_uri, client_id=None) -> lis
         elif kind == "Deployment":
             tpl = d["spec"]["template"]
             tpl["metadata"]["labels"][WI_USE] = "true"
+            if not zonal():  # a cluster without availability zones: the Ramen zone is a logical placement
+                tpl["spec"].pop("nodeSelector", None)
             for e in tpl["spec"]["containers"][0]["env"]:
                 if e["name"] == "RAMEN_TRUST_PROXY_HOPS":
                     e["value"] = "1"

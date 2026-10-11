@@ -24,5 +24,6 @@ output "helm_set" {
     "--set azure.keyVault=${azurerm_key_vault.ramen.name},azure.clientId=${azurerm_user_assigned_identity.console.client_id}",
     "--set azure.oidcIssuer=${azurerm_kubernetes_cluster.ramen.oidc_issuer_url},azure.publicHostname=${local.public_hostname}",
     "--set-string azure.tenantId=${data.azurerm_client_config.me.tenant_id}",
+    "--set azure.zonal=${length(var.node_zones) > 0}",
   ])
 }

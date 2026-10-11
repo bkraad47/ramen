@@ -713,8 +713,12 @@ Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no 
     `count < max_count`.
   - **Down** by one when every ready worker is `low` (< 30 %) for 3 consecutive rebalances and the zone's call rate per
     worker after removing one would stay below the up threshold, and `count > 1`.
-  - **Cooldown**: no change within 120 s of the previous one (`RAMEN_AUTOSCALE_COOLDOWN_SECS`); a worker that is `down`
-    (not answering) never counts as low.
+  - **Cooldown**: up after 30 s (`RAMEN_AUTOSCALE_UP_COOLDOWN_SECS`), down after 120 s (`RAMEN_AUTOSCALE_COOLDOWN_SECS`);
+    a worker that is `down` (not answering) never counts as low. The up step is proportional —
+    `ceil(ready × max(mean/50 %, rate per worker/target))`, at least +1, at most `max_count` — down is always −1 (load
+    tests on GKE: one-at-a-time steps with one 120 s cooldown took 309 s to reach 3 while calls were refused).
+  - **Probes**: worker readiness and liveness use a 5 s timeout and liveness tolerates 6 misses — the 1 s default made
+    Kubernetes restart CPU-saturated workers mid-load on GKE.
   - The result `{action: up|down|hold, from, to, reason}` is returned by rebalance, written to the worker doc, audited
     `workers.autoscale` (user `scheduler` or the person), and shown on the group page.
 - **Who runs it.** Manual: the Rebalance button / `POST …/rebalance` (group admin+). Scheduled: the Config page's

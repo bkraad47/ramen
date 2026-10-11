@@ -66,12 +66,26 @@ def test_max_one_never_scales():
         assert d["action"] == "hold" and d["to"] == 1
 
 
-def test_up_waits_for_the_cooldown():
-    st = {"last_change": 950}
-    d, _ = a.decide([wk("p1", "high", 30)], st, {"count": 1, "max_count": 3}, 1000, 120)
+def test_up_waits_for_the_short_up_cooldown_and_down_for_the_long_one():
+    """0.7.5 load tests: up fast (30 s), down carefully (120 s)."""
+    st = {"last_change": 990}
+    d, _ = a.decide([wk("p1", "high", 30)], st, {"count": 1, "max_count": 3}, 1000, 120, 30)
     assert d["action"] == "hold" and "cooling down" in d["reason"]
-    d, _ = a.decide([wk("p1", "high", 30)], st, {"count": 1, "max_count": 3}, 1071, 120)
+    d, _ = a.decide([wk("p1", "high", 30)], st, {"count": 1, "max_count": 3}, 1021, 120, 30)
     assert d["action"] == "up"
+
+
+def test_an_overloaded_zone_scales_up_in_one_proportional_step_within_max():
+    """Saturated workers (inflight at the limit, calls refused) need more than one more worker."""
+    sat = [wk("p1", "high", 32)]
+    d, _ = a.decide(sat, {}, {"count": 1, "max_count": 5}, 1000, 120, 30)
+    assert d["action"] == "up" and d["to"] == 2  # 100 % / 50 % → 2 workers' worth
+    two = [wk("p1", "high", 32), wk("p2", "high", 32)]
+    d, _ = a.decide(two, {}, {"count": 2, "max_count": 3}, 1000, 120, 30)
+    assert d["action"] == "up" and d["to"] == 3  # 4 wanted, clamped at max_count
+    mild = [wk("p1", "high", 27)]  # 84 %: one more is enough
+    d, _ = a.decide(mild, {}, {"count": 1, "max_count": 5}, 1000, 120, 30)
+    assert d["to"] == 2
 
 
 def test_down_needs_three_consecutive_low_rebalances_with_a_known_rate():

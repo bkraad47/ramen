@@ -81,8 +81,18 @@ def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_pro
                 "resources": {"requests": res, "limits": res},
                 # grpc.health.v1: "" / ramen.v1.Mcp = SERVING once runtime.load succeeded (readiness),
                 # ramen.v1.Admin = process alive (liveness) so a slow load never gets the pod killed
-                "readinessProbe": {"grpc": {"port": PORT}, "periodSeconds": 5, "failureThreshold": 60},
-                "livenessProbe": {"grpc": {"port": PORT, "service": "ramen.v1.Admin"}, "periodSeconds": 10},
+                "readinessProbe": {
+                    "grpc": {"port": PORT},
+                    "periodSeconds": 5,
+                    "timeoutSeconds": 5,
+                    "failureThreshold": 60,
+                },
+                "livenessProbe": {
+                    "grpc": {"port": PORT, "service": "ramen.v1.Admin"},
+                    "periodSeconds": 10,
+                    "timeoutSeconds": 5,
+                    "failureThreshold": 6,
+                },
                 "volumeMounts": [{"name": "bucket", "mountPath": "/data/bucket"}],
             }
         ],

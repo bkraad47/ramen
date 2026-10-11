@@ -119,27 +119,25 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 {{ table(mcp_keys, ['name', 'env', 'zone', 'created', 'created_by'], u('/api/v1/groups/' ~ group.id ~ '/mcp-keys'), 'MCP keys (values never shown)', mact) }}
 
 {% if can_admin %}<h2>How MCP users sign in</h2>
-{% set si = signin %}{% set cid = (si.clients[0].client_id if si.clients else '<client id>') %}
-<div class="card signin-guide"><p class="muted">How each kind of caller reaches this group's workers, generated from this install: edge <code>{{ si.host }}</code>, zones {% for z in si.zones %}<code>{{ z }}</code>{{ ', ' if not loop.last }}{% endfor %}. A person's token is scoped to <code>mcp:{{ group.id }}:&lt;zone&gt;</code> and carries their role in this group; a group key reaches every tool the key kind may use.</p>
-<details open><summary><b>1. Group key</b> — agents, CI, automation</summary>
-<p class="muted">Create a key above under <i>MCP keys</i> (shown once). It is not a person: calls are logged under the key id.</p>
-{% for z in si.zones %}<pre>claude mcp add-json ramen-{{ group.id }}-{{ z }} '{"type":"http","url":"{{ si.public_url }}/mcp",
-  "headers":{"Authorization":"Bearer &lt;rmk_ key&gt;","ramen-group":"{{ group.id }}","ramen-zone":"{{ z }}"}}'
-ramen-mcp-bridge --target {{ si.host }}:443 --tls --key &lt;rmk_ key&gt; --group {{ group.id }} --zone {{ z }}</pre>{% endfor %}</details>
-<details><summary><b>2. Ramen accounts</b> — people with a console password{% if si.magic %} or a sign-in link{% endif %} ({{ si.manual_members }} set on the Users page)</summary>
-{% if not si.password and not si.magic %}<p class="err">Password and magic-link sign-in are off on the Config page: only identity-provider accounts can sign in.</p>{% endif %}
-{% if not si.clients %}<p class="err">No OAuth client is registered yet: a super admin adds one on Config → OAuth clients (redirect URI <code>http://127.0.0.1/callback</code> for the bridge and Claude Code).</p>{% else %}<p class="muted">OAuth client{{ 's' if si.clients|length > 1 }}: {% for c in si.clients %}<code>{{ c.client_id }}</code> ({{ c.name }}){{ ', ' if not loop.last }}{% endfor %}. The person approves it once per zone; the bridge forgets its tokens after thirty minutes idle (0.3.0) and asks again.</p>{% endif %}
-{% for z in si.zones %}<pre>claude mcp add-json ramen-{{ group.id }}-{{ z }} '{"type":"http","url":"{{ si.public_url }}/mcp",
-  "headers":{"ramen-group":"{{ group.id }}","ramen-zone":"{{ z }}"},
-  "oauth":{"clientId":"{{ cid }}","scopes":"mcp:{{ group.id }}:{{ z }}"}}'
-ramen-mcp-bridge --target {{ si.host }}:443 --tls --oauth {{ si.public_url }} --client-id {{ cid }} --group {{ group.id }} --zone {{ z }}</pre>{% endfor %}</details>
-{% for pv in si.providers %}<details><summary><b>{{ loop.index + 2 }}. {{ provider_label(pv.name) }}</b> — sign in with the provider ({{ pv.members }} member{{ 's' if pv.members != 1 }} from it)</summary>
-{% if not pv.claim %}<p class="err">No role claim is named for {{ pv.name }} on the Config page, so its sign-ins get no role here until an admin adds them on the Users page.</p>
-{% else %}<p class="muted">Groups come from {{ 'a lookup at sign-in (' ~ ('Microsoft Graph' if pv.name == 'entra' else 'Cloud Identity' if pv.name == 'google' else pv.name) ~ ')' if pv.source == 'lookup' else 'the ' ~ pv.claim ~ ' claim' }}. Rules that grant a role in <b>{{ group.id }}</b>:</p>
+{% macro boxes(items) %}<div class="codeboxes">{% for b in items %}<div class="codebox"><div class="codebox-label">{{ b.label }}</div><pre>{{ b.text }}</pre></div>{% endfor %}</div>{% endmacro %}
+{% set si = signin %}
+<div class="card signin-guide"><p class="muted">Generated from this install: edge <code>{{ si.host }}</code>, zone{{ 's' if si.zones|length > 1 }} {% for z in si.zones %}<code>{{ z }}</code>{{ ', ' if not loop.last }}{% endfor %}. A person's token is scoped to <code>mcp:{{ group.id }}:&lt;zone&gt;</code> and carries their role in this group; a group key reaches every tool the key kind may use.</p>
+<details open><summary><b>Group key</b> — agents, CI, automation</summary>
+<p class="muted">Create a key above under <i>MCP keys</i> (shown once) and put it where <code>&lt;rmk_ key&gt;</code> is. A key is not a person: calls are logged under the key id. Every client below speaks Streamable HTTP directly; the bridge is for stdio-only clients.</p>
+{{ boxes(si.key_boxes) }}</details>
+<details><summary><b>Ramen accounts</b> — a console password{% if si.magic %} or sign-in link{% endif %} ({{ si.manual_members }} member{{ 's' if si.manual_members != 1 }} set on the Users page)</summary>
+{% if not si.password and not si.magic %}<p class="err">Password and sign-in-link login are off on the Config page: only identity-provider accounts can sign in.</p>{% endif %}
+{% if not si.client %}<p class="err">No OAuth client is registered yet: a super admin adds one on Config → OAuth clients (redirect URI <code>http://127.0.0.1/callback</code>).</p>
+{% else %}<p class="muted">OAuth client <code>{{ si.client.client_id }}</code> ({{ si.client.name }}){% if si.clients|length > 1 %} — {{ si.clients|length - 1 }} other client{{ 's' if si.clients|length > 2 }} on Config → OAuth clients{% endif %}. The person signs in and approves once per zone. Claude Code speaks Streamable HTTP with this client id; Cursor and VS Code / GitHub Copilot sign people in through the bridge. The bridge keeps tokens in memory and forgets them after thirty minutes idle.</p>{% endif %}
+{{ boxes(si.account_boxes) }}</details>
+{% for pv in si.providers %}<details><summary><b>{{ pv.title }}</b> — {% if pv.configured %}sign in with the provider ({{ pv.members }} member{{ 's' if pv.members != 1 }} from it){% else %}not set up on this console{% endif %}</summary>
+{% if not pv.configured %}<p class="muted">A super admin adds it on Config → Identity providers: name <code>{{ pv.name }}</code>{% if pv.issuer %}, issuer <code>{{ pv.issuer }}</code>{% endif %}, the client id and secret{% if pv.lookup %}, and group source <i>lookup</i> to read the person's groups from {{ pv.lookup }}{% endif %}. The rules that map its groups to roles in <b>{{ group.id }}</b> then show here, with the commands.</p>
+{% else %}{% if not pv.claim %}<p class="err">No role claim is named for {{ pv.name }} on the Config page, so its sign-ins get no role here until an admin adds them on the Users page.</p>
+{% else %}<p class="muted">Groups come from {{ 'a lookup at sign-in (' ~ pv.lookup ~ ')' if pv.source == 'lookup' else 'the ' ~ pv.claim ~ ' claim' }}. Rules that grant a role in <b>{{ group.id }}</b>:</p>
 {% if pv.rules %}<table><tr><th>{{ pv.claim }} value</th><th>Role here</th></tr>{% for r in pv.rules %}<tr><td><code>{{ r.value }}</code></td><td>{{ role_label(r.role) }}</td></tr>{% endfor %}</table>
 {% else %}<p class="err">No rule grants a role in this group yet — add one on Config → OAuth role mapping.</p>{% endif %}{% endif %}
-<p class="muted">The same client and commands as section 2; on the console's sign-in page the person presses <b>Sign in with {{ provider_label(pv.name) }}</b>. Removing someone from the provider group takes effect at their next sign-in (an admin entry on the Users page wins).</p>
-{% for z in si.zones %}<pre>ramen-mcp-bridge --target {{ si.host }}:443 --tls --oauth {{ si.public_url }} --client-id {{ cid }} --group {{ group.id }} --zone {{ z }}</pre>{% endfor %}</details>{% endfor %}
+<p class="muted">On the console's sign-in page the person presses <b>Sign in with {{ provider_label(pv.name) }}</b>. Removing someone from the provider group takes effect at their next sign-in; an admin entry on the Users page wins.</p>
+{{ boxes(pv.boxes) }}{% endif %}</details>{% endfor %}
 </div>{% endif %}
 {% if can_admin %}<h2>Service-account restrictions</h2>
 <div class="card"><p class="muted">What this group's admins may <b>request</b> for its zones, on top of the super-admin rules on the Config page. A JSON list of <code>{"effect": "allow|deny", "permission": "glob"}</code>, checked when a request is made (never against permissions already granted): a <b>deny</b> rule matching the permission refuses it; when the list has <b>allow</b> rules, the permission must match one of them; with no rules anything the super-admin rules permit can be requested. Globs are shell-style — <code>bucket.*</code>, <code>*.write</code>, <code>*</code>. A rule that allows what a super-admin rule denies is rejected (409). Example: <code>[{"effect": "allow", "permission": "bucket.*"}, {"effect": "deny", "permission": "bucket.write"}]</code> lets admins request only bucket reads.</p>

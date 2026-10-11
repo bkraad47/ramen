@@ -109,3 +109,8 @@ table.formtable td .act{width:180px}
 .login .field input{width:100%;box-sizing:border-box;margin:0}
 .login .signin-link{display:block;text-align:center;font-size:12px;color:var(--muted)}
 .login .signin-magic{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+/* 0.7.5: one labelled box per client / command in the group page's sign-in guide */
+.signin-guide .codeboxes{display:flex;flex-direction:column;gap:10px;margin:8px 0 12px}
+.signin-guide .codebox{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+.signin-guide .codebox-label{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);padding:6px 10px;border-bottom:1px solid var(--line)}
+.signin-guide .codebox pre{margin:0;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-radius:0}

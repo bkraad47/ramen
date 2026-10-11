@@ -112,41 +112,18 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
 
 
 async def mcp_signin(request: Request, group: str, envs: list[dict]) -> dict:
-    """What the group page's "How MCP users sign in" card shows, built from the live install (0.7.5): the edge host,
-    this group's zones, the registered OAuth clients, the password/magic-link toggles, and per identity provider the
-    rules that grant a role in this group plus how many members it brought."""
-    from urllib.parse import urlsplit
+    """The data behind the group page's "How MCP users sign in" card (0.7.5), see `signin_guide`."""
+    from . import signin_guide
 
-    auth = await auth_settings(request)
-    members = await accounts(request).list_members(group)
-    public = base_url(request)
-    zones = sorted({z for e in envs for z in e.get("zones") or []})
-    providers = []
-    for name in request.app.state.oauth.providers():
-        rules = [
-            {"value": value, "role": role}
-            for value, (role, groups) in sorted((auth.role_map.get(name) or {}).items())
-            if group in groups or role == "super_admin"
-        ]
-        providers.append(
-            {
-                "name": name,
-                "claim": auth.role_claim.get(name, ""),
-                "source": auth.source_of(name),
-                "rules": rules,
-                "members": sum(1 for m in members if m["source"] == "idp" and m["provider"] == name),
-            }
-        )
-    return {
-        "host": urlsplit(public).hostname or "<host>",
-        "public_url": public,
-        "zones": zones or ["<zone>"],
-        "clients": await request.app.state.oauth_server.clients(),
-        "password": auth.password_login,
-        "magic": auth.magic_link,
-        "manual_members": sum(1 for m in members if m["source"] == "manual"),
-        "providers": providers,
-    }
+    return signin_guide.build(
+        base_url(request),
+        group,
+        sorted({z for e in envs for z in e.get("zones") or []}),
+        await request.app.state.oauth_server.clients(),
+        await auth_settings(request),
+        await accounts(request).list_members(group),
+        request.app.state.oauth.providers(),
+    )
 
 
 @r.get("/environments")

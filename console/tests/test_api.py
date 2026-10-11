@@ -170,7 +170,7 @@ def test_zones_workers(demo):
     assert [z["name"] for z in demo.get("/api/v1/zones").json()] == ["zone-a", "zone-b"]
     r = demo.get("/api/v1/groups/demo/zones/zone-a/workers")
     assert r.status_code == 200 and r.json()["live"][0]["load"] == "low" and r.json()["count"] == 1
-    r = demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 3, "size": "small"})
+    r = demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 3, "max_count": 3, "size": "small"})
     assert r.status_code == 200 and r.json()["count"] == 3 and r.json()["size"] == "small"
     assert demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 0}).status_code == 422
     assert demo.post("/api/v1/groups/demo/zones/zone-a/rebalance").json()["ok"] is True
@@ -183,7 +183,7 @@ def test_zones_workers(demo):
     make_user(demo, "ga@x", "group_admin", ["demo"])
     with TestClient(demo.app) as ga:
         login(ga, "ga@x", PW)
-        assert ga.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2}).status_code == 200
+        assert ga.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2, "max_count": 2}).status_code == 200
         assert ga.put("/api/v1/groups/demo/zones/zone-a/workers", json={"size": "big"}).status_code == 403
         assert ga.post("/api/v1/zones", json={"name": "z9"}).status_code == 403
     assert demo.delete("/api/v1/zones/zone-b").status_code == 200

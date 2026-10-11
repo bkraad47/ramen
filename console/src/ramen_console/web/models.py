@@ -116,6 +116,7 @@ class DeployIn(BaseModel):
 
 class WorkersIn(ListFields):
     count: int | None = None
+    max_count: int | None = None  # §21.7: super admins and group admins; min is always 1
     size: str | None = None
     allowed_sizes: list[str] | None = None
 

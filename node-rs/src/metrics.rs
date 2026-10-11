@@ -36,7 +36,7 @@ impl Metrics {
         } else {
             "even"
         };
-        json!({"inflight": inflight, "total": self.total.load(Relaxed), "errors": self.errors.load(Relaxed), "load": load,
+        json!({"inflight": inflight, "max_inflight": max, "total": self.total.load(Relaxed), "errors": self.errors.load(Relaxed), "load": load,
                "sidecar_alive": sidecar_alive, "loaded_at": loaded_at, "packages": packages,
                "manifest_hash": manifest_hash, "guardrails": guardrails})
     }
@@ -67,6 +67,17 @@ mod tests {
         assert_eq!(
             m.snapshot(9, 10, true, None, Value::Null, "", json!({}))["load"],
             "high"
+        );
+    }
+
+    /// §21.7 (0.7.5): the console's autoscaler reads the limit the node runs with next to `inflight`.
+    #[test]
+    fn max_inflight_is_reported() {
+        let m = Metrics::default();
+        let s = m.snapshot(3, 48, true, None, Value::Null, "", json!({}));
+        assert_eq!(
+            (s["inflight"].as_u64(), s["max_inflight"].as_u64()),
+            (Some(3), Some(48))
         );
     }
 

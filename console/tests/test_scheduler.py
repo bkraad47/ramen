@@ -21,20 +21,34 @@ async def test_tick_does_nothing_when_disabled(demo):
     assert calls == []
 
 
-async def test_tick_rebalances_only_skewed_pairs(demo, monkeypatch):
+async def test_tick_rebalances_every_pair_and_scales_up_the_busy_one(demo, monkeypatch):
+    """§21.7: every pair is rebalanced each interval; the busy one scales up (audited by `scheduler`), the quiet one
+    holds; only the skewed pair gets a `scheduler.rebalance` line."""
     svc = demo.app.state.services
     await scheduler.set_config(svc.store, enabled=True)
+    for z in ("zone-a", "zone-b"):
+        w = await svc.worker_config("demo", z)
+        await svc.store.put("workers", w["id"], {**w, "max_count": 3})
 
     async def fake_workers(group, zone):
-        return [{"load": "high"}] if zone == "zone-a" else [{"load": "even"}]
+        load = "high" if zone == "zone-a" else "even"
+        return [{"id": f"{zone}-p1", "load": load, "metrics": {"inflight": 30 if load == "high" else 10, "total": 5}}]
 
     monkeypatch.setattr(svc.cloud, "workers", fake_workers)
     fired = await scheduler.tick(svc)
-    assert [(f["group"], f["zone"]) for f in fired] == [("demo", "zone-a")]
+    assert sorted((f["group"], f["zone"]) for f in fired) == [("demo", "zone-a"), ("demo", "zone-b")]
+    by_zone = {f["zone"]: f["result"]["autoscale"] for f in fired}
+    assert (
+        by_zone["zone-a"]["action"] == "up" and by_zone["zone-a"]["to"] == 2 and by_zone["zone-b"]["action"] == "hold"
+    )
+    assert (await svc.worker_config("demo", "zone-a"))["count"] == 2
 
     audit = await svc.store.list("audit")
-    entries = [a for a in audit if a["action"] == "scheduler.rebalance"]
-    assert len(entries) == 1 and entries[0]["tags"] == ["scheduler", "auto"] and entries[0]["user"] == "scheduler"
+    skew = [a for a in audit if a["action"] == "scheduler.rebalance"]
+    assert len(skew) == 1 and skew[0]["user"] == "scheduler" and "load:high" in skew[0]["tags"]
+    scaled = [a for a in audit if a["action"] == "workers.autoscale"]
+    assert len(scaled) == 1 and scaled[0]["user"] == "scheduler" and scaled[0]["target"] == "demo/zone-a"
+    assert {"action:up", "from:1", "to:2"} <= set(scaled[0]["tags"])
 
 
 async def test_tick_skips_pair_when_workers_call_fails(demo, monkeypatch):

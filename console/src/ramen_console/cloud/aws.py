@@ -218,11 +218,6 @@ class AwsCloud(GcpCloud):
             )
         else:
             out.update(applied=True, alb=alb["dns"])
-        hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
-        dep = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker")
-        if hpa and dep and dep["spec"].get("replicas") != hpa["spec"].get("minReplicas"):
-            await asyncio.to_thread(self.kube.set_replicas, ns, "worker", hpa["spec"]["minReplicas"])
-            out["scaled_to"] = hpa["spec"]["minReplicas"]
         return out
 
     @_guard

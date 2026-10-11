@@ -126,6 +126,7 @@ class GcpCloud(Cloud):
                     self.kube.apply(d, keep=("template",))
                     continue
             self.kube.apply(d, keep=("replicas",) if name == "worker-canary" else ())
+        self.kube.delete("HorizontalPodAutoscaler", ns_name(group, zone), "worker")  # §21.7: pre-0.7.5 HPA, if any
         return {
             "ok": True,
             "namespace": ns_name(group, zone),
@@ -336,11 +337,6 @@ class GcpCloud(Cloud):
                     )
             else:
                 out.update(backend_service=bs["name"], applied=True)
-        hpa = await asyncio.to_thread(self.kube.read, "HorizontalPodAutoscaler", ns, "worker")
-        dep = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker")
-        if hpa and dep and dep["spec"].get("replicas") != hpa["spec"].get("minReplicas"):
-            await asyncio.to_thread(self.kube.set_replicas, ns, "worker", hpa["spec"]["minReplicas"])
-            out["scaled_to"] = hpa["spec"]["minReplicas"]
         return out
 
     @_guard

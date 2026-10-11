@@ -239,6 +239,15 @@ async def job(request: Request, jid: str, p: Principal = Depends(viewer)):
     return j
 
 
+def _admin_or_refuse(p: Principal, group: str) -> None:
+    """Scaling is for super admins and the group's admins; viewers reach the handler so the refusal is audited under
+    the scaling action itself (§21.7) rather than as a bare route."""
+    from fastapi import HTTPException
+
+    if not can(p, "group_admin", group):
+        raise HTTPException(403, f"Requires Group Admin on group {group}")
+
+
 @r.get("/groups/{group}/zones/{zone}/workers")
 async def workers(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
     from ..util import public
@@ -249,8 +258,9 @@ async def workers(request: Request, group: str, zone: str, p: Principal = Depend
 
 
 @r.put("/groups/{group}/zones/{zone}/workers")
-async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(admin_g)):
-    """§21.7: `max_count` (min is always 1), a manual `count` inside [1, max], sizes. Each is audited with from/to."""
+async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn, p: Principal = Depends(viewer_g)):
+    """§21.7: `max_count` (min is always 1), a manual `count` inside [1, max], sizes. Each is audited with from/to,
+    a refused attempt too (under the same action, `error:forbidden`), so the audit page's filter finds it."""
     s = svc(request)
     before = await s.worker_config(group, zone)
     tags = [f"group:{group}", f"zone:{zone}"]
@@ -261,13 +271,15 @@ async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn
         note(request, "workers.count", f"{group}/{zone}", [*tags, f"from:{before.get('count', 1)}", f"to:{body.count}"])
     else:
         note(request, "workers.scale", f"{group}/{zone}", tags)
+    _admin_or_refuse(p, group)
     doc = await s.set_workers(group, zone, p, body.count, body.size, body.allowed_sizes, body.max_count)
     return respond(request, doc)
 
 
 @r.post("/groups/{group}/zones/{zone}/rebalance")
-async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(admin_g)):
+async def rebalance(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
     note(request, "workers.rebalance", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}"])
+    _admin_or_refuse(p, group)
     from ..audit import client_ip
 
     return respond(request, await svc(request).rebalance(group, zone, user=p.name, ip=client_ip(request)))

@@ -134,3 +134,24 @@ def test_the_last_decision_is_shown_to_admins(demo, monkeypatch):
     part = demo.get("/ui/groups/demo/zones/zone-a/workers").text
     assert "Last autoscale: <b>up</b> 1→2" in part
     assert "Last decision: <b>up</b> 1→2" in demo.get("/groups/demo").text
+
+
+def test_a_refused_scaling_attempt_is_audited_under_the_scaling_action(demo):
+    """Live load test 0.7.5: refusals were audited as a bare `PUT /api/...`, so the audit filter for workers.* missed
+    them. Now they carry the scaling action, the group and zone, ok=false and error:forbidden."""
+    from fastapi.testclient import TestClient
+
+    from tests.test_api import PW, login, make_user
+
+    make_user(demo, "v-scale@x", "viewer", ["demo"])
+    with TestClient(demo.app) as v:
+        login(v, "v-scale@x", PW)
+        h = {"X-Ramen-CSRF": v.cookies.get("ramen_csrf", "")}
+        assert v.put("/api/v1/groups/demo/zones/zone-a/workers", json={"max_count": 9}, headers=h).status_code == 403
+        assert v.post("/api/v1/groups/demo/zones/zone-a/rebalance", headers=h).status_code == 403
+    rows = demo.get("/api/v1/audit?limit=50").json()
+    rows = rows if isinstance(rows, list) else rows.get("items", [])
+    mine = {e["action"]: e for e in rows if e.get("user") == "v-scale@x" and e["action"].startswith("workers.")}
+    assert set(mine) >= {"workers.max_count", "workers.rebalance"}
+    for e in mine.values():
+        assert "error:forbidden" in e["tags"] and "group:demo" in e["tags"] and "zone:zone-a" in e["tags"]

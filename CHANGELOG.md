@@ -24,6 +24,9 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
     load balancer's address. Both now use the entry `RAMEN_TRUST_PROXY_HOPS` from the right, as the node does; the
     chart sets 2 on GCP and 1 on AWS and Azure for the console too.
   - The Google group lookup refuses an email that would alter its query filter.
+  - Found by this release's GKE run: an MCP key created seconds after its zone was attached failed with Secret
+    Manager's `400 Service account … does not exist`; the secret binding now rides out the IAM lag the way the bucket
+    grant already did.
   - Noted, not changed: `Store.transaction()` is a per-process lock, so the console is a single replica (chart default);
     a hung guardrail hook's thread lives on after the fail-closed answer.
 - **The compose stack pulls the published images.** `make up` pulls `docker.io/bkraad47/ramen-console` and

@@ -63,14 +63,20 @@ def pkce() -> tuple[str, str]:
     return verifier, b64url(hashlib.sha256(verifier.encode()).digest())
 
 
+# One secret per test process: a LocalNode and a LocalConsole that must verify each other's tokens share it.
+# Generated, never a literal (scripts/check_secrets.py).
+SESSION_SECRET = secrets.token_hex(32)
+ADMIN_PASSWORD = secrets.token_hex(10) + "Aa1!"
+
+
 class LocalConsole:
     """Context manager: a console process; `.url`, `.admin` (logged-in super admin), OAuth helpers."""
 
     def __init__(
         self,
         env: dict | None = None,
-        session_secret: str = "REDACTED-SECRET",
-        admin: tuple[str, str] = ("admin@ramen.local", "REDACTED-PASSWORD"),
+        session_secret: str = SESSION_SECRET,
+        admin: tuple[str, str] = ("admin@ramen.local", ADMIN_PASSWORD),
     ):
         self.python = require_console()
         self.port = free_port()
@@ -87,7 +93,7 @@ class LocalConsole:
             "RAMEN_ADMIN_PASSWORD": admin[1],
             "RAMEN_PUBLIC_URL": self.url,  # the OAuth issuer (§16.3) = what the node's RAMEN_OAUTH_ISSUER must equal
             "RAMEN_LOCAL_SESSION_SECRET": session_secret,
-            "RAMEN_SESSION_SECRET": "REDACTED-SECRET",
+            "RAMEN_SESSION_SECRET": secrets.token_hex(32),
             "RAMEN_SMTP_HOST": f"file://{self.dir / 'mail'}",
             "RAMEN_LOGIN_RATE_LIMIT": "0",
             "RAMEN_LOG_LEVEL": "WARNING",

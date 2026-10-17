@@ -3,8 +3,8 @@
 Three short walks: run Ramen on your laptop, connect a repo of tools, and connect Claude. Every step has the
 page you will see. The wiki goes deeper on each topic once you want it.
 
-You need Docker with compose v2, `git`, `make` and `uv`. The first start builds two images and takes three to
-five minutes.
+You need Docker with compose v2, `git`, `make` and `uv`. The first start pulls the release's two images from
+Docker Hub, about a minute; `make up BUILD=1` builds them from source instead, three to five minutes.
 
 ## 1. Start Ramen locally
 
@@ -14,12 +14,13 @@ make up
 ```
 
 That starts a Firestore emulator, the console and one worker. Open **https://localhost:8443** and accept the
-self-signed certificate. Sign in with `admin@ramen.local` and the password `REDACTED-PASSWORD` from
-`deploy/local/.env`.
+self-signed certificate. Sign in with `admin@ramen.local` and the password `make up` generated into
+`deploy/local/.env` (`grep RAMEN_ADMIN_PASSWORD deploy/local/.env`). Every secret in that file is generated on your
+machine; nothing in the repository is a usable password or key.
 
 <figure markdown>
 ![The sign-in page](img/login.png){ .ramen-shot width=720 }
-<figcaption>The sign-in page. Change the password in deploy/local/.env before anyone else can reach the port.</figcaption>
+<figcaption>The sign-in page. The password is the generated one in deploy/local/.env; `make env` rotates a stale one.</figcaption>
 </figure>
 
 Then prove the whole path with one command:

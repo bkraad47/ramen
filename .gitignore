@@ -9,6 +9,8 @@ htmlcov/
 dist/
 *.egg-info/
 .env
+.env.bak
+deploy/kind/.secrets.env
 .terraform/
 *.tfstate*
 .DS_Store

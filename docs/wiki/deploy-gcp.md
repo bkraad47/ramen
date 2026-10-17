@@ -41,12 +41,25 @@ The outputs you need later are `public_hostname`, `certificate_map` and `artifac
 
 ## 3. Images
 
+Every release publishes `docker.io/bkraad47/ramen-console` and `ramen-worker` (also on `ghcr.io/bkraad47/`;
+linux/amd64 and arm64; tags `<version>` and `latest`). To run those, skip the build and add two values to the Helm
+command in the next step:
+
+```sh
+V=$(cat VERSION)
+#  --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
+#  --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V
+```
+
+To build and push your own into the project's Artifact Registry instead, which is what the release verification
+runs did:
+
 ```sh
 make push PROJECT=$PROJECT REGION=$REGION
 ```
 
-This builds and pushes `console` and `worker` images tagged with the release. A push from a Colima or Lima
-Docker can fail with `broken pipe` on one layer. If it does, `docker save` the image and push it with `crane`.
+A push from a Colima or Lima Docker can fail with `broken pipe` on one layer. If it does, `docker save` the image
+and push it with `crane`.
 
 ## 4. The console
 
@@ -64,7 +77,7 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
-curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":"0.6.0"} once the certificate is active
+curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
 ```
 
 Keep the three generated values in a password manager. `RAMEN_PUBLIC_URL` is the address people use and the OAuth
@@ -134,7 +147,7 @@ admin approves it. [Users and access](users-access.md#service-account-permission
   ([Groups, zones and regions](groups-zones.md#ip-rules)).
 - **Logs**: Cloud Logging for the namespace, on the Logs page. External monitors read the same logs with
   `resource.labels.namespace_name="ramen-<group>-<zone>"`.
-- **Upgrade the console**: `make push`, then `kubectl -n ramen-system rollout restart deploy/console`. For a
+- **Upgrade the console**: `make push`, or `--set image.tag=<version>` on the public image, then `kubectl -n ramen-system rollout restart deploy/console`. For a
   minute or two after a console restart the load balancer can answer `503` with the body
   `unconditional drop overload` (no healthy backend yet); retry. `scripts/cloud_smoke.sh` rides it out.
 - **Deploy from CI**: [Deploy from GitHub Actions](deploy-github-actions.md).

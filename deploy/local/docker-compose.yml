@@ -1,5 +1,5 @@
 # Local Ramen stack (CONTRACTS §5): Firestore emulator + console + one worker (group `demo`).
-# Shell env > .env > defaults below (CI exports RAMEN_ADMIN_EMAIL/PASSWORD, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY).
+# Shell env > .env; secrets have no default here (`make env` generates them into .env; CI generates them into its environment).
 # Deploy from the console writes /buckets/demo/.ramen/env-local (minted rmk_ keys) and calls the worker's ramen.v1.Admin/Reload (gRPC, CONTRACTS §11).
 # Worker build context is the ramen repo root because the image needs node-rs/, runtime-py/ and proto/ (see node-rs/Dockerfile).
 name: ramen
@@ -17,8 +17,8 @@ services:
   console:
     build:
       context: ../../console
-      args: { RAMEN_VERSION: "${VERSION:-0.7.5}" }
-    image: ramen-console:${VERSION:-0.7.5}
+      args: { RAMEN_VERSION: "${VERSION:-0.7.6}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-0.7.6}   # pulled by `make up`; built when the tag is not published (or BUILD=1)
     depends_on:
       firestore: { condition: service_healthy }
     environment:
@@ -29,14 +29,14 @@ services:
       RAMEN_TLS: self
       RAMEN_CONSOLE_PORT: "8443"
       RAMEN_ADMIN_EMAIL: ${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
-      RAMEN_ADMIN_PASSWORD: ${RAMEN_ADMIN_PASSWORD:-changeme-ramen}
-      RAMEN_FERNET_KEY: ${RAMEN_FERNET_KEY:-0VnINh_5EgyBnkUEf44BuR7CTKLrb97GSTjdjTbbkhY=}
+      RAMEN_ADMIN_PASSWORD: ${RAMEN_ADMIN_PASSWORD:?generated into deploy/local/.env by make env}
+      RAMEN_FERNET_KEY: ${RAMEN_FERNET_KEY:?generated into deploy/local/.env by make env}
       RAMEN_BUCKET_ROOT: /buckets
       RAMEN_LOG_ROOT: /buckets/_logs
       RAMEN_WORKER_URL: worker:8080               # zone `local` → this worker (gRPC h2c target host:port)
-      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}   # sent as metadata x-ramen-admin-key on Admin/Reload
+      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:?generated into deploy/local/.env by make env}   # sent as metadata x-ramen-admin-key on Admin/Reload
       RAMEN_PUBLIC_URL: ${RAMEN_PUBLIC_URL:-https://localhost:8443}   # base for links in mails, and the OAuth issuer (§16.3)
-      RAMEN_LOCAL_SESSION_SECRET: ${RAMEN_SESSION_SECRET:-local-session-secret}   # the worker's RAMEN_SESSION_SECRET, so console-minted tokens verify; not written to the bucket
+      RAMEN_LOCAL_SESSION_SECRET: ${RAMEN_SESSION_SECRET:?generated into deploy/local/.env by make env}   # the worker's RAMEN_SESSION_SECRET, so console-minted tokens verify; not written to the bucket
       RAMEN_SMTP_HOST: ${RAMEN_SMTP_HOST:-file:///mail}   # dev mail backend: .eml files in ./.mail (CONTRACTS §9); set a real SMTP host to send
       RAMEN_SMTP_FROM: ${RAMEN_SMTP_FROM:-ramen@localhost}
       RAMEN_AUTH_MAGIC_LINK: ${RAMEN_AUTH_MAGIC_LINK:-0}
@@ -50,18 +50,18 @@ services:
     build:
       context: ../..
       dockerfile: node-rs/Dockerfile
-      args: { VERSION: "${VERSION:-0.7.5}" }
-    image: ramen-worker:${VERSION:-0.7.5}
+      args: { VERSION: "${VERSION:-0.7.6}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-worker:${VERSION:-0.7.6}
     environment:
       RAMEN_NODE_PORT: "8080"
       RAMEN_BUCKET: /buckets/demo
       RAMEN_GROUP: demo
       RAMEN_ENV: default
       RAMEN_ZONE: local
-      RAMEN_MCP_KEYS: ${RAMEN_MCP_KEYS:-local-mcp-key}
-      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:-local-admin-key}
+      RAMEN_MCP_KEYS: ${RAMEN_MCP_KEYS:?generated into deploy/local/.env by make env}
+      RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:?generated into deploy/local/.env by make env}
       RAMEN_ALLOWED_CIDRS: ${RAMEN_ALLOWED_CIDRS:-0.0.0.0/0,::/0}
-      RAMEN_SESSION_SECRET: ${RAMEN_SESSION_SECRET:-local-session-secret}   # §16.2 session ids and §16.3 tokens; same value as the console's
+      RAMEN_SESSION_SECRET: ${RAMEN_SESSION_SECRET:?generated into deploy/local/.env by make env}   # §16.2 session ids and §16.3 tokens; same value as the console's
       RAMEN_OAUTH_ISSUER: ${RAMEN_PUBLIC_URL:-https://localhost:8443}       # the console is the authorization server
       RAMEN_ALLOWED_ORIGINS: ${RAMEN_ALLOWED_ORIGINS:-}                     # empty: every browser Origin refused (§16.1)
       RAMEN_SIDECAR_IDLE_SECS: "300"

@@ -46,8 +46,21 @@ k apply -f "$HERE/fake-gcs.yaml"
 k -n ramen-system rollout status deployment/fake-gcs --timeout=180s
 
 say "console chart"
+SECRETS="$HERE/.secrets.env"   # generated once per checkout, git-ignored; test.sh reads it; nothing static (check_secrets.py)
+if [ ! -f "$SECRETS" ]; then
+  { echo "RAMEN_ADMIN_PASSWORD=$(openssl rand -hex 10)Aa1!"      # the console's policy: 12+, upper/lower/digit/special
+    echo "RAMEN_ADMIN_KEY=$(openssl rand -hex 24)"
+    echo "RAMEN_SESSION_SECRET=$(openssl rand -hex 32)"
+    echo "RAMEN_FERNET_KEY=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+  } > "$SECRETS"
+  chmod 600 "$SECRETS"
+fi
+set -a; . "$SECRETS"; set +a
 helm --kube-context "$KCTX" upgrade --install ramen "$ROOT/deploy/helm/ramen" \
-  -n ramen-system -f "$HERE/values.yaml" --set "image.tag=$VERSION" --wait --timeout 5m
+  -n ramen-system -f "$HERE/values.yaml" --set "image.tag=$VERSION" \
+  --set "console.secrets.RAMEN_ADMIN_PASSWORD=$RAMEN_ADMIN_PASSWORD,console.secrets.RAMEN_ADMIN_KEY=$RAMEN_ADMIN_KEY" \
+  --set "console.secrets.RAMEN_SESSION_SECRET=$RAMEN_SESSION_SECRET,console.secrets.RAMEN_FERNET_KEY=$RAMEN_FERNET_KEY" \
+  --wait --timeout 5m
 k apply -f "$HERE/nodeports.yaml"
 k -n ramen-system rollout status deployment/console --timeout=300s
 
@@ -64,7 +77,7 @@ done
 
 say "ready"
 cat <<TXT
-console   http://localhost:18000            (admin@ramen.local / REDACTED-PASSWORD)
+console   http://localhost:18000            (admin@ramen.local / password in deploy/kind/.secrets.env)
 zone a    localhost:18081  (gRPC h2c)       namespace ramen-demo-a, node label topology.kubernetes.io/zone=kind-a
 zone b    localhost:18082  (gRPC h2c)       namespace ramen-demo-b, node label topology.kubernetes.io/zone=kind-b
 stable    localhost:18084 / 18085          the same zones, stable track only (see zones.yaml)

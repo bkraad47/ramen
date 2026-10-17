@@ -72,9 +72,8 @@ it is about to return, and secret values never reach it.
 
 ## What is verified
 
-CI runs the whole guard table on both transports on real node processes, on Linux and on a Windows runner. 0.7.5 ran
-on GKE, EKS and AKS, each torn down afterwards: the same 33 checks, Entra ID sign-in with group lookup, and autoscaling
-load tests on all three; Google sign-in on GKE. Node TLS is covered by tests only, and Google Workspace group lookup
-only against a fake.
-[What each run covered, hop by hop](wiki/transport.md#what-is-verified-and-what-is-not), and
-[what the threat model does and does not defend](threat-model.md).
+One sentence, because the record lives elsewhere: CI runs the whole guard table on both transports on Linux and
+Windows, and 0.7.5 ran the same 33 checks, Entra ID sign-in and autoscaling load tests live on GKE, EKS and AKS, each
+torn down afterwards. The record, including what is tested only:
+[Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not); the boundaries:
+[Threat model](threat-model.md).

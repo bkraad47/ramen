@@ -1,5 +1,6 @@
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -48,9 +49,22 @@ def console_url() -> str:
     return E.strip(E.require("RAMEN_CONSOLE_URL"))
 
 
+def _dotenv(name: str) -> str | None:
+    """The compose stack's generated secret (deploy/local/.env, written by `make env`); there is no static default."""
+    path = Path(__file__).resolve().parents[1] / "deploy" / "local" / ".env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1] or None
+    return None
+
+
 @pytest.fixture(scope="session")
 def admin_creds() -> tuple[str, str]:
-    return E.env("RAMEN_ADMIN_EMAIL", "admin@ramen.local"), E.env("RAMEN_ADMIN_PASSWORD", "REDACTED-PASSWORD")
+    password = E.env("RAMEN_ADMIN_PASSWORD") or _dotenv("RAMEN_ADMIN_PASSWORD")
+    if not password:
+        pytest.fail("RAMEN_ADMIN_PASSWORD is not set and deploy/local/.env has none: run `make env`")
+    return E.env("RAMEN_ADMIN_EMAIL", "admin@ramen.local"), password
 
 
 @pytest.fixture(scope="session")

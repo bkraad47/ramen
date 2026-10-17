@@ -103,28 +103,28 @@ wheels = [
 
 [[package]]
 name = "ramen-mcp-bridge"
-version = "0.2.2"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "grpcio-health-checking" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/c6/f35c1660f66a1e1bca8d9b296c6084a139b4b9c8c897836990920877299b/ramen_mcp_bridge-0.2.2.tar.gz", hash = "sha256:d9c8631188eb806ce875488f861cb7ac48b61d640cd3f1bec595cb65619a5d0c", size = 112412, upload-time = "2026-10-04T12:33:37.098Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/77/1a1d959e3b57321e91012602907aabe9f72f9190a857b8e4c59910d6eada/ramen_mcp_bridge-0.3.0.tar.gz", hash = "sha256:0de0b2c8f6eeaabc4c458f68bc9d240bc88c42abaa42b2cd750a1497466706cb", size = 117472, upload-time = "2026-10-17T03:23:49.611Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/1e/b65b7850475a1388e73afcd8b4fa32a823189ddfd7d075969246c1b10b61/ramen_mcp_bridge-0.2.2-py3-none-any.whl", hash = "sha256:1626fdc555494d7c19cfc0448363e74126ecc67a5912e0937847da4f2aad1bb1", size = 14793, upload-time = "2026-10-04T12:33:35.741Z" },
+    { url = "https://files.pythonhosted.org/packages/64/97/d1193cfcae705c1dd5a4475ca23777bf274d4bf969af5e66a209c292414b/ramen_mcp_bridge-0.3.0-py3-none-any.whl", hash = "sha256:3ae27301df16b5252462fc30205b71be6934a1c6d6f2eeb2bd1f744caad817c7", size = 18183, upload-time = "2026-10-17T03:23:48.296Z" },
 ]
 
 [[package]]
 name = "ramen-mcpb"
-version = "0.6.21"
+version = "0.7.6"
 source = { virtual = "." }
 dependencies = [
     { name = "ramen-mcp-bridge" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "ramen-mcp-bridge", specifier = "==0.2.2" }]
+requires-dist = [{ name = "ramen-mcp-bridge", specifier = "==0.3.0" }]
 
 [[package]]
 name = "typing-extensions"

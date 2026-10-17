@@ -60,10 +60,9 @@ management plane. Verification status is the section at the end, and it is the p
 
 ## What is verified, and what is not
 The record is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not), kept with the
-`reports/` directory of the private workspace. In short, as of 0.6.0: both transports and every guard above are
-proven on real node processes in CI on Linux and Windows; the GCP path was proven live on throwaway GKE projects in
-0.3.2, 0.4.0, 0.5.1, 0.5.95 and 0.6.0, and the AWS path on a real account in 0.5.6, 0.5.8 and 0.6.0, each emptied the
-same day; there has been no third-party penetration test. An independent agent reviews each release's new
+`reports/` directory of the private workspace. In short: every guard above is proven on real node processes in CI
+on Linux and Windows, and every release since 0.3.2 has run live on a throwaway cloud environment emptied the same
+day, most recently 0.7.5 on GKE, EKS and AKS; there has been no third-party penetration test. An independent agent reviews each release's new
 surface against the code (`reports/security-v<version>.md`), which is the closest thing to an audit this project
 has had.
 

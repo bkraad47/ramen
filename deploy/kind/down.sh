@@ -5,4 +5,5 @@ CLUSTER=${KIND_CLUSTER:-ramen}
 VERSION=${VERSION:-$(cat "$(cd "$(dirname "$0")/../.." && pwd)/VERSION")}
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && kind delete cluster --name "$CLUSTER" || echo "no cluster $CLUSTER"
 docker image rm -f "ramen-worker-kind:$VERSION" >/dev/null 2>&1 || true
+rm -f "$(cd "$(dirname "$0")" && pwd)/.secrets.env"   # the generated console secrets die with the cluster
 echo "down"

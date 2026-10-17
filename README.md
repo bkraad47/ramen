@@ -22,8 +22,9 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. The stdio
 > bridge stays for clients that only speak stdio.
 
-**Status.** Current release **0.8.0** (packaging and docs; the product is 0.7.5). 0.7.5 passed the same 33 checks
-live on **GKE, EKS and AKS**; what each run covered, and what is tested only:
+**Status.** Current release **0.8.0**, verified live on GKE, EKS and AKS on 2026-10-17 — smoke, the 63-check release suite
+and six load-test scenarios on each cloud — then torn down; CI proves both transports on Linux and Windows. The single
+record of what each run covered, and what is tested only, is
 [Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
 
 **Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts**

@@ -38,6 +38,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 ## 0.8.0 — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 
+- **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0 failed), six load-test scenarios per cloud (no 5xx; `429` back-pressure only), the mail flows on compose; every environment torn down afterwards. Record: the Transport page.
 - **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent read of the console, node and runtime), every finding fixed with a test:
 - A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still reads as `localhost`) and was reflected into the consent hand-off page's `href` with a JavaScript escape instead of an HTML one. The netloc must now be exactly `host[:port]`, and the hand-off page encodes the target per context (HTML-escaped attribute, JSON string in the script with `<`, `>`, `&` as `\u` escapes).
 - A group admin could set `repo_url` to `ext::sh -c …` and the next deploy ran it in the console. `repo_url` must be an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, scp-like or `-`-prefixed values; a path or `file://` only on the local adapter), git runs with `GIT_ALLOW_PROTOCOL` (no remote helpers) and `--` before the URL.

@@ -231,6 +231,18 @@ The in-flight semaphore is sized when the pod starts and `Admin/Reload` does not
 This section is the single record; [How it works](../how-it-works.md), the [threat model](../threat-model.md) and
 the home page point here.
 
+- **Verified live in 0.8.0 on GKE, EKS and AKS** (2026-10-17, each torn down afterwards), on the build that carries the
+  security review's fixes: `scripts/cloud_smoke.sh` (zone, group, key, canary deploy of the demo repo with its NeMo rails
+  and golden cases, a call through the edge) on each; then `tests/cloud/test_release_features.py` with `tests/e2e` and the
+  remote conformance modules — custom roles API (422/409), an OAuth-only role refusing the password, per-tool access by a
+  custom kind and by its base, a person's console token over Streamable HTTP and the same person through the stdio bridge
+  (`--oauth`, bridge 0.3.0), the guardrail block with `_meta.ramen.guardrail` on both, a hidden tool for the group key,
+  refresh rotation, the access-log reasons — **63 passed on GKE, 63 on AKS, 64 on EKS, 0 failed** (skips: `Admin/*` is not
+  routed through an edge by design; the mail-dir test runs on compose). `scripts/load_test.py` (64 concurrent calls, max 3):
+  all six scenarios passed on each cloud — up to 3 in 137–253 s, back to 1 in 600–678 s, console `/readyz` answered every
+  poll; the only non-200 answers were `429` from the node's in-flight cap, never a 5xx. Mail flows (invitation, password
+  reset, magic link) end to end on the compose file backend. Entra ID sign-in with the groups lookup: _pending the
+  user's browser session_. Google Workspace groups: fake Cloud Identity only (no Workspace tenant).
 - **Verified live in 0.7.5 on GKE, EKS and AKS** (each torn down afterwards): the 33-check run on each — a canary
   deploy of the demo repo with its NeMo rails and golden cases, custom roles and per-tool access by name and by base,
   a console token over Streamable HTTP and the same person through the stdio bridge (`--oauth`), the guardrail block

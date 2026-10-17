@@ -29,7 +29,7 @@ def tag_date(version: str) -> str:
             check=True,
         ).stdout.strip()
         return out or "—"
-    except subprocess.CalledProcessError, FileNotFoundError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return "—"
 
 
@@ -44,7 +44,7 @@ def has_tag(version: str) -> bool:
             check=True,
         )
         return True
-    except subprocess.CalledProcessError, FileNotFoundError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
 

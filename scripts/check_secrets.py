@@ -71,7 +71,7 @@ def main() -> int:
         rel = path.relative_to(ROOT).as_posix()
         try:
             text = path.read_text()
-        except UnicodeDecodeError, OSError:
+        except (UnicodeDecodeError, OSError):
             continue
         for n, line in enumerate(text.split("\n"), 1):
             for tok in TOKEN.split(line):

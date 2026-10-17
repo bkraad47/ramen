@@ -442,7 +442,16 @@ class Iam:
 
             del pol.bindings[:]
             pol.bindings.extend(policy_pb2.Binding(role=b["role"], members=b["members"]) for b in doc)
-            sm.set_iam_policy(request={"resource": name, "policy": pol})
+            # the same IAM lag as the bucket grant: a GSA created seconds ago is 400 "… does not exist" for a while
+            # (0.8.0, found by an MCP key created right after its zone was attached on GKE)
+            for attempt in range(12):
+                try:
+                    sm.set_iam_policy(request={"resource": name, "policy": pol})
+                    break
+                except Exception as e:  # noqa: BLE001
+                    if http_status(e) != 400 or "does not exist" not in str(e) or attempt == 11:
+                        raise
+                    time.sleep(min(2**attempt, 10))
         return changed
 
     def grant_secret_roles(self, sm, group, email, roles: list[str]) -> list[str]:

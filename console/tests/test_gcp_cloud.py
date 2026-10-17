@@ -171,6 +171,21 @@ async def test_attach_zone_retries_bucket_grant_until_new_gsa_is_visible(cloud, 
     assert [b["role"] for b in fk.storage.buckets["p1-groups"].policy.bindings] == ["roles/storage.objectViewer"]
 
 
+async def test_bind_new_secret_retries_until_the_new_gsa_is_visible(cloud, fk, monkeypatch):
+    """Live GKE (0.8.0 run): an MCP key created seconds after its zone was attached failed with Secret Manager's 400
+    "Service account … does not exist" — the IAM lag the bucket grant already rides out. Same retry here."""
+    import ramen_console.cloud.gcp_api as api
+
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    await cloud.attach_zone("demo", "a", SPEC)
+    fk.secretmanager.create_secret({"parent": "projects/p1", "secret_id": "ramen-demo-dev-all-KEY", "secret": {}})
+    fk.secretmanager.iam_lag = 3
+    assert cloud.bind_new_secret("projects/p1/secrets/ramen-demo-dev-all-KEY", "demo")
+    assert fk.secretmanager.iam_lag == 0 and fk.secretmanager.calls.count("set_iam_policy") >= 4
+    pol = fk.secretmanager.secrets["projects/p1/secrets/ramen-demo-dev-all-KEY"]["policy"]
+    assert pol and list(pol[0].members)
+
+
 async def test_attach_zone_gives_up_on_persistent_bad_request(cloud, fk, monkeypatch):
     import ramen_console.cloud.gcp_api as api
 

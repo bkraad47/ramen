@@ -352,6 +352,7 @@ class FakeSM:
     def __init__(self):
         self.secrets: dict[str, dict] = {}
         self.calls: list[str] = []
+        self.iam_lag = 0  # set_iam_policy calls still answering 400 "Service account … does not exist" (IAM lag)
 
     def create_secret(self, request):
         name = f"{request['parent']}/secrets/{request['secret_id']}"
@@ -390,6 +391,9 @@ class FakeSM:
 
     def set_iam_policy(self, request):
         self.calls.append("set_iam_policy")
+        if self.iam_lag > 0:
+            self.iam_lag -= 1
+            raise FakeApiError(400, "Service account ramen-demo-a@p1.iam.gserviceaccount.com does not exist.")
         self.secrets[request["resource"]]["policy"] = copy.deepcopy(list(request["policy"].bindings))
         return request["policy"]
 

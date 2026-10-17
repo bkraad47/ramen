@@ -4,6 +4,10 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 ## [Unreleased]
 
 ## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
+- **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as
+  `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0
+  failed), six load-test scenarios per cloud (no 5xx; `429` back-pressure only), the mail flows on compose; every
+  environment torn down afterwards. Record: the Transport page.
 - **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent
   read of the console, node and runtime), every finding fixed with a test:
   - A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still

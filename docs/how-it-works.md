@@ -71,6 +71,6 @@ it is about to return, and secret values never reach it.
 
 ## What is verified
 
-0.7.5 passed the same 33 checks live on GKE, EKS and AKS; what each run covered, and what is tested only:
+0.8.0 passed the release suite and the load tests live on GKE, EKS and AKS; what each run covered, and what is tested only:
 [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). The boundaries:
 [Threat model](threat-model.md).

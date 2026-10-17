@@ -4,6 +4,28 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 ## [Unreleased]
 
 ## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
+- **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent
+  read of the console, node and runtime), every finding fixed with a test:
+  - A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still
+    reads as `localhost`) and was reflected into the consent hand-off page's `href` with a JavaScript escape instead of
+    an HTML one. The netloc must now be exactly `host[:port]`, and the hand-off page encodes the target per context
+    (HTML-escaped attribute, JSON string in the script with `<`, `>`, `&` as `\u` escapes).
+  - A group admin could set `repo_url` to `ext::sh -c …` and the next deploy ran it in the console. `repo_url` must be
+    an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, `file:`, scp-like or `-`-prefixed values),
+    git runs with `GIT_ALLOW_PROTOCOL` (no remote helpers) and `--` before the URL.
+  - A repo could ship `.ramen/env-<zone>` and the worker applied it as its deploy file (self-minted `RAMEN_MCP_KEYS`,
+    policy overrides). The console never uploads `.ramen/` from a checkout (and drops a tracked one from the local
+    bucket), and the runtime never downloads `.ramen/*` from a bucket.
+  - The scheduler's tick and a Rebalance click on the same zone could both read the old count and both scale; one
+    autoscale decision per zone at a time.
+  - Two deploys of one environment could drive the same canary Deployment at once; a second deploy while one runs is
+    a `409` naming the running job.
+  - The audit `ip` was the left-most `x-forwarded-for` entry (client-written) and the login rate limiter keyed on the
+    load balancer's address. Both now use the entry `RAMEN_TRUST_PROXY_HOPS` from the right, as the node does; the
+    chart sets 2 on GCP and 1 on AWS and Azure for the console too.
+  - The Google group lookup refuses an email that would alter its query filter.
+  - Noted, not changed: `Store.transaction()` is a per-process lock, so the console is a single replica (chart default);
+    a hung guardrail hook's thread lives on after the fail-closed answer.
 - **The compose stack pulls the published images.** `make up` pulls `docker.io/bkraad47/ramen-console` and
   `ramen-worker` at `VERSION` (about a minute) and builds from source only when the tag is not published yet;
   `make up BUILD=1` always builds. CI keeps building from source.

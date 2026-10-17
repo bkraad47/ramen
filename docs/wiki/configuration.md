@@ -145,7 +145,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_VERBOSE` | worker | `1` logs full request and response bodies. Toggle per environment on the group page. |
 | `RAMEN_SIDECAR_IDLE_SECS` | worker | Seconds of idleness before the Python runtime stops, default 300. |
 | `RAMEN_CALL_TIMEOUT_SECS`, `RAMEN_MAX_INFLIGHT` | worker | Per-call deadline and the in-flight bound. |
-| `RAMEN_TRUST_PROXY_HOPS` | worker | Proxies between the client and the node: 2 on GCP, 1 on AWS and on AKS, set by the charts. A wrong value denies, never admits. |
+| `RAMEN_TRUST_PROXY_HOPS` | worker, console | Proxies between the client and the node, or the console: 2 on GCP, 1 on AWS and on AKS, set by the charts. The node denies on a wrong value, never admits; the console (0.8.0) uses it for the audit `ip` and the sign-in rate limit, falling back to the peer. |
 | `RAMEN_ALLOWED_ORIGINS` | worker | Browser origins allowed on `/mcp`. Empty by default, so every browser origin is refused. |
 | `RAMEN_SESSION_SECRET` | console, handed to workers | Signs the MCP session ids and the OAuth tokens a worker verifies. The console generates one per group and writes it into each zone on deploy. |
 | `RAMEN_SESSION_TTL_SECS` | worker | How long an MCP session id stays valid, default 1800. |

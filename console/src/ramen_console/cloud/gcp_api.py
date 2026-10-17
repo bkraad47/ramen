@@ -10,21 +10,18 @@ from pathlib import Path
 
 from ..errors import ApiError
 from .gcp_clients import fresh_http, http_status
-from .local import redact, run_git
+from .local import redact, repo_files, run_git
 
 DEFAULT_PRIORITY = 2147483647
 
 
 def sync_repo_to_gcs(storage, bucket_name, group, repo_url, ref, token) -> str:
     with tempfile.TemporaryDirectory() as tmp:
-        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
+        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, "--", repo_url, tmp], token)
         if r.returncode != 0:
             raise ApiError(502, "Git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
-        local = {}
-        for p in root.rglob("*"):
-            if p.is_file() and ".git" not in p.relative_to(root).parts:
-                local[prefix + p.relative_to(root).as_posix()] = p
+        local = {prefix + rel: p for rel, p in repo_files(root).items()}
         bucket = storage.bucket(bucket_name)
         remote = {b.name: b for b in bucket.list_blobs(prefix=prefix)}
         for name, path in local.items():

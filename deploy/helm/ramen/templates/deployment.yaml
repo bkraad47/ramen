@@ -14,7 +14,8 @@
   "RAMEN_GROUPS_BUCKET" (printf "az://%s/groups" .Values.azure.storageAccount)
   "RAMEN_IMAGE_WORKER" (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.image.tag | toString))
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
-  "RAMEN_COOKIE_SECURE" "1") }}
+  "RAMEN_COOKIE_SECURE" "1"
+  "RAMEN_TRUST_PROXY_HOPS" "1") }}
 {{- else if eq .Values.provider "aws" }}
 {{- /* CONTRACTS §8 console env; provider=aws forces the three backend selectors, the rest defaults from aws.*/ -}}
 {{- $env = merge (dict) (dict "RAMEN_STORE" "dynamodb" "RAMEN_CLOUD" "aws" "RAMEN_SECRETS_BACKEND" "aws") .Values.console.env (dict
@@ -26,7 +27,8 @@
   "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" (.Values.aws.account | toString))
   "RAMEN_IMAGE_WORKER" (printf "%s.dkr.ecr.%s.amazonaws.com/ramen/worker:%s" (.Values.aws.account | toString) .Values.region (.Values.image.tag | toString))
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
-  "RAMEN_COOKIE_SECURE" "1") }}
+  "RAMEN_COOKIE_SECURE" "1"
+  "RAMEN_TRUST_PROXY_HOPS" "1") }}
 {{- else }}
 {{- $env = merge (dict) .Values.console.env (dict
   "RAMEN_GCP_PROJECT" .Values.project
@@ -34,7 +36,8 @@
   "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" .Values.project)
   "RAMEN_IMAGE_WORKER" (printf "%s-docker.pkg.dev/%s/ramen/worker:%s" .Values.region .Values.project (.Values.image.tag | toString))
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
-  "RAMEN_COOKIE_SECURE" "1") }}
+  "RAMEN_COOKIE_SECURE" "1"
+  "RAMEN_TRUST_PROXY_HOPS" "2") }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

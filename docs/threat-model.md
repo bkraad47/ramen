@@ -23,6 +23,9 @@ management plane. Verification status is the section at the end, and it is the p
   balancer and IAM behave as documented.
 
 ## What Ramen defends against
+- **A tenant repo cannot author the worker's deploy file** (0.8.0): `.ramen/` in a checkout is never uploaded or
+  downloaded; the keys, tool access and roles a worker applies come only from the console.
+- **A group's `repo_url` cannot run code in the console** (0.8.0): network git URLs only, no remote helpers.
 
 | Threat | Adversary | Defence | Where |
 |---|---|---|---|
@@ -57,6 +60,9 @@ management plane. Verification status is the section at the end, and it is the p
 - **The key's length can leak** through the length check in front of the constant-time compare.
 - **Denial of service at the edge** beyond the per-node caps: that is the load balancer's and the cloud's job.
 - **The cloud provider** (A6).
+- **A second console replica.** The store's transaction is a per-process lock, so single-use codes, refresh rotation
+  and membership writes are atomic within one console; run one replica (the chart's default) until a store-level
+  transaction exists.
 
 ## What is verified, and what is not
 The record is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not), kept with the

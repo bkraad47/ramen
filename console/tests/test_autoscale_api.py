@@ -1,5 +1,7 @@
 """CONTRACTS §21.7: who may set the bounds, what is refused, and that every action is audited."""
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from tests.test_api import PW, app, client, cloud, demo, login, make_user, root  # noqa: F401 - pytest fixtures
@@ -167,3 +169,31 @@ def test_a_viewer_is_refused_before_the_zone_is_looked_up(demo):
         assert v.post("/api/v1/groups/demo/zones/any/rebalance").status_code == 403
     mine = [a for a in audit(demo, "workers.count") if a["user"] == "v-any@x"]
     assert mine and "error:forbidden" in mine[0]["tags"] and "zone:any" in mine[0]["tags"]
+
+
+def test_concurrent_scheduler_and_button_scale_only_once(demo, monkeypatch):
+    """0.8.0 SC4: the scheduler's tick and a Rebalance click on the same zone must not both scale it."""
+    demo.put(URL, json={"max_count": 3})
+    svc = demo.app.state.services
+    scaled = []
+
+    async def busy(group, zone):
+        await asyncio.sleep(0.05)  # the metrics round trip, during which the other caller reads the same doc
+        return [{"id": "p1", "load": "high", "metrics": {"inflight": 30, "max_inflight": 32, "total": 9}}]
+
+    async def scale(group, zone, spec):
+        scaled.append(spec.get("count") if isinstance(spec, dict) else spec)
+        return {"ok": True}
+
+    monkeypatch.setattr(svc.cloud, "workers", busy)
+    monkeypatch.setattr(svc.cloud, "scale", scale)
+
+    async def both():
+        return await asyncio.gather(
+            svc.autoscale("demo", "zone-a", user="scheduler"), svc.autoscale("demo", "zone-a", user="root")
+        )
+
+    a, b = asyncio.run(both())
+    assert sorted(d["action"] for d in (a, b)) == ["hold", "up"], (a, b)
+    assert len(scaled) == 1 and demo.get(URL).json()["count"] == 2
+    assert len(audit(demo, "workers.autoscale")) == 1

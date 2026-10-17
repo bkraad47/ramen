@@ -80,9 +80,22 @@ def scope_parts(scope: str) -> tuple[str, str]:
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
+def _host_port_only(u) -> bool:
+    """The netloc is exactly `host` or `host:port` (0.8.0 SC1): no userinfo, no garbage that `urlparse` would let
+    through while `.hostname` still reads as a loopback name."""
+    try:
+        host, port = u.hostname, u.port
+    except ValueError:
+        return False
+    if not host or u.username is not None or u.password is not None:
+        return False
+    shown = f"[{host}]" if ":" in host else host
+    return u.netloc.lower() == (f"{shown}:{port}" if port is not None else shown)
+
+
 def redirect_ok(uri: str) -> bool:
     u = urlparse(uri)
-    if u.scheme not in ("http", "https") or not u.netloc or u.fragment:
+    if u.scheme not in ("http", "https") or not u.netloc or u.fragment or not _host_port_only(u):
         return False
     # loopback may be plain http (RFC 8252); anything else must be https
     return u.scheme == "https" or u.hostname in LOOPBACK
@@ -95,7 +108,7 @@ def redirect_matches(registered: list[str], uri: str) -> bool:
     if uri in registered:
         return True
     u = urlparse(uri)
-    if u.scheme != "http" or u.hostname not in LOOPBACK:
+    if u.scheme != "http" or u.hostname not in LOOPBACK or not _host_port_only(u):
         return False
     return any(
         (r := urlparse(reg)).scheme == "http" and r.hostname in LOOPBACK and (r.path, r.query) == (u.path, u.query)

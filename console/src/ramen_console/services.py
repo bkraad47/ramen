@@ -23,7 +23,8 @@ def validate_repo_url(url: str) -> str:
     """0.8.0 SC2: a group repo is a network git URL with a host. `ext::` (a remote helper that runs a command),
     scp-like `git@host:path`, a leading `-` (git reads it as an option) and whitespace are refused everywhere; a
     filesystem path or `file://` URL only on the local adapter (`RAMEN_CLOUD=local`: a laptop or the compose stack,
-    where a checkout on disk is how tools are developed). Git itself is held to these protocols in `cloud.local.git_env`."""
+    where a checkout on disk is how tools are developed). Git itself is held to these protocols in
+    `cloud.local.git_env`."""
     if not url:
         return url
     msg = "repo_url must be an https://, http://, ssh:// or git:// URL with a host"

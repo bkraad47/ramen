@@ -3,7 +3,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
-## [0.7.6] — packaging and docs: published images by default, bridge 0.3.0 pinned
+## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 - **The compose stack pulls the published images.** `make up` pulls `docker.io/bkraad47/ramen-console` and
   `ramen-worker` at `VERSION` (about a minute) and builds from source only when the tag is not published yet;
   `make up BUILD=1` always builds. CI keeps building from source.
@@ -11,7 +11,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   memory or the OS keychain, 30-minute idle expiry, a needed sign-in relayed to the AI client as error `-32001`) is
   on PyPI since 2026-10-17; the worker image, both Glama images and the MCPB bundle pin it.
 - **No static secrets, anywhere.** `make up` generates the admin password, Fernet key, MCP key, admin key and
-  session secret into `deploy/local/.env` (`make env`, git-ignored; a stale or pre-0.7.6 value is rotated); the
+  session secret into `deploy/local/.env` (`make env`, git-ignored; a stale or pre-0.8.0 value is rotated); the
   compose file has no fallback values any more; CI, the kind cluster (`deploy/kind/.secrets.env`), the screenshot
   console and the test harness generate theirs; `scripts/check_secrets.py` runs in `make lint` and CI and fails on
   any literal that once shipped, any literal secret value under `deploy/`, `.github/` or `scripts/`, and any

@@ -6,7 +6,7 @@ project: kind
 region: us-central1
 image:
   repository: ramen-console          # side-loaded with `kind load docker-image`
-  tag: 0.7.6
+  tag: 0.8.0
   pullPolicy: IfNotPresent
 serviceAccount:
   name: console
@@ -22,7 +22,7 @@ console:
     RAMEN_GCP_PROJECT: kind
     RAMEN_GCP_REGION: us-central1
     RAMEN_GROUPS_BUCKET: ramen-kind-groups
-    RAMEN_IMAGE_WORKER: ramen-worker-kind:0.7.6
+    RAMEN_IMAGE_WORKER: ramen-worker-kind:0.8.0
     STORAGE_EMULATOR_HOST: http://fake-gcs.ramen-system.svc.cluster.local:4443
     RAMEN_DEPLOY_TIMEOUT_SECS: "420"
     # §21.7 autoscaling: the proofs cannot wait the production 120 s between changes, and the demo calculator is

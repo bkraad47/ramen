@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.7.6` **(current)** | 2026-10-11 | packaging and docs: published images by default, bridge 0.3.0 pinned | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.6) |
+| `0.8.0` **(current)** | 2026-10-11 | packaging and docs: published images by default, bridge 0.3.0 pinned | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
 | `0.7.5` | 2026-10-11 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
 | `0.7.1` | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
@@ -36,11 +36,11 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## 0.7.6 — packaging and docs: published images by default, bridge 0.3.0 pinned
+## 0.8.0 — packaging and docs: published images by default, bridge 0.3.0 pinned
 
 - **The compose stack pulls the published images.** `make up` pulls `docker.io/bkraad47/ramen-console` and `ramen-worker` at `VERSION` (about a minute) and builds from source only when the tag is not published yet; `make up BUILD=1` always builds. CI keeps building from source.
 - **Bridge 0.3.0 everywhere.** [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge) 0.3.0 (tokens in memory or the OS keychain, 30-minute idle expiry, a needed sign-in relayed to the AI client as error `-32001`) is on PyPI since 2026-10-17; the worker image, both Glama images and the MCPB bundle pin it.
-- **No static secrets, anywhere.** `make up` generates the admin password, Fernet key, MCP key, admin key and session secret into `deploy/local/.env` (`make env`, git-ignored; a stale or pre-0.7.6 value is rotated); the compose file has no fallback values any more; CI, the kind cluster (`deploy/kind/.secrets.env`), the screenshot console and the test harness generate theirs; `scripts/check_secrets.py` runs in `make lint` and CI and fails on any literal that once shipped, any literal secret value under `deploy/`, `.github/` or `scripts/`, and any Fernet-shaped literal.
+- **No static secrets, anywhere.** `make up` generates the admin password, Fernet key, MCP key, admin key and session secret into `deploy/local/.env` (`make env`, git-ignored; a stale or pre-0.8.0 value is rotated); the compose file has no fallback values any more; CI, the kind cluster (`deploy/kind/.secrets.env`), the screenshot console and the test harness generate theirs; `scripts/check_secrets.py` runs in `make lint` and CI and fails on any literal that once shipped, any literal secret value under `deploy/`, `.github/` or `scripts/`, and any Fernet-shaped literal.
 - **Docs say each thing once.** The README no longer repeats the transport table, the Rust rationale, the cloud connect snippets or the verification record; the home page, How it works and the threat model each carry one sentence on what is verified and point to Transport. The deploy guides show the public images next to `make push` and no longer quote a 0.6.0 `readyz` or a 0.3.0 image tag; Releases lists 0.7.x and the images; the changelog page has 0.7.5's tag date. No console or worker behaviour change: the product is 0.7.5.
 
 ## 0.7.5 — guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen

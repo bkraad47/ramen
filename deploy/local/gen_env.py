@@ -3,7 +3,7 @@
 
 Generated: RAMEN_ADMIN_PASSWORD, RAMEN_FERNET_KEY, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_SESSION_SECRET. The example
 carries no values for them, so a copied example never starts a console with a known password. An existing .env is
-kept unless one of those is empty, shorter than a generated value or the Fernet key that shipped before 0.7.6; then
+kept unless one of those is empty, shorter than a generated value or the Fernet key that shipped before 0.8.0; then
 just those keys are rotated and the old file is left in .env.bak. Checked by scripts/check_secrets.py.
 """
 

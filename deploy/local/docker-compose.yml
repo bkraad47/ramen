@@ -17,8 +17,8 @@ services:
   console:
     build:
       context: ../../console
-      args: { RAMEN_VERSION: "${VERSION:-0.7.6}" }
-    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-0.7.6}   # pulled by `make up`; built when the tag is not published (or BUILD=1)
+      args: { RAMEN_VERSION: "${VERSION:-0.8.0}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-0.8.0}   # pulled by `make up`; built when the tag is not published (or BUILD=1)
     depends_on:
       firestore: { condition: service_healthy }
     environment:
@@ -50,8 +50,8 @@ services:
     build:
       context: ../..
       dockerfile: node-rs/Dockerfile
-      args: { VERSION: "${VERSION:-0.7.6}" }
-    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-worker:${VERSION:-0.7.6}
+      args: { VERSION: "${VERSION:-0.8.0}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-worker:${VERSION:-0.8.0}
     environment:
       RAMEN_NODE_PORT: "8080"
       RAMEN_BUCKET: /buckets/demo

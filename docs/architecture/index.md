@@ -1,4 +1,4 @@
-# Architecture (current: v0.7.6; the product is 0.7.5)
+# Architecture (current: v0.8.0; the product is 0.7.5)
 
 Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
 

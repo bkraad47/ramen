@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""No static secrets in the tree (0.7.6). Every password, Fernet key, session secret, admin key and MCP key that a
+"""No static secrets in the tree (0.8.0). Every password, Fernet key, session secret, admin key and MCP key that a
 running process accepts is generated: `make env` for the compose stack, `deploy/kind/up.sh` for kind, a step in CI,
 `secrets` in the test harness. This fails on
   1. a literal that once shipped as a default, anywhere in tracked text (matched by sha256, so this file holds none);

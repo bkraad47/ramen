@@ -55,7 +55,7 @@ def calculator_func(var1: float, var2: float, func: str) -> float:
 An exception becomes `isError: true` with `ExceptionType: message` and no traceback, so raise `ValueError` with a
 sentence a model can act on.
 
-`output` (0.7.0) is a JSON Schema and becomes the MCP `outputSchema`; the worker validates every result against it.
+`output` is a JSON Schema and becomes the MCP `outputSchema`; the worker validates every result against it.
 A scalar schema such as `{"type": "number"}` is published as an object with one `result` property and the value
 comes back as `structuredContent: {"result": 5}` next to the text; an object schema is used as declared and the
 returned dict is the `structuredContent`. A result that does not match is a tool error, `invalid output: <path>:
@@ -67,7 +67,7 @@ Quality Score read exactly that, and so does the agent choosing between tools.
 
 ## Golden cases
 
-`mcp/tests.yaml` (0.7.0) turns your tests into a deploy gate. The console runs every case against the canary with
+`mcp/tests.yaml` turns your tests into a deploy gate. The console runs every case against the canary with
 the group's first MCP key before the stable workers take the new code; one failing case aborts the deploy and the
 job log names it and the difference.
 
@@ -90,10 +90,9 @@ an MCP key skips the cases with a warning; a malformed file fails the deploy bef
 
 ## Guardrails
 
-`mcp/guardrails.yaml` (0.7.5) opts tools into a check before the call and after the result, run in the runtime next
-to the tool: NeMo Guardrails rails or a `policy.py` of your own, per tool, fail-closed by default. The golden cases
-run through them, so a case whose arguments a rail blocks fails the gate with the rail's message. The whole story,
-with the demo repo's deterministic rails, is on [Guardrails](guardrails.md).
+`mcp/guardrails.yaml` opts tools into a check before the call and after the result, run in the runtime next to the
+tool: NeMo Guardrails rails or a `policy.py` of your own, fail-closed by default. Golden cases run through them.
+The whole story, with the demo repo's deterministic rails, is on [Guardrails](guardrails.md).
 
 ## Resources and prompts
 
@@ -161,20 +160,20 @@ pre-commit check.
 1. `make up` on your laptop. Create a group pointing at your repo, attach zone `local`, deploy.
 2. Call it with the key from the group page, with `curl`, the `mcp` SDK or the bridge
    ([Get started](../get-started.md#3-connect-a-client)).
-3. Push, deploy again, or let [GitHub Actions deploy on push](deploy-github-actions.md). The group page lists what each zone reported, with each tool's schema. The Logs page tails
-   the worker.
+3. Push, deploy again, or let [GitHub Actions deploy on push](deploy-github-actions.md). The group page lists what
+   each zone reported, with each tool's schema. The Logs page tails the worker.
 
 ## Heavy dependencies
 
 The worker pip-installs `mcp/requirements.txt` on the first load of a new ref. Pin the versions. If the install
-fails, the deploy stops at the canary with pip's output in the job log, and the previous version keeps serving. For heavy stacks
-such as numpy, pandas or a CUDA wheel, build a worker image for the group and record it on the group page's
+fails, the deploy stops at the canary with pip's output in the job log, and the previous version keeps serving. For
+heavy stacks such as numpy, pandas or a CUDA wheel, build a worker image for the group and record it on the group page's
 **Worker image** card:
 
 ```sh
 make push-worker PROJECT=<project> REGION=<region>    # tag it yourself if you keep several
 ```
 
-The image is not per group; the group page is where a group pins which image it runs. The console records and
-recalls references, and never builds. The pin reaches the zones on the next deploy,
-and **Recall** puts the group back on an older build.
+The image is not tied to one group; each group pins the one it runs on its group page. The console records and
+recalls references and never builds. The pin reaches the zones on the next deploy, and **Recall** puts the group
+back on an older build.

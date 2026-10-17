@@ -62,20 +62,19 @@ audited.
 
 ## How a person signs in
 
-Since 0.7.5 every mail the console sends (an invitation, a password reset, a sign-in link, the warning digest) is
-branded HTML with a button and a copyable address, with the plain text kept.
-
-Password sign-in is on by default; magic-link sign-in (a one-time link by email) is off until a super admin switches it on on the Config page, and needs mail configured. A super admin can add Microsoft Entra ID or Google Workspace on the
-Config page and map claim values to roles per group; see [Entra ID and Workspace](sso.md). Disabling password
+Password sign-in is on by default. Magic-link sign-in (a one-time link by email) is off until a super admin switches
+it on on the Config page, and needs [mail](configuration.md#email) configured. A super admin can add Microsoft Entra
+ID or Google Workspace on the Config page and map claim values to roles per group; see
+[Entra ID and Workspace](sso.md). Disabling password
 login needs another way in first, or the break-glass `RAMEN_ADMIN_FORCE_PASSWORD=1`.
 
-Every role, group and password change bumps the person's session epoch. Open sessions and refresh tokens end
-at once. There is no window where an open tab keeps a permission it just lost.
+Every role, group and password change bumps the person's session epoch, so open sessions and refresh tokens end
+at once and an open tab never keeps a permission it just lost.
 
 ## What an MCP user gets
 
-An MCP user who signs in sees one page: which groups they may connect to and how. Claude Code, Claude Desktop,
-Cursor and the bridge send them to the console to sign in and approve the client once per group and zone. Every
+An MCP user who signs in sees one page: which groups they may connect to and how. Claude Code over HTTP, and Claude Desktop,
+Cursor or VS Code through the bridge, send them to the console to sign in and approve the client once per group and zone. Every
 call is logged under their account. [Connect with OAuth](connect-oauth.md) and
 [connect with a password](connect-password.md) show both sides.
 
@@ -87,8 +86,8 @@ call is logged under their account. [Connect with OAuth](connect-oauth.md) and
 ## Service-account permissions
 
 Each zone's workers run as their own cloud identity: a GCP service account with Workload Identity, an AWS IAM
-role with IRSA, or an Azure user-assigned managed identity with workload identity (0.7.5). It starts with the least it needs: read the group's prefix of the bucket and the group's secrets.
-Everything more is requested and approved.
+role with IRSA, or an Azure user-assigned managed identity with workload identity. It starts with the least it
+needs: read the group's prefix of the bucket and the group's secrets. Everything more is requested and approved.
 
 1. **A super admin sets the rules** on the Config page: `deny kms.*` style rules that gate what anyone may
    request. Deny wins; when allow rules exist a permission must match one. A group admin can add stricter
@@ -116,8 +115,8 @@ the whole log.
 
 **Logs** shows each worker's access log: one JSON line per MCP call with the time, address, method, tool name,
 status and the key id or `user:<id>`. Entries are newest first on the left and the selected one opens on the
-right. In the cloud it reads Cloud Logging, CloudWatch, or on AKS the pod logs through the Kubernetes API. The verbose flag on an environment logs full request and
-response bodies; turn it on only while debugging.
+right. In the cloud it reads Cloud Logging, CloudWatch, or on AKS the pod logs through the Kubernetes API. The
+verbose flag on an environment logs full request and response bodies; turn it on only while debugging.
 
 <figure markdown>
 ![The logs page](../img/logs.png){ .ramen-shot }

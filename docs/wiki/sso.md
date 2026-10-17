@@ -3,8 +3,8 @@
 The console speaks plain OpenID Connect. Since 0.7.5 it can also **read the person's groups from the provider**
 at sign-in (Microsoft Graph for Entra ID, Cloud Identity for Google Workspace), map them to a role per Ramen
 group, and keep the memberships an admin set by hand next to the ones the provider decides. Roles can be your own
-(0.7.5 [custom roles](users-access.md#custom-roles)), and a role can insist on the provider: people who hold it
-cannot sign in with a password.
+([custom roles](users-access.md#custom-roles)), and a role can insist on the provider: people who hold it cannot
+sign in with a password.
 
 !!! info "What has been run against real providers (0.7.5)"
     **Microsoft Entra ID**, on GKE, EKS and AKS, through a throwaway app registration and two test groups with the
@@ -131,7 +131,7 @@ The built-in roles cannot be made OAuth-only; make a custom one on the base you 
 | `502 could not read your groups from entra` | Graph refused the token: the app registration lacks `User.Read`, or admin consent is required in your tenant. Check the audit line's tags |
 | Sign-in succeeds but the person sees only their own account page | Their groups matched no rule (ids and display names both work with the lookup; check the spelling) |
 | A rule demoted everyone, including you | Start the console with `RAMEN_ADMIN_FORCE_PASSWORD=1`, sign in as the bootstrap super admin, fix the rules |
-| An existing password account signs in through the provider | It is the same account, matched on the email the provider returns (0.7.5: verified or not); the mapping decides the provider-side memberships, the admin entries stay |
+| An existing password account signs in through the provider | It is the same account, matched on the email the provider returns (verified or not); the mapping decides the provider-side memberships, the admin entries stay |
 | A person with a custom OAuth-only role cannot sign in with a password | By design; they must use the provider button |
 | The provider does not serve the standard discovery path | Point `RAMEN_OAUTH_<NAME>_ISSUER` at the issuer whose `.well-known/openid-configuration` resolves |
 
@@ -149,5 +149,6 @@ the plain `303`.
 
 Admins find the exact commands for their install on the group page: **How MCP users sign in** has one section per
 provider with the rules that reach that group, its member count, and copy-ready commands for Claude Code (over
-HTTP, or through the bridge) and for Cursor and VS Code through the bridge ([Connect with OAuth](connect-oauth.md)). The token the client receives carries the person's role in the group, custom roles included, so the
-worker can apply [per-tool access](groups-zones.md) to it. [Connect with OAuth](connect-oauth.md) has the client side.
+HTTP, or through the bridge) and for Cursor and VS Code through the bridge. The token the client receives carries
+the person's role in the group, custom roles included, so the worker can apply [per-tool access](groups-zones.md)
+to it. [Connect with OAuth](connect-oauth.md) has the client side.

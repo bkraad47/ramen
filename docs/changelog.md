@@ -9,7 +9,7 @@ they are marked.
 
 | Version | Date | What changed |
 |---|---|---|
-| **0.8.0** | 2026-10-17 | Packaging and docs: the compose stack pulls the published Docker Hub images, the worker, Glama and MCPB images pin bridge 0.3.0 (now on PyPI), the deploy guides show the public images, each claim lives on one page, and no password or key is static anywhere (generated `.env`, kind, CI; `check_secrets.py` in CI). |
+| **0.8.0** | 2026-10-17 | A security and concurrency review fixed with tests (a crafted OAuth loopback redirect, `repo_url` code execution, a repo-shipped deploy file, an autoscale race, concurrent deploys, a spoofable audit ip); verified again live on GKE, EKS and AKS; the compose stack pulls the published images; bridge 0.3.0 pinned; no static secrets anywhere; docs say each thing once. |
 | 0.7.5 | 2026-10-10 | Guardrails in the worker (NeMo Guardrails or your own policy), groups from Entra ID and Google Workspace at sign-in, custom and OAuth-only roles, identity providers on the Config page, Azure (AKS) as the third cloud, autoscaling by Ramen between 1 and an admin's max, salted hashes at rest, bridge 0.3.0. |
 | 0.7.2 | 2026-10-07 | Per-tool access (who may see and who may call each tool), clients told about a rollout, a drift signal. |
 | 0.7.1 | 2026-10-05 | Golden cases skip blocked tools; CI fixes. |

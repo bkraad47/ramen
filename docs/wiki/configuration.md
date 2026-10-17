@@ -40,14 +40,14 @@ autoscale:                                   # 0.7.5, see Autoscaling
 ```
 
 What the Config page edits is stored in the console store and layered over the file: the public address (base
-URI), authentication toggles, identity providers and their group source (0.7.5), custom roles (0.7.5), OAuth role
-rules, OAuth clients, SMTP and the warning-email list, the GitHub App, the
-auto-rebalance scheduler, the service-account rules and the permission catalogue.
+URI), authentication toggles, identity providers and their group source, custom roles, OAuth role rules, OAuth
+clients, SMTP and the warning-email list, the GitHub App, the auto-rebalance scheduler, the service-account rules
+and the permission catalogue.
 
 ## The public address (base URI)
 
-The **Public address (base URI)** card near the top of the Config page holds the address people and MCP clients reach the
-console at: `https://ops.example.com` or, behind a proxy that serves it under a path, `https://ops.example.com/ramen`.
+The **Public address (base URI)** card near the top of the Config page holds the address people and MCP clients
+reach the console at: `https://ops.example.com` or, behind a proxy that serves it under a path, `https://ops.example.com/ramen`.
 A super admin sets it there or with `PUT /api/v1/config/base-uri {"base_uri": "..."}` (`GET` reads it). Every
 change is audited as `config.base_uri`.
 
@@ -126,21 +126,21 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 |---|---|---|
 | `RAMEN_PUBLIC_URL` | console, handed to workers | The address people and clients use, and the OAuth issuer the workers trust. The base URI on the Config page wins over it. Without either, OAuth is off for the workers. |
 | `RAMEN_STORE`, `RAMEN_POSTGRES_DSN` | console | The state store. |
-| `RAMEN_CLOUD` | console | The cloud adapter: `local`, `gcp`, `aws` or `azure` (0.7.5). Also decides which cloud's zones and regions the Zones and Config pages offer. |
+| `RAMEN_CLOUD` | console | The cloud adapter: `local`, `gcp`, `aws` or `azure`. Also decides which cloud's zones and regions the Zones and Config pages offer. |
 | `RAMEN_SECRETS_BACKEND` | console | Where secret values live: `store`, `gcp`, `aws` or `azure` (Key Vault, `RAMEN_AZURE_KEY_VAULT`). |
 | `RAMEN_AZURE_SUBSCRIPTION_ID`, `RAMEN_AZURE_RESOURCE_GROUP`, `RAMEN_AZURE_LOCATION` (default `eastus`), `RAMEN_AZURE_STORAGE_ACCOUNT`, `RAMEN_AZURE_CONTAINER` (default `groups`), `RAMEN_AZURE_TABLE` (default `ramen`), `RAMEN_AZURE_KEY_VAULT`, `RAMEN_AZURE_OIDC_ISSUER` | console, Azure | The install the Azure adapter manages, the AKS OIDC issuer the zone identities trust. Set by the chart from `terraform output helm_set`. |
 | `RAMEN_AZURE_ZONAL` | console, Azure | `1` (default) pins a zone's workers to its availability zone; `0` when the AKS pool has no zones (`node_zones = []`), so a Ramen zone is a logical placement. |
 | `RAMEN_AZURE_TLS` | chart, Azure | The edge certificate: Let's Encrypt (default) or `selfsigned`. |
 | `RAMEN_AUTOSCALE_TARGET_RPS`, `RAMEN_AUTOSCALE_UP_COOLDOWN_SECS`, `RAMEN_AUTOSCALE_COOLDOWN_SECS` | console | [Autoscaling](autoscaling.md): calls per second per worker that scale up (default 50), seconds between steps up (30) and down (120). The bounds (1 to a max) are per group × zone on the group page. |
 | `RAMEN_FERNET_KEY` | console | Encrypts password hashes, secret values, key hashes and tokens in the store. Generate once, keep forever. |
-| `RAMEN_OAUTH_ACCESS_TTL`, `RAMEN_OAUTH_REFRESH_TTL` | console | Lifetimes of the MCP access token (seconds, default 3600) and refresh token (default 30 days) the console issues (0.7.0). |
+| `RAMEN_OAUTH_ACCESS_TTL`, `RAMEN_OAUTH_REFRESH_TTL` | console | Lifetimes of the MCP access token (seconds, default 3600) and refresh token (default 30 days) the console issues. |
 | `RAMEN_ADMIN_EMAIL`, `RAMEN_ADMIN_PASSWORD` | console | The bootstrap super admin, re-applied on every start. `RAMEN_ADMIN_FORCE_PASSWORD=1` is the break-glass. |
 | `RAMEN_COOKIE_SECURE` | console | `1` on a public console: secure cookies and HSTS. Plain http gets a 301 for GET and a 403 otherwise when a proxy terminated it; the cloud edges have no port 80 at all. |
 | `RAMEN_LOGIN_RATE_LIMIT` | console | Failed sign-ins per address per minute, default 20. |
 | `RAMEN_OAUTH_<NAME>_*` | console | An OIDC provider: issuer, client id and secret, scopes. Since 0.7.5 a super admin saves providers on the Config page's *Identity providers* card instead (the page wins over the environment per name); `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` is ignored: the provider's email is the account, verified flag or not. |
-| `RAMEN_OAUTH_<NAME>_GROUPS` | console | `claim` (default) or `lookup`: read the person's groups from Microsoft Graph (`entra`) or Cloud Identity (`google`) at sign-in instead of the token (0.7.5). `RAMEN_OAUTH_<NAME>_GROUPS_URL` overrides the API base including its version (`https://graph.microsoft.com/v1.0`, `https://cloudidentity.googleapis.com/v1`), for tests. The Config page's *Group source* wins. |
-| `RAMEN_TOOL_ACCESS`, `RAMEN_ROLES` | worker | Written by the console on deploy: per-tool list/call kinds (0.7.2) and the custom roles with their base (0.7.5), so the node can match a token's role against both. The roles themselves are kept in the store and edited on the Config page's *Roles* card. |
-| `RAMEN_SMTP_*` | console | Mail: invitations, password resets, magic links and warning digests, as HTML with a plain-text part (0.7.5). The Config page's SMTP card overrides them field by field. |
+| `RAMEN_OAUTH_<NAME>_GROUPS` | console | `claim` (default) or `lookup`: read the person's groups from Microsoft Graph (`entra`) or Cloud Identity (`google`) at sign-in instead of the token. `RAMEN_OAUTH_<NAME>_GROUPS_URL` overrides the API base including its version (`https://graph.microsoft.com/v1.0`, `https://cloudidentity.googleapis.com/v1`), for tests. The Config page's *Group source* wins. |
+| `RAMEN_TOOL_ACCESS`, `RAMEN_ROLES` | worker | Written by the console on deploy: per-tool list/call kinds and the custom roles with their base, so the node can match a token's role against both. The roles themselves are kept in the store and edited on the Config page's *Roles* card. |
+| `RAMEN_SMTP_*` | console | Mail: invitations, password resets, magic links and warning digests, as HTML with a plain-text part. The Config page's SMTP card overrides them field by field. |
 | `RAMEN_MCP_KEYS`, `RAMEN_ALLOWED_CIDRS`, `RAMEN_ADMIN_KEY`, `RAMEN_BLOCKED` | worker | Written by the console on deploy. Never set by hand in the cloud. |
 | `RAMEN_VERBOSE` | worker | `1` logs full request and response bodies. Toggle per environment on the group page. |
 | `RAMEN_SIDECAR_IDLE_SECS` | worker | Seconds of idleness before the Python runtime stops, default 300. |
@@ -189,13 +189,13 @@ the fix there is to deploy each environment again.
 ## Email
 
 SMTP on the Config page or `RAMEN_SMTP_*`. It carries invitations, password resets, magic-link sign-ins and a digest
-of warnings and errors to the notify list, batched every thirty seconds. Since 0.7.5 every mail is branded HTML (the
-logo inline, a button plus the address to copy, a signature) with the plain text kept; the digest is one row per alert
+of warnings and errors to the notify list, batched every thirty seconds. Every mail is branded HTML (the logo
+inline, a button plus the address to copy, a signature) with the plain text kept. The digest is one row per alert
 with a level badge, and its subject counts them ("2 warnings, 1 error on the Ramen console"). A zone pinned at its
 autoscaling max under load is one of those warnings.
 
 ## The local stack
 
 `deploy/local/.env` holds the compose stack's values: the admin account, the Fernet key, the local MCP and admin
-keys and the image version. `make env` copies the example. The compose console serves TLS on 8443 with a
+keys and the image version. `make env` (run by `make up`) writes it from the example with generated secrets and rotates a stale one; nothing in it is committed. The compose console serves TLS on 8443 with a
 self-signed certificate; the worker on 8080 is plaintext and open, and is for a machine you control only.

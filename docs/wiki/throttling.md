@@ -23,7 +23,8 @@ curl -s -H "X-Ramen-Api-Key: $RMN" -H 'Content-Type: application/json' -X PUT ht
   -d '{"redis_url":"redis://redis.ramen-system.svc.cluster.local:6379","ip_per_min":600,"token_per_min":120}'
 ```
 
-Changes reach the workers on the next deploy.
+The URL and both limits reach the workers in their deploy config, so a change takes effect on the next deploy;
+until then the workers count against the old limits.
 
 ## A Redis in the cluster
 
@@ -54,9 +55,6 @@ a password in the URL.
 With `token_per_min` at 3, a burst on one key starts answering `429` after two or three calls, because the
 deploy's own smoke test spends one of the window, and a call through another zone is a `429` as well. Both 0.6.0
 cloud runs showed that.
-
-The URL and both limits reach the workers in their deploy config, so any change takes effect on the next deploy;
-until then the workers keep counting against the old limits.
 
 Separate from these: the node bounds in-flight calls per pod with `RAMEN_MAX_INFLIGHT`, and the console limits
 failed sign-ins per address with `RAMEN_LOGIN_RATE_LIMIT`.

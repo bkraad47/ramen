@@ -6,10 +6,9 @@ The Model Context Protocol made it easy to give a model a tool. It said nothing 
 for forty teams. The traditional answer is one server process per team, a key pasted into a client config and an
 operator who learns who can reach what by reading config files. It works for one team and breaks at the second.
 
-Ramen's answer is a platform built on how organizations work. Tools are code in git. A group is a team that owns
-its repo, its secrets and its members. People hold a role per group. Clients sign in as themselves. A deploy is a
-canary, a smoke test and a rollout. The transport underneath is gRPC and JSON-RPC 2.0 in a Rust node, and none of
-it reaches your Python.
+Ramen's answer: tools are code in git. A group is a team that owns its repo, its secrets and its members. People
+hold a role per group. Clients sign in as themselves. A deploy is a canary, a smoke test and a rollout. The
+transport is Streamable HTTP, gRPC and JSON-RPC 2.0 in a Rust node, and none of it reaches your Python.
 
 ## The shape
 
@@ -42,7 +41,7 @@ allow-list, the in-flight limit, timeouts, health and the access log. It is a sm
 interpreter. The runtime owns what you write: `pip install`, validation, secret substitution and the call. The two
 talk over JSON-RPC on stdin and stdout, so there is no extra port to secure. The runtime is started when needed and
 stopped after an idle timeout. A crash in tool code costs one restart, not the pod that holds the keys.
-Guardrails run in the runtime too (0.7.5): a rail sees exactly the arguments the tool is about to get and the result
+Guardrails run in the runtime too: a rail sees exactly the arguments the tool is about to get and the result
 it is about to return, and secret values never reach it.
 
 ## The features
@@ -60,7 +59,7 @@ it is about to return, and secret values never reach it.
 | **Identity federation** | Microsoft Entra ID, Google Workspace or any OIDC provider, set up on the Config page; groups read from Graph or Cloud Identity at sign-in, mapped to roles per group, next to what admins set by hand. | [Entra ID and Workspace](wiki/sso.md) |
 | **MCP keys and API keys** | `rmk_` keys open a group's workers. `rmn_` keys drive the console API. Each side refuses the other. | [API keys and the API](wiki/api-keys.md) |
 | **Secrets** | Named values per group, environment and zone. Never shown back. Reach code as `{{$group.NAME}}` or through `mcp/env.yaml`. | [Secrets](wiki/secrets.md) |
-| **Fernet at rest** | `RAMEN_FERNET_KEY` encrypts password hashes, secret values, key hashes and tokens in the store; key and token hashes are salted (0.7.5). | [Configuration](wiki/configuration.md) |
+| **Fernet at rest** | `RAMEN_FERNET_KEY` encrypts password hashes, secret values, key hashes and tokens in the store; key and token hashes are salted. | [Configuration](wiki/configuration.md) |
 | **Cloud identity per zone** | Each zone's workers run as their own service account or IAM role, with permissions a second admin approves. | [Users and access](wiki/users-access.md#service-account-permissions) |
 | **IP rules** | Per zone at the node; at the edge one Cloud Armor policy per group on GCP, one WAF IP set per group on AWS, an Envoy `SecurityPolicy` per zone on AKS. | [Groups, zones and regions](wiki/groups-zones.md#ip-rules) |
 | **Throttling** | Per-IP and per-token limits per minute, shared across zones through Redis. | [Throttling](wiki/throttling.md) |
@@ -72,8 +71,6 @@ it is about to return, and secret values never reach it.
 
 ## What is verified
 
-One sentence, because the record lives elsewhere: CI runs the whole guard table on both transports on Linux and
-Windows, and 0.7.5 ran the same 33 checks, Entra ID sign-in and autoscaling load tests live on GKE, EKS and AKS, each
-torn down afterwards. The record, including what is tested only:
-[Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not); the boundaries:
+0.7.5 passed the same 33 checks live on GKE, EKS and AKS; what each run covered, and what is tested only:
+[Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). The boundaries:
 [Threat model](threat-model.md).

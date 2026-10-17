@@ -1,8 +1,7 @@
 # Deploy on AWS
 
-EKS, DynamoDB, S3, Secrets Manager, ECR and an application load balancer with gRPC target groups. Every release
-since 0.5.6 has applied this on a real account and torn it down; the 0.7.5 run added the 33-check verification, Entra
-ID sign-in with group lookup and the autoscaling load tests. Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
+EKS, DynamoDB, S3, Secrets Manager, ECR and an application load balancer with gRPC target groups. Each release's cloud
+pass applies this on a real account and tears it down ([the record](transport.md#what-is-verified-and-what-is-not)). Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
 Fluent Bit at volume. If a step breaks on your account, open an issue with the step and the error.
 
 Cost while it runs: the EKS control plane (about $0.10 an hour while its Kubernetes version is in standard

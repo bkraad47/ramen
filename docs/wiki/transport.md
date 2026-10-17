@@ -4,14 +4,13 @@ Since 0.5.0 a worker speaks two transports on one port, through one set of guard
 
 - **Streamable HTTP** — the front door. `POST /mcp` carries one JSON-RPC 2.0 message (MCP spec 2025-06-18); the
   credential is `Authorization: Bearer`, an `rmk_` key or a console-issued OAuth token. A URL and a header, so
-  phones, browsers and hosted agent platforms are clients without installing anything.
+  phones, browsers and hosted agent platforms connect without installing anything.
 - **gRPC** — `ramen.v1.Mcp/Call`, one message as `bytes body` ([§11](../CONTRACTS.md),
   [`mcp.proto`](https://github.com/bkraad47/ramen/blob/main/proto/ramen/v1/mcp.proto)). Kept for teams that want
   it internally, and what the stdio bridge speaks.
 
-Nothing about MCP changed: the messages your client and your tools see are the standard ones. What matters for
-security is that the HTTP handler does not have its own checks: it turns the request headers into the same metadata
-map and calls the same guard and dispatch functions the gRPC service calls
+The messages your client and your tools see are standard MCP. The HTTP handler has no checks of its own: it turns
+the request headers into the same metadata map and calls the same guard and dispatch functions as the gRPC service
 ([`node-rs/src/http.rs`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/http.rs) →
 [`grpc.rs::guard`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/grpc.rs)). The conformance suite runs the
 whole guard table on both transports so a check that drifts fails there first.
@@ -24,27 +23,25 @@ whole guard table on both transports so a check that drifts fails there first.
 
 A worker runs two processes with one job each.
 
-- **`ramen-node` (Rust, [tonic](https://github.com/hyperium/tonic))** owns everything that must not be slowed down
-  or broken by user code: the gRPC surface, key checking, source-range checking, the blocked-name filter,
-  concurrency bounding, deadlines, health and the access log. It is a small, statically linked binary with no
-  interpreter and no user code in its address space.
-- **`ramen_runtime` (Python 3.12)** owns everything users write: `pip install`, proto validation, argument
-  validation, secret substitution and the call itself.
+- **`ramen-node` (Rust, [tonic](https://github.com/hyperium/tonic))**: the transport, key and source-range checks,
+  the blocked-name filter, the concurrency bound, deadlines, health and the access log. A small, statically linked
+  binary with no interpreter and no user code in its address space.
+- **`ramen_runtime` (Python 3.12)**: `pip install`, proto and argument validation, secret substitution and the call.
 
-They talk over newline-delimited JSON-RPC on stdin/stdout ([contract §2](../CONTRACTS.md)) — no socket, no port,
-nothing extra to secure. The runtime is spawned when needed and killed after `RAMEN_SIDECAR_IDLE_SECS` of idleness,
-so a crash, a hang or a leak in tool code costs one respawn rather than the pod that is holding the keys.
+They talk newline-delimited JSON-RPC on stdin/stdout ([contract §2](../CONTRACTS.md)): no socket, no port. The
+runtime is spawned when needed and killed after `RAMEN_SIDECAR_IDLE_SECS` idle, so a crash, hang or leak in tool code
+costs one respawn, not the pod that holds the keys.
 
 ## Hop by hop
 
 | Hop | What it is | What protects it |
 |---|---|---|
 | Client → edge (HTTP) | `POST https://<edge>/mcp` | TLS at the load balancer; the credential in `Authorization: Bearer`; a browser `Origin` must be on the zone's allowlist (see [Origin](#origin)); a session id is signed and bound to the credential (see [Sessions](#sessions)). The local compose worker is plain `http://` on the laptop only |
-| Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. The key comes from `RAMEN_MCP_KEY` |
+| Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; **plaintext h2c unless you ask for TLS** — `--tls`, or `--ca <pem>` to pin the server certificate. the credential is a group key (`--key`, `RAMEN_BRIDGE_KEY` or `RAMEN_MCP_KEY`) or the person's own sign-in (`--oauth`) |
 | Edge → node | GKE Gateway, an AWS ALB, or Envoy Gateway on AKS → the zone's pods | TLS terminates at the load balancer; the LB → node hop is h2c unless the node runs its own TLS (`RAMEN_TLS_CERT` + `RAMEN_TLS_KEY`). Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group, applied on a real account since 0.5.6; on AKS an Envoy `SecurityPolicy` per zone route (0.7.5) |
-| Edge → node, without a key | `grpc.health.v1.Health`, and gRPC reflection where it is enabled | neither is key-checked or source-range-checked, so health answers anyone who reaches the edge — by design. Reflection would let them enumerate the services too, so it is switched off on deployed workers (`RAMEN_REFLECTION=0` in the chart and both renderers) and answers `UNIMPLEMENTED` there; it stays on locally |
-| Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` (on by default): ingress to the node port only from the console's namespace and the load-balancer / health-check ranges. This — with the hardened container context — is what actually bounds direct access, and what makes the unauthenticated surface above tolerable |
-| Node (every `Mcp/Call`) | the guard in front of your code | bearer key compared byte-for-byte in constant time with no early exit between keys (the length check in front of that compare is *not* constant time, so a key's length can leak); source range checked against `RAMEN_ALLOWED_CIDRS`; blocked names filtered; 4 MiB message cap; `RAMEN_MAX_INFLIGHT` cap |
+| Edge → node, without a key | `grpc.health.v1.Health`, the OAuth resource metadata, and gRPC reflection where it is enabled | not key-checked or source-range-checked, by design; reflection is off on deployed workers ([the unauthenticated surface](#the-unauthenticated-surface)) |
+| Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` and the hardened container context ([what bounds direct access](#what-bounds-direct-access-to-a-pod)) |
+| Node (every `Mcp/Call`) | the guard in front of your code | the bearer key in constant time ([the bearer key](#the-bearer-key)); source range against `RAMEN_ALLOWED_CIDRS`; blocked names filtered; 4 MiB message cap; `RAMEN_MAX_INFLIGHT` cap |
 | Node → runtime | JSON-RPC on stdio inside the pod | no network surface; the runtime is a child process of the node |
 | Runtime → bucket | read of the group's prefix, by content hash | the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets. The AWS equivalent is an IAM role with IRSA, applied on a real account since 0.5.6; on AKS a user-assigned managed identity with workload identity (0.7.5), which can read the whole `groups` container (see below) |
 | Console → node | `Admin/Reload`, `Admin/Metrics`, `Health/Check` on the pod IP | cluster-internal, and plaintext h2c unless the console itself has `RAMEN_WORKER_TLS=1`; `Admin/*` additionally needs `x-ramen-admin-key` and `RAMEN_ADMIN_CIDRS`, and is not routed through the load balancer at all |
@@ -53,36 +50,33 @@ so a crash, a hang or a leak in tool code costs one respawn rather than the pod 
 `Mcp/Call` requires metadata `authorization: Bearer <key>`. The node compares the presented key against every
 configured key in `RAMEN_MCP_KEYS` with a constant-time byte comparison, and folds over the whole key set without
 an early exit on the first mismatch
-([`node-rs/src/auth.rs`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/auth.rs)). One caveat, so it is
-not read as more than it is: the byte compare is guarded by a plain length test, and that test is not constant
-time — the *length* of a configured key can still be inferred from timing, though its bytes cannot. A miss is gRPC
+([`node-rs/src/auth.rs`](https://github.com/bkraad47/ramen/blob/main/node-rs/src/auth.rs)). One caveat: the byte
+compare is guarded by a plain length test, which is not constant time, so the *length* of a configured key can be
+inferred from timing, though its bytes cannot. A miss is gRPC
 `UNAUTHENTICATED`, and **an empty key set denies everyone** rather than letting everyone in. Error details never
 echo key material.
 
 Keys are generated per group in the console and written into the zone's config on deploy. Rotation is one
-action — the deploy rewrites the zone's Secret and rolls both Deployments for you — but it is not *instant*
-revocation: the old pods keep accepting the old key set until they finish draining, and the deploy job waits up
+action (the deploy rewrites the zone's Secret and rolls both Deployments), but it is not *instant* revocation: the old pods keep accepting the old key set until they finish draining, and the deploy job waits up
 to 180 s for that. Assume a revoked key still works for a few minutes.
 
-One thing the access log does give away: every call is logged with a `key_id`, which is a short unsalted hash of
-the key that was presented. It is not key material, and the log never contains the key itself — but anyone who
-can read worker logs can hash a candidate key and see whether it appears. Worker logs are sensitive.
+The access log logs every call with a `key_id`, a short unsalted hash of the presented key. It is not key
+material, but anyone who can read worker logs can hash a candidate key and see whether it appears. Worker logs are
+sensitive.
 
 ### The source-range allowlist
 `RAMEN_ALLOWED_CIDRS` is checked against the caller's address; outside it the call is `PERMISSION_DENIED`, and
 IPv4-mapped IPv6 addresses are normalised before the match.
 
-Which address counts as the caller's is the whole question, because behind a load balancer the peer *is* the
-load balancer. `RAMEN_TRUST_PROXY_HOPS = n` answers it: take the **n-th `x-forwarded-for` entry counted from the
-right**. Proxies *append* to that header, so its right-hand end is the part they wrote and everything left of it
-is whatever the caller chose to send. Skipping the `n - 1` right-hand entries your own proxies added lands
-exactly on the address the outermost trusted proxy observed — an address a caller cannot pick. Set the count
-correctly and the node's allowlist is a genuine check on the client address.
+Behind a load balancer the peer *is* the load balancer, so the question is which address counts as the caller's.
+`RAMEN_TRUST_PROXY_HOPS = n` answers it: take the **n-th `x-forwarded-for` entry counted from the right**. Proxies
+*append* to that header, so its right-hand end is what they wrote and everything to the left is whatever the caller
+sent. Skipping the `n - 1` right-hand entries your own proxies added lands on the address the outermost trusted
+proxy observed, which a caller cannot pick.
 
-Everything else falls back to the **peer address**: trust off (`n = 0`), no header at all, fewer than `n`
-entries, or an entry at that position that will not parse. That direction matters. Behind a load balancer the
-peer is the proxy, so a client-range allowlist stops matching and starts denying — a wrong hop count costs you
-availability, not confidentiality. It fails closed.
+Everything else falls back to the **peer address**: trust off (`n = 0`), no header, fewer than `n` entries, or an
+entry at that position that will not parse. Behind a load balancer the peer is the proxy, so a client-range
+allowlist then denies: a wrong hop count costs availability, not confidentiality. It fails closed.
 
 | Where | `RAMEN_TRUST_PROXY_HOPS` | why |
 |---|---|---|
@@ -94,23 +88,23 @@ The worker chart and both console renderers set it per provider; you can overrid
 legacy `RAMEN_TRUST_PROXY=1` still works and means one hop, and an explicit `RAMEN_TRUST_PROXY_HOPS` wins over
 it in both directions, so `HOPS=0` is an explicit off switch.
 
-What this list is *not* is the thing that stops something reaching a worker directly — that is the
-[`NetworkPolicy`](#what-bounds-direct-access-to-a-pod). The allowlist decides which clients a reachable worker
-will answer.
+The allowlist decides which clients a reachable worker will answer; what stops something reaching a worker
+directly is the [`NetworkPolicy`](#what-bounds-direct-access-to-a-pod).
 
 **Unset, `RAMEN_ALLOWED_CIDRS` defaults to `0.0.0.0/0` and `::/0` — every source is allowed**, and the bearer
 key is the only gate. Setting per-zone IP rules in the console is what populates it on deploy.
 
-`RAMEN_ADMIN_CIDRS` defaults to any in the same way and the console never writes it, so `Admin/*` stays reachable and `x-ramen-admin-key` is the gate
-that always applies there. That does **not** make an IP lock free of consequences: a deploy also smoke-tests
-`tools/list` as an ordinary `Mcp/Call` from the console, and that call *is* subject to `RAMEN_ALLOWED_CIDRS`. A
-lock must therefore include the console's own source range as the worker sees it, or every later deploy fails at
-the smoke step with `PERMISSION_DENIED` — which is why the cloud IP-rules test skips itself unless it is given
-that range to add to the lock.
+`RAMEN_ADMIN_CIDRS` defaults to any in the same way and the console never writes it, so `x-ramen-admin-key` is the
+gate that always applies on `Admin/*`.
+
+A deploy smoke-tests `tools/list` as an ordinary `Mcp/Call` from the console, and that call *is* subject to
+`RAMEN_ALLOWED_CIDRS`. An IP lock must therefore include the console's own source range as the worker sees it, or
+every later deploy fails at the smoke step with `PERMISSION_DENIED`. That is why the cloud IP-rules test skips itself
+unless it is given that range to add to the lock.
 
 ### TLS
-TLS terminates at the load balancer, which is the hop that crosses the internet. Everything behind it is
-cleartext HTTP/2 by default — that is what GKE's `appProtocol: kubernetes.io/h2c` means, and it is the path that
+TLS terminates at the load balancer, the hop that crosses the internet. Everything behind it is cleartext HTTP/2
+by default; that is what GKE's `appProtocol: kubernetes.io/h2c` means, and it is the path that
 was verified on a live GKE Gateway in 0.3.2. If you want the last hop encrypted too, give the node
 `RAMEN_TLS_CERT` and `RAMEN_TLS_KEY` and switch the Service to `HTTP2`; that mode has local tests but has not
 been exercised in a cloud deployment. Since 0.5.1 the node terminates TLS itself and offers both `h2` and
@@ -122,13 +116,12 @@ is *also* given `RAMEN_WORKER_TLS=1` (plus `RAMEN_WORKER_CA`, or `RAMEN_WORKER_C
 client certificate). Give the node TLS without the console side and the console keeps speaking cleartext to a TLS
 port, so every `Admin/Reload` — and therefore every deploy — fails.
 
-Clients choose their own side: `ramen-mcp-bridge` is plaintext unless you pass `--tls` or `--ca`. Two details
-that catch people out:
+`ramen-mcp-bridge` is plaintext unless you pass `--tls` or `--ca`. Two details catch people out:
 
 - **`--insecure` overrides `--tls` and `--ca`** instead of conflicting with them. A leftover `--insecure` in an
   `mcpServers` entry downgrades the connection silently, with no warning and no error.
-- **`--ca <pem>` replaces the trust store**, it does not pin a certificate in the strict sense — the connection
-  still verifies the hostname, it just anchors trust in that PEM. GKE (Google-managed, since 0.5.5) and AKS
+- **`--ca <pem>` replaces the trust store**; it does not pin a certificate in the strict sense. The connection
+  still verifies the hostname and anchors trust in that PEM. GKE (Google-managed, since 0.5.5) and AKS
   (Let's Encrypt, 0.7.5) serve a publicly trusted certificate, so `--tls` alone works there; the AWS guide's
   self-signed certificate needs `--ca`, or `--tls` fails with `CERTIFICATE_VERIFY_FAILED` — the mistake that cost a
   run in the 0.3.2 cloud verification. From bridge 0.2.2 the same `--ca` also verifies the console during `--oauth`
@@ -150,16 +143,16 @@ replayed with a different key. The console writes the secret into every zone's d
 from its own deploy file. Without it the node generates one per process and says so in its log, and sessions then
 die with the pod.
 
-
 Since 0.7.2 a session id also carries the first twelve hex characters of the manifest hash it was opened on. After a
 deploy changes the tool set, the worker's next answer to that session is an event stream (when the client accepts
 `text/event-stream`, as the official SDKs and Claude Code do) that begins with `notifications/tools/list_changed`,
 once per session and per rollout, so the client re-lists. The worker keeps serving the current version; nothing is
 pinned to the old one, and behind a load balancer each pod announces once. Session ids from 0.7.1 are still accepted;
 during the upgrade to 0.7.2 an old pod answers a new id with `404` and the client re-initializes.
+
 ### Origin
 A request that carries a browser `Origin` header is refused with `403` unless the origin is on
-`RAMEN_ALLOWED_ORIGINS` — and that list is **empty by default**, so a page on another site cannot use a victim's
+`RAMEN_ALLOWED_ORIGINS`. That list is **empty by default**, so a page on another site cannot use a victim's
 browser to reach a worker through DNS rebinding. Non-browser clients send no `Origin` and are unaffected. A group may
 open its own web origins from its deploy file; `*` is for a laptop.
 
@@ -182,32 +175,32 @@ that load balancers and Kubernetes can probe it; `GET /.well-known/oauth-protect
 metadata by design (RFC 9728) and names only the console's URL and the resource identifier; and gRPC **server
 reflection** (`v1` and `v1alpha`), so that `grpcurl` works without a local copy of the proto.
 
-Reflection is convenient on a laptop and a disclosure at an edge: anyone who could reach it could list the
-services and print their definitions, `ramen.v1.Admin` included, from a source range the MCP allowlist denies.
-So it is gated by `RAMEN_REFLECTION`, which is **on by default and switched off on deployed workers** — the
-worker chart and both console renderers set `RAMEN_REFLECTION=0`. With it off the reflection services are not
-registered at all and answer `UNIMPLEMENTED`, so what the load balancer will list for an anonymous caller is
-nothing. Locally and in compose, where the port is not exposed to anyone else, reflection stays on.
+Reflection is convenient on a laptop and a disclosure at an edge: anyone who reached it could list the services and
+print their definitions, `ramen.v1.Admin` included, from a source range the MCP allowlist denies. So
+`RAMEN_REFLECTION` is **on by default and switched off on deployed workers**: the worker chart and both console
+renderers set `RAMEN_REFLECTION=0`, the reflection services are not registered and answer `UNIMPLEMENTED`, and an
+anonymous caller at the load balancer can list nothing. Locally and in compose, where the port is not exposed to
+anyone else, reflection stays on.
 
-Health remains unauthenticated everywhere by design. It reports readiness and nothing more.
+Health stays unauthenticated everywhere, by design. It reports readiness and nothing more: `SERVING` only after the
+runtime has loaded the group's code.
 
 ### What bounds direct access to a pod
 The worker `NetworkPolicy` (enabled by default) admits ingress to the node port only from the console's namespace
 and from the load balancer's front-end and health-check ranges — the VPC CIDR on AWS. Together with the hardened
 container context (non-root, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault`
-seccomp) it is the control that answers "what stops another pod, or the internet, from reaching the node
-directly", and it is what makes the unauthenticated health and reflection surface tolerable. It is also what
+seccomp) it is what stops another pod, or the internet, reaching the node directly, and what makes the
+unauthenticated surface tolerable. It is also what
 closed the direct-access item of the 0.3.0 security audit.
 
 ### The deploy file is a configuration channel
 The node's configuration comes from three places, in order: a `RAMEN_CONFIG` yaml, then the process environment,
 then the deploy file the console writes into the group's bucket (`.ramen/env-<zone>`), re-read on every
-`Admin/Reload`. That last source is a channel, not just data, and it is worth knowing both halves of what it can
-do. It **can** set `RAMEN_MCP_KEYS` and `RAMEN_ALLOWED_CIDRS` — so write access to a group's bucket prefix is the
+`Admin/Reload`. That last source is a channel, not just data. It **can** set `RAMEN_MCP_KEYS` and `RAMEN_ALLOWED_CIDRS` — so write access to a group's bucket prefix is the
 ability to add an MCP key and to widen that zone's address allowlist — along with the block list, the in-flight
 and timeout limits, the idle timer and the log file. It deliberately **cannot** set the bucket, the port, the
-Python interpreter, the group or zone identity, the admin key, or the proxy-trust setting. That exclusion list is
-a real control: the same write access cannot repoint a worker at another group's code, take over its admin
+Python interpreter, the group or zone identity, the admin key, or the proxy-trust setting, so the same write access
+cannot repoint a worker at another group's code, take over its admin
 surface, or change how it decides a caller's address.
 
 ### Per-zone cloud identity
@@ -219,7 +212,7 @@ account since 0.5.6. On Azure (0.7.5) it is a user-assigned managed identity wit
 Key Vault role on each of the group's secrets; Azure cannot scope a blob role to a path, so that identity may read the
 whole `groups` container, and the per-group boundary for code is the console's sync.
 
-The separation is about *contents*, and one edge is worth naming: the IAM condition that scopes the storage role
+The separation is about *contents*. One edge: the IAM condition that scopes the storage role
 matches the group's object prefix **or the bucket resource itself**, because that is what a bucket listing is
 checked against. A group's worker identity can therefore enumerate object names across the shared groups bucket,
 including other groups' paths. It cannot read those objects — only see that they exist.
@@ -228,17 +221,15 @@ including other groups' paths. It cannot read those objects — only see that th
 gRPC status codes describe the edge, JSON-RPC errors describe your code. A bad key is `UNAUTHENTICATED`, a blocked
 source range is `PERMISSION_DENIED`, an oversized message is `OUT_OF_RANGE`, too many in-flight calls is
 `RESOURCE_EXHAUSTED`; a blocked or unknown tool is JSON-RPC `-32601` and an exception in your tool is
-`isError: true`. A client can always tell "the edge rejected me" from "the tool said no". One caveat on that
-in-flight cap: the semaphore is sized when the pod starts and an `Admin/Reload` does not resize it, so although
-a deploy is allowed to set `RAMEN_MAX_INFLIGHT`, the new value only takes effect the next time the pod
-restarts. `grpc.health.v1.Health`
-is unauthenticated by design, so load balancers and Kubernetes can probe it, and it reports `SERVING` only after
-the runtime has actually loaded the group's code.
+`isError: true`. A client can always tell "the edge rejected me" from "the tool said no".
+
+The in-flight semaphore is sized when the pod starts and `Admin/Reload` does not resize it: a deploy may set
+`RAMEN_MAX_INFLIGHT`, but the new value takes effect only when the pod restarts.
 
 ## What is verified, and what is not
 
-This section is the single record. The home page, [How it works](../how-it-works.md) and the
-[threat model](../threat-model.md) each carry one sentence and point here.
+This section is the single record; [How it works](../how-it-works.md), the [threat model](../threat-model.md) and
+the home page point here.
 
 - **Verified live in 0.7.5 on GKE, EKS and AKS** (each torn down afterwards): the 33-check run on each — a canary
   deploy of the demo repo with its NeMo rails and golden cases, custom roles and per-tool access by name and by base,
@@ -259,7 +250,6 @@ This section is the single record. The home page, [How it works](../how-it-works
   signing a person in with `--oauth`, and dropping a zone taking its namespace and its cloud identity with it.
   GCP ran on Firestore and then again on in-cluster Postgres; AWS ran on DynamoDB with Secrets Manager, and needed
   `RAMEN_PUBLIC_URL` set before its workers would accept console-minted tokens. Both were torn down the same day.
-
 - **Verified live in 0.5.1 on one GKE Autopilot cluster through the Gateway load balancer**: `POST /mcp` with an
   `rmk_` key routed by `ramen-group`/`ramen-zone` to the zone's pods, the 401/403 answers and the session id
   through the balancer, the OAuth flow from the console's consent page to a `tools/call` with the token, refresh
@@ -316,7 +306,7 @@ Two ways in, and both reach the same pods through the same guards:
 | A person's sign-in (OAuth) | Claude Code (`oauth.clientId` in its config) | every stdio client: `--oauth https://<edge> --client-id <id>` |
 | Use it for | Claude Code, Cursor, VS Code / GitHub Copilot, phones, hosted agents, `curl` | clients that only speak stdio, and a person's sign-in in Cursor, VS Code and Claude Desktop (no dynamic client registration in Ramen) |
 
-The group page's **How MCP users sign in** card (admins, 0.7.5) prints every form below filled in for the install.
+The group page's **How MCP users sign in** card (admins) prints every form below, filled in for the install.
 
 With a group key over HTTP:
 
@@ -347,17 +337,16 @@ claude mcp add ramen-demo-a -- uvx ramen-mcp-bridge@latest --target <edge>:443 -
 Every flag has an environment variable behind it (`RAMEN_BRIDGE_TARGET`, `RAMEN_BRIDGE_GROUP`, `RAMEN_BRIDGE_ZONE`,
 `RAMEN_BRIDGE_TLS`, `RAMEN_BRIDGE_CA`, `RAMEN_BRIDGE_OAUTH`, `RAMEN_BRIDGE_CLIENT_ID`; the key from `RAMEN_MCP_KEY` or
 `RAMEN_BRIDGE_KEY`). Never pass `--key` on a shared machine: a command line is visible to every other user through
-`ps`; use the environment variable there. Bridge 0.3.0 keeps a person's token in memory unless `--keychain` or
-`--token-file` says otherwise, forgets it after 30 idle minutes, and answers a call that needs a sign-in with error
-`-32001` carrying the link ([Connect with OAuth](connect-oauth.md#what-the-person-does)).
+`ps`; use the environment variable there. Where the bridge keeps a person's token, and how it asks for a sign-in:
+[Connect with OAuth](connect-oauth.md#what-the-person-does).
 
 The local compose stack is the other place to be careful. It publishes the worker on host port 8080 as plaintext
-h2c with an open address allowlist, a committed MCP key and a committed admin key, and no `RAMEN_ADMIN_CIDRS` —
-so on a developer laptop `Admin/Reload` is reachable by anything that can reach the port, using a key that is in
-this repository. That is fine for `make up` on a machine you control and is not a deployment posture. Locally the
+h2c with an open address allowlist, the MCP and admin keys `make env` generated into the git-ignored `.env`, and no
+`RAMEN_ADMIN_CIDRS` — so on a developer laptop `Admin/Reload` is reachable by anything on the machine that can read
+that file. That is fine for `make up` on a machine you control and is not a deployment posture. Locally the
 bridge needs `--target localhost:8080 --insecure`.
 
 Anything that speaks gRPC can skip the bridge and call `ramen.v1.Mcp/Call` directly. Locally, server reflection
 is on, so `grpcurl` works without a local copy of the proto; against a deployed worker it is
-[switched off](#the-unauthenticated-surface), so pass `-import-path proto -proto ramen/v1/mcp.proto` there. See the
+[switched off](#the-unauthenticated-surface), so pass `-import-path proto -proto ramen/v1/mcp.proto` there. See
 [Get started](../get-started.md) and [the MCP repo](mcp-repo.md).

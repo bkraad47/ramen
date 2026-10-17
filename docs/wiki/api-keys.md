@@ -11,8 +11,10 @@ Two kinds of key, and each side refuses the other:
 | Use for | agents, Claude Desktop, Cursor, `curl` | CI deploys, rotation, backups, scripts |
 
 Both are shown once and stored hashed: since 0.7.5 as `s1$<salt>$<HMAC-SHA256>` with a random salt per key (a key
-hashed by an older release still verifies and is rewritten salted on its next use). Revoke an MCP key on the group page and deploy to push the change; the
-old pods keep accepting it until they drain, so treat a leaked key as live for a few minutes.
+hashed by an older release still verifies and is rewritten salted on its next use).
+
+Revoke an MCP key on the group page and deploy to push the change. The old pods keep accepting it until they
+drain, so treat a leaked key as live for a few minutes.
 
 <figure markdown>
 ![The API keys page](../img/api-keys.png){ .ramen-shot }

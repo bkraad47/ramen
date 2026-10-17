@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.8.0` **(current)** | 2026-10-11 | packaging and docs: published images by default, bridge 0.3.0 pinned | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
+| `0.8.0` **(current)** | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
 | `0.7.5` | 2026-10-11 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
 | `0.7.1` | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
@@ -36,8 +36,18 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
 
-## 0.8.0 — packaging and docs: published images by default, bridge 0.3.0 pinned
+## 0.8.0 — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 
+- **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent read of the console, node and runtime), every finding fixed with a test:
+- A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still reads as `localhost`) and was reflected into the consent hand-off page's `href` with a JavaScript escape instead of an HTML one. The netloc must now be exactly `host[:port]`, and the hand-off page encodes the target per context (HTML-escaped attribute, JSON string in the script with `<`, `>`, `&` as `\u` escapes).
+- A group admin could set `repo_url` to `ext::sh -c …` and the next deploy ran it in the console. `repo_url` must be an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, scp-like or `-`-prefixed values; a path or `file://` only on the local adapter), git runs with `GIT_ALLOW_PROTOCOL` (no remote helpers) and `--` before the URL.
+- A repo could ship `.ramen/env-<zone>` and the worker applied it as its deploy file (self-minted `RAMEN_MCP_KEYS`, policy overrides). The console never uploads `.ramen/` from a checkout (and drops a tracked one from the local bucket), and the runtime never downloads `.ramen/*` from a bucket.
+- The scheduler's tick and a Rebalance click on the same zone could both read the old count and both scale; one autoscale decision per zone at a time.
+- Two deploys of one environment could drive the same canary Deployment at once; a second deploy while one runs is a `409` naming the running job.
+- The audit `ip` was the left-most `x-forwarded-for` entry (client-written) and the login rate limiter keyed on the load balancer's address. Both now use the entry `RAMEN_TRUST_PROXY_HOPS` from the right, as the node does; the chart sets 2 on GCP and 1 on AWS and Azure for the console too.
+- The Google group lookup refuses an email that would alter its query filter.
+- Found by this release's GKE run: an MCP key created seconds after its zone was attached failed with Secret Manager's `400 Service account … does not exist`; the secret binding now rides out the IAM lag the way the bucket grant already did.
+- Noted, not changed: `Store.transaction()` is a per-process lock, so the console is a single replica (chart default); a hung guardrail hook's thread lives on after the fail-closed answer.
 - **The compose stack pulls the published images.** `make up` pulls `docker.io/bkraad47/ramen-console` and `ramen-worker` at `VERSION` (about a minute) and builds from source only when the tag is not published yet; `make up BUILD=1` always builds. CI keeps building from source.
 - **Bridge 0.3.0 everywhere.** [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge) 0.3.0 (tokens in memory or the OS keychain, 30-minute idle expiry, a needed sign-in relayed to the AI client as error `-32001`) is on PyPI since 2026-10-17; the worker image, both Glama images and the MCPB bundle pin it.
 - **No static secrets, anywhere.** `make up` generates the admin password, Fernet key, MCP key, admin key and session secret into `deploy/local/.env` (`make env`, git-ignored; a stale or pre-0.8.0 value is rotated); the compose file has no fallback values any more; CI, the kind cluster (`deploy/kind/.secrets.env`), the screenshot console and the test harness generate theirs; `scripts/check_secrets.py` runs in `make lint` and CI and fails on any literal that once shipped, any literal secret value under `deploy/`, `.github/` or `scripts/`, and any Fernet-shaped literal.

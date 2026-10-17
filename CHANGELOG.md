@@ -9,6 +9,8 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   failed), six load-test scenarios per cloud (no 5xx; `429` back-pressure only), the mail flows on compose, a live
   Entra ID sign-in with the groups lookup on all three (group removal → `analyst_sso`) and the same person through the
   bridge's `--oauth`; every environment torn down afterwards. Record: the Transport page.
+- Console: the sidebar's role pill has a default background, so a custom role (`analyst_sso`, any custom kind) is
+  readable — it rendered white on white next to the signed-in name (seen on the live Entra sign-in).
 - **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent
   read of the console, node and runtime), every finding fixed with a test:
   - A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still

@@ -4,7 +4,7 @@ Firestore emulator + console + one worker (group `demo`, zone `local`). Run from
 Long version with screenshots: https://bkraad47.github.io/ramen/get-started/
 
 ```sh
-make up        # copies .env.example → .env once; docker compose up -d --build (first run 3–5 min)
+make up        # writes .env with generated secrets once (make env); pulls docker.io/bkraad47/ramen-{console,worker}:$VERSION and starts them (BUILD=1 builds from source, 3–5 min)
 make demo      # zone/group/env → mint rmk_ key → canary deploy → tools/call; last line "PASS: demo_calculator_tool(2,3,add) -> 5"
 make logs      # follow containers
 make down      # stop + delete volumes
@@ -12,8 +12,8 @@ make down      # stop + delete volumes
 
 | Service | URL | Login / key |
 |---|---|---|
-| Console | **https://localhost:8443** (self-signed → `curl -k`, accept the browser warning) | `admin@ramen.local` / `REDACTED-PASSWORD` (`.env`) |
-| Worker MCP | **http://localhost:8080/mcp** (Streamable HTTP, the front door) and **localhost:8080** (`ramen.v1.Mcp/Call` over gRPC, for the stdio bridge and gRPC clients) | `Authorization: Bearer rmk_…` minted on the group page (or the `.env` dev fallback `RAMEN_MCP_KEYS=REDACTED-KEY`) |
+| Console | **https://localhost:8443** (self-signed → `curl -k`, accept the browser warning) | `admin@ramen.local` / the generated `RAMEN_ADMIN_PASSWORD` in `.env` |
+| Worker MCP | **http://localhost:8080/mcp** (Streamable HTTP, the front door) and **localhost:8080** (`ramen.v1.Mcp/Call` over gRPC, for the stdio bridge and gRPC clients) | `Authorization: Bearer rmk_…` minted on the group page (or the generated `RAMEN_MCP_KEYS` in `.env`) |
 | Firestore emulator | http://localhost:8081 | — |
 
 Locally you do **not** need to add a zone or a group by hand: `make demo` creates zone `local`, group `demo`
@@ -23,7 +23,7 @@ Locally you do **not** need to add a zone or a group by hand: `make demo` create
 ## Mint a worker key and call the tool
 ```sh
 # Console: Groups → demo → MCP auth keys → name → Mint MCP key (shown once) → Deploy (canary).  Or:
-curl -sk -c c.txt -X POST https://localhost:8443/login -d email=admin@ramen.local -d password=REDACTED-PASSWORD -o /dev/null
+curl -sk -c c.txt -X POST https://localhost:8443/login -d email=admin@ramen.local -d "password=$(sed -n 's/^RAMEN_ADMIN_PASSWORD=//p' deploy/local/.env)" -o /dev/null
 CSRF="X-Ramen-CSRF: $(awk '$6=="ramen_csrf"{print $7}' c.txt)"   # cookie sessions echo the csrf cookie on mutations (API keys don't need it)
 KEY=$(curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://localhost:8443/api/v1/groups/demo/mcp-keys -d '{"name":"laptop"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
 curl -sk -b c.txt -H "$CSRF" -H 'Content-Type: application/json' -X POST https://localhost:8443/api/v1/groups/demo/environments/dev/deploy -d '{"canary":true}'
@@ -56,7 +56,7 @@ a group MCP key minted on the group page rather than the `.env` dev fallback.
 | File | What |
 |---|---|
 | `docker-compose.yml` | services `firestore` (8081), `console` (8443, `RAMEN_TLS=self`), `worker` (8080); shared volume `buckets` (`/buckets/demo` = the group bucket, `/buckets/_logs` = worker logs the console tails) |
-| `.env.example` → `.env` | `VERSION` (image tags), admin email/password, `RAMEN_FERNET_KEY`, `RAMEN_MCP_KEYS`, `RAMEN_ADMIN_KEY`, `RAMEN_ALLOWED_CIDRS`, `RAMEN_VERBOSE`, auth: `RAMEN_PUBLIC_URL`, `RAMEN_SMTP_*` (default `file:///mail` → invite/reset/magic-link mails land as `.eml` in `deploy/local/.mail/`), `RAMEN_AUTH_MAGIC_LINK`, `RAMEN_ADMIN_FORCE_PASSWORD`. Rotate everything before exposing the stack |
+| `.env.example` → `.env` (`make env`, secrets generated, never committed) | `VERSION` (image tags), admin email/password, `RAMEN_FERNET_KEY`, `RAMEN_MCP_KEYS`, `RAMEN_ADMIN_KEY`, `RAMEN_ALLOWED_CIDRS`, `RAMEN_VERBOSE`, auth: `RAMEN_PUBLIC_URL`, `RAMEN_SMTP_*` (default `file:///mail` → invite/reset/magic-link mails land as `.eml` in `deploy/local/.mail/`), `RAMEN_AUTH_MAGIC_LINK`, `RAMEN_ADMIN_FORCE_PASSWORD`. Rotate everything before exposing the stack |
 | `demo.sh` | the `make demo` flow against the console API (`docs/CONTRACTS.md` §4a) |
 | `demo-worker.sh` | `make demo-worker`: node + runtime on the host, no Docker |
 | `mcp_call.py` | tiny client on the official `mcp` SDK: Streamable HTTP when given a URL, the stdio bridge when given `host:port`; used by the demos |
@@ -74,6 +74,7 @@ a group MCP key minted on the group page rather than the `.env` dev fallback.
 | `ramen-mcp-bridge --health` → `NOT_SERVING` | nothing deployed yet: `make demo` or click Deploy (`--health ramen.v1.Admin` is liveness and stays SERVING) |
 | deploy job `error` with pip output | the group repo's `mcp/requirements.txt` failed; fix and redeploy |
 | images still tagged an old version | `.env` pins `VERSION`; edit it, `make up` |
-| e2e from `tests/` | `RAMEN_CONSOLE_URL=https://localhost:8443 RAMEN_NODE_TARGET=localhost:8080 RAMEN_ADMIN_PASSWORD=REDACTED-PASSWORD RAMEN_TLS_INSECURE=1 RAMEN_MAIL_DIR=$PWD/deploy/local/.mail uv run pytest -rs e2e conformance` in `tests/` |
+| `make up` builds instead of pulling | the tag in `.env` is not published yet (a branch ahead of the release); that is the fallback, or set `VERSION` to a released tag |
+| e2e from `tests/` | `RAMEN_CONSOLE_URL=https://localhost:8443 RAMEN_NODE_TARGET=localhost:8080 RAMEN_ADMIN_PASSWORD=$(sed -n 's/^RAMEN_ADMIN_PASSWORD=//p' ../deploy/local/.env) RAMEN_TLS_INSECURE=1 RAMEN_MAIL_DIR=$PWD/deploy/local/.mail uv run pytest -rs e2e conformance` in `tests/` |
 
-Cloud bring-up: [`../README.md`](../README.md) (GCP verified; AWS untested).
+Cloud bring-up: [`../README.md`](../README.md).

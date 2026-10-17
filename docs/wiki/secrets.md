@@ -55,8 +55,9 @@ with a warning so the rest of the file still applies.
 | `store` | the console store, Fernet-encrypted with `RAMEN_FERNET_KEY` (local, kind) | nothing; the console injects the value on deploy |
 | `gcp` | Secret Manager `ramen-<group>-<env or all>-<zone or all>-<NAME>` | `secretAccessor` on `ramen-<group>-*`, granted at zone creation |
 | `aws` | Secrets Manager `ramen/<group>/<env or all>/<zone or all>/<NAME>` | `GetSecretValue` on `ramen/<group>/*`, granted at zone creation |
+| `azure` | Key Vault `ramen--<group>--<NAME>` | Key Vault Secrets User on exactly the group's secrets, granted at zone creation |
 
-The charts set `gcp` and `aws`. MCP keys are stored through the same backend.
+The charts set `gcp`, `aws` and `azure`. MCP keys are stored through the same backend.
 
 ## Special names
 

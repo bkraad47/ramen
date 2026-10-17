@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 
+from .clientip import client_ip
 from .errors import invalid
 
 log = logging.getLogger("ramen.security")
@@ -162,7 +163,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if self.limit <= 0 or request.method != "POST" or not request.url.path.startswith(self.PATHS):
             return await call_next(request)
-        key = f"{request.client.host if request.client else '-'}:{request.url.path.split('/')[1]}"
+        key = f"{client_ip(request)}:{request.url.path.split('/')[1]}"  # the trusted hop, never the raw peer (SC6)
         if self._count(key, 0) >= self.limit:
             return JSONResponse(
                 {"detail": "Too many attempts, slow down"}, status_code=429, headers={"Retry-After": "60"}

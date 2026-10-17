@@ -10,9 +10,7 @@ from .util import now, uid
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "-")
+from .clientip import client_ip  # noqa: E402,F401 - re-exported: `audit.client_ip` is what the routes import
 
 
 async def write_audit(store, *, user, ip, action, target, ok, tags):

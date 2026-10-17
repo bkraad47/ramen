@@ -17,7 +17,7 @@ One page per subject. [Get started](../get-started.md) is the short path; these 
 | [API keys and the API](api-keys.md) | The two kinds of key, the OpenAPI page, a cheat sheet, a CI deploy |
 | [Deploy from GitHub Actions](deploy-github-actions.md) | An API key for CI, the repo secret, a workflow that deploys on push and waits for the job, rotation |
 | [Throttling with Redis](throttling.md) | Per-address and per-token limits, scope and item, shared across zones |
-| [Entra ID and Google Workspace](sso.md) | Providers on the Config page, groups read from Graph or Cloud Identity, role rules, OAuth-only roles, troubleshooting. Entra live on three clouds |
+| [Entra ID and Google Workspace](sso.md) | Providers on the Config page, groups read from Graph or Cloud Identity, role rules, OAuth-only roles, troubleshooting |
 | [Guardrails](guardrails.md) | NeMo Guardrails rails or your own `policy.py`, per tool, before the call and after the result |
 | [Backups](backups.md) | What an export holds and what it does not, preview, restore, prune, reconcile |
 | [Configuration](configuration.md) | The config file, the public address (base URI) and path-prefix proxies, the state store, every variable that matters, restricting actions |

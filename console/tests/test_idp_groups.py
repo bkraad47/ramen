@@ -373,3 +373,21 @@ def test_no_cloud_adapter_reads_identity_provider_settings():
         if marker.search(line)
     ]
     assert hits == [], hits
+
+
+def test_google_lookup_rejects_an_email_with_a_quote():
+    """0.8.0 SC9: the Cloud Identity query is built from the provider's email; a quote would change the filter."""
+    calls = []
+
+    async def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"memberships": []})
+
+    async def run(email):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await groups._google(http, CI, email)
+
+    with pytest.raises(groups.LookupError):
+        asyncio.run(run("x'||'y@example.com"))
+    assert calls == []
+    assert asyncio.run(run("plain@example.com")) == [] and len(calls) == 1

@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
  && useradd -r -u 10001 -m -d /home/ramen ramen && chown -R ramen:ramen /buckets
 COPY runtime-py /opt/ramen-runtime
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[nemo]' \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.3.0'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 COPY glama/start.sh /usr/local/bin/ramen-stdio
 USER ramen

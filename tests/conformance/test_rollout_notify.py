@@ -13,12 +13,13 @@ import pytest
 from mcp import types
 
 from ramen_tests import env as E
+from ramen_tests.localconsole import SESSION_SECRET
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import http_session, sdk_text, sse_events, text_of
 from ramen_tests.tokens import legacy_session_id
 
 pytestmark = pytest.mark.conformance
-SECRET = "REDACTED-SECRET"
+SECRET = SESSION_SECRET
 OLD, NEW = "demo_calculator_tool", "slow_tool"
 IGNORE = shutil.ignore_patterns("__pycache__")
 BOTH = [("Accept", "application/json, text/event-stream")]

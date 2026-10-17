@@ -19,13 +19,13 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.12-slim
-ARG VERSION=0.7.5
+ARG VERSION=0.8.0
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,azure,nemo]' \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.3.0'
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080

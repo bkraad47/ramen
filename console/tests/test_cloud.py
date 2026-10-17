@@ -174,3 +174,53 @@ def test_factory(monkeypatch, tmp_path):
     monkeypatch.setenv("RAMEN_CLOUD", "x")
     with pytest.raises(ValueError):
         make_cloud()
+
+
+# --- 0.8.0 SC2 / SC3 -------------------------------------------------------------------------------------------------
+def test_sync_repo_refuses_an_ext_or_file_remote(monkeypatch):
+    """`repo_url` is validated before any git runs, and git itself is held to network protocols. A path or `file://`
+    is a local-adapter feature (a checkout on disk), never accepted by a cloud console."""
+    from ramen_console.errors import ApiError
+    from ramen_console.services import validate_repo_url
+
+    def refused(url):
+        with pytest.raises(ApiError) as e:
+            validate_repo_url(url)
+        assert e.value.status_code == 422, url
+
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
+    for bad in (
+        "ext::sh -c id",
+        "file:///etc",
+        "/srv/repo",
+        "-oProxyCommand=id",
+        "ssh host",
+        "http://",
+        "git@host:x.git",
+    ):
+        refused(bad)
+    refused(" https://h/r")
+    for good in ("https://github.com/bkraad47/ramen-demo-mcp-group", "ssh://git@github.com/o/r.git", "git://h/r", ""):
+        assert validate_repo_url(good) == good
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    assert validate_repo_url("/srv/repo") == "/srv/repo" and validate_repo_url("file:///srv/repo") == "file:///srv/repo"
+    for bad in ("ext::sh -c id", "-oProxyCommand=id", "ssh host"):
+        refused(bad)
+    allowed = git_env(None)["GIT_ALLOW_PROTOCOL"].split(":")
+    assert "ext" not in allowed and {"https", "ssh"} <= set(allowed)
+
+
+async def test_sync_never_uploads_a_repo_dot_ramen_env(cloud, repo, tmp_path):
+    """A tenant repo that ships `.ramen/env-<zone>` must not reach the worker bucket: the deploy file is the
+    console's."""
+    from ramen_console.cloud.local import repo_files
+
+    (repo / ".ramen").mkdir()
+    (repo / ".ramen" / "env-local").write_text("RAMEN_MCP_KEYS=rmk_planted\n")
+    for args in (["add", "-f", "."], ["commit", "-qm", "plant"]):
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True)
+    assert set(repo_files(repo)) == {"mcp/requirements.txt"}, "the upload set skips .git and .ramen"
+    dest = await cloud.sync_repo("demo", str(repo), "main", None)
+    assert not (tmp_path / "buckets" / "demo" / ".ramen" / "env-local").exists(), dest
+    await cloud.sync_repo("demo", str(repo), "main", None)  # the fetch/checkout path too
+    assert not (tmp_path / "buckets" / "demo" / ".ramen" / "env-local").exists()

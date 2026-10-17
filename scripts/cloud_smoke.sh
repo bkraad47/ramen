@@ -84,8 +84,9 @@ STEP="http origin";    R=$(curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -o /dev/null 
 STEP="http session";   SID=$(curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -D - -o /dev/null -X POST "$HTTP_URL" -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" -H "ramen-group: $GROUP" -H "ramen-zone: $ZONE" -d '{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cloud_smoke","version":"0.5.0"}}}' | tr -d '\r' | awk 'tolower($1)=="mcp-session-id:"{print $2}')
 [ -n "$SID" ] || fail "initialize over HTTP returned no Mcp-Session-Id"
 # Admin/Reload without a key: UNAUTHENTICATED (direct), PERMISSION_DENIED (outside RAMEN_ADMIN_CIDRS) or UNIMPLEMENTED/404
-# through an LB that does not route ramen.v1.Admin at all (CONTRACTS §11: Admin stays cluster-internal) — all three mean "gated".
-STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented|status code received from server: 464' || fail "Admin/Reload without key → ${ERR:-OK}"   # 464: the ALB has no gRPC route for Admin/* (console catch-all), which is the point
+# through an LB that does not route ramen.v1.Admin at all (CONTRACTS §11: Admin stays cluster-internal); Envoy Gateway (AKS) closes
+# the stream without trailers for such a path. All of them mean "gated".
+STEP="admin gate";  ERR=$("${G[@]}" -proto ramen/v1/admin.proto "$NODE" ramen.v1.Admin/Reload 2>&1 >/dev/null); echo "$ERR" | grep -Eq 'Unauthenticated|PermissionDenied|Unimplemented|status code received from server: 464|closed the stream without sending trailers' || fail "Admin/Reload without key → ${ERR:-OK}"   # 464: the ALB has no gRPC route for Admin/* (console catch-all), which is the point
 if [ "${RAMEN_SMOKE_ADMIN:-0}" = 1 ]; then
   STEP="admin reload"; "${G[@]}" -max-time 180 -proto ramen/v1/admin.proto -H "x-ramen-admin-key: $ADMIN_KEY" "$NODE" ramen.v1.Admin/Reload >/dev/null 2>&1 || fail "Admin/Reload with key failed"
 fi

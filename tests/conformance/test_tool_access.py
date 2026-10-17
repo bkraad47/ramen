@@ -14,14 +14,14 @@ import time
 import pytest
 
 from ramen_tests import env as E
-from ramen_tests.localconsole import LocalConsole
+from ramen_tests.localconsole import SESSION_SECRET, LocalConsole
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import JsonRpcError, text_of
 from ramen_tests.tokens import claims_of, user_token
 
 pytestmark = pytest.mark.conformance
 TRANSPORTS = ("grpc", "http")
-SECRET, ISSUER, PUBLIC = "REDACTED-SECRET", "https://console.example", "https://mcp.example"
+SECRET, ISSUER, PUBLIC = SESSION_SECRET, "https://console.example", "https://mcp.example"
 CALC, FREE = "demo_calculator_tool", "slow_tool"
 ARGS = {"var1": 2, "var2": 3, "func": "add"}
 ACCESS = {CALC: {"list": ["key", "group_admin"], "call": ["group_admin"]}}

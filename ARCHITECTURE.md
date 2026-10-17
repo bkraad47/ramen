@@ -1,4 +1,4 @@
-# Ramen architecture (v0.7.5)
+# Ramen architecture (v0.8.0)
 
 Full version on the docs site: https://bkraad47.github.io/ramen/architecture/ (with per-version pages).
 Binding interface contracts: [docs/CONTRACTS.md](docs/CONTRACTS.md) — §11 is gRPC, §16 is Streamable HTTP.
@@ -25,7 +25,7 @@ grpcurl / gRPC client ───────────────────�
   reserved) and `admin.proto` (`Admin/Reload`, `Admin/Metrics`, JSON bytes). Single source: tonic-build for Rust,
   grpcio-tools for the Python stubs vendored in console, runtime-py and tests (`make proto`).
 - **console/** FastAPI + Jinja2 + HTMX (D11). Auth (email/password, OAuth/OIDC with PKCE, magic link), RBAC (super
-  admin, group admin, viewer), groups/environments/zones, secrets (names only), deploy jobs, rebalance, IP rules,
+  admin; per group: group admin, viewer, MCP user or a custom role on one of those bases, D48), groups/environments/zones, secrets (names only), deploy jobs, rebalance, IP rules,
   logs, audit, `rmn_` API keys, `rmk_` MCP keys, config yaml, backups, SA policy engine, tool blocking, CSRF. The
   console is also the **OAuth 2.1 authorization server** for per-user access (D34; §16.3). `ramen_console.grpcclient`
   dials worker pods directly (`<pod-ip>:8080`, 10 s deadline).
@@ -44,8 +44,9 @@ grpcurl / gRPC client ───────────────────�
   protos, pip-installs `requirements.txt`, executes callables, resolves `{{$group.NAME}}` from
   `RAMEN_SECRET_<GROUP>__<NAME>`, redacts secrets. **`ramen-mcp-bridge`** is its own package/repo (v0.5.7; also
   installed in the worker image): a stdio MCP server that forwards each message to `Mcp/Call` with the key and
-  routing metadata — for clients that only speak stdio; standard clients (Claude Desktop, Cursor, the `mcp` SDK)
-  connect straight to `POST /mcp` instead.
+  routing metadata — for clients that only speak stdio; HTTP clients (Claude Code, Cursor, VS Code, the `mcp` SDK)
+  connect straight to `POST /mcp` with a group key; a person's sign-in in Claude Desktop, Cursor or VS Code goes
+  through the bridge (`--oauth`).
 - **deploy/** compose (local), Helm `ramen` (console + Gateway/ALB Ingress + reduced ClusterRole) and
   `ramen-worker` (one zone namespace: Service `appProtocol: kubernetes.io/h2c`, header-matched HTTPRoute /
   gRPC-annotated Ingress, gRPC health policy, Role/RoleBinding), Terraform GCP (GKE Autopilot, Firestore, GCS, AR,
@@ -53,13 +54,14 @@ grpcurl / gRPC client ───────────────────�
   IAM), AWS (EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA with narrowed WAF/IAM, ALB controller, Fluent Bit;
   applied to a real account since 0.5.6) and Azure (AKS, ACR, Blob + Table Storage, Key Vault, managed identities,
   Envoy Gateway + cert-manager; 0.7.5), CloudFormation equivalent for AWS.
-- **State** Firestore (GCP default) / DynamoDB (AWS default) / Postgres (self-hosted, `RAMEN_STORE=postgres`,
-  v0.5.5) behind one repository interface, Fernet-encrypted sensitive fields (D2, D37).
+- **State** Firestore (GCP default) / DynamoDB (AWS default) / Azure Table Storage (AKS default) / Postgres
+  (self-hosted, `RAMEN_STORE=postgres`, v0.5.5) behind one repository interface, Fernet-encrypted sensitive fields (D2, D37).
 - **Exposure** GKE Gateway (global HTTPS LB, static IP, Google-managed cert via Certificate Manager — a free
-  `sslip.io` hostname needs no domain, v0.5.5/D36; self-signed remains an opt-out) or AWS ALB; `/` → console
+  `sslip.io` hostname needs no domain, v0.5.5/D36; self-signed remains an opt-out), AWS ALB, or Envoy Gateway on AKS
+  (Let's Encrypt via cert-manager); `/` → console
   (HTTP); `POST /mcp` and gRPC calls carrying `ramen-group` + `ramen-zone` metadata → that zone's workers
-  (HTTPRoute header match on GCP, ALB listener rule + `backend-protocol-version: GRPC` on AWS; health checks
-  both). No path rewrite, no path alias.
+  (HTTPRoute header match on GCP and AKS, ALB listener rule + `backend-protocol-version: GRPC` on AWS; health
+  checks on all). No path rewrite, no path alias.
 - **Deploy** sync repo (token via git header, never in the URL) → write zone Secret/env (keys, secrets, blocked,
   CIDRs) → canary → `Health/Check` SERVING → `Admin/Reload` → `tools/list` smoke → stable. Failure scales canary
   to 0, stable untouched.

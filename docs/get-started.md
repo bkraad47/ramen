@@ -1,10 +1,10 @@
 # Get started
 
-Three short walks: run Ramen on your laptop, connect a repo of tools, and connect Claude. Every step has the
-page you will see. The wiki goes deeper on each topic once you want it.
+Three short walks: run Ramen on your laptop, connect a repo of tools, and connect a client. Each step shows the
+page you will see; the wiki goes deeper.
 
-You need Docker with compose v2, `git`, `make` and `uv`. The first start builds two images and takes three to
-five minutes.
+You need Docker with compose v2, `git`, `make` and `uv`. The first start pulls the release's two images from
+Docker Hub, about a minute; `make up BUILD=1` builds them from source instead, three to five minutes.
 
 ## 1. Start Ramen locally
 
@@ -14,12 +14,13 @@ make up
 ```
 
 That starts a Firestore emulator, the console and one worker. Open **https://localhost:8443** and accept the
-self-signed certificate. Sign in with `admin@ramen.local` and the password `REDACTED-PASSWORD` from
-`deploy/local/.env`.
+self-signed certificate. Sign in with `admin@ramen.local` and the password `make up` generated into
+`deploy/local/.env` (`grep RAMEN_ADMIN_PASSWORD deploy/local/.env`). Every secret in that file is generated on your
+machine; nothing in the repository is a usable password or key.
 
 <figure markdown>
 ![The sign-in page](img/login.png){ .ramen-shot width=720 }
-<figcaption>The sign-in page. Change the password in deploy/local/.env before anyone else can reach the port.</figcaption>
+<figcaption>The sign-in page. The password is the generated one in deploy/local/.env; `make env` rotates a stale one.</figcaption>
 </figure>
 
 Then prove the whole path with one command:
@@ -44,8 +45,8 @@ PASS: demo_calculator_tool(2,3,add) -> 5
 
 ## 2. Connect an MCP repo
 
-A group is one git repo of tools. `make demo` already made the group `demo` from the demo repo, which is the
-smallest complete one; this section is how you add your own.
+A group is one git repo of tools. `make demo` already made the group `demo` from the demo repo, the smallest
+complete one. This is how you add your own.
 
 ```
 mcp/
@@ -123,10 +124,10 @@ curl -s http://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H '
 
 ### As yourself (Claude Code, with OAuth)
 
-No shared key. Your account can be a Ramen password account or, once a super admin has added one on the Config page,
-Microsoft Entra ID or Google ([Entra ID and Workspace](wiki/sso.md)). A super admin registers the client on **Config → OAuth clients** with the redirect URI
-`http://localhost/callback`, and gives you the client id. Your account needs a role in the group, and *MCP User*
-is enough. Then, against the local stack:
+No shared key. Your account is a Ramen password account or, once a super admin has added a provider on the Config
+page, Microsoft Entra ID or Google ([Entra ID and Workspace](wiki/sso.md)). A super admin registers the client on
+**Config → OAuth clients** with the redirect URI `http://localhost/callback` and gives you the client id. Your
+account needs a role in the group; *MCP User* is enough. Then, against the local stack:
 
 ```sh
 claude mcp add-json ramen-demo '{"type":"http","url":"http://localhost:8080/mcp",
@@ -153,9 +154,10 @@ claude mcp add ramen-demo-stdio -- uvx ramen-mcp-bridge@latest --target localhos
 ```
 
 `uvx …@latest` runs the newest release without installing it (`pip install ramen-mcp-bridge` also works). In any
-other client put the command in an `mcpServers` entry as `command: "uvx"` and `args`. Against a cloud console it
-takes `--target <edge>:443 --tls`, and `--oauth https://<edge> --client-id <id>` instead of `--key` to sign a person
-in; that is also how Cursor, VS Code and Claude Desktop do a person's sign-in:
+other client, put the command in an `mcpServers` entry as `command: "uvx"` and `args`.
+
+Against a cloud console the bridge takes `--target <edge>:443 --tls`, and `--oauth https://<edge> --client-id <id>`
+instead of `--key` to sign a person in. That is how Cursor, VS Code and Claude Desktop sign a person in:
 [Connect a client with OAuth](wiki/connect-oauth.md#what-the-person-does). In a cloud, the group page's **How MCP
 users sign in** card prints every command for your install.
 

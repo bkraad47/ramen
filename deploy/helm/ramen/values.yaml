@@ -29,7 +29,7 @@ azure:                       # provider=azure only (terraform -chdir=deploy/terr
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console (gcp), <account>.dkr.ecr.<region>.amazonaws.com/ramen/console (aws) or <acr>/ramen/console (azure);
                              # any reference works on both clouds, e.g. the public docker.io/bkraad47/ramen-console (or ghcr.io/bkraad47/...) — no `make push` needed
-  tag: 0.7.5
+  tag: 0.8.0
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:

@@ -15,7 +15,7 @@ from pathlib import Path
 from ..errors import ApiError
 from .gcp_api import _try_json, k8s_name
 from .gcp_clients import GcpClients
-from .local import redact, run_git
+from .local import redact, repo_files, run_git
 
 ARM = "https://management.azure.com"
 IDENTITY_API, ROLES_API = "2023-01-31", "2022-04-01"
@@ -238,15 +238,11 @@ def sync_repo_to_blob(container, account, container_name, group, repo_url, ref, 
     from azure.storage.blob import ContentSettings
 
     with tempfile.TemporaryDirectory() as tmp:
-        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, tmp], token)
+        r = run_git(["git", "clone", "-q", "--depth", "1", "--branch", ref, "--", repo_url, tmp], token)
         if r.returncode != 0:
             raise ApiError(502, "Git failed: " + redact(r.stderr, token).strip()[:500])
         root, prefix = Path(tmp), f"{group}/"
-        local = {
-            prefix + p.relative_to(root).as_posix(): p
-            for p in root.rglob("*")
-            if p.is_file() and ".git" not in p.relative_to(root).parts
-        }
+        local = {prefix + rel: p for rel, p in repo_files(root).items()}
         remote = {
             b.name: bytes(b.content_settings.content_md5 or b"") for b in container.list_blobs(name_starts_with=prefix)
         }

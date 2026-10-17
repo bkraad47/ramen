@@ -140,9 +140,11 @@ def newest_link(maildir: Path, kind: str, since: float) -> str:
     while time.monotonic() < deadline:
         for p in sorted(maildir.glob("*.eml"), reverse=True):
             if p.stat().st_mtime >= since:
-                body = email.message_from_bytes(
-                    p.read_bytes(), policy=email.policy.default
-                ).get_content()  # decodes QP wrapping
+                msg = email.message_from_bytes(p.read_bytes(), policy=email.policy.default)
+                part = (
+                    msg.get_body(preferencelist=("plain", "html")) if msg.is_multipart() else msg
+                )  # 0.7.5: HTML + text
+                body = part.get_content()  # decodes QP wrapping
                 m = re.search(rf"https?://\S+?/auth/{kind}/(\S+)", body)
                 if m:
                     return m.group(1)

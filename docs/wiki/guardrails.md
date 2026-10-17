@@ -25,10 +25,11 @@ tools:
   demo_calculator_tool: {pre: true}     # post defaults to false
 ```
 
-A tool that is not listed is never checked; `word_count: true` is short for `{pre: true}`. `pre` runs after Ramen has validated the arguments and resolved
-`{{$group.VAR}}` secrets, and before your function; the payload the engine sees is the tool name and the
+A tool that is not listed is never checked; `word_count: true` is short for `{pre: true}`.
+
+`pre` runs after Ramen has validated the arguments and resolved `{{$group.VAR}}` secrets, and before your function; the payload the engine sees is the tool name and the
 arguments **as written**, so a secret reference stays `{{$group.API_KEY}}` and the value never reaches a rail.
-`post` runs after the output schema check (0.7.0) and sees the tool name, the same as-written arguments, and the
+`post` runs after the output schema check and sees the tool name, the same as-written arguments, and the
 result text or the structured result as JSON, with every resolved secret value masked as `***`. The agent still
 receives the tool's own output; only the rail sees the masked copy.
 
@@ -168,6 +169,5 @@ The compose stack does the same through the node (`make up`, `make demo`). The c
   message puts them in the runtime log; raise with a reason, not the payload.
 - In the demo repo only `word_count`'s pre rail can ever fire: its output is three integers, and the calculator's
   arguments are numbers and an enum.
-- The worker and Glama images ship `ramen-runtime[nemo]` (NeMo Guardrails 0.24). Verified live on GKE, EKS and AKS:
-  the injection phrase is blocked with `_meta.ramen.guardrail`, over Streamable HTTP and through the bridge, and the
-  access log names `guardrail_pre`.
+- The worker and Glama images ship `ramen-runtime[nemo]` (NeMo Guardrails 0.24). What was verified live:
+  [Transport → What is verified](transport.md#what-is-verified-and-what-is-not).

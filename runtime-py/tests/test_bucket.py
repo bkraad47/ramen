@@ -267,3 +267,16 @@ def test_az_client_needs_the_extra_and_honours_the_endpoint_override(monkeypatch
     monkeypatch.setenv("RAMEN_AZURE_BLOB_ENDPOINT", "http://127.0.0.1:10000/devstoreaccount1")
     bucket._client("az", "acct/groups")
     assert seen["url"] == "http://127.0.0.1:10000/devstoreaccount1"
+
+
+def test_sync_skips_a_bucket_resident_ramen_env_file(tmp_path):
+    """0.8.0 SC3: the deploy file is the console's. A `.ramen/env*` object in the bucket (a tenant repo shipped it)
+    is neither downloaded nor allowed to delete the worker's own `.ramen` state."""
+    dest = tmp_path / "bucket"
+    dest.mkdir()
+    (dest / ".ramen").mkdir()
+    (dest / ".ramen" / "env-a").write_text("RAMEN_MCP_KEYS=console-written\n")
+    client = FakeClient([FakeBlob("demo/mcp/x.py", b"x"), FakeBlob("demo/.ramen/env-a", b"RAMEN_MCP_KEYS=planted\n")])
+    s = bucket.sync("gs://b/demo", dest, client=client)
+    assert s["downloaded"] == 1 and (dest / "mcp" / "x.py").read_bytes() == b"x"
+    assert (dest / ".ramen" / "env-a").read_text() == "RAMEN_MCP_KEYS=console-written\n"

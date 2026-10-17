@@ -56,6 +56,8 @@ async def _entra(http: httpx.AsyncClient, base: str) -> list[str]:
 
 
 async def _google(http: httpx.AsyncClient, base: str, email: str) -> list[str]:
+    if any(c in email for c in "'\"\\") or any(c.isspace() for c in email):  # 0.8.0 SC9: it becomes a query filter
+        raise LookupError("could not read your groups from google: the account's email is not a safe query value")
     out: list[str] = []
     params = {"query": f"member_key_id=='{email}'"}
     while True:

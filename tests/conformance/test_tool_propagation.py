@@ -15,6 +15,7 @@ import shutil
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests.localconsole import SESSION_SECRET
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import (
     JsonRpcError,
@@ -46,7 +47,7 @@ def live(tmp_path):
     """A fresh node on a private copy of the demo bucket (each test mutates it)."""
     bucket = tmp_path / "bucket"
     shutil.copytree(E.FIXTURES / "demo_group", bucket, ignore=IGNORE)
-    with LocalNode(bucket=bucket, env={"RAMEN_SESSION_SECRET": "REDACTED-SECRET"}) as n:
+    with LocalNode(bucket=bucket, env={"RAMEN_SESSION_SECRET": SESSION_SECRET}) as n:
         n.wait_serving()
         n.bucket = bucket
         yield n

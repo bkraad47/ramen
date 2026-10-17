@@ -37,7 +37,7 @@ def runtime_python() -> str:
 def runtime_importable() -> bool:
     try:
         r = subprocess.run([runtime_python(), "-c", "import ramen_runtime"], capture_output=True, timeout=30)
-    except OSError, subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return r.returncode == 0
 

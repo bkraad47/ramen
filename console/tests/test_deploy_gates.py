@@ -307,3 +307,13 @@ def test_golden_cases_for_a_tool_the_key_may_not_call_are_skipped(demo, ws, tmp_
     assert any("golden calc: skipped (not callable for key)" in line for line in job["log"])
     calls = [c for c in ws["cold"].calls if c[0] == "Mcp/Call" and c[2].get("method") == "tools/call"]
     assert [c[2]["params"]["name"] for c in calls] == ["other"]
+
+
+def test_a_second_deploy_of_the_same_target_is_refused_while_one_runs(demo):
+    """0.8.0 SC5: two deploys of one environment would drive the same canary Deployment and race `last_deploy`."""
+    jobs = demo.app.state.jobs
+    running = jobs.create("deploy", "demo/prod")
+    r = demo.post(DEPLOY, json={"canary": True})
+    assert r.status_code == 409 and running["id"] in r.text, r.text
+    running["status"] = "ok"
+    assert demo.post(DEPLOY, json={"canary": True}).status_code == 202

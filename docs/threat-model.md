@@ -1,7 +1,6 @@
 # Threat model
 
-What Ramen defends against, what it does not, and what is unverified — stated so a buyer can check it against the
-code and the reports rather than take it on trust. Terms: a **group** is a tenant; a **zone** is a Kubernetes
+What Ramen defends against, what it does not, and what is unverified, with the code to check each against. Terms: a **group** is a tenant; a **zone** is a Kubernetes
 namespace with that group's workers; a **worker** is one Rust node plus one Python runtime; the **console** is the
 management plane. Verification status is the section at the end, and it is the part most likely to change.
 
@@ -23,24 +22,27 @@ management plane. Verification status is the section at the end, and it is the p
   balancer and IAM behave as documented.
 
 ## What Ramen defends against
+- **A tenant repo cannot author the worker's deploy file** (0.8.0): `.ramen/` in a checkout is never uploaded or
+  downloaded; the keys, tool access and roles a worker applies come only from the console.
+- **A group's `repo_url` cannot run code in the console** (0.8.0): network git URLs only, no remote helpers.
 
 | Threat | Adversary | Defence | Where |
 |---|---|---|---|
 | Calling a worker without a credential | A1 | every `Mcp/Call` and `POST /mcp` requires a bearer credential; an empty key set denies everyone | `node-rs/src/auth.rs`, `grpc.rs::guard` |
 | Guessing or timing a key | A1 | constant-time comparison folded over every key with no early exit; 12-character minimum with four character classes | `auth.rs::check_key`, `console/security.py` |
-| Reaching a worker from an address the group did not allow | A1, A2 | `RAMEN_ALLOWED_CIDRS` at the node, checked against the proxy hop the load balancer appended (a caller cannot choose it; a wrong count fails closed), plus Cloud Armor at the GCP edge | `auth.rs::client_ip`, `cloud/gcp.py` |
+| Reaching a worker from an address the group did not allow | A1, A2 | `RAMEN_ALLOWED_CIDRS` at the node, checked against the proxy hop the load balancer appended (a caller cannot choose it; a wrong count fails closed), plus Cloud Armor on GCP, a WAF IP set on AWS, an Envoy `SecurityPolicy` on AKS at the GCP edge | `auth.rs::client_ip`, `cloud/gcp.py` |
 | Using a stolen session id under another credential | A2 | session ids are HMACs over the credential; a mismatch is `404` | `session.rs` |
 | Replaying an OAuth token against another zone or issuer | A2 | audience, scope and issuer checks; one-hour life; refresh rotation bound to the user's session epoch | `token.rs`, `console/oauth_server.py` |
 | A web page using a victim's browser to reach a worker | A5 | `Origin` refused unless allow-listed (empty by default); the console's forms and cookie-authenticated API mutations require a CSRF token | `http.rs::origin_allowed`, `console/auth/csrf.py` |
-| A tool author reading another group's secrets | A3 | one namespace, one pod set and one cloud identity per group and zone; the identity can read only that group's bucket prefix and secrets; the console never returns a secret value | `cloud/gcp_k8s.py`, `cloud/gcp_api.py`, `services.py` |
+| A tool author reading another group's secrets | A3 | one namespace, one pod set and one cloud identity per group and zone; the identity can read only that group's bucket prefix and secrets (on Azure a blob role cannot be scoped to a prefix, so the boundary for code there is the console's sync — each worker loads only its group's prefix); the console never returns a secret value | `cloud/gcp_k8s.py`, `cloud/gcp_api.py`, `services.py` |
 | A group widening its own trust from its deploy file | A3 | the deploy file may set only an allow-list of keys; the session secret, the issuer, proxy trust and reflection are not among them | `config.rs::DEPLOY_KEYS` |
 | Tool code crashing or hanging the process that holds the keys | A3 | user code runs in a separate Python process the node spawns, bounds with a call timeout and kills after idleness; the node holds the keys and does the auth | `sidecar.rs` |
 | Another pod reaching a worker directly | A4 | the worker NetworkPolicy admits the node port only from the console namespace and the load balancer's ranges; hardened container context | `deploy/helm/ramen-worker` |
 | Enumerating the services from the edge | A1 | gRPC reflection is off on deployed workers; health and the OAuth resource metadata are the only unauthenticated surface, by design | `grpc.rs::routes`, `http.rs` |
 | A revoked user keeping access | A2 | sessions carry a per-user epoch bumped on password, role and group change, delete, auth-config change and restore; refresh tokens carry the same epoch | `accounts.py`, `oauth_server.py` |
-| Flooding a zone | A1 | `RAMEN_MAX_INFLIGHT` per node (`RESOURCE_EXHAUSTED` / `429`), a 4 MiB message cap, Ramen's own autoscaling up to the zone's max (0.7.5) | `grpc.rs`, `console/autoscale.py` |
-| Reading credentials from a copy of the store | A2 | passwords argon2; API and MCP key secrets as `s1$<salt>$<HMAC-SHA256>` with a random salt per key; OAuth codes and refresh tokens under an HMAC with a per-install salt kept Fernet-encrypted in `config/hashing` (0.7.5; older hashes still verify, and a key's is rewritten salted on its next use) | `auth/apikeys.py`, `oauth_server.py` |
-| A prompt injection or a leak through a tool | A1, A5 | opt-in guardrails per tool in the worker: NeMo rails or a `policy.py` before the call and after the result, fail-closed (0.7.5) | `runtime-py/.../guardrails.py` |
+| Flooding a zone | A1 | `RAMEN_MAX_INFLIGHT` per node (`RESOURCE_EXHAUSTED` / `429`), a 4 MiB message cap, Ramen's own autoscaling up to the zone's max | `grpc.rs`, `console/autoscale.py` |
+| Reading credentials from a copy of the store | A2 | passwords argon2; API and MCP key secrets as `s1$<salt>$<HMAC-SHA256>` with a random salt per key; OAuth codes and refresh tokens under an HMAC with a per-install salt kept Fernet-encrypted in `config/hashing` (since 0.7.5; older hashes still verify, and a key's is rewritten salted on its next use) | `auth/apikeys.py`, `oauth_server.py` |
+| A prompt injection or a leak through a tool | A1, A5 | opt-in guardrails per tool in the worker: NeMo rails or a `policy.py` before the call and after the result, fail-closed | `runtime-py/.../guardrails.py` |
 
 ## What Ramen does not defend against
 - **A holder of a valid `rmk_` key is that group, until the key is revoked.** Keys are shared secrets; use OAuth
@@ -57,15 +59,15 @@ management plane. Verification status is the section at the end, and it is the p
 - **The key's length can leak** through the length check in front of the constant-time compare.
 - **Denial of service at the edge** beyond the per-node caps: that is the load balancer's and the cloud's job.
 - **The cloud provider** (A6).
+- **A second console replica.** The store's transaction is a per-process lock, so single-use codes, refresh rotation
+  and membership writes are atomic within one console; run one replica (the chart's default) until a store-level
+  transaction exists.
 
 ## What is verified, and what is not
-The record is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not), kept with the
-`reports/` directory of the private workspace. In short, as of 0.6.0: both transports and every guard above are
-proven on real node processes in CI on Linux and Windows; the GCP path was proven live on throwaway GKE projects in
-0.3.2, 0.4.0, 0.5.1, 0.5.95 and 0.6.0, and the AWS path on a real account in 0.5.6, 0.5.8 and 0.6.0, each emptied the
-same day; there has been no third-party penetration test. An independent agent reviews each release's new
-surface against the code (`reports/security-v<version>.md`), which is the closest thing to an audit this project
-has had.
+The record is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not), backed by the
+`reports/` directory of the private workspace. There has been no third-party penetration test. An independent agent
+reviews each release's new surface against the code (`reports/security-v<version>.md`), which is the closest thing
+to an audit this project has had.
 
 ## Reporting
 A vulnerability report goes to the maintainer through a private GitHub security advisory on the repository. Say what

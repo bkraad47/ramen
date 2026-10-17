@@ -1,5 +1,6 @@
 """CONTRACTS §4: console API — bootstrap login, RBAC matrix, secret values never leak, API keys, audit, backup.
-Needs RAMEN_CONSOLE_URL (+ RAMEN_ADMIN_EMAIL/RAMEN_ADMIN_PASSWORD, default admin@ramen.local / REDACTED-PASSWORD)."""
+Needs RAMEN_CONSOLE_URL (+ RAMEN_ADMIN_EMAIL/RAMEN_ADMIN_PASSWORD, default admin@ramen.local and the
+generated password in deploy/local/.env)."""
 
 import json
 

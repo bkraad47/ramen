@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
  && git clone --depth 1 --branch "$DEMO_REF" https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \
  && useradd -r -u 10001 -m -d /home/ramen ramen && chown -R ramen:ramen /buckets \
  && python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[nemo]' \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.2.2'
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.3.0'
 USER ramen
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 ENTRYPOINT ["sh", "/usr/local/bin/ramen-stdio"]

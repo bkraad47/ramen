@@ -7,9 +7,8 @@ is asked in return.
 - **Run it, fork it, adapt it** to your organization: different clouds, your own console pages, your own policy
   catalogue. The group repo contract ([the MCP repo](wiki/mcp-repo.md)) and the [interface contracts](CONTRACTS.md) are the
   stable surfaces to build against.
-- **Keep the reference.** The license requires the copyright notice to stay with the code; beyond the letter of
-  the license, the request is simple: say where it came from. A fork that keeps "based on Project Ramen" in its README and docs
-  is welcome.
+- **Keep the reference.** The license requires the copyright notice to stay with the code. Beyond that, say where
+  it came from: a fork that keeps "based on Project Ramen" in its README and docs is welcome.
 - **Not acceptable**: taking the project, renaming it, and presenting it as a new commercial product of your own
   with the origin removed. That is both against the spirit of this project and, where the notice is stripped,
   against the license.

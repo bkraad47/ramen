@@ -9,8 +9,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 export RAMEN_CONSOLE_URL=${RAMEN_CONSOLE_URL:-http://localhost:18000}
 export RAMEN_ADMIN_EMAIL=${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
-export RAMEN_ADMIN_PASSWORD=${RAMEN_ADMIN_PASSWORD:-Kind-Console-1!}
-export RAMEN_ADMIN_KEY=${RAMEN_ADMIN_KEY:-Kind-Admin-Key-1!}
+[ -f "$HERE/.secrets.env" ] && { set -a; . "$HERE/.secrets.env"; set +a; }   # written by up.sh
+export RAMEN_ADMIN_PASSWORD=${RAMEN_ADMIN_PASSWORD:?run deploy/kind/up.sh first (it writes deploy/kind/.secrets.env)}
+export RAMEN_ADMIN_KEY=${RAMEN_ADMIN_KEY:?run deploy/kind/up.sh first}
 export RAMEN_KIND_ZONES=${RAMEN_KIND_ZONES:-a=localhost:18081,b=localhost:18082}
 export RAMEN_KIND_NODE_ZONES=${RAMEN_KIND_NODE_ZONES:-a=kind-a,b=kind-b}
 export RAMEN_KIND_STABLE_ZONES=${RAMEN_KIND_STABLE_ZONES:-a=localhost:18084,b=localhost:18085}

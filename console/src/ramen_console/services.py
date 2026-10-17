@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 import time
 
 from . import autoscale, regions
@@ -13,6 +15,31 @@ from .secrets.base import SecretsBackend, StoreBackend
 from .security import generate_key_secret
 from .storage.base import Store
 from .util import KEYNAME_RE, NAME_RE, SECRET_RE, is_cidr, now, parse_image, public, uid
+
+REPO_SCHEMES = ("https", "http", "ssh", "git")
+
+
+def validate_repo_url(url: str) -> str:
+    """0.8.0 SC2: a group repo is a network git URL with a host. `ext::` (a remote helper that runs a command),
+    scp-like `git@host:path`, a leading `-` (git reads it as an option) and whitespace are refused everywhere; a
+    filesystem path or `file://` URL only on the local adapter (`RAMEN_CLOUD=local`: a laptop or the compose stack,
+    where a checkout on disk is how tools are developed). Git itself is held to these protocols in
+    `cloud.local.git_env`."""
+    if not url:
+        return url
+    msg = "repo_url must be an https://, http://, ssh:// or git:// URL with a host"
+    if url != url.strip() or any(c.isspace() for c in url) or url.startswith("-") or url.startswith("ext:"):
+        raise invalid(msg)
+    from urllib.parse import urlparse
+
+    u = urlparse(url)
+    if u.scheme in REPO_SCHEMES and u.hostname:
+        return url
+    local = os.environ.get("RAMEN_CLOUD", "local") == "local" and (url.startswith("/") or u.scheme == "file")
+    if not local:
+        raise invalid(msg + " (a path or file:// only on the local adapter)")
+    return url
+
 
 log = logging.getLogger("ramen.autoscale")
 
@@ -54,7 +81,7 @@ class Services:
             raise conflict(f"Group {name} exists")
         doc = {
             "name": name,
-            "repo_url": repo_url,
+            "repo_url": validate_repo_url(repo_url),
             "ref": ref,
             "created": now(),
             "created_by": by,
@@ -69,6 +96,8 @@ class Services:
 
     async def update_group(self, name, **fields) -> dict:
         g = await self.get_group(name)
+        if fields.get("repo_url") is not None:
+            validate_repo_url(fields["repo_url"])
         g.update({k: v for k, v in fields.items() if v is not None})
         return public(await self.store.put("groups", name, g))
 
@@ -390,7 +419,17 @@ class Services:
         out["autoscale"] = await self.autoscale(group, zone, user=user, ip=ip)
         return out
 
+    def _zone_lock(self, group, zone) -> asyncio.Lock:
+        locks = self.__dict__.setdefault("_autoscale_locks", {})
+        return locks.setdefault(f"{group}/{zone}", asyncio.Lock())
+
     async def autoscale(self, group, zone, user: str = "-", ip: str = "-", now: float | None = None) -> dict:
+        """One read-decide-write per zone at a time (0.8.0 SC4): the scheduler's tick and a Rebalance click must not
+        both read the pre-change count and both scale."""
+        async with self._zone_lock(group, zone):
+            return await self._autoscale(group, zone, user, ip, now)
+
+    async def _autoscale(self, group, zone, user: str, ip: str, now: float | None) -> dict:
         now = time.time() if now is None else now
         w = await self.worker_config(group, zone)
         try:

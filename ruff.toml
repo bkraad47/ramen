@@ -1,6 +1,6 @@
 # Shared lint/format settings; console/, runtime-py/ and tests/ extend this file from their pyproject.toml.
 line-length = 120
-target-version = "py314"
+target-version = "py312"  # the runtime is Python 3.12 (NeMo Guardrails, D45); every tree keeps 3.12 syntax, the console included
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]

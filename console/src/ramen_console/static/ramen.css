@@ -1,4 +1,4 @@
-:root{--coral:#F26B3A;--bg:#F4F1EC;--ink:#2b2622;--muted:#8a7f76;--card:#fffdfa;--line:#e6dfd5;--blue:#3a7bd5;--green:#3aa76d;--red:#d64545;--grey:#b9b1a8;--role-super-admin:#7a3fb5;--role-group-admin:#1f7a8c;--role-viewer:#8a7f76;--role-mcp-user:#3aa76d}
+:root{--coral:#F26B3A;--bg:#F4F1EC;--ink:#2b2622;--muted:#8a7f76;--card:#fffdfa;--line:#e6dfd5;--blue:#3a7bd5;--green:#3aa76d;--red:#d64545;--grey:#b9b1a8;--role-super-admin:#7a3fb5;--role-group-admin:#1f7a8c;--role-viewer:#8a7f76;--role-mcp-user:#3aa76d;--role-custom:#5c6b7a}
 *{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh}
 a{color:var(--coral)}nav.side{width:248px;background:#fff;border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:100vh;flex-shrink:0;display:flex;flex-direction:column}
 nav.side img{width:56px;height:56px;display:block;margin:0 auto 16px;border-radius:12px}
@@ -6,7 +6,7 @@ nav.side a{display:block;padding:8px 12px;border-radius:8px;color:var(--ink);tex
 nav.side .who{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .identity{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .identity .email{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:12px}
-.role{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap}
+.role{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;white-space:nowrap;background:var(--role-custom)}
 .role.super-admin{background:var(--role-super-admin)}.role.group-admin{background:var(--role-group-admin)}.role.viewer{background:var(--role-viewer)}.role.mcp-user{background:var(--role-mcp-user)}
 nav.side a.logout,.logout{display:block;margin:10px 0 6px;padding:6px 0;color:var(--red);font-weight:600;text-decoration:none}
 nav.side a.logout:hover{background:transparent;color:var(--red);text-decoration:underline}

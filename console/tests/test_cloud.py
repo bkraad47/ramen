@@ -177,25 +177,35 @@ def test_factory(monkeypatch, tmp_path):
 
 
 # --- 0.8.0 SC2 / SC3 -------------------------------------------------------------------------------------------------
-def test_sync_repo_refuses_an_ext_or_file_remote():
-    """`repo_url` is validated before any git runs, and git itself is held to network protocols."""
+def test_sync_repo_refuses_an_ext_or_file_remote(monkeypatch):
+    """`repo_url` is validated before any git runs, and git itself is held to network protocols. A path or `file://`
+    is a local-adapter feature (a checkout on disk), never accepted by a cloud console."""
     from ramen_console.errors import ApiError
     from ramen_console.services import validate_repo_url
 
+    def refused(url):
+        with pytest.raises(ApiError) as e:
+            validate_repo_url(url)
+        assert e.value.status_code == 422, url
+
+    monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     for bad in (
         "ext::sh -c id",
         "file:///etc",
+        "/srv/repo",
         "-oProxyCommand=id",
         "ssh host",
         "http://",
         "git@host:x.git",
-        " https://h/r",
     ):
-        with pytest.raises(ApiError) as e:
-            validate_repo_url(bad)
-        assert e.value.status_code == 422, bad
+        refused(bad)
+    refused(" https://h/r")
     for good in ("https://github.com/bkraad47/ramen-demo-mcp-group", "ssh://git@github.com/o/r.git", "git://h/r", ""):
         assert validate_repo_url(good) == good
+    monkeypatch.setenv("RAMEN_CLOUD", "local")
+    assert validate_repo_url("/srv/repo") == "/srv/repo" and validate_repo_url("file:///srv/repo") == "file:///srv/repo"
+    for bad in ("ext::sh -c id", "-oProxyCommand=id", "ssh host"):
+        refused(bad)
     allowed = git_env(None)["GIT_ALLOW_PROTOCOL"].split(":")
     assert "ext" not in allowed and {"https", "ssh"} <= set(allowed)
 

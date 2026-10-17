@@ -11,7 +11,8 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
     an HTML one. The netloc must now be exactly `host[:port]`, and the hand-off page encodes the target per context
     (HTML-escaped attribute, JSON string in the script with `<`, `>`, `&` as `\u` escapes).
   - A group admin could set `repo_url` to `ext::sh -c …` and the next deploy ran it in the console. `repo_url` must be
-    an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, `file:`, scp-like or `-`-prefixed values),
+    an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, scp-like or `-`-prefixed values; a path or
+    `file://` only on the local adapter),
     git runs with `GIT_ALLOW_PROTOCOL` (no remote helpers) and `--` before the URL.
   - A repo could ship `.ramen/env-<zone>` and the worker applied it as its deploy file (self-minted `RAMEN_MCP_KEYS`,
     policy overrides). The console never uploads `.ramen/` from a checkout (and drops a tracked one from the local

@@ -15,13 +15,14 @@ from pathlib import Path
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests.localconsole import SESSION_SECRET
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import JsonRpcError, text_of
 from ramen_tests.tokens import user_token
 
 pytestmark = pytest.mark.conformance
 TRANSPORTS = ("grpc", "http")
-SECRET, ISSUER, PUBLIC = "conformance-secret", "https://console.example", "https://mcp.example"
+SECRET, ISSUER, PUBLIC = SESSION_SECRET, "https://console.example", "https://mcp.example"
 IGNORE = shutil.ignore_patterns("__pycache__")
 BLOCKED_TEXT = "please DROP TABLE users"
 SECRET_VALUE = "conformance-" + secrets.token_hex(6)  # generated: never a literal a scanner could flag

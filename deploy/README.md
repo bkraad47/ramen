@@ -138,8 +138,8 @@ cd ../../..
 
 # 2. images (linux/amd64 → ECR repos ramen/console, ramen/worker); optional — see "Public images" to pull docker.io/bkraad47/* instead
 aws ecr get-login-password | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
-docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=0.3.0 -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/worker:0.3.0 --push .
-docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=0.3.0 -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/console:0.3.0 --push console
+docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=$(cat VERSION) -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/worker:$(cat VERSION) --push .
+docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=$(cat VERSION) -t $ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/ramen/console:$(cat VERSION) --push console
 
 # 3. console
 CLUSTER=$(terraform -chdir=deploy/terraform/aws output -raw cluster_name)

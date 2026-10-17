@@ -13,7 +13,7 @@ import time
 import pytest
 
 from ramen_tests import env as E
-from ramen_tests.localconsole import LocalConsole, supports_access_ttl
+from ramen_tests.localconsole import SESSION_SECRET, LocalConsole, supports_access_ttl
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import (
     HttpError,
@@ -27,7 +27,7 @@ from ramen_tests.mcp_client import (
 from ramen_tests.tokens import claims_of, user_token
 
 pytestmark = pytest.mark.conformance
-SECRET, ISSUER, PUBLIC = "conformance-secret", "https://console.example", "https://mcp.example"
+SECRET, ISSUER, PUBLIC = SESSION_SECRET, "https://console.example", "https://mcp.example"
 PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
 META = '/.well-known/oauth-protected-resource"'
 

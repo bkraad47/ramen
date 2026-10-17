@@ -79,8 +79,10 @@ docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VER
 
 From a Colima or Lima Docker, `docker save` the images and push the tarballs with `crane push` after
 `az acr login --name <acr> --expose-token` (`crane auth login $ACR -u 00000000-0000-0000-0000-000000000000 -p <token>`).
-The public images on Docker Hub (`docker.io/bkraad47/ramen-console`, `ramen-worker`) work too: set
-`image.repository` and `console.env.RAMEN_IMAGE_WORKER`.
+Or skip the build: the release's public images `docker.io/bkraad47/ramen-console` and `ramen-worker` (also on
+`ghcr.io/bkraad47/`) run with `--set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V
+--set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V` added after the Terraform values in the Helm
+command below.
 
 ## 3. The console
 

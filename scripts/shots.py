@@ -14,6 +14,7 @@ was captured for; `console/tests/test_docs_images.py` fails when that falls behi
 import argparse
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -25,7 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 PORT = int(os.environ.get("RAMEN_SHOTS_PORT", "18100"))
 BASE = f"http://127.0.0.1:{PORT}"
-EMAIL, PASSWORD = "admin@ramen.local", "Shots-Console-1!"
+EMAIL = "admin@ramen.local"
+PASSWORD = os.environ.get("RAMEN_SHOTS_PASSWORD") or secrets.token_hex(10) + "Aa1!"  # generated per run, never static
 
 # file -> (path, what the page is, full page (True), viewport (False) or a CSS selector: just that part of the page)
 PAGES = {
@@ -411,13 +413,13 @@ def main() -> int:
         "RAMEN_CLOUD": "local",
         "RAMEN_ADMIN_EMAIL": EMAIL,
         "RAMEN_ADMIN_PASSWORD": PASSWORD,
-        "RAMEN_SESSION_SECRET": "shots-only-secret",
+        "RAMEN_SESSION_SECRET": secrets.token_hex(32),
         "RAMEN_BACKUP_ROOT": "/tmp/ramen-shots/backups",
         "RAMEN_BUCKET_ROOT": "/tmp/ramen-shots/buckets",
         "RAMEN_LOG_ROOT": "/tmp/ramen-shots/logs",
         "RAMEN_LOCAL_WORKERS": f"demo/a={cold.target},demo/b={hot.target},analytics/a={cold.target}",
         "RAMEN_WORKER_URL": cold.target,
-        "RAMEN_ADMIN_KEY": "shots",
+        "RAMEN_ADMIN_KEY": secrets.token_hex(24),
     }
     from cryptography.fernet import Fernet
 

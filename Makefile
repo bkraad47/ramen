@@ -25,6 +25,7 @@ shots:
 # ruff (shared ruff.toml) on every Python tree, cargo fmt/clippy, helm lint, terraform fmt; actionlint/shellcheck when installed.
 AZURE_HELM = --set provider=azure,azure.nodeResourceGroup=MC_x,azure.clientId=x,azure.publicHostname=h.sslip.io
 lint:
+	python3 scripts/check_secrets.py
 	@for d in console runtime-py tests; do (cd $$d && uv sync -q --all-extras && uv run ruff check . && uv run ruff format --check .) || exit 1; done
 	cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local
 	cd node-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings
@@ -71,11 +72,17 @@ push-console:
 	docker buildx build --platform $(PLATFORM) --build-arg RAMEN_VERSION=$(VERSION) -t $(REGISTRY)/console:$(VERSION) --push console
 
 env:
-	@[ -f deploy/local/.env ] || cp deploy/local/.env.example deploy/local/.env
-	@[ deploy/local/.env -nt deploy/local/.env.example ] || echo "note: deploy/local/.env is older than .env.example — new keys may be missing (diff them or delete .env to regenerate)"
+	@python3 deploy/local/gen_env.py   # writes .env with generated secrets; rotates a stale one; keeps a good one
 
+# Pulls the release's published images (docker.io/bkraad47/ramen-{console,worker}:$VERSION; RAMEN_IMAGE_REGISTRY=ghcr.io/bkraad47
+# to switch); a tag that is not published yet (a branch ahead of the release) falls back to a build. BUILD=1 always builds.
 up: env
-	$(COMPOSE) up -d --build
+ifeq ($(BUILD),1)
+	$(COMPOSE) build
+else
+	$(COMPOSE) pull --ignore-pull-failures console worker
+endif
+	$(COMPOSE) up -d
 
 down:
 	$(COMPOSE) down -v

@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.7.5
+  version_current: 0.7.6
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -87,7 +87,7 @@ nav:
       - Interface contracts: CONTRACTS.md
       - Contributing and modifying: contributing.md
       - Version tracker: versions.md
-      - Architecture (v0.7.5): architecture/index.md
+      - Architecture (v0.7.x): architecture/index.md
       - Architecture history:
           - v0.6.0: architecture/v0.6.0.md
           - v0.4.0: architecture/v0.4.0.md

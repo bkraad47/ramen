@@ -26,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/check_versions.py
+      - run: python3 scripts/check_secrets.py
       - run: python3 scripts/check_docs_links.py
 
   python:
@@ -150,8 +151,7 @@ jobs:
         working-directory: tests
         env:
           RAMEN_NODE_BIN: ${{ github.workspace }}\node-rs\target\release\ramen-node.exe
-          RAMEN_MCP_KEY: test-key
-        run: uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py conformance/test_numpy_deps.py
+        run: export RAMEN_MCP_KEY=rmk_$(openssl rand -hex 16) && uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py conformance/test_numpy_deps.py
 
   iac:
     # Terraform (fmt + validate, no backend, no credentials) and Helm (lint + render) for every provider: gcp, aws, azure.
@@ -200,11 +200,8 @@ jobs:
       RAMEN_NODE_URL: localhost:8080   # gRPC h2c target (CONTRACTS §11)
       RAMEN_E2E_GROUP: demo
       RAMEN_E2E_ZONE: local
-      RAMEN_MCP_KEY: ci-mcp-key
-      RAMEN_MCP_KEYS: ci-mcp-key
-      RAMEN_ADMIN_KEY: ci-admin-key
       RAMEN_ADMIN_EMAIL: admin@ramen.local
-      RAMEN_ADMIN_PASSWORD: ramen-admin
+      # RAMEN_MCP_KEY(S), RAMEN_ADMIN_KEY, RAMEN_ADMIN_PASSWORD, RAMEN_FERNET_KEY, RAMEN_SESSION_SECRET: generated below
       RAMEN_TLS_INSECURE: "1"
       RAMEN_DEMO_REPO: https://github.com/bkraad47/ramen-demo-mcp-group
     steps:
@@ -229,6 +226,12 @@ jobs:
         run: |
           curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin grpcurl
           grpcurl -version
+      - name: Generate the stack's secrets (nothing static; scripts/check_secrets.py)
+        run: |
+          k=rmk_$(openssl rand -hex 16); echo "::add-mask::$k"; { echo "RAMEN_MCP_KEY=$k"; echo "RAMEN_MCP_KEYS=$k"; } >> "$GITHUB_ENV"
+          for v in RAMEN_ADMIN_KEY RAMEN_SESSION_SECRET; do s=$(openssl rand -hex 24); echo "::add-mask::$s"; echo "$v=$s" >> "$GITHUB_ENV"; done
+          p="$(openssl rand -hex 10)Aa1!"; echo "::add-mask::$p"; echo "RAMEN_ADMIN_PASSWORD=$p" >> "$GITHUB_ENV"
+          f=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())'); echo "::add-mask::$f"; echo "RAMEN_FERNET_KEY=$f" >> "$GITHUB_ENV"
       - name: Compose up
         run: docker compose -f deploy/local/docker-compose.yml up -d --build
       - name: Wait ready

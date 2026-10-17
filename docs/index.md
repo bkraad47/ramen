@@ -16,7 +16,7 @@ hide: [toc]
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
       "operatingSystem": "Kubernetes (GKE, EKS, AKS), Docker",
-      "softwareVersion": "0.7.5",
+      "softwareVersion": "0.7.6",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
       "downloadUrl": "https://github.com/bkraad47/ramen/releases",
@@ -51,7 +51,7 @@ hide: [toc]
         "Docker"
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"
@@ -136,9 +136,7 @@ it and press Deploy.
 - **Rust where it counts.** The Rust node owns auth, limits and the transport. Your Python runs in a separate
   process it can restart at any time.
 
-**What is verified.** CI proves both transports on real node processes on Linux and Windows. 0.7.5 was deployed to
-GKE, EKS and AKS and passed the same 33 checks on each (NeMo rails, custom roles, tool access, HTTP and the bridge),
-Microsoft Entra ID sign-in with group lookup on all three, Google sign-in on GKE, and autoscaling load tests on all
-three. Google Workspace *groups* are tested against a fake only.
-[What each run covered, hop by hop.](wiki/transport.md#what-is-verified-and-what-is-not)
+**What is verified.** 0.7.5 ran live on GKE, EKS and AKS, with the same 33 checks, Entra ID sign-in with group
+lookup and autoscaling load tests on each, and CI proves both transports on Linux and Windows; the single record,
+including what is tested only, is [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not).
 Everything in detail is in the [wiki](wiki/index.md).

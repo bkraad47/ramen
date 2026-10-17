@@ -9,7 +9,8 @@ they are marked.
 
 | Version | Date | What changed |
 |---|---|---|
-| **0.7.5** | not tagged yet | Guardrails in the worker (NeMo Guardrails or your own policy), groups from Entra ID and Google Workspace at sign-in, custom and OAuth-only roles, identity providers on the Config page, Azure (AKS) as the third cloud, autoscaling by Ramen between 1 and an admin's max, salted hashes at rest, bridge 0.3.0. |
+| **0.7.6** | 2026-10-17 | Packaging and docs: the compose stack pulls the published Docker Hub images, the worker, Glama and MCPB images pin bridge 0.3.0 (now on PyPI), the deploy guides show the public images, each claim lives on one page, and no password or key is static anywhere (generated `.env`, kind, CI; `check_secrets.py` in CI). |
+| 0.7.5 | 2026-10-10 | Guardrails in the worker (NeMo Guardrails or your own policy), groups from Entra ID and Google Workspace at sign-in, custom and OAuth-only roles, identity providers on the Config page, Azure (AKS) as the third cloud, autoscaling by Ramen between 1 and an admin's max, salted hashes at rest, bridge 0.3.0. |
 | 0.7.2 | 2026-10-07 | Per-tool access (who may see and who may call each tool), clients told about a rollout, a drift signal. |
 | 0.7.1 | 2026-10-05 | Golden cases skip blocked tools; CI fixes. |
 | 0.7.0 | 2026-10-05 | Your tests gate your rollout: schema compatibility gate, golden cases, output schemas, token expiry mid-task. |

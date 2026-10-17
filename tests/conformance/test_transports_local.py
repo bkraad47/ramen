@@ -5,10 +5,12 @@ The gRPC surface keeps its own module (test_mcp_node_local.py); this one runs th
 binary and an importable ramen_runtime."""
 
 import json
+import secrets
 
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests.localconsole import SESSION_SECRET
 from ramen_tests.localnode import LocalNode
 from ramen_tests.mcp_client import (
     MAX_MESSAGE,
@@ -29,7 +31,7 @@ ARGS = {"var1": 2, "var2": 3, "func": "add"}
 
 @pytest.fixture(scope="module")
 def plain():
-    with LocalNode(env={"RAMEN_SESSION_SECRET": "conformance-secret"}) as n:
+    with LocalNode(env={"RAMEN_SESSION_SECRET": SESSION_SECRET}) as n:
         n.wait_serving()
         yield n
 
@@ -88,7 +90,7 @@ def test_empty_key_set_denies_all_on_each_transport(transport):
     with LocalNode(env={"RAMEN_MCP_KEYS": ""}) as n:
         n.wait_answering()
         c = n.for_transport(transport)
-        assert c.outcome(PING, key="test-key") == "UNAUTHENTICATED"
+        assert c.outcome(PING, key="rmk_" + secrets.token_hex(8)) == "UNAUTHENTICATED"  # any key: the set is empty
         assert c.outcome(PING, key="") == "UNAUTHENTICATED"
 
 
@@ -157,13 +159,14 @@ def test_access_log_names_the_transport_and_the_consumer(plain):
 
 # --- HTTP-only (§16.1 / §16.2) ----------------------------------------------------------------------------------------
 def test_http_initialize_mints_a_session_that_only_its_credential_can_use(plain):
-    with LocalNode(env={"RAMEN_MCP_KEYS": "test-key,other-key", "RAMEN_SESSION_SECRET": "s"}) as n:
+    mine, other_key = "rmk_" + secrets.token_hex(8), "rmk_" + secrets.token_hex(8)
+    with LocalNode(env={"RAMEN_MCP_KEYS": f"{mine},{other_key}", "RAMEN_SESSION_SECRET": secrets.token_hex(16)}) as n:
         n.wait_serving()
-        c = n.http_client()
+        c = n.http_client(key=mine)
         c.initialize()
         assert c.session_id and c.session_id.count(".") in (2, 3)  # 0.7.2 C11: `<nonce>.<expiry>.<hash12>.<mac>`
         assert c.ping() == {}  # accepted back
-        other = n.http_client(key="other-key")
+        other = n.http_client(key=other_key)
         other.session_id = c.session_id
         assert other.status(PING) == 404, "a session id must not be reusable under another key"
         c.session_id = "garbage"
@@ -174,7 +177,7 @@ def test_http_initialize_mints_a_session_that_only_its_credential_can_use(plain)
         c.session_id = None
         c.initialize()
         assert c.end_session() == 204
-        assert c.end_session(key="other-key") in (404, 401)
+        assert c.end_session(key=other_key) in (404, 401)
 
 
 def test_http_origin_validation(plain):
@@ -204,7 +207,9 @@ def test_http_content_negotiation_and_verbs(plain):
 
 def test_http_protected_resource_metadata_appears_only_with_an_issuer(plain):
     assert plain.http.get("/.well-known/oauth-protected-resource").status_code == 404
-    with LocalNode(env={"RAMEN_OAUTH_ISSUER": "https://console.example", "RAMEN_SESSION_SECRET": "s"}) as n:
+    with LocalNode(
+        env={"RAMEN_OAUTH_ISSUER": "https://console.example", "RAMEN_SESSION_SECRET": secrets.token_hex(16)}
+    ) as n:
         n.wait_serving()
         r = n.http_client().get("/.well-known/oauth-protected-resource")
         assert r.status_code == 200
@@ -259,7 +264,7 @@ def test_http_over_node_tls():
 def test_tool_code_never_sees_the_nodes_credentials():
     """H1: the runtime is spawned without the node's secrets. A tool that lists its own environment is the proof."""
     secrets = {
-        "RAMEN_SESSION_SECRET": "conformance-secret",
+        "RAMEN_SESSION_SECRET": SESSION_SECRET,
         "RAMEN_OAUTH_ISSUER": "https://console.example",
         "RAMEN_ALLOWED_ORIGINS": "https://app.example",
     }
@@ -279,7 +284,7 @@ def test_a_console_minted_token_is_a_credential_on_each_transport(transport):
     the access log names the user, and a token for another zone, another issuer or yesterday does not."""
     import time
 
-    secret, issuer = "conformance-secret", "https://console.example"
+    secret, issuer = SESSION_SECRET, "https://console.example"
     env = {
         "RAMEN_SESSION_SECRET": secret,
         "RAMEN_OAUTH_ISSUER": issuer + "/",

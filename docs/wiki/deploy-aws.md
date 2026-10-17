@@ -1,8 +1,8 @@
 # Deploy on AWS
 
-EKS, DynamoDB, S3, Secrets Manager, ECR and an application load balancer with gRPC target groups. The 0.6.0 run
-applied this on a real account with two zones, the demo group, the Redis throttle, the bridge over TLS and a
-teardown. Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
+EKS, DynamoDB, S3, Secrets Manager, ECR and an application load balancer with gRPC target groups. Every release
+since 0.5.6 has applied this on a real account and torn it down; the 0.7.5 run added the 33-check verification, Entra
+ID sign-in with group lookup and the autoscaling load tests. Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
 Fluent Bit at volume. If a step breaks on your account, open an issue with the step and the error.
 
 Cost while it runs: the EKS control plane (about $0.10 an hour while its Kubernetes version is in standard
@@ -56,6 +56,11 @@ gets an address.
 
 ## 2. Images
 
+Every release publishes `docker.io/bkraad47/ramen-console` and `ramen-worker` (also on `ghcr.io/bkraad47/`). To run
+those, skip this step and add `--set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$(cat VERSION)
+--set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$(cat VERSION)` to the Helm command in the next
+step. To build and push your own into ECR, which is what the release verification runs did:
+
 ```sh
 REGION=us-east-1; ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
@@ -93,7 +98,7 @@ kubectl -n ramen-system rollout status deploy/console
 kubectl -n ramen-system get ingress console          # ADDRESS is the load balancer's DNS name after a few minutes
 aws acm get-certificate --certificate-arn $CERT --region $REGION --query Certificate --output text > ramen-lb.pem
 ALB=<that address>
-curl --cacert ramen-lb.pem https://$ALB/readyz      # {"ok":true,"store":"dynamodb","version":"0.6.0"}
+curl --cacert ramen-lb.pem https://$ALB/readyz      # {"ok":true,"store":"dynamodb","version":"<version>"}
 ```
 
 Then set the public address, which is the OAuth issuer the workers trust, and upgrade again:

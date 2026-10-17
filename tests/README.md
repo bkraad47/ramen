@@ -20,7 +20,7 @@ stack and a cloud deployment. Contract under test: `docs/CONTRACTS.md` (transpor
 | `conformance/test_call_args_hash.py` | built `ramen-node` + importable `ramen_runtime` | 0.7.2 C12: `tools/call` log lines carry `args` = sha256(canonical arguments)[:12], equal for equal arguments in any key order, `""` without arguments, never the values |
 | `conformance/test_scripts.py` | none | `scripts/check_versions.py --demo`: `../ramen-demo-mcp/VERSION` is a row, mismatch fails |
 | `conformance/test_bridge.py` | `RAMEN_NODE_URL` + key + `ramen-mcp-bridge` (`RAMEN_BRIDGE_CMD`, PATH, or `../../ramen-mcp-bridge/.venv`) | §11 bridge: official `mcp` SDK stdio client → `ramen-mcp-bridge` → `Mcp/Call`: initialize, list/call/read/get, unknown tool, bad key fails cleanly |
-| `conformance/test_console_api.py` | `RAMEN_CONSOLE_URL` (opt: `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD`, default `admin@ramen.local`/`ramen-admin`) | §4: bootstrap login, RBAC matrix, secret values never in responses, API keys, audit, backup |
+| `conformance/test_console_api.py` | `RAMEN_CONSOLE_URL` (opt: `RAMEN_ADMIN_EMAIL`/`RAMEN_ADMIN_PASSWORD`, default `admin@ramen.local` and the generated password in `deploy/local/.env`) | §4: bootstrap login, RBAC matrix, secret values never in responses, API keys, audit, backup |
 | `conformance/test_console_auth.py` | `RAMEN_CONSOLE_URL` (reset-mail case also needs `RAMEN_MAIL_DIR` = host path of the console's `RAMEN_SMTP_HOST=file://` dir, compose: `deploy/local/.mail`) | §9: CSRF (cookie sessions 403 without `X-Ramen-CSRF`, API keys exempt), `GET|PUT /api/v1/config/auth` super admin + audited, SA permission request → 409 on denied rule (audited) → approve → `sa_permissions` on the zone, `PUT …/blocked` → env + group page, password reset via emailed link (single use) |
 | `e2e/test_demo_flow.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` (+`RAMEN_ADMIN_KEY` for the metrics case) | console → zone/group/env → mint `rmk_` key → deploy job → Health SERVING → MCP calls over gRPC → only the minted key works → Admin/Metrics, audit, dashboard |
 | `e2e/test_tool_blocking.py` | same (runs after the demo flow) | §9: `PUT …/blocked [demo_calculator_tool]` → deploy → node hides it from `tools/list` and denies the call → unblock → deploy → restored |
@@ -56,8 +56,8 @@ Local compose stack (`deploy/local/docker-compose.yml`):
 ```sh
 docker compose -f deploy/local/docker-compose.yml up -d --build
 scripts/wait_ready.sh https://localhost:8443/login && scripts/wait_ready.sh localhost:8080 120 2 --any
-cd tests && RAMEN_CONSOLE_URL=https://localhost:8443 RAMEN_NODE_URL=localhost:8080 RAMEN_ADMIN_KEY=local-admin-key \
-  RAMEN_ADMIN_EMAIL=admin@ramen.local RAMEN_ADMIN_PASSWORD=ramen-admin RAMEN_TLS_INSECURE=1 \
+cd tests && RAMEN_CONSOLE_URL=https://localhost:8443 RAMEN_NODE_URL=localhost:8080 RAMEN_ADMIN_KEY=$(sed -n 's/^RAMEN_ADMIN_KEY=//p' ../deploy/local/.env) \
+  RAMEN_ADMIN_EMAIL=admin@ramen.local RAMEN_ADMIN_PASSWORD=$(sed -n 's/^RAMEN_ADMIN_PASSWORD=//p' ../deploy/local/.env) RAMEN_TLS_INSECURE=1 \
   uv run pytest -rs e2e conformance cloud --cov --cov-report=xml
 ```
 `RAMEN_NODE_URL` is a gRPC target `host:port`: a worker directly (compose `localhost:8080`, h2c) or the cloud LB (`RAMEN_NODE_TLS=1`);

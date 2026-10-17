@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=${RAMEN_DEMO_DIR:-/tmp/ramen-demo-worker}
 PORT=${RAMEN_NODE_PORT:-8080}
-KEY=${RAMEN_MCP_KEYS:-demo-key}
+KEY=${RAMEN_MCP_KEYS:-rmk_$(openssl rand -hex 16)}   # generated per run; nothing static
 REPO=${RAMEN_DEMO_REPO:-https://github.com/bkraad47/ramen-demo-mcp-group}
 mkdir -p "$WORK"
 if [ -d "$WORK/demo/.git" ]; then git -C "$WORK/demo" pull -q; else git clone -q "$REPO" "$WORK/demo"; fi

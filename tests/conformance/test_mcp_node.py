@@ -184,7 +184,7 @@ def test_admin_requires_admin_key(node):
                 fn(admin_key=bad)
             except grpc.RpcError as e:
                 code = e.code()
-            if code == S.UNIMPLEMENTED:
+            if code in (S.UNIMPLEMENTED, S.UNKNOWN):  # UNKNOWN: the AWS ALB answers 464 for an unrouted gRPC path
                 pytest.skip("ramen.v1.Admin is not routed through this LB (§11: Admin stays cluster-internal)")
             assert code in (S.UNAUTHENTICATED, S.PERMISSION_DENIED), f"{fn.__name__} key={bad!r} → {code}"
             if code == S.PERMISSION_DENIED:

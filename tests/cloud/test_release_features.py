@@ -228,10 +228,10 @@ async def test_the_same_person_through_the_bridge(world, analyst_tokens, tmp_pat
     token_file = tmp_path / "tokens.json"
     token_file.write_text(json.dumps({**analyst_tokens, "expires_at": time.time() + 600}))
     args = ["--target", node.target, "--group", GROUP, "--zone", ZONE, "--tls" if node.tls else "--insecure"]
-    if node.tls and not E.tls_verify():
+    if node.tls and (node._ca is not None or not E.tls_verify()):  # RAMEN_NODE_CA (a self-signed edge) or insecure mode
         from ramen_tests.mcp_client import _ca_file, _insecure_root
 
-        args += ["--ca", _ca_file(_insecure_root(node.target)[0])]
+        args += ["--ca", _ca_file(node._ca if node._ca is not None else _insecure_root(node.target)[0])]
     args += [
         "--oauth",
         world["base"],

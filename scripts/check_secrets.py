@@ -18,7 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # sha256 of each literal that once shipped as a default (the literals themselves must not appear here either);
-# a line is split into tokens and each token is hashed. Add a hash with: python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].rstrip("=").encode()).hexdigest())' <literal>
+# a line is split into tokens and each token is hashed. New hash:
+#   python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].rstrip("=").encode()).hexdigest())' <literal>
 KNOWN_SHA256 = frozenset(
     {
         "0a1e78ac529bb5ba79e173bf8d0c8386e314c51b5a0879cac4a9c7da15736993",

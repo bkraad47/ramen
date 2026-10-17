@@ -65,7 +65,7 @@ def parse_weights(ingress: dict | None) -> dict[str, int]:
     try:
         tgs = json.loads(ingress["metadata"]["annotations"][ACTION])["forwardConfig"]["targetGroups"]
         return {t["serviceName"]: int(t["weight"]) for t in tgs}
-    except KeyError, TypeError, ValueError:
+    except (KeyError, TypeError, ValueError):
         return {"worker": 100, "worker-canary": 0}
 
 

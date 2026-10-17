@@ -15,7 +15,7 @@ def _entry(i: int, raw: str, names: dict[str, str]) -> dict:
         doc = json.loads(raw)
         if not isinstance(doc, dict):
             raise ValueError
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return {
             "i": i,
             "raw": raw,

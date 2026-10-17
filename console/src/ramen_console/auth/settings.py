@@ -1,5 +1,7 @@
 """Auth settings (CONTRACTS §9): yaml/env defaults, overridden by the store doc `config/auth` (super-admin toggle)."""
 
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass, field
 

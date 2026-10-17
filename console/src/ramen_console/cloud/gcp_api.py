@@ -74,7 +74,7 @@ def _try_json(text) -> dict | None:
         return None
     try:
         doc = json.loads(text)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
     return doc if isinstance(doc, dict) else None
 

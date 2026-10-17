@@ -16,7 +16,7 @@ WINDOW_S = 60
 def _ts(value) -> float | None:
     try:
         return datetime.fromisoformat(str(value)).timestamp()
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
 
 

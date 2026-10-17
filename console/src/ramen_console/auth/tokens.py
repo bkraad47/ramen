@@ -16,6 +16,6 @@ class Tokens:
     def load(self, kind: str, token: str) -> tuple[str, str] | None:
         try:
             d = self._s.loads(token, max_age=AGES[kind])
-        except BadSignature, KeyError:
+        except (BadSignature, KeyError):
             return None
         return (d["u"], d["n"]) if d.get("k") == kind else None

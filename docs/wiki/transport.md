@@ -241,8 +241,10 @@ the home page point here.
   routed through an edge by design; the mail-dir test runs on compose). `scripts/load_test.py` (64 concurrent calls, max 3):
   all six scenarios passed on each cloud — up to 3 in 137–253 s, back to 1 in 600–678 s, console `/readyz` answered every
   poll; the only non-200 answers were `429` from the node's in-flight cap, never a 5xx. Mail flows (invitation, password
-  reset, magic link) end to end on the compose file backend. Entra ID sign-in with the groups lookup: _pending the
-  user's browser session_. Google Workspace groups: fake Cloud Identity only (no Workspace tenant).
+  reset, magic link) end to end on the compose file backend. Microsoft Entra ID sign-in with the groups lookup on
+  all three (`login.oauth … groups:lookup`, `idp_memberships {demo: group_admin}` from the admins group), removal from the
+  group and a fresh sign-in → `analyst_sso`, and the same person through the stdio bridge (`--oauth`): tools listed,
+  the injection blocked by the rails, `oauth.authorize`/`oauth.token` audited. Google Workspace groups: fake Cloud Identity only (no Workspace tenant).
 - **Verified live in 0.7.5 on GKE, EKS and AKS** (each torn down afterwards): the 33-check run on each — a canary
   deploy of the demo repo with its NeMo rails and golden cases, custom roles and per-tool access by name and by base,
   a console token over Streamable HTTP and the same person through the stdio bridge (`--oauth`), the guardrail block

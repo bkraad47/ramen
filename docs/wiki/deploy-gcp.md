@@ -2,7 +2,7 @@
 
 A regional GKE Autopilot cluster, Firestore, a bucket, Secret Manager and a global HTTPS load balancer with a
 Google-managed certificate on a free `sslip.io` hostname. About 25 minutes, most of it waiting for GKE and the
-load balancer. Every release is run this way on a throwaway project and torn down the same day.
+load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down the same day ([the record](transport.md#what-is-verified-and-what-is-not)).
 
 Cost while it runs: the Autopilot pods (around $0.05 an hour for the console and two small workers, plus the
 control-plane fee after the free tier), the load balancer forwarding rule (around $0.025 an hour), a static IP
@@ -141,14 +141,12 @@ admin approves it. [Users and access](users-access.md#service-account-permission
 - **Scale**: the group page's *Zone actions* card. Admins set the count; super admins set the size and the sizes
   a zone allows.
 - **IP rules**: a CIDR list per zone, in the group page's *Zone actions* card. It becomes the node's own
-  allow-list and a Cloud Armor policy. The policy is one per **group**, attached to each of its zones' backends,
-  so two zones of a group share the edge rule while their node allow-lists stay separate. Include the console's
-  own range: a deploy smoke-tests the worker like any other client
-  ([Groups, zones and regions](groups-zones.md#ip-rules)).
+  allow-list and a Cloud Armor policy, one per **group**, attached to each of its zones' backends. Include the
+  console's own range ([Groups, zones and regions](groups-zones.md#ip-rules)).
 - **Logs**: Cloud Logging for the namespace, on the Logs page. External monitors read the same logs with
   `resource.labels.namespace_name="ramen-<group>-<zone>"`.
-- **Upgrade the console**: `make push`, or `--set image.tag=<version>` on the public image, then `kubectl -n ramen-system rollout restart deploy/console`. For a
-  minute or two after a console restart the load balancer can answer `503` with the body
+- **Upgrade the console**: `make push`, or `--set image.tag=<version>` on the public image, then
+  `kubectl -n ramen-system rollout restart deploy/console`. For a minute or two after a console restart the load balancer can answer `503` with the body
   `unconditional drop overload` (no healthy backend yet); retry. `scripts/cloud_smoke.sh` rides it out.
 - **Deploy from CI**: [Deploy from GitHub Actions](deploy-github-actions.md).
 

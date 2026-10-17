@@ -32,9 +32,9 @@ A zone created before 0.7.5 starts with max = its current count, so nothing scal
 A **rebalance** makes the decision. Two things trigger one:
 
 - **Rebalance and autoscale** in a zone's actions (group admins and up), or `POST …/zones/{z}/rebalance`.
-- The **Auto-rebalance scheduler** on the Config page (super admin; off by default, every 60 s when on). Since 0.7.5 it
-  visits every group × zone each interval, not only the skewed ones, so zones scale up and back down on their own.
-  Turn it on, or nothing scales without a button press.
+- The **Auto-rebalance scheduler** on the Config page (super admin; off by default, every 60 s when on). It visits
+  every group × zone each interval, not only the skewed ones, so zones scale up and back down on their own. Turn it
+  on, or nothing scales without a button press.
 
 The load-balancer leg of rebalance (GCP capacity scaler, AWS target-group weights) runs as before.
 

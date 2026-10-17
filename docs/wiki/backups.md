@@ -75,5 +75,5 @@ had comes back unable to sign in until an admin resets the password or they sign
 ## Moving between stores or clouds
 
 Take a backup, bring the new console up with the new store settings ([Configuration](configuration.md)), restore
-with `reconcile`, then re-add every secret, generate new MCP and API keys, and deploy each environment. Redeploy before expecting OAuth tokens to
-verify: a restored group gets a new session secret on its next deploy.
+with `reconcile`, then re-add every secret, generate new MCP and API keys, and deploy each environment. OAuth tokens
+verify only after that deploy: a restored group gets a new session secret on its next deploy.

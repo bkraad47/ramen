@@ -31,14 +31,18 @@ its pods and routes, and the zone's service account or IAM role.
 
 ### Blocked regions (0.7.0)
 
-A super admin can keep workers out of whole regions: **Config → Blocked regions** lists the regions of the cloud the
-console runs on (GCP, AWS or Azure; since 0.7.5 only that one, and a save keeps the lists of the others). A blocked region refuses new zones (`403 Region <r> is blocked by a
-super admin`, on the page and at `POST /api/v1/zones`), and a zone that already sits in a region blocked later
-fails its next deploy with the same message in the job log and a server warning, which the warning-email digest
-carries to the people on the notify list. Other zones of the environment still deploy. Group admins cannot change
-the list. `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...], "azure": [...]}`; a GCP zone `us-west1-a` belongs to
-`us-west1`, an AWS availability zone `eu-west-1a` to `eu-west-1`. On the zones page the location is a dropdown of the
-provider's zones grouped by region, minus the blocked ones; `local` zones keep a free-text location.
+A super admin can keep workers out of whole regions. **Config → Blocked regions** lists the regions of the cloud the
+console runs on (since 0.7.5 only that one; a save keeps the lists of the others). Group admins cannot change it.
+
+- A blocked region refuses new zones: `403 Region <r> is blocked by a super admin`, on the page and at
+  `POST /api/v1/zones`.
+- A zone already in a region blocked later fails its next deploy with the same message in the job log and a server
+  warning, which the warning-email digest carries to the notify list. Other zones of the environment still deploy.
+- `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...], "azure": [...]}`. A GCP zone `us-west1-a`
+  belongs to `us-west1`, an AWS availability zone `eu-west-1a` to `eu-west-1`.
+
+On the zones page the location is a dropdown of the provider's zones grouped by region, minus the blocked ones;
+`local` zones keep a free-text location.
 
 ## Creating a group
 
@@ -52,8 +56,9 @@ serves, service-account permissions, MCP keys, the worker image and restrictions
 ## Environments
 
 **Add environment** on the group page: a name, a ref and the zones, picked from a checkbox list of the zones that
-exist. Any group admin may attach any zone that exists, so a zone is a shared resource: a super admin decides
-which zones exist at all, and that is the control over where a group can run. `dev` can follow `main` while `prod` sits on a tag. Rolling back is deploying the older ref.
+exist. Any group admin may attach any zone that exists, so a zone is a shared resource: which zones exist at all,
+decided by a super admin, is the control over where a group can run. `dev` can follow `main` while `prod` sits on a
+tag. Rolling back is deploying the older ref.
 
 The **Environments** page lists every environment you can see, across the groups you belong to, with the last
 deploy flattened into the row: the outcome, when it ran, and the error if it failed. *Open group* goes to where
@@ -82,11 +87,15 @@ deploys are started.
 6. **Stable**: restart `worker` with the new template and wait.
 
 Any failure in steps 3 to 6 scales the canary to zero and leaves the stable pods untouched, a bad image pin
-included. A deploy refused as breaking offers **Deploy again, accept breaking changes** on its job card (the API
-takes `"breaking": true`); clients that hold a session keep talking to the stable workers meanwhile and see the
-new set on their next `tools/list`. The first deploy of a zone has nothing to compare against. On AWS the canary's share of traffic moves to the stable track before its pods change and comes back
-once it passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-github-actions.md). The job log on the
-group page shows each step. A stuck rollout names the pod that is not running and the scheduler's reason.
+included. The job log on the group page shows each step; a stuck rollout names the pod that is not running and
+the scheduler's reason.
+
+A deploy refused as breaking offers **Deploy again, accept breaking changes** on its job card (the API takes
+`"breaking": true`). Clients that hold a session keep talking to the stable workers meanwhile and see the new set on
+their next `tools/list`. The first deploy of a zone has nothing to compare against.
+
+On AWS the canary's share of traffic moves to the stable track before its pods change and comes back once it has
+passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-github-actions.md).
 
 ## Scaling and sizes
 
@@ -99,8 +108,9 @@ and the sizes a zone allows.
 ## Rebalance
 
 The dashboard shows a load cell per zone and group: `low`, `even`, `high` or `down`, from each node's in-flight
-count, where `low` is under 30% of the node's in-flight cap and `high` is over 80%. **Rebalance and autoscale** in *Zone actions* adjusts the load balancer (on GCP the backend's capacity scaler, on AWS
-the target-group weights) and makes the [autoscaling](autoscaling.md) decision for the zone. While the Gateway is
+count, where `low` is under 30% of the node's in-flight cap and `high` is over 80%. **Rebalance and autoscale** in
+*Zone actions* adjusts the load balancer (on GCP the backend's capacity scaler, on AWS the target-group weights) and
+makes the [autoscaling](autoscaling.md) decision for the zone. While the Gateway is
 still reconciling it answers `applied: false` with a note and retries in the background. A super admin can turn on
 the **auto-rebalance scheduler** on the Config page; since 0.7.5 it visits every group × zone each interval, and each
 run is audited as `scheduler`.
@@ -112,6 +122,10 @@ Since 0.7.0 each zone also shows its **manifest**: the hash of everything the wo
 worker reports on its metrics) with the names and the exact schemas a client sees in a collapsed section. The live
 workers cell shows each worker's hash and flags a **manifest mismatch** when the workers of one zone disagree, which
 is what a half-finished rollout looks like.
+
+**Disable** a package on one zone, or add it to **Blocked everywhere** on the environment. A blocked name
+disappears from `tools/list` and answers the JSON-RPC error `-32601` until it is enabled again. The node enforces
+it, so a bad tool can be pulled without a code change.
 
 ### Tool access (0.7.2)
 
@@ -131,20 +145,17 @@ The group page's **Drift** card shows, per zone and tool, how often the same cal
 arguments, hashed, never stored) within a minute, from the worker's call log. A high rate is what an agent retrying
 or abandoning a tool looks like. Above the threshold on the Config page (default 30 %) the console logs a warning the
 digest email carries. `GET /api/v1/groups/{g}/zones/{z}/drift`.
-**Disable** a package on one zone, or add it to **Blocked everywhere** on the environment. A blocked name
-disappears from `tools/list` and answers the JSON-RPC error `-32601` until it is enabled again. The node enforces
-it, so a bad tool can be pulled without a code change.
 
 ## IP rules
 
-**IP rules** in the group page's *Zone actions* card takes a CIDR list. It becomes the node's allow-list and an edge rule: a Cloud Armor
-policy per group on GCP, a WAF IP set per group on AWS, an Envoy Gateway `SecurityPolicy` per zone route on AKS. **The Cloud Armor policy is one per group**, so two zones
-of the same group share the edge rule even though their node allow-lists stay separate. An empty list allows
-every source. Include the console's
-own range, because a deploy smoke-tests the worker as an ordinary caller. Changing rules rolls the zone's pods.
+**IP rules** in the group page's *Zone actions* card takes a CIDR list. It becomes the node's allow-list and an edge
+rule: a Cloud Armor policy per group on GCP, a WAF IP set per group on AWS, an Envoy Gateway `SecurityPolicy` per
+zone route on AKS. **The Cloud Armor policy is one per group**, so two zones of the same group share the edge rule
+even though their node allow-lists stay separate. An empty list allows every source. Include the console's own range, because a deploy smoke-tests the
+worker as an ordinary caller. Changing rules rolls the zone's pods.
 
 ## Deleting
 
 Deleting an environment tears down its zones' deployments for the group. Deleting a group tears down everything
-it owned, in every zone, including its Cloud Armor policy on GCP and its WAF IP sets on AWS. On GKE a namespace can sit in `Terminating` for a while; [Deploy on GCP](deploy-gcp.md#gotchas)
-says what to do if it never clears.
+it owned, in every zone, including its Cloud Armor policy on GCP and its WAF IP sets on AWS. On GKE a namespace can
+sit in `Terminating` for a while; [Deploy on GCP](deploy-gcp.md#gotchas) says what to do if it never clears.

@@ -7,7 +7,8 @@ server: PKCE, pre-registered public clients, no client secret, no dynamic regist
 ## What an admin does once
 
 1. **Config → OAuth clients → Register client**: a name and the redirect URI. Any loopback name and port is
-   accepted, so `http://localhost/callback` covers Claude Code, Claude Desktop, Cursor and the bridge. The client
+   accepted, so `http://localhost/callback` covers Claude Code and the bridge (which is how Claude Desktop, Cursor and
+   VS Code sign a person in). The client
    id appears in the table.
 2. Give the person a role in the group on the Users page. **MCP User** is enough.
 
@@ -18,10 +19,10 @@ server: PKCE, pre-registered public clients, no client secret, no dynamic regist
 
 ## What the person does
 
-The sign-in step is the same whatever the account is: a Ramen password ([connect with a
+The sign-in step is the same whatever the account: a Ramen password ([connect with a
 password](connect-password.md)), Microsoft Entra ID or Google ([Entra ID and Workspace](sso.md)). The console's
-login page shows a button per provider, and a role marked OAuth-only sends the person to the provider. The client
-side differs only by how the client reaches Ramen:
+login page shows a button per provider, and a role marked OAuth-only sends the person to the provider. Clients
+differ only in how they reach Ramen:
 
 - **Streamable HTTP**: the client talks to `https://<edge>/mcp` itself. Claude Code can, because it takes a
   pre-registered client id in its config.
@@ -31,8 +32,8 @@ side differs only by how the client reaches Ramen:
   sign-in they go through the bridge. `uvx ramen-mcp-bridge@latest` runs the newest release without an install
   (needs [uv](https://docs.astral.sh/uv/)); `@latest` stops a cached uvx from running an old bridge.
 
-Admins do not need to type these: the group page's **How MCP users sign in** card generates every command below for
-the install's edge host, the group's zones and a registered client id, one section per identity provider.
+Admins need not type these: the group page's **How MCP users sign in** card generates every command below for the
+install's edge host, the group's zones and a registered client id, one section per identity provider.
 
 <figure markdown>
 ![How MCP users sign in, generated on the group page](../img/group-signin.png){ .ramen-shot }
@@ -77,15 +78,18 @@ the install's edge host, the group's zones and a registered client id, one secti
     ```
     Run by hand it signs in, then waits silently for MCP messages on stdin; that is normal.
 
-**Where the bridge keeps the token (bridge 0.3.0).** In memory by default: nothing is written to disk, and the
-person signs in again when the client restarts. `--keychain` keeps it in the operating system's secret store (macOS
-Keychain, or a Secret Service such as GNOME Keyring through `secret-tool`); `--token-file <path>` keeps it in a 0600
-file, for automation only. Tokens are forgotten 30 minutes after the last call (`--idle-timeout`, seconds, `0`
-disables). When a sign-in is needed while the client is already running, the bridge does not block: the MCP call
-answers error `-32001` with the sign-in link in `data.sign_in_url`, so the AI client can show the person the link;
-they open it, approve, and the next call works. `--no-browser` prints the link instead of opening a browser. Behind a
-self-signed certificate add `--ca <pem>`; it verifies the console during sign-in as well as the worker. Bridge 0.2.x
-kept the refresh token in `~/.config/ramen-mcp-bridge/`; 0.3.0 no longer does unless asked to.
+**Where the bridge keeps the token (bridge 0.3.0).**
+
+- In memory by default: nothing is written to disk, and the person signs in again when the client restarts.
+- `--keychain` keeps it in the operating system's secret store (macOS Keychain, or a Secret Service such as GNOME
+  Keyring through `secret-tool`); `--token-file <path>` keeps it in a 0600 file, for automation only.
+- Tokens are forgotten 30 minutes after the last call (`--idle-timeout`, seconds, `0` disables).
+- A sign-in needed while the client runs does not block: the MCP call answers error `-32001` with the link in
+  `data.sign_in_url`, so the AI client can show it; the person opens it, approves, and the next call works.
+  `--no-browser` prints the link instead of opening a browser.
+- Behind a self-signed certificate add `--ca <pem>`; it verifies the console during sign-in as well as the worker.
+
+Bridge 0.2.x kept the refresh token in `~/.config/ramen-mcp-bridge/`; 0.3.0 does so only when asked.
 
 **With a group key instead** (agents, CI): no sign-in, the key in `Authorization: Bearer`. Over HTTP in every
 client (`claude mcp add --transport http … --header "Authorization: Bearer <rmk_ key>"`, or a `url` + `headers`
@@ -105,9 +109,8 @@ same reach as a group key, with the person's name on every log line.
 
 Since 0.7.2 the token also names the person's `role` in the group, which the worker uses for per-tool access
 ([Groups, zones and regions](groups-zones.md#tool-access-072)); since 0.7.5 that may be a
-[custom role](users-access.md#custom-roles), and a role marked OAuth-only sends the person to the identity provider
-instead of the password form. The worker's access log shows `user:<id>` instead of a key id. The Audit page has the client registration and
-every consent decision, and since 0.7.0 every token mint (`oauth.token`), refresh (`oauth.refresh`), a rotated-out
+[custom role](users-access.md#custom-roles). The worker's access log shows `user:<id>` instead of a key id. The
+Audit page has the client registration and every consent decision, and since 0.7.0 every token mint (`oauth.token`), refresh (`oauth.refresh`), a rotated-out
 refresh token presented again (`oauth.refresh_reuse`, which revokes the family) and every refusal (`oauth.denied`
 with its reason). The lifetimes are the console's `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) and
 `RAMEN_OAUTH_REFRESH_TTL` (default 30 days), shown on the Config page.
@@ -120,8 +123,8 @@ Code) refreshes and retries on its own, and the bridge does the same once for th
 unless the refresh token itself is gone. The MCP session survives: session ids are bound to the person
 (`user:<sub>`), not to one token, so the same `Mcp-Session-Id` keeps working with the refreshed token. A call that
 started before expiry finishes (auth is checked on entry), and nothing runs twice: the only retry happens when the
-`401` came back before dispatch. Refresh tokens Ramen holds are stored hashed, rotate on every use, belong to one
-person and one group, and die when the person's role, password or account changes. Verified with a 3-second token
+`401` came back before dispatch. Refresh tokens are stored hashed and belong to one person and one group.
+Verified with a 3-second token
 in `tests/conformance` for 0.7.0 (see the [changelog](../changelog.md)).
 
 ## What can go wrong

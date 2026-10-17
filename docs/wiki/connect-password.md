@@ -4,8 +4,7 @@ A password account connects through exactly the same OAuth flow as any other sig
 sees the password. The authorize request lands on the console's login page, the person types their email and
 password, and the login page returns them to the consent page. There is nothing to configure for it.
 
-So this page covers only what is different: the account itself. The client commands are in
-[Connect a client with OAuth](connect-oauth.md).
+This page covers only the account. The client commands are in [Connect a client with OAuth](connect-oauth.md).
 
 ## The account
 
@@ -24,13 +23,9 @@ So this page covers only what is different: the account itself. The client comma
 ## Then connect
 
 Follow [What the person does](connect-oauth.md#what-the-person-does) with the client id an admin gives them. The
-browser step shows the console's own login page rather than an identity provider's, and that is the only visible
-difference.
-
-The commands are the same for every client: Claude Code over Streamable HTTP with `claude mcp add-json …
-"oauth":{"clientId":…}`, or any client through `uvx ramen-mcp-bridge@latest … --oauth https://<edge>
---client-id <client id>`. A group admin copies them, filled in for the install, from the group page's **How MCP
-users sign in** card (section *Ramen accounts*).
+only visible difference is that the browser step shows the console's own login page rather than an identity
+provider's. A group admin copies the commands, filled in for the install, from the group page's **How MCP users
+sign in** card (section *Ramen accounts*).
 
 A password account cannot connect this way if it holds a custom role marked **OAuth only** in any group: the login
 step answers `403 This account signs in with <provider>` and the person must use the provider button
@@ -38,4 +33,4 @@ step answers `403 This account signs in with <provider>` and the person must use
 Config page, only identity-provider accounts can sign in.
 
 Every call the client makes is logged as `user:<id>`, never as a key id. Removing the person from the group, or
-disabling the account, ends their tokens at once.
+disabling the account, ends their refresh tokens at once; an access token already issued lives out its hour.

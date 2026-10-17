@@ -19,15 +19,11 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 **Docs: https://bkraad47.github.io/ramen/** · [Get started](https://bkraad47.github.io/ramen/get-started/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/) · [Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/) · [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/) · [Azure](https://bkraad47.github.io/ramen/wiki/deploy-azure/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
 > **Streamable HTTP is the front door.** Every worker serves `POST /mcp` — a URL and a bearer header, nothing to
-> install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. Phones,
-> browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
+> install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. The stdio
+> bridge stays for clients that only speak stdio.
 
-**What is true today.** Current release **0.8.0** (packaging and docs; the product is 0.7.5). CI proves both
-transports on real node processes on Linux and Windows. 0.7.5 was deployed on **GKE, EKS and AKS** on 2026-10-10/11
-and passed the same 33 checks on each — a canary deploy of the demo repo with its NeMo rails and golden cases,
-custom roles and per-tool access, a person's token over Streamable HTTP and through the stdio bridge, Microsoft
-Entra ID sign-in with group lookup, autoscaling under load — and every environment was torn down afterwards. The
-single record of what each run covered, and what is tested only, is
+**Status.** Current release **0.8.0** (packaging and docs; the product is 0.7.5). 0.7.5 passed the same 33 checks
+live on **GKE, EKS and AKS**; what each run covered, and what is tested only:
 [Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
 
 **Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts**
@@ -44,20 +40,20 @@ holds the keys. The shape, the data model and why each piece is where it is:
   leaves stable untouched.
 - **Multi-zone from day one.** Group → Environment → Zone → Worker; the load balancer routes on `ramen-group` /
   `ramen-zone`, so one client config works for every zone.
-- **Guardrails inside the worker.** Opt a tool into a pre-call and post-call check that runs in the Python runtime
-  next to it: [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails (deterministic or LLM-backed,
-  your model and key) or a `policy.py` of your own. A blocked call is a readable tool error, the tool never ran or its
-  output never left the pod, and the access log says which rail. Fail-closed by default.
+- **Guardrails inside the worker.** Opt a tool into a check before the call and after the result, run in the Python
+  runtime next to it: [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails (deterministic or
+  LLM-backed, your model and key) or a `policy.py` of your own. A blocked call is a readable tool error and the access
+  log names the rail. Fail-closed by default.
 - **Your identity provider decides, your admins override.** Add Microsoft Entra ID, Google Workspace or any OIDC
-  provider on the Config page; read a person's groups from Graph or Cloud Identity at sign-in, map them to roles per
-  group, and keep what admins set by hand. Any IdP on any cloud.
+  provider on the Config page, on any cloud; read a person's groups from Graph or Cloud Identity at sign-in, map them
+  to roles per group, and keep what admins set by hand.
 - **Roles per group, and roles you define.** Group Admin, Viewer, MCP User or a custom role on one of those bases
   (`analyst` on Viewer), usable in memberships, provider rules and per-tool access; a role can be **OAuth only**.
   Decide per environment who may see and who may call each tool; a drift signal flags a caller repeating one call.
 - **Autoscaling by Ramen.** Each zone runs between 1 worker and a max that admins set; the console scales up fast
   under load and back down when quiet, the same on all three clouds, with no HPA and every step in the audit log.
-- **Three clouds.** Terraform and Helm for GKE (Gateway, Cloud Armor), EKS (ALB, WAF) and AKS (Envoy Gateway, Let's
-  Encrypt, Table Storage, Key Vault, workload identity). The same console and guards on each.
+- **Three clouds.** Terraform and Helm for GKE, EKS and AKS, with the same console and guards on each
+  ([Deploy to the cloud](#deploy-to-the-cloud)).
 - **Enterprise controls.** `rmk_` MCP keys and `rmn_` API keys stored as salted hashes, IP rules per zone at the node
   and at the cloud edge, secrets that are never displayed, Redis throttles, an audit line for every action.
 - **One Deployment per zone, not one per tool.** A worker loads *every* tool of the group, so thirty tools run on
@@ -90,23 +86,12 @@ if a literal one ever returns.
 
 ## Connect a client
 
-A worker is a URL and two headers; the credential decides whose name a call runs under.
+A worker is a URL (`/mcp`) and two routing headers, `ramen-group` and `ramen-zone`. The credential decides whose
+name a call runs under:
 
-```json
-{"mcpServers": {"ramen-demo": {"url": "http://localhost:8080/mcp",
-  "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "local"}}}}
-```
-
-- **A group key** (`rmk_`, generated on the group page, shown once; deploy once more so the worker learns it): the
-  entry above in Cursor, VS Code, Claude Code or anything that can make an HTTP request. Against a deployment the
-  URL is `https://<edge>/mcp` and the zone is a cloud zone.
-- **A person, over Streamable HTTP** (Claude Code): `claude mcp add-json … "oauth":{"clientId":"<id>"}` against a
-  client a super admin registered on Config → OAuth clients. The console is the OAuth 2.1 authorization server; the
-  person signs in with a Ramen password, Entra ID or Google.
-- **Stdio-only clients**, and Cursor, VS Code or Claude Desktop signing a person in: the bridge,
-  `uvx ramen-mcp-bridge@latest --target <edge>:443 --tls` with `--key` or `--oauth https://<edge> --client-id <id>`.
-  Bridge 0.3.0 keeps the token in memory (or `--keychain`), forgets it after 30 idle minutes, and answers a needed
-  sign-in with the link as error `-32001`, so the AI client can hand it to the person.
+- **A group key** (`rmk_`) in `Authorization: Bearer`, for agents and automation. Any HTTP-capable client.
+- **A person's sign-in** through the console (OAuth 2.1, with a Ramen password, Entra ID or Google): Claude Code
+  over HTTP, or any stdio client through the bridge.
 
 Every form, with the pages you will see:
 [Get started → Connect a client](https://bkraad47.github.io/ramen/get-started/#3-connect-a-client) ·
@@ -139,10 +124,10 @@ Every form, with the pages you will see:
 ## Transport and security, in short
 
 Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2025-06-18) and **gRPC** (`ramen.v1.Mcp/Call`) on one port
-through one implementation of every guard, so a check added to one transport is on both or on neither. TLS ends at
-the load balancer; the node checks the credential, the source range at the provider's `x-forwarded-for` hop, blocked
-names and the size and in-flight caps; the runtime reaches the bucket as the zone's own cloud identity; guardrails
-run between the runtime and your tool. Hop by hop, with what protects each and what is verified:
+through one implementation of every guard, so a check is on both transports or on neither. TLS ends at the load
+balancer. The node checks the credential, the source range at the provider's `x-forwarded-for` hop, blocked names
+and the size and in-flight caps. The runtime reaches the bucket as the zone's own cloud identity, and guardrails run
+between the runtime and your tool. Hop by hop, with what protects each and what is verified:
 [Transport](https://bkraad47.github.io/ramen/wiki/transport/). Boundaries and non-goals:
 [Threat model](https://bkraad47.github.io/ramen/threat-model/).
 
@@ -155,13 +140,12 @@ run between the runtime and your tool. Hop by hop, with what protects each and w
 | **Azure** | AKS (workload identity), Table Storage, Blob Storage, Key Vault, Envoy Gateway with a Let's Encrypt certificate | [docs](https://bkraad47.github.io/ramen/wiki/deploy-azure/) |
 | **Local** | docker compose: Firestore emulator, console, one worker; CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
 
-All three clouds ran the 0.7.5 verification (above) on throwaway environments torn down the same day; the GCP and
-AWS paths have done so every release since 0.5.x. Bring-up is the same shape on each: `terraform apply` →
-`helm upgrade --install` (the release's public images, or `make push` to your own registry) → add a zone and a group
-in the console → Deploy. About 25 minutes, mostly waiting for the cluster and the load balancer. The edge gets a
-publicly trusted certificate on a free `sslip.io` hostname (Let's Encrypt on AKS), so clients use
-`https://<public_hostname>/mcp` with the bearer header and the two routing headers, and the bridge points at
-`<public_hostname>:443 --tls` with nothing to import.
+Bring-up is the same on each: `terraform apply` → `helm upgrade --install` (the release's public images, or
+`make push` to your own registry) → add a zone and a group in the console → Deploy. About 25 minutes, mostly waiting
+for the cluster and the load balancer. The edge gets a publicly trusted certificate on a free `sslip.io` hostname
+(Let's Encrypt on AKS), so clients use `https://<public_hostname>/mcp` and the bridge points at
+`<public_hostname>:443 --tls` with nothing to import. What each cloud run covered:
+[Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
 
 ## Write your own tools
 

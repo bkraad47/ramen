@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 
 from . import autoscale, regions
@@ -19,18 +20,23 @@ REPO_SCHEMES = ("https", "http", "ssh", "git")
 
 
 def validate_repo_url(url: str) -> str:
-    """0.8.0 SC2: a group repo is a network git URL with a host, nothing else. `ext::` (a remote helper that runs a
-    command), `file:`, scp-like `git@host:path`, a leading `-` (git reads it as an option) and whitespace are
-    refused here, and git itself is held to these protocols in `cloud.local.git_env`."""
+    """0.8.0 SC2: a group repo is a network git URL with a host. `ext::` (a remote helper that runs a command),
+    scp-like `git@host:path`, a leading `-` (git reads it as an option) and whitespace are refused everywhere; a
+    filesystem path or `file://` URL only on the local adapter (`RAMEN_CLOUD=local`: a laptop or the compose stack,
+    where a checkout on disk is how tools are developed). Git itself is held to these protocols in `cloud.local.git_env`."""
     if not url:
         return url
-    if url != url.strip() or any(c.isspace() for c in url) or url.startswith("-"):
-        raise invalid("repo_url must be an https://, http://, ssh:// or git:// URL with a host")
+    msg = "repo_url must be an https://, http://, ssh:// or git:// URL with a host"
+    if url != url.strip() or any(c.isspace() for c in url) or url.startswith("-") or url.startswith("ext:"):
+        raise invalid(msg)
     from urllib.parse import urlparse
 
     u = urlparse(url)
-    if u.scheme not in REPO_SCHEMES or not u.hostname:
-        raise invalid("repo_url must be an https://, http://, ssh:// or git:// URL with a host")
+    if u.scheme in REPO_SCHEMES and u.hostname:
+        return url
+    local = os.environ.get("RAMEN_CLOUD", "local") == "local" and (url.startswith("/") or u.scheme == "file")
+    if not local:
+        raise invalid(msg + " (a path or file:// only on the local adapter)")
     return url
 
 

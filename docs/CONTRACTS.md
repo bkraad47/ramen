@@ -756,7 +756,8 @@ Source: `reports/security-concurrency-v0.8.0.md` (private workspace). Each item 
   netloc. The consent hand-off page for a loopback target encodes it per context: HTML-escaped in the `href`, a JSON
   string literal in the script with `<`, `>` and `&` as `\u` escapes.
 - 22.2 `repo_url` is an `https://`, `http://`, `ssh://` or `git://` URL with a host, validated on create and update
-  (`422` otherwise): no `ext::`, `file:`, scp-like `user@host:path`, leading `-` or whitespace. Every git invocation
+  (`422` otherwise): no `ext::`, scp-like `user@host:path`, leading `-` or whitespace anywhere; a filesystem path or
+  `file://` URL only when `RAMEN_CLOUD=local` (the compose stack, a laptop), never on a cloud console. Every git invocation
   runs with `GIT_ALLOW_PROTOCOL=https:http:ssh:git:file` (never a remote helper) and `--` before the URL.
 - 22.3 The deploy file is the console's alone. A checkout's `.ramen/` is never uploaded to the bucket (and a tracked
   `.ramen/*` is removed from the local adapter's checkout); the runtime's bucket sync never downloads `.ramen/*`.

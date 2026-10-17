@@ -1,6 +1,8 @@
 """Outbound email (CONTRACTS §9, G12): SMTP from `RAMEN_SMTP_*`; `RAMEN_SMTP_HOST=file://<dir>` writes .eml files
 (dev/tests). Message bodies are never logged."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os

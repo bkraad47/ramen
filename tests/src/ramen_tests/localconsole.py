@@ -42,7 +42,7 @@ def require_console() -> str:
         pytest.skip("console venv not found (uv sync in console, or RAMEN_CONSOLE_PYTHON)")
     try:
         r = subprocess.run([py, "-c", "import ramen_console, uvicorn"], capture_output=True, timeout=60)
-    except OSError, subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         r = None
     if r is None or r.returncode != 0:
         pytest.skip("ramen_console/uvicorn not importable from the console venv")

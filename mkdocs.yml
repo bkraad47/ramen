@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.7.6
+  version_current: 0.8.0
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen

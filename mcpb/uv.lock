@@ -117,7 +117,7 @@ wheels = [
 
 [[package]]
 name = "ramen-mcpb"
-version = "0.7.6"
+version = "0.8.0"
 source = { virtual = "." }
 dependencies = [
     { name = "ramen-mcp-bridge" },

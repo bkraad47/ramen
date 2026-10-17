@@ -16,7 +16,7 @@ docker pull bkraad47/ramen-worker:latest bkraad47/ramen-console:latest
 
 | Ramen | Bridge on PyPI | Demo repo | Notes |
 |---|---|---|---|
-| 0.7.6 | 0.3.0 | `v0.7.6` tag (same content as `v0.7.5`) | packaging and docs: the worker, Glama and MCPB images pin bridge 0.3.0, the compose stack pulls the published images, the deploy guides show the public images; no console or worker behaviour change |
+| 0.8.0 | 0.3.0 | `v0.8.0` tag (same content as `v0.7.5`) | packaging and docs: the worker, Glama and MCPB images pin bridge 0.3.0, the compose stack pulls the published images, the deploy guides show the public images; no console or worker behaviour change |
 | 0.7.5 | 0.2.2 in the worker image; 0.3.0 documented, on PyPI since 2026-10-17 | `v0.7.5` tag: `mcp/guardrails.yaml`, NeMo rails, `word_count` | guardrails in the runtime, identity-provider group lookup, custom roles, AKS, autoscaling by Ramen, salted hashes |
 | 0.7.0 to 0.7.2 | 0.2.2 | `v0.7.0` to `v0.7.2` tags: `mcp/tests.yaml`, `output` schemas, richer descriptions | gates, golden cases, output schemas (0.7.0); per-tool access, rollout notice, drift (0.7.2) |
 | 0.6.23 | 0.2.2 | `main` with `mcp/env.yaml` and `.github/workflows/ramen-deploy.yml` | self-contained image for MCP directories (`glama/Dockerfile`); Smithery bundle `mcpb/`; no worker or bridge change |
@@ -44,7 +44,7 @@ beyond GitHub (`github.actor == 'bkraad47'`); forks and other pushers stop after
 | [Official MCP registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.bkraad47/ramen) | `server.json` published with GitHub OIDC; no secret |
 | [Smithery](https://smithery.ai/servers/bkraad47/ramen) | the MCPB bundle, with the `SMITHERY_API_KEY` repository secret (skipped with a warning when unset) |
 | [Glama](https://glama.ai/mcp/servers/bkraad47/ramen) | rebuilds from the repository and downloads the latest release's worker; nothing to publish |
-| Docker Hub `bkraad47/ramen-worker`, `bkraad47/ramen-console` and GHCR `ghcr.io/bkraad47/…` (0.7.0) | multi-arch images tagged `<version>` and `latest`; GHCR with the workflow's own token, Docker Hub with `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (skipped with a warning when unset). Any cloud can pull them straight, without `make push`; since 0.7.6 the local compose stack pulls them by default (`make up BUILD=1` builds from source) |
+| Docker Hub `bkraad47/ramen-worker`, `bkraad47/ramen-console` and GHCR `ghcr.io/bkraad47/…` (0.7.0) | multi-arch images tagged `<version>` and `latest`; GHCR with the workflow's own token, Docker Hub with `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (skipped with a warning when unset). Any cloud can pull them straight, without `make push`; since 0.8.0 the local compose stack pulls them by default (`make up BUILD=1` builds from source) |
 | Demo repo tag | `ramen-demo-mcp-group` is tagged `v<version>` with the release it was verified against (`VERSION` file in the repo) |
 | PulseMCP and other directories | read the official registry |
 

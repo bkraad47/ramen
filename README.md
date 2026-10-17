@@ -22,7 +22,7 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. Phones,
 > browsers and hosted agent platforms connect directly; the stdio bridge stays for clients that only speak stdio.
 
-**What is true today.** Current release **0.7.6** (packaging and docs; the product is 0.7.5). CI proves both
+**What is true today.** Current release **0.8.0** (packaging and docs; the product is 0.7.5). CI proves both
 transports on real node processes on Linux and Windows. 0.7.5 was deployed on **GKE, EKS and AKS** on 2026-10-10/11
 and passed the same 33 checks on each — a canary deploy of the demo repo with its NeMo rails and golden cases,
 custom roles and per-tool access, a person's token over Streamable HTTP and through the stdio bridge, Microsoft

@@ -54,17 +54,21 @@ def _back_to_client(request: Request, target: str, client_name: str = "your appl
     if not browser or urlsplit(target).hostname not in ("127.0.0.1", "localhost", "::1"):
         return RedirectResponse(target, 303)
     from html import escape
+    from json import dumps
 
-    safe = target.replace("\\", "\\\\").replace("'", "\\'").replace("<", "%3C").replace(">", "%3E")
+    # per-context encoding (0.8.0 SC1): HTML-escaped in the attribute, a JSON string literal in the script with
+    # `<`, `>` and `&` as \u escapes so no target can close the tag or the attribute
+    href = escape(target, quote=True)
+    js = dumps(target).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     who = escape(client_name or "your application")
     body = (
         f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Signed in — back to {who}</title>"
         "</head><body style='font-family:sans-serif;max-width:40rem;margin:4rem auto'>"
         f"<h2>Signed in</h2><p>Handing your sign-in back to <b>{who}</b> on this computer. "
         "It will confirm in a moment and this tab can be closed.</p>"
-        f"<p>Nothing happening? <a href='{safe}'>Continue to {who}</a>. If that page cannot be reached, "
+        f"<p>Nothing happening? <a href='{href}'>Continue to {who}</a>. If that page cannot be reached, "
         f"{who} is no longer waiting: start the sign-in again from there.</p>"
-        f"<script>location.replace('{safe}')</script></body></html>"
+        f"<script>location.replace({js})</script></body></html>"
     )
     return HTMLResponse(body, headers={"Cache-Control": "no-store"})
 

@@ -15,6 +15,9 @@ def git_env(token: str | None) -> dict[str, str]:
     URL, never `.git/config`). SEC-12."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG_")}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ALLOW_PROTOCOL"] = (
+        "https:http:ssh:git:file"  # never ext:: (runs a command); file: is refused by validate_repo_url (0.8.0 SC2)
+    )
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         env.update(
@@ -27,6 +30,18 @@ def git_env(token: str | None) -> dict[str, str]:
 
 def run_git(cmd: list[str], token: str | None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, env=git_env(token))
+
+
+def repo_files(root) -> dict:
+    """The files of a checkout that go to the worker bucket, by path relative to `root`: everything except `.git`
+    and `.ramen` (0.8.0 SC3: the deploy file under `.ramen/` is the console's; a repo must never ship one)."""
+    root = Path(root)
+    out = {}
+    for p in root.rglob("*"):
+        parts = p.relative_to(root).parts
+        if p.is_file() and ".git" not in parts and parts[0] != ".ramen":
+            out[p.relative_to(root).as_posix()] = p
+    return out
 
 
 def redact(text: str, token: str | None) -> str:
@@ -88,11 +103,15 @@ class LocalCloud(Cloud):
             ]
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            cmds = [["git", "clone", "-q", "--depth", "1", "--branch", ref, repo_url, str(dest)]]
+            cmds = [["git", "clone", "-q", "--depth", "1", "--branch", ref, "--", repo_url, str(dest)]]
         for cmd in cmds:
             r = await asyncio.to_thread(run_git, cmd, token)
             if r.returncode != 0:
                 raise RuntimeError(f"git failed: {redact(r.stderr, token)}".strip())
+        # the checkout is the local bucket: a tracked `.ramen/*` would become the node's deploy file (0.8.0 SC3)
+        tracked = await asyncio.to_thread(run_git, ["git", "-C", str(dest), "ls-files", "-z", "--", ".ramen"], token)
+        for rel in filter(None, tracked.stdout.split("\0")):
+            (dest / rel).unlink(missing_ok=True)
         return str(dest)
 
     def _rules_path(self, group, zone) -> Path:

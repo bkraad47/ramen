@@ -112,8 +112,8 @@ def sync(uri: str, dest: Path, client=None) -> dict:
     objects = {"s3": _s3_objects, "az": _az_objects}.get(kind, _gcs_objects)
     for key, digest, download in objects(client, name, prefix):
         rel = key[strip:]
-        if not rel or rel.endswith("/"):
-            continue
+        if not rel or rel.endswith("/") or rel.split("/", 1)[0] == ".ramen":
+            continue  # `.ramen/*` in the bucket is never the console's (0.8.0 SC3): the deploy file arrives another way
         local = dest / rel
         wanted.add(local)
         if local.is_file() and digest and _md5(local) == digest:

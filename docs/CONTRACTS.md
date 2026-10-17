@@ -748,3 +748,28 @@ Workers are scaled by the console's rebalance, the same on GKE, EKS and AKS; no 
   fields). The salt is per install, not per token, because the hash is the lookup id. A lookup tries the salted id,
   then the bare SHA-256 every pre-0.7.5 token used.
 - Passwords stay argon2 (salted by construction).
+
+## 22. v0.8.0 — the security and concurrency review's fixes (binding)
+Source: `reports/security-concurrency-v0.8.0.md` (private workspace). Each item has a test named in the report.
+- 22.1 OAuth redirect URIs (§16.3): a URI's netloc is exactly `host` or `host:port` (no userinfo, nothing `urlparse`
+  reads past); the loopback leniency (any port, any of `localhost` / `127.0.0.1` / `::1`) applies only to such a
+  netloc. The consent hand-off page for a loopback target encodes it per context: HTML-escaped in the `href`, a JSON
+  string literal in the script with `<`, `>` and `&` as `\u` escapes.
+- 22.2 `repo_url` is an `https://`, `http://`, `ssh://` or `git://` URL with a host, validated on create and update
+  (`422` otherwise): no `ext::`, `file:`, scp-like `user@host:path`, leading `-` or whitespace. Every git invocation
+  runs with `GIT_ALLOW_PROTOCOL=https:http:ssh:git:file` (never a remote helper) and `--` before the URL.
+- 22.3 The deploy file is the console's alone. A checkout's `.ramen/` is never uploaded to the bucket (and a tracked
+  `.ramen/*` is removed from the local adapter's checkout); the runtime's bucket sync never downloads `.ramen/*`.
+  `config.rs` reads `.ramen/env-<zone>` as before, so on the cloud adapters it comes only from the console's Secret.
+- 22.4 `Services.autoscale` holds a per-`group/zone` lock around read-decide-write; a concurrent call waits and then
+  sees the new state (a `hold` on cooldown).
+- 22.5 `POST …/environments/{env}/deploy` answers `409` naming the running job while a deploy of that environment is
+  `running`.
+- 22.6 The console's caller address (`audit.ip`, the login rate-limit key) is the `x-forwarded-for` entry
+  `RAMEN_TRUST_PROXY_HOPS` from the right (default 1; 0 = the peer), as the node does (§11); fewer entries than hops →
+  the peer. The chart sets 2 on GCP and 1 on AWS and Azure for the console as for the workers.
+- 22.7 The Google group lookup refuses an email containing a quote, a backslash or whitespace (`LookupError`, no
+  session), since the email is a query filter value.
+- 22.8 Known and documented, not changed: `Store.transaction()` is a per-process lock, so the console runs as one
+  replica (chart default `console.replicas: 1`); a guardrail hook that overruns its timeout leaves its thread running
+  after the fail-closed answer.

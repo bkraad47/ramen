@@ -5,7 +5,7 @@ from .. import deploy as dep
 from .. import drift, toolaccess
 from ..audit import note, write_audit
 from ..baseuri import prefix
-from ..errors import invalid, not_found
+from ..errors import conflict, invalid, not_found
 from ..rbac import Principal, can, require
 from . import models as m
 from .helpers import accounts, respond, svc, tabular
@@ -216,9 +216,13 @@ async def deploy(
     e = await s.get_env(group, env)
     if body.zone and body.zone not in e.get("zones", []):
         raise invalid(f"Zone {body.zone} is not attached to {env}")
+    target = f"{group}/{env}"
+    running = [j for j in request.app.state.jobs.recent(target) if j["target"] == target and j["status"] == "running"]
+    if running:  # 0.8.0 SC5: two deploys would drive one canary Deployment and race `last_deploy`
+        raise conflict(f"A deploy of {target} is already running (job {running[0]['id']}); wait for it to finish")
     tags = [f"group:{group}", f"canary:{body.canary}"] + ([f"breaking:{body.breaking}"] if body.breaking else [])
-    note(request, "deploy.start", f"{group}/{env}", tags)
-    job = request.app.state.jobs.create("deploy", f"{group}/{env}")
+    note(request, "deploy.start", target, tags)
+    job = request.app.state.jobs.create("deploy", target)
     from ..audit import client_ip
 
     ip = client_ip(request)

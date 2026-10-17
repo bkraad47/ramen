@@ -486,7 +486,9 @@ def test_consent_hands_a_loopback_client_a_self_navigating_page_and_a_web_client
     browser = {"Sec-Fetch-Mode": "navigate"}  # what a real browser's form submission carries
     r = demo.post("/oauth/authorize", data=form, headers=browser, follow_redirects=False)
     assert r.status_code == 200 and "text/html" in r.headers["content-type"], r.text[:200]
-    assert "location.replace('http://127.0.0.1" in r.text and "code=" in r.text and "<script>" in r.text
+    assert (
+        'location.replace("http://127.0.0.1' in r.text and "code=" in r.text and "<script>" in r.text
+    )  # JSON literal (0.8.0 SC1)
     assert "href='http://127.0.0.1" in r.text  # the fallback link
     # a programmatic caller (the bridge's own fake browser in tests, scripts) still gets the plain 303
     r = authorize(demo, cid, challenge)
@@ -506,3 +508,30 @@ def test_consent_hands_a_loopback_client_a_self_navigating_page_and_a_web_client
     form["csrf_token"] = demo.cookies.get("ramen_csrf", "")
     r = demo.post("/oauth/authorize", data=form, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("https://app.example/cb?")
+
+
+# --- 0.8.0 SC1: a crafted loopback redirect_uri must neither match nor be reflected unescaped -------------------------
+def test_a_crafted_loopback_redirect_uri_is_rejected_and_never_reflected_unescaped():
+    from starlette.requests import Request
+
+    from ramen_console.oauth_server import redirect_matches
+    from ramen_console.web.oauth_routes import _back_to_client
+
+    registered = ["http://127.0.0.1:33418/oauth/callback"]
+    assert redirect_matches(registered, "http://localhost:5555/oauth/callback"), "RFC 8252: any port"
+    assert redirect_matches(registered, "http://[::1]:5/oauth/callback"), "any loopback name"
+    crafted = "http://localhost:1' autofocus onfocus=alert(document.domain) x='/oauth/callback"
+    assert not redirect_matches(registered, crafted), "garbage in the netloc is not a port"
+    assert not redirect_matches(registered, "http://user@127.0.0.1:1/oauth/callback"), "no userinfo"
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/oauth/authorize",
+        "headers": [(b"sec-fetch-mode", b"navigate")],
+    }
+    target = "http://127.0.0.1:1'><script>alert(1)</script></script><b x='/cb?code=abc&state=s"
+    body = _back_to_client(Request(scope), target, "Evil <b>client</b>").body.decode()
+    assert "' autofocus" not in body and "'><script>" not in body and "<b x=" not in body, body
+    assert body.count("</script>") == 1, "a target can never close the inline script"
+    assert "<b>client</b>" not in body

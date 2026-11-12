@@ -5,9 +5,12 @@ pub mod http;
 pub mod log;
 pub mod mcp;
 pub mod metrics;
+pub mod modern;
 pub mod server;
 pub mod session;
 pub mod sidecar;
+pub mod subs;
+pub mod tasks;
 pub mod throttle;
 pub mod token;
 

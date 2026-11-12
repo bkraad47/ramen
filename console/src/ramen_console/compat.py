@@ -1,12 +1,16 @@
 """B3 / C5 (0.7.0): is a canary's manifest compatible with the stable track's? Pure functions, no I/O.
 
 Breaking: a removed tool/resource/prompt, a removed property, a new required property (or prompt argument), a changed
-`type`, a narrowed `enum`. Everything else that adds is additive; descriptions and `_meta` never matter.
+`type`, a narrowed `enum`, and (§23.2) a tool parameter whose `x-mcp-header` is added, removed or renamed — a client
+that cached the old schema would send the wrong `Mcp-Param-*` headers. Everything else that adds is additive, a tool
+gaining or losing `task: true` (§23.5) included; descriptions and `_meta` never matter.
 """
 
 import hashlib
 import json
 
+HEADER = "x-mcp-header"
+TASKS = "io.modelcontextprotocol/tasks"
 KINDS = (("tools", "tool", "name"), ("resources", "resource", "uri"), ("prompts", "prompt", "name"))
 
 
@@ -64,8 +68,33 @@ def summary(d: dict) -> str:
     return "; ".join(parts) or "no schema changes"
 
 
+def header_params(tool: dict) -> dict[str, str]:
+    """§23.2: `{parameter: header name}` for the tool's header-promoted parameters."""
+    props = (tool.get("inputSchema") or {}).get("properties") or {}
+    return {n: str(p[HEADER]) for n, p in props.items() if isinstance(p, dict) and p.get(HEADER)}
+
+
+def is_task(tool: dict) -> bool:
+    """§23.5: the tool was declared `task: true` (any of the three places a definition may say so)."""
+    execution, meta = tool.get("execution"), tool.get("_meta")
+    return (
+        tool.get("task") is True
+        or (isinstance(execution, dict) and execution.get("taskSupport") in ("optional", "required"))
+        or (isinstance(meta, dict) and TASKS in meta)
+    )
+
+
 def _tool(where, before, after, out):
     _schema(where, before.get("inputSchema") or {}, after.get("inputSchema") or {}, out, "property ")
+    hb, ha = header_params(before), header_params(after)
+    for n in sorted(hb.keys() | ha.keys()):
+        old, new = hb.get(n), ha.get(n)
+        # a parameter that is itself new or removed is already reported by `_schema`
+        if old != new and all(n in ((t.get("inputSchema") or {}).get("properties") or {}) for t in (before, after)):
+            verb = "added" if old is None else ("removed" if new is None else "renamed")
+            out["breaking"].append(f"{where}: property {n} header {verb}: {old or 'none'} -> {new or 'none'}")
+    if is_task(before) != is_task(after):
+        out["additive"].append(f"{where}: {'now runs' if is_task(after) else 'no longer runs'} as a task")
     ob, oa = before.get("outputSchema"), after.get("outputSchema")
     if ob and not oa:
         out["breaking"].append(f"{where}: output schema removed")

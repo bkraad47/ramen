@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 import json
+import re
 import sys
 import types
 from collections.abc import Callable
@@ -10,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .log import log
-from .proto import KINDS, ProtoError, input_schema, output_schema, validate_proto
+from .proto import KINDS, ProtoError, input_schema, output_schema, template_regex, validate_proto
 
 
 @dataclass
@@ -22,6 +23,7 @@ class Package:
     func: Callable | None = None
     skill: str = ""
     settings: dict = field(default_factory=dict)
+    template: re.Pattern | None = None  # §23.3: a resource whose uri has `{var}`
 
     @property
     def schema(self) -> dict:
@@ -45,6 +47,7 @@ class Registry:
             "tools": [
                 {"name": t.name, "description": t.proto.get("description", ""), "inputSchema": t.schema}
                 | ({"outputSchema": t.output} if t.output else {})
+                | ({"task": True} if t.proto.get("task") else {})  # §23.5
                 for t in self.tools
             ],
             "resources": [
@@ -55,13 +58,14 @@ class Registry:
                     "mimeType": r.proto["mime_type"],
                 }
                 for r in self.resources
+                if r.template is None
             ],
             "prompts": [
                 {
                     "name": p.name,
                     "description": p.proto.get("description", ""),
                     "arguments": [
-                        {"name": a, "description": s.get("description", ""), "required": True}
+                        {"name": a, "description": s.get("description", ""), "required": True} | _enum(s)
                         for a, s in p.proto.get("input", {}).items()
                     ],
                     "_meta": {"settings": p.settings},
@@ -69,16 +73,34 @@ class Registry:
                 for p in self.prompts
             ],
         }
+        # §23.3: the keys below exist only when a package uses them, so a 0.8 group describes (and hashes) as before
+        if templates := [r for r in self.resources if r.template is not None]:
+            d["resourceTemplates"] = [
+                {
+                    "name": r.name,
+                    "uriTemplate": r.proto["uri"],
+                    "description": r.proto.get("description", ""),
+                    "mimeType": r.proto["mime_type"],
+                }
+                | ({"variables": v} if (v := {a: _enum(s) for a, s in r.proto["input"].items() if "enum" in s}) else {})
+                for r in templates
+            ]
         return d | {"hash": manifest_hash(d), "errors": self.errors}
 
 
+def _enum(spec: dict) -> dict:
+    """§23.1 completion: the node answers `completion/complete` from the declared `enum`."""
+    return {"enum": spec["enum"]} if "enum" in spec else {}
+
+
 def manifest_hash(d: dict) -> str:
-    """C1 (0.7.0): sha256 of the canonical JSON of tools+resources+prompts, prompts without `_meta`."""
+    """C1 (0.7.0): sha256 of the canonical JSON of tools+resources+prompts, prompts without `_meta`; plus
+    `resourceTemplates` when the group has any (§23.3)."""
     body = {
         "tools": d["tools"],
         "resources": d["resources"],
         "prompts": [{k: v for k, v in p.items() if k != "_meta"} for p in d["prompts"]],
-    }
+    } | ({"resourceTemplates": d["resourceTemplates"]} if "resourceTemplates" in d else {})
     return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -125,15 +147,20 @@ def _load_package(folder: str, d: Path) -> Package:
     validate_proto(proto, folder, d.name, jsons[0].stem)
     pkg = Package(kind=proto["type"], name=d.name, dir=d, proto=proto)
     if folder == "prompts":
-        skill = d / proto["skill"]
-        if not skill.is_file():
-            raise ProtoError(f"skill file {proto['skill']} not found")
-        pkg.skill = skill.read_text(encoding="utf-8")
+        if "callable" in proto:  # §23.3: a callable prompt, bound like a tool
+            pkg.func = _bind(d, proto["callable"])
+        else:
+            skill = d / proto["skill"]
+            if not skill.is_file():
+                raise ProtoError(f"skill file {proto['skill']} not found")
+            pkg.skill = skill.read_text(encoding="utf-8")
         settings = d / proto.get("settings", "settings.json")
         if settings.is_file():
             pkg.settings = json.loads(settings.read_text(encoding="utf-8"))
         return pkg
     pkg.func = _bind(d, proto["callable"])
+    if folder == "resources":
+        pkg.template = template_regex(proto["uri"])
     return pkg
 
 

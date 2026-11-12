@@ -1,11 +1,15 @@
 //! Counters behind `Admin/Metrics` (CONTRACTS §3 fields, §11 transport).
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 #[derive(Default)]
 pub struct Metrics {
     pub total: AtomicU64,
     pub errors: AtomicU64,
+    /// §23.1: dispatched calls per protocol version served.
+    by_protocol: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -14,6 +18,15 @@ impl Metrics {
         if !ok {
             self.errors.fetch_add(1, Relaxed);
         }
+    }
+
+    /// §23.1 `calls_by_protocol`. The key is always one of the versions the node serves, never client text.
+    pub fn record_protocol(&self, version: &str) {
+        if version.is_empty() {
+            return;
+        }
+        let mut m = self.by_protocol.lock().unwrap_or_else(|e| e.into_inner());
+        *m.entry(version.to_string()).or_insert(0) += 1;
     }
 
     // one positional field per metric the console reads; a struct here would just rename the same eight things
@@ -38,7 +51,8 @@ impl Metrics {
         };
         json!({"inflight": inflight, "max_inflight": max, "total": self.total.load(Relaxed), "errors": self.errors.load(Relaxed), "load": load,
                "sidecar_alive": sidecar_alive, "loaded_at": loaded_at, "packages": packages,
-               "manifest_hash": manifest_hash, "guardrails": guardrails})
+               "manifest_hash": manifest_hash, "guardrails": guardrails,
+               "calls_by_protocol": *self.by_protocol.lock().unwrap_or_else(|e| e.into_inner())})
     }
 }
 
@@ -78,6 +92,22 @@ mod tests {
         assert_eq!(
             (s["inflight"].as_u64(), s["max_inflight"].as_u64()),
             (Some(3), Some(48))
+        );
+    }
+
+    /// §23.1 (1.0.0): calls are counted per protocol version served.
+    #[test]
+    fn calls_are_counted_by_protocol() {
+        let m = Metrics::default();
+        let snap = |m: &Metrics| m.snapshot(0, 1, false, None, Value::Null, "", json!({}));
+        assert_eq!(snap(&m)["calls_by_protocol"], json!({}));
+        m.record_protocol("2025-06-18");
+        m.record_protocol("2026-07-28");
+        m.record_protocol("2026-07-28");
+        m.record_protocol("");
+        assert_eq!(
+            snap(&m)["calls_by_protocol"],
+            json!({"2025-06-18": 1, "2026-07-28": 2})
         );
     }
 

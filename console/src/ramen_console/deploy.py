@@ -237,7 +237,7 @@ def _gate(job, group, env_name, zone, breaking, stable, cases, cfg, info):
                 args = golden.resolve_args(c["args"], secret)
             except golden.GoldenError as e:
                 raise GateError(f"golden case {c['name']}: {e}") from None
-            why = golden.check_response(c, await call(golden.request({**c, "args": args}, i)))
+            why = await golden.run({**c, "args": args}, call, i)
             log_.append(f"{now()} zone {zone}: golden {c['name']}: {'ok' if why is None else 'FAILED ' + why}")
             if why is not None:
                 failed.append(f"{c['name']}: {why}")

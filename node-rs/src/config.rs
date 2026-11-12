@@ -27,6 +27,12 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_THROTTLE_ITEM_TOKEN",
     "RAMEN_THROTTLE_SCOPE_IP",
     "RAMEN_THROTTLE_SCOPE_TOKEN",
+    // §23 (1.0.0): tunables of the 2026-07-28 surface. `RAMEN_MRTR_TTL_SECS` is not here for the reason
+    // `RAMEN_SESSION_TTL_SECS` is not: a group must not stretch the life of a signed token.
+    "RAMEN_LIST_TTL_MS",
+    "RAMEN_TASK_TTL_SECS",
+    "RAMEN_MAX_TASKS",
+    "RAMEN_MAX_SUBSCRIPTIONS",
 ];
 
 /// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
@@ -124,6 +130,16 @@ pub struct Config {
     pub throttle_item_token: u64,
     pub throttle_scope_ip: u64,
     pub throttle_scope_token: u64,
+    /// §23.1: `ttlMs` on modern list / discover results (`RAMEN_LIST_TTL_MS`, default 60000).
+    pub list_ttl_ms: u64,
+    /// §23.4: lifetime of a signed `requestState` (`RAMEN_MRTR_TTL_SECS`, default 600).
+    pub mrtr_ttl_secs: u64,
+    /// §23.5: a task's `ttlMs` / 1000 (`RAMEN_TASK_TTL_SECS`, default 3600).
+    pub task_ttl_secs: u64,
+    /// §23.5: tasks running on this pod at once (`RAMEN_MAX_TASKS`, default 4); beyond it a task call is 429.
+    pub max_tasks: usize,
+    /// §23.6: open `subscriptions/listen` streams per pod (`RAMEN_MAX_SUBSCRIPTIONS`, default 64), then 429.
+    pub max_subscriptions: usize,
 }
 
 impl Config {
@@ -265,6 +281,11 @@ impl Config {
             throttle_item_token: num("RAMEN_THROTTLE_ITEM_TOKEN", 0)?,
             throttle_scope_ip: num("RAMEN_THROTTLE_SCOPE_IP", 0)?,
             throttle_scope_token: num("RAMEN_THROTTLE_SCOPE_TOKEN", 0)?,
+            list_ttl_ms: num("RAMEN_LIST_TTL_MS", 60_000)?,
+            mrtr_ttl_secs: num("RAMEN_MRTR_TTL_SECS", 600)?.max(1),
+            task_ttl_secs: num("RAMEN_TASK_TTL_SECS", 3600)?.max(1),
+            max_tasks: num("RAMEN_MAX_TASKS", 4)? as usize,
+            max_subscriptions: num("RAMEN_MAX_SUBSCRIPTIONS", 64)? as usize,
         })
     }
 }
@@ -542,6 +563,58 @@ mod tests {
                 .contains("RAMEN_CONFIG")
         );
         let _ = Config::load();
+    }
+
+    /// §23 (1.0.0): the five keys of the 2026-07-28 surface, their defaults, and which a group may set.
+    #[test]
+    fn modern_keys_have_contract_defaults() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert_eq!(
+            (
+                c.list_ttl_ms,
+                c.mrtr_ttl_secs,
+                c.task_ttl_secs,
+                c.max_tasks,
+                c.max_subscriptions
+            ),
+            (60_000, 600, 3600, 4, 64)
+        );
+        let m: HashMap<_, _> = [
+            ("RAMEN_LIST_TTL_MS", "0"),
+            ("RAMEN_MRTR_TTL_SECS", "0"),
+            ("RAMEN_TASK_TTL_SECS", "5"),
+            ("RAMEN_MAX_TASKS", "0"),
+            ("RAMEN_MAX_SUBSCRIPTIONS", "2"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let c = Config::from_map(&m).unwrap();
+        assert_eq!(
+            (
+                c.list_ttl_ms,
+                c.mrtr_ttl_secs,
+                c.task_ttl_secs,
+                c.max_tasks,
+                c.max_subscriptions
+            ),
+            (0, 1, 5, 0, 2)
+        );
+        for k in [
+            "RAMEN_LIST_TTL_MS",
+            "RAMEN_TASK_TTL_SECS",
+            "RAMEN_MAX_TASKS",
+            "RAMEN_MAX_SUBSCRIPTIONS",
+        ] {
+            assert!(DEPLOY_KEYS.contains(&k), "{k}");
+        }
+        assert!(!DEPLOY_KEYS.contains(&"RAMEN_MRTR_TTL_SECS"));
+        let m: HashMap<_, _> = [("RAMEN_MAX_TASKS".to_string(), "lots".to_string())].into();
+        assert!(
+            Config::from_map(&m)
+                .unwrap_err()
+                .contains("RAMEN_MAX_TASKS")
+        );
     }
 
     #[test]

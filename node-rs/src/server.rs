@@ -52,6 +52,15 @@ pub async fn run(
     let merged = std::mem::take(routes.axum_router_mut()).merge(crate::http::router(app.clone()));
     *routes.axum_router_mut() = merged;
     let server = Server::builder().accept_http1(true).add_routes(routes);
+    // §23.6: a graceful stop waits for open responses, and a `subscriptions/listen` stream never ends by itself —
+    // so the signal first tells every stream to send its completion result and close.
+    let shutdown = {
+        let app = app.clone();
+        async move {
+            shutdown.await;
+            app.subs.drain();
+        }
+    };
     let served = match tls(&cfg) {
         // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
         // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.

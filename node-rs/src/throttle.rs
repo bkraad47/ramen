@@ -27,6 +27,11 @@ impl Throttle {
         }
     }
 
+    /// §23.5: the Redis the task store shares — the scope instance, else the zone-local one, else none (memory).
+    pub fn shared_store(&self) -> Option<ConnectionManager> {
+        self.scope.clone().or_else(|| self.item.clone())
+    }
+
     pub fn none() -> Self {
         Self {
             item: None,

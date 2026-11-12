@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolaccess
+from .. import alerts, baseuri, compat, drift, github_app, oauth_server, regions, toolaccess
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -37,6 +37,23 @@ async def dashboard_grid(request: Request, p: Principal = Depends(viewer)):
     return render(request, "partials/dashboard.html", data=await dep.dashboard(s, await s.visible_groups(p)))
 
 
+def protocol_stats(live: list[dict]) -> dict:
+    """§23.1: what the zone's workers report in `Admin/Metrics` since 1.0.0, summed over the zone — calls per protocol
+    version (newest first), open subscription streams, live tasks. None for a key no worker reports (0.8 workers)."""
+    calls, counts = None, {"subscriptions": None, "tasks": None}
+    for x in live:
+        m = x.get("metrics") or {}
+        if isinstance(m.get("calls_by_protocol"), dict):
+            calls = calls or {}
+            for v, n in m["calls_by_protocol"].items():
+                if isinstance(n, int):
+                    calls[str(v)] = calls.get(str(v), 0) + n
+        for k in counts:
+            if isinstance(m.get(k), int):
+                counts[k] = (counts[k] or 0) + m[k]
+    return {"calls_by_protocol": None if calls is None else sorted(calls.items(), reverse=True), **counts}
+
+
 @r.get("/ui/groups/{group}/zones/{zone}/workers")
 async def workers_partial(request: Request, group: str, zone: str, p: Principal = Depends(require("viewer", "group"))):
     s = svc(request)
@@ -56,6 +73,7 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
     # B4: every worker of a zone must serve the same manifest (C2 `manifest_hash`; absent on pre-0.7.0 workers)
     hashes = {x.get("metrics", {}).get("manifest_hash") for x in w["live"]} - {None, ""}
     w["manifest_mismatch"] = len(hashes) > 1
+    w["protocol"] = protocol_stats(w["live"])
     group_admin = can(p, "group_admin", group)  # §21.7: only they see and set the max; others see the count
     return render(request, "partials/workers.html", w=w, group=group, zone=zone, can_scale=group_admin)
 
@@ -91,7 +109,9 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         group=g,
         envs=envs,
         kinds=toolaccess.kinds(),
-        tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
+        tool_rows={e["name"]: toolaccess.rows(e) for e in envs},
+        is_task=compat.is_task,  # §23.5 / §23.2: the `task` and `headers` badges of "Packages per zone"
+        header_params=compat.header_params,  # C10: last deploy's tools + restricted names
         known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,
         workers=workers,

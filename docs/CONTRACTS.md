@@ -774,3 +774,151 @@ Source: `reports/security-concurrency-v0.8.0.md` (private workspace). Each item 
 - 22.8 Known and documented, not changed: `Store.transaction()` is a per-process lock, so the console runs as one
   replica (chart default `console.replicas: 1`); a guardrail hook that overruns its timeout leaves its thread running
   after the fail-closed answer.
+
+## 23. v1.0.0 — MCP 2026-07-28: stateless core, standard headers, MRTR, tasks (binding)
+Spec revision 2026-07-28 (SEPs 2575, 2567, 2243, 2322, 2549, 2577; tasks extension `io.modelcontextprotocol/tasks`).
+The node is **dual-era**: 2025-06-18 clients are served exactly as in 0.8.0 (§16, §20); nothing below changes a legacy
+answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11-05"]`.
+
+### 23.1 Era selection and the modern envelope
+- A message is **modern** when the HTTP header `MCP-Protocol-Version` is not a legacy version, or the body has
+  `params._meta["io.modelcontextprotocol/protocolVersion"]`. Everything else is legacy (a bare request with neither
+  included). On gRPC (`Mcp/Call`) only the body decides, and the header rules of §23.2 do not apply.
+- Order on `POST /mcp`: Accept/Content-Type → address → Origin → credential (§16.1, unchanged) → body → era → modern
+  checks → throttle/inflight → dispatch. Modern checks, in this order, each answered as a JSON-RPC error carrying the
+  request `id`:
+  1. `_meta` missing, or without `protocolVersion` or `clientCapabilities` (an object) → `-32602`, HTTP 400.
+     `clientInfo` is optional.
+  2. header `MCP-Protocol-Version` missing or ≠ the body version → `-32020`, HTTP 400.
+  3. version ≠ `MODERN` → `-32022`, HTTP 400, `data: {"supported": [MODERN, ...LEGACY], "requested": "<v>"}`.
+  4. standard headers (§23.2) → `-32020`, HTTP 400.
+  5. `initialize`, `ping`, `logging/setLevel`, `resources/subscribe`, `resources/unsubscribe` and any unknown method →
+     `-32601`, HTTP 404. `notifications/*` → 202, ignored.
+- HTTP status of a modern JSON-RPC error: 400 for `-32020/-32021/-32022` and the `_meta` `-32602`; 404 for `-32601`;
+  200 for every other JSON-RPC error. Transport denials keep §16.1 (401/403/413/429/503).
+- Modern requests ignore `Mcp-Session-Id` and never get one. `GET /mcp` stays 405; `DELETE /mcp` stays legacy-only.
+- Every modern result carries `resultType` (`complete` | `input_required` | `task`) and
+  `_meta["io.modelcontextprotocol/serverInfo"] = {"name": "ramen-node", "version": <node version>}` (merged into an
+  existing `_meta`). `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` and
+  `server/discover` add `ttlMs` (`RAMEN_LIST_TTL_MS`, default 60000; `resources/read` always 0) and
+  `cacheScope: "private"` (lists vary by caller).
+- Modern error codes — nothing from `-32000..-32019`: unknown, blocked or hidden tool → `-32602 Unknown tool: <name>`;
+  listable but not callable → `-32602 forbidden: <name> is not callable for <kind>`; unknown/blocked prompt → `-32602`;
+  resource not found or blocked → `-32602 Resource not found`, `data: {"uri": ...}`; runtime not loaded → `-32603`.
+  Access-log reasons (`blocked_name`, `tool_hidden`, `tool_denied`) are unchanged.
+- `server/discover` → `{"resultType": "complete", "supportedVersions": [MODERN, ...LEGACY], "capabilities": {"tools":
+  {"listChanged": true}, "prompts": {"listChanged": true}, "resources": {"listChanged": true}, "completions": {},
+  "extensions": {"io.modelcontextprotocol/tasks": {}}}, "ttlMs", "cacheScope"}`; `extensions` only when a loaded tool
+  has `task: true`. No `logging`, no `resources.subscribe`. Legacy `initialize` is unchanged except that it accepts a
+  requested `2025-11-25` by answering `2025-06-18` (as it already does for any version).
+- `completion/complete` (both eras): values = the `enum` entries of the named prompt argument / template variable that
+  start with `argument.value` (max 100), else `[]`; `{"completion": {"values": [...], "total": n, "hasMore": false}}`.
+- Access log: every `mcp` line gains `protocol` (the version served). `Admin/Metrics` gains
+  `calls_by_protocol: {"<version>": n}`; `subscriptions` (open streams) and `tasks` (live) counts.
+
+### 23.2 Standard headers (HTTP, modern only)
+- `Mcp-Method` is required and must equal `method`. `Mcp-Name` is required on `tools/call`, `prompts/get` (=
+  `params.name`), `resources/read` (= `params.uri`) and `tasks/get|update|cancel` (= `params.taskId`). A value of the
+  form `=?base64?<b64>?=` is decoded (UTF-8) before comparing. Missing, mismatching or undecodable → `-32020`.
+- `Mcp-Param-<Name>`: a tool parameter declares `"header": "<Name>"` in its proto `input` entry (types `string`,
+  `integer`, `boolean` and `enum` only; `<Name>` an RFC 9110 token, case-insensitively unique per tool — otherwise the
+  package fails to load). The MCP `inputSchema` property then carries `"x-mcp-header": "<Name>"`. On `tools/call`: the
+  argument present and non-null in the body ⇒ the header is required and must match (integers numerically, booleans
+  `true`/`false`, base64 sentinel decoded); argument absent or null ⇒ header not expected; unknown `Mcp-Param-*` ignored.
+- The body stays authoritative; a mismatch is refused and logged with reason `header_mismatch`, never guessed.
+- `traceparent`, `tracestate`, `baggage` (HTTP header, else the `_meta` key) are copied onto the access-log line as
+  `trace: {"traceparent": ..., ...}` when `traceparent` matches the W3C shape; never forwarded to tools.
+- CORS (§16.1) allows and exposes the new header names. Compatibility gate (§19): adding, removing or renaming a
+  parameter's `header` is a breaking change unless `breaking: true`.
+
+### 23.3 Group contract additions (runtime-py; all optional, 0.8 packages load unchanged with the same manifest hash)
+`from ramen_runtime import ...` inside tool/resource/prompt code:
+- Content: `text(s)`, `image(data: bytes, mime)`, `audio(data: bytes, mime)`, `resource(uri, text=None | blob=None,
+  mime="text/plain")`. A tool may return one block, a list of blocks, or (as before) any JSON value. Blocks go into
+  `content` as given; no `structuredContent` for a block result.
+- Resources: the callable may return `bytes` (→ `blob`, base64). A `uri` containing `{var}` is a template: listed by
+  `resources/templates/list` as `uriTemplate` (not by `resources/list`), matched on read (`{var}` = one path segment),
+  variables passed to the callable as keyword strings and declared in `input`.
+- Prompts: `"callable": "<fn>"` (in `<name>.py`) instead of `"skill"`: returns a string, a block, or a list of
+  `{"role", "content"}` messages / blocks (role `user`). Arguments as keywords.
+- `InputRequired(requests: dict[str, dict], state=None)` — raise it from a tool or callable prompt. Builders:
+  `elicit(message, schema)` (form), `elicit_url(message, url)`, `sample(messages | text, max_tokens=100, **params)`,
+  `list_roots()`. On the retry `input_responses()` returns the client's answers (dict, `{}` on the first call),
+  `request_state()` the verified `state` (or `None`), `client_capabilities()` the declared capabilities.
+  A form-mode schema with a property named like a credential (`password|passwd|secret|token|api[_-]?key|credential|
+  card|cvv|ssn`, case-insensitive) is refused: the call answers `isError` `input request refused: <key>.<field> looks
+  like a secret; use elicit_url` — so a golden case catches it at the canary.
+- `MissingCapability(required: dict)` — raise when the tool cannot run for this client → `-32021`.
+- `progress(progress, total=None, message=None)` — no-op unless the request carried `_meta.progressToken`.
+- Tool proto `"task": true` — see §23.5.
+
+### 23.4 MRTR (multi round-trip requests)
+- Sidecar protocol (§2): `runtime.call_tool` / `runtime.get_prompt` params gain `inputResponses` (object, optional),
+  `state` (any JSON, optional — already verified by the node), `client: {"capabilities": {...}}`, `progress: bool`.
+  The result is the 0.8 shape, or `{"resultType": "input_required", "inputRequests": {...}, "state": <json>?}`, or
+  `{"resultType": "missing_capability", "requiredCapabilities": {...}}`. While a call runs the runtime may write
+  `{"jsonrpc": "2.0", "method": "runtime.progress", "params": {"id": <call id>, "progress", "total"?, "message"?}}`.
+- Node, modern era: `input_required` → result `{"resultType": "input_required", "inputRequests", "requestState"?}`;
+  `requestState` only when the tool gave `state`. An input request whose method the client did not declare
+  (`elicitation/create` → `elicitation`, with `mode: "url"` → `elicitation.url`; `sampling/createMessage` → `sampling`;
+  `roots/list` → `roots`), and `missing_capability`, → `-32021` with `data.requiredCapabilities` (HTTP 400).
+- `requestState = b64url(payload) "." b64url(HMAC-SHA256(key, payload))`, key derived from the group session secret
+  (label `mrtr`), `payload = {"v": 1, "s": state, "b": caller binding (§16.2), "g": group, "z": zone, "m": method,
+  "n": name, "a": args digest (C12), "e": expiry}`; TTL `RAMEN_MRTR_TTL_SECS` (default 600). A presented state that is
+  malformed, fails the MAC, is expired, or was issued for another caller, group, zone, method, name or arguments →
+  `-32602 requestState integrity check failed` (log reason `state_invalid`). Not single-use.
+- `inputResponses` must be an object of objects when present → else `-32602`. Unknown keys are the tool's to ignore.
+- Guardrails (§21.2): **pre runs on every round** — the first call and each retry; on a retry the engine sees the
+  arguments plus `"$inputResponses": {...}` — and before the tool body runs again. **Post runs on the final
+  (`complete`) result only.** A blocked round is the usual `isError` result with `_meta.ramen.guardrail`.
+- Legacy era: an `input_required` outcome becomes `isError` `this tool needs more input (<keys>); it can only ask a
+  client that speaks MCP 2026-07-28` (prompts: `-32602` with the same text). `missing_capability` → the same style.
+- `progress`: when the request has `_meta.progressToken` and `Accept` includes `text/event-stream` (either era), the
+  POST is answered as SSE: one `notifications/progress` (`progressToken`, `progress`, `total`?, `message`?) per runtime
+  line, then the response. Otherwise progress lines are dropped.
+- Golden cases (§19): a case may carry `respond: {<key>: <response>}`; the console then calls in the modern era
+  declaring elicitation (form + url), sampling and roots, and on `input_required` retries once with those responses
+  and the `requestState`; `expect` applies to the final result. `expect: {input_required: [<keys>]}` asserts the
+  first round instead.
+
+### 23.5 Tasks (`io.modelcontextprotocol/tasks`, modern only)
+- A tool with `"task": true` called by a client that declared the extension on that request returns
+  `{"resultType": "task", "taskId", "status": "working", "createdAt", "lastUpdatedAt", "ttlMs", "pollIntervalMs"}`;
+  any other caller (legacy, or no declaration) gets the synchronous call as before (bounded by the call timeout).
+- `tasks/get {taskId}` → the task fields + `inputRequests` (`input_required`) | `result` (`completed`, the tool result
+  incl. `isError`) | `error` (`failed`); `tasks/update {taskId, inputResponses}` and `tasks/cancel {taskId}` →
+  `{"resultType": "complete"}`. Called without the extension declared → `-32021`. Unknown, expired, or another
+  caller's task → `-32602 Unknown task` (a task is bound to the caller binding of §16.2 and to group + zone).
+- `taskId`: 128 random bits, hex. `ttlMs` = `RAMEN_TASK_TTL_SECS` (default 3600) × 1000; `pollIntervalMs` 2000;
+  at most `RAMEN_MAX_TASKS` (default 4) running per pod — beyond it the call is refused like inflight (429).
+- Runtime: `runtime.task_start {taskId, name, arguments, client}` returns at once and runs the tool on a thread;
+  `runtime.task_poll {taskId}` → `{"status", "result"?, "error"?, "inputRequests"?}`; `runtime.task_update {taskId,
+  inputResponses}` (the tool body runs again with them); `runtime.task_cancel {taskId}` (cooperative: the result is
+  discarded). Guardrails: pre before the start and before every re-run, post on the final result; a block completes
+  the task with the `isError` result.
+- Node: the owning pod polls the runtime (500 ms) and writes the record to the task store: the scope Redis
+  (`RAMEN_REDIS_SCOPE_URL`), else the item Redis, else process memory (single pod; documented). Any pod of the zone
+  answers `tasks/get` from the store; `update`/`cancel` reaching another pod are queued in the store for the owner.
+  A `working` task whose owner stopped heart-beating (30 s) is `failed` (`-32603 worker lost`). The sidecar is not
+  idle-killed while a task runs. Access log: `tasks/*` lines carry `name` = the tool and `task` = the id.
+
+### 23.6 Subscriptions (`subscriptions/listen`, HTTP, modern only)
+- A POST answered as `text/event-stream` (`X-Accel-Buffering: no`): first the ack
+  `notifications/subscriptions/acknowledged` with `params._meta["io.modelcontextprotocol/subscriptionId"]` = the
+  request id and `params.notifications` = the honoured subset of `toolsListChanged`, `promptsListChanged`,
+  `resourcesListChanged` (+ `taskIds` when the extension is declared; `resourceSubscriptions` is never honoured);
+  then, after each load whose manifest hash differs, one `notifications/{tools,prompts,resources}/list_changed` per
+  requested kind, each tagged with the subscription id; `notifications/tasks` for watched tasks; an SSE comment every
+  15 s. On shutdown/drain the node sends `{"id", "result": {"resultType": "complete", "_meta": {subscriptionId}}}`.
+- A stream holds no inflight permit; at most `RAMEN_MAX_SUBSCRIPTIONS` (default 64) per pod, then 429. It is
+  per-pod: a stream learns of the reload of the pod it is connected to. Over gRPC the method is `-32601`.
+- Supersedes the "no push channel" note of §20 for modern clients; the legacy SSE answer of C11 is unchanged.
+
+### 23.7 Verification
+- Golden regression: every 0.8 tool/resource/prompt of the fixture and demo groups answers byte-identically (minus
+  `ms`) on the legacy era, and identically plus the modern envelope on the modern era, on both transports.
+- Official suite (`@modelcontextprotocol/conformance@alpha`, pinned version) against a node serving
+  `tests/fixtures/conformance_group` through a local proxy that adds the credential (the suite cannot send one):
+  `--requirements 2026-07-28` and `--spec-version 2025-06-18`, each with a checked-in expected-failures baseline.
+  A baseline entry needs a one-line reason in the file. Known for the legacy wire: server-initiated sampling,
+  elicitation and logging, and `resources/subscribe` are not offered to 2025-06-18 clients.

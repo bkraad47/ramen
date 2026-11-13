@@ -114,3 +114,23 @@ table.formtable td .act{width:180px}
 .signin-guide .codebox{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .signin-guide .codebox-label{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);padding:6px 10px;border-bottom:1px solid var(--line)}
 .signin-guide .codebox pre{margin:0;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-radius:0}
+/* 1.0.0 UI pass (the user's screenshots): one control height on every form row, selects drawn like inputs, buttons that
+   never wrap, cards without a gap above their first line, short explainers folded into <details class="help">. */
+:root{--ctl-h:38px}
+.zone-actions,.settings{--ctl-h:30px}
+input:not([type=checkbox]):not([type=radio]):not([type=hidden]),select{height:var(--ctl-h);box-sizing:border-box}
+select{-webkit-appearance:none;appearance:none;background-color:#fff;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+select[multiple]{height:auto;background-image:none;padding-right:9px}
+form.inline button,form.inline .btn,.row-actions button,.row-actions .btn,.act{height:var(--ctl-h);box-sizing:border-box;white-space:nowrap;padding-top:0;padding-bottom:0}
+form.inline button:not(.act):not(.sm),form.inline .btn:not(.act){font-size:14px}
+details.multi>summary{height:var(--ctl-h);box-sizing:border-box;display:flex;align-items:center;border-radius:8px}
+.card>:first-child{margin-top:0}
+input.wide{width:360px}
+table.kv{margin:0 0 4px}table.kv th{width:10em;text-align:left;font-weight:500;color:var(--muted);white-space:nowrap;vertical-align:middle}
+table.kv td{vertical-align:middle}table.kv td>*{vertical-align:middle}table.kv form.inline{display:inline-flex;margin:0 0 0 8px}
+details.help{margin:6px 0 10px}details.help>summary{cursor:pointer;color:var(--muted);font-size:13px}details.help ol,details.help ul{margin:6px 0;padding-left:20px}
+details.help p{margin:6px 0}
+#audit-scroll td:first-child,#audit-scroll td:nth-child(3),.ts{white-space:nowrap}
+.act{font-size:14px}.zone-actions .act,.settings .act,.zone-actions button,.settings button{font-size:12px}
+details.multi>summary{padding-right:28px;background-color:#fff;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+details.multi>summary::after{content:none}

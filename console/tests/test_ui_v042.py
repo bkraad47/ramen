@@ -18,8 +18,8 @@ def cell_of(page: str, needle: str) -> str:
 def test_api_key_groups_are_a_dropdown_that_still_takes_several_groups(demo):
     page = demo.get("/api-keys").text
     assert '<select name="groups" multiple' not in page and "multiple size=" not in page
-    assert 'id="group-pick"' in page and "Add" in page
-    assert 'name="groups"' in page  # the chips post as repeated fields
+    assert 'id="key-groups"' in page  # 1.0.0: the checkbox dropdown, as on every other multi-value field
+    assert 'name="groups"' in page  # the ticked boxes post as repeated fields
 
     r = demo.post("/api/v1/api-keys", json={"name": "two-groups", "groups": ["demo", "other"]})
     assert r.status_code == 201 and sorted(r.json()["groups"]) == ["demo", "other"]

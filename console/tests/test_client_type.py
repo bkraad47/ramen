@@ -204,11 +204,11 @@ def test_a_group_mcp_key_is_not_accepted_by_the_console_api(app, root):
 
 
 def test_the_page_offers_the_caller_groups_as_a_dropdown(root):
-    """W1 (§14): the list box became a dropdown plus Add; the options are still the groups the caller may grant."""
+    """W1 (§14), 1.0.0: a checkbox dropdown (as on every other multi-value field); the options are still the groups the
+    caller may grant."""
     html = root.get("/api-keys").text
-    assert '<select id="group-pick">' in html and "multiple" not in html
-    assert '<option value="demo">demo</option>' in html
-    assert '<option value="other">other</option>' in html
+    assert 'id="key-groups"' in html and "multiple" not in html and 'id="group-pick"' not in html
+    assert 'name="groups" value="demo"' in html and 'name="groups" value="other"' in html
 
 
 def test_the_listing_shows_group_names_not_a_json_array(root):

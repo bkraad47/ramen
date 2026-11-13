@@ -320,8 +320,9 @@ def capture(
                         replies.append((r.url, r.status))
 
                 page.on("response", remember)
-                page.select_option("#group-pick", "demo")  # an agent key names its groups (§14 W1)
-                page.get_by_role("button", name="Add").click()
+                page.click("#key-groups > summary")  # an agent key names its groups (§14 W1; a checkbox dropdown since 1.0)
+                page.check("#key-groups input[value=demo]")
+                page.click("#key-groups > summary")
                 page.get_by_role("button", name="Generate key").click()
                 try:
                     page.wait_for_function("document.querySelector('#once').innerText.trim().length > 0", timeout=8000)

@@ -2,7 +2,7 @@
 {% block body %}
 <div class="card"><b>Repo:</b> <code>{{ group.repo_url or '—' }}</code> @ <code>{{ group.ref }}</code> · MCP auth: <span class="badge">{{ group.mcp_auth.mode }}</span>
 {% if can_admin %}<form class="inline" hx-put="{{ base }}/api/v1/groups/{{ group.id }}" hx-ext="json" hx-swap="none">
-<label>Repo URL<input name="repo_url" value="{{ group.repo_url }}"></label><label>Ref<input name="ref" value="{{ group.ref }}"></label>
+<label>Repo URL<input class="wide" name="repo_url" value="{{ group.repo_url }}"></label><label>Ref<input name="ref" value="{{ group.ref }}"></label>
 <label>Fallback GitHub token (stored encrypted, never shown)<input name="github_token" type="password" placeholder="Prefer a GITHUB_TOKEN secret"></label>
 <label>GitHub App installation id (skips the token above)<input name="github_app_installation_id" value="{{ group.github_app_installation_id or '' }}" placeholder="123456"></label><button>Save</button></form>{% endif %}</div>
 
@@ -13,7 +13,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <label>Scope Redis URL<input name="redis_url" type="password" placeholder="{{ 'unchanged' if group.redis_scope_url else 'redis://host:6379' }}"></label>
 <label>Per-IP /min<input class="sm" type="number" min="0" name="ip_per_min" value="{{ group.scope_ip_per_min or 0 }}" style="width:6em"></label>
 <label>Per-token /min<input class="sm" type="number" min="0" name="token_per_min" value="{{ group.scope_token_per_min or 0 }}" style="width:6em"></label>
-<button class="act">Save group/environment limits</button></form>{% endif %}</div>
+<button class="act">Save limits</button></form>{% endif %}</div>
 
 <h2>Environments</h2>
 {% if can_admin %}<form class="inline" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/environments" hx-ext="json" hx-swap="none">
@@ -96,11 +96,19 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 {% else %}<p class="muted">No environments</p>{% endfor %}
 
 <h2>Worker image</h2>
-<div class="card"><p class="muted">Workers run the release image unless this group pins one. Builds are pushed to the registry ({{ 'make build-worker GROUP=' ~ group.id }}); recording a tag here pins it, and the pin reaches the zones on the next deploy.</p>
-<p>Build on deploy: <span class="badge {{ 'ok' if builds else '' }}">{{ 'on' if builds else 'off' }}</span>{% if can_admin %} <button class="sm ghost" hx-put="{{ base }}/api/v1/groups/{{ group.id }}" hx-ext="json" hx-vals='{"build_image": {{ 'false' if builds else 'true' }}}' hx-swap="none" {{ 'disabled title="This deployment has no image builder (ramen-builder)"' if not builder and not builds }}>Build on deploy: {{ 'on → off' if builds else 'off → on' }}</button>{% endif %} <span class="muted">When on and the repo has a non-empty <code>mcp/requirements.txt</code>, a deploy first builds this group's image — the release image plus those requirements — and the workers start without installing anything. A pinned image below wins over a built one.{% if not builder %} This deployment has no image builder, so it cannot be turned on.{% endif %}</span></p>
-<p>Current: {% if group.image %}<code>{{ group.image.ref }}</code> <span class="muted">(pinned)</span>{% elif group.built_image %}<code>{{ group.built_image.ref }}</code> <span class="muted">(built on deploy)</span>{% else %}<span class="muted">The release image</span>{% endif %}
-{% if p.role == 'super_admin' and group.image %} <button class="sm ghost" hx-delete="{{ base }}/api/v1/groups/{{ group.id }}/images/current" hx-swap="none">Use the release image</button>{% endif %}</p>
-{% if p.role == 'super_admin' %}<form class="inline" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/images" hx-ext="json" hx-swap="none"><label>Tag<input name="tag" required placeholder="registry/path:{{ group.id }}-1"></label><label>Digest (optional)<input name="digest" placeholder="sha256:…"></label><label>Note<input name="note" placeholder="What changed"></label><button>Record image</button></form>{% endif %}
+<div class="card"><table class="kv">
+<tr><th>Running now</th><td>{% if group.image %}<code>{{ group.image.ref }}</code> <span class="badge">pinned</span>{% elif group.built_image %}<code>{{ group.built_image.ref }}</code> <span class="muted">(built on deploy)</span>{% else %}The release image{% endif %}
+{% if p.role == 'super_admin' and group.image %} <button class="act ghost" hx-delete="{{ base }}/api/v1/groups/{{ group.id }}/images/current" hx-swap="none">Use the release image</button>{% endif %}</td></tr>
+<tr><th>Build on deploy</th><td><span class="badge {{ 'ok' if builds else '' }}">{{ 'on' if builds else 'off' }}</span>{% if can_admin %} <button class="act ghost" hx-put="{{ base }}/api/v1/groups/{{ group.id }}" hx-ext="json" hx-vals='{"build_image": {{ 'false' if builds else 'true' }}}' hx-swap="none" {{ 'disabled title="This deployment has no image builder (ramen-builder)"' if not builder and not builds }}>Build on deploy: {{ 'on → off' if builds else 'off → on' }}</button>{% endif %}
+<span class="muted">{% if builder %}Bakes <code>mcp/requirements.txt</code> into this group's image at deploy.{% else %}This deployment has no image builder, so it cannot be turned on.{% endif %}</span></td></tr>
+</table>
+<details class="help"><summary>How the image is chosen</summary><ol>
+<li>A <b>pinned</b> image wins. A super admin pins one by recording its tag below.</li>
+<li>Otherwise, with build on deploy on and a non-empty <code>mcp/requirements.txt</code>, the image the last deploy built (the release image plus those requirements; workers then start without installing anything).</li>
+<li>Otherwise the <b>release image</b>.</li></ol>
+<p class="muted">A change reaches the zones on the next deploy. To build an image yourself: <code>{{ 'make build-worker GROUP=' ~ group.id }}</code>, push it, then pin its tag.</p></details>
+{% if p.role == 'super_admin' %}<h3>Pin an image</h3><form class="inline" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/images" hx-ext="json" hx-swap="none"><label>Tag<input name="tag" required placeholder="registry/path:{{ group.id }}-1"></label><label>Digest (optional)<input name="digest" placeholder="sha256:…"></label><label>Note<input name="note" placeholder="What changed"></label><button>Record image</button></form>{% endif %}
+<h3>History</h3>
 <table><tr><th>Image</th><th>Note</th><th>Recorded</th><th>By</th><th>Pinned</th><th></th></tr>
 {% for i in images %}<tr><td><code>{{ i.ref or i.tag }}</code>{% if i.source == 'build' %} <span class="badge {{ 'error' if i.status == 'failed' else '' }}">{{ 'build failed' if i.status == 'failed' else 'built' }}</span>{% endif %}</td><td>{{ i.note or '—' }}</td><td>{{ i.created }}</td><td>{{ i.created_by or '—' }}</td>
 <td>{% if i.current or i.in_use %}<span class="badge ok">In use</span>{% else %}<span class="muted">—</span>{% endif %}</td>
@@ -112,7 +120,8 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <p class="muted">Telemetry is on for this console (endpoint <code>{{ otel.endpoint or '—' }}</code>). When consent is required, this group's tools, prompts and resources are served only to a caller who accepted the telemetry notice: a person accepts it on the sign-in consent page, an agent with a group key is asked once by its MCP client (2026-07-28 elicitation). Callers that can do neither are refused. Takes effect on the next deploy.{% if not otel.enabled %} Telemetry is currently off, so nobody is asked.{% endif %}</p></div>{% endif %}
 
 {% if can_admin %}<h2>Service-account permissions</h2>
-<div class="card"><p class="muted">Approved permissions per zone are bound to the zone's service account (least privilege, F6.5). A group admin requests a permission for a zone, a super admin approves it, and the console binds the matching cloud roles (GCP IAM / AWS IAM) to that zone's identity — revoking takes them away again. <b>Scope</b> names the resources the permission is for: leave it empty (or <code>*</code>) and <code>bucket.*</code> covers the group's own area of the groups bucket and <code>secrets.*</code> the group's secrets; name buckets or secrets (<code>bucket-a, bucket-b</code>) and the binding is on those alone. Permissions whose cloud roles are project-wide (logs, metrics, queues, …) record the scope but cannot enforce it. On GCP the console's identity manages IAM only on the groups bucket: to scope to another bucket, grant it <code>roles/storage.admin</code> on that bucket first (the approval tells you if it is missing).</p>
+<div class="card"><p class="muted">Each zone runs as its own service account with only what is approved here. A group admin requests a permission for a zone; a super admin approves it and the console grants the matching cloud roles. Revoking takes them away again.</p>
+<details class="help"><summary>What Scope means</summary><p>Scope names the resources the permission is for. Empty or <code>*</code>: <code>bucket.*</code> covers the group's own area of the groups bucket and <code>secrets.*</code> the group's secrets. Named (<code>bucket-a, bucket-b</code>): the grant is on those alone. Permissions whose cloud roles are project-wide (logs, metrics, queues, …) record the scope but cannot enforce it. On GCP the console manages IAM only on the groups bucket: to scope to another bucket, grant the console <code>roles/storage.admin</code> on it first (the approval tells you if that is missing).</p></details>
 <table><tr><th>Zone</th><th>Service account</th><th>Approved permissions</th></tr>{% for z in zones %}{% set scopes = workers[z.id].sa_scopes or {} %}<tr><td>{{ z.id }}</td><td>{{ workers[z.id].service_account or '—' }}</td>
 <td>{% for q in workers[z.id].sa_permissions or [] %}<span class="badge ok">{{ q }}{% if scopes.get(q) and scopes[q] != ['*'] %}: {{ scopes[q]|join(', ') }}{% endif %}</span>{% if p.role == 'super_admin' %} <button class="sm danger" hx-delete="{{ base }}/api/v1/groups/{{ group.id }}/zones/{{ z.id }}/permissions/{{ q }}" hx-confirm="Take {{ q }} away from zone {{ z.id }}?" hx-swap="none">Revoke permission</button>{% endif %} {% else %}—{% endfor %}</td></tr>{% endfor %}</table>
 {% if can_admin %}<form class="inline" hx-post="{{ base }}/api/v1/requests" hx-ext="json" hx-vals='{"group": "{{ group.id }}"}' hx-swap="none"><label>Zone<select name="zone">{% for z in zones %}<option>{{ z.id }}</option>{% endfor %}</select></label>

@@ -131,7 +131,8 @@ def test_an_open_subscription_shows_in_subscriptions(node):
     with m.listen({"toolsListChanged": True}) as s:
         assert s.next(5) is not None
         assert node.node.admin_metrics()["subscriptions"] == 1, "a zone with a listener is not idle"
-    deadline = time.monotonic() + 5
+    # a client that just closes is noticed on a keep-alive write (15 s apart; Linux one write later than macOS)
+    deadline = time.monotonic() + 60
     while node.node.admin_metrics()["subscriptions"] and time.monotonic() < deadline:
         time.sleep(0.2)
     assert node.node.admin_metrics()["subscriptions"] == 0

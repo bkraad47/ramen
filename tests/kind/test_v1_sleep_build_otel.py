@@ -202,6 +202,8 @@ def v1(admin, stack, kube_ready, group, env_name, tmp_path_factory):
         admin.put("workers", {"sleep_after_secs": 0}, group=group, zone=zone)
         admin.post("zone_wake", group=group, zone=zone)
     admin.put("group", {"require_telemetry_consent": False}, group=group)
+    # before the namespace (and the Redis in it) goes: workers handed a Redis that no longer exists would have none
+    admin.http.put(f"/api/v1/groups/{group}/throttle", json={"redis_url": ""})
     admin.put("config_otel", {"enabled": False})
     admin.put("config_scheduler", before_sched)
     admin.put("group", {"repo_url": before_group["repo_url"], "ref": before_group.get("ref", "main")}, group=group)

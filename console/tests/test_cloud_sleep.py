@@ -1,6 +1,7 @@
 """§24.1 sleeping workers on every adapter: labels and selectors per provider, sleep/wake/zone_runtime against the
 shared k8s fake."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -456,3 +457,40 @@ async def test_wake_is_safe_to_call_twice_at_once(zone):
     a, b = await asyncio.gather(cloud.wake_zone("demo", "a", 2, 0), cloud.wake_zone("demo", "a", 2, 0))
     assert a == b == {"ok": True, "namespace": NS, "workers": 2, "canary": 0, "activator": 0}
     assert replicas(k8s) == {"worker": 2, "worker-canary": 0, ACTIVATOR: 0}
+
+
+CONSOLE_CHART = CHART.parent / "ramen"
+CONSOLE_SETS = {
+    "gcp": ("project=p1,region=us-central1,builder.gsa=b@p1.iam.gserviceaccount.com", "gcp", "firestore"),
+    "aws": (
+        "provider=aws,region=us-east-1,aws.account=123456789012,builder.roleArn=arn:aws:iam::1:role/b",
+        "aws",
+        "dynamodb",
+    ),
+    "azure": (
+        "provider=azure,region=westus2,azure.acr=r.azurecr.io,azure.storageAccount=s,azure.nodeResourceGroup=MC_x,"
+        "azure.clientId=c,azure.publicHostname=h.sslip.io,builder.clientId=b",
+        "azure",
+        "azuretables",
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm not installed")
+@pytest.mark.parametrize("provider", sorted(CONSOLE_SETS))
+def test_the_console_chart_keeps_the_providers_backends_when_the_builder_is_on(provider):
+    """1.0.0 AKS run: the §24 env block was merged after the chart's default `console.env` (RAMEN_CLOUD gcp, RAMEN_STORE
+    firestore), so an AWS or Azure console came up asking for Google credentials."""
+    sets, cloud, store = CONSOLE_SETS[provider]
+    out = subprocess.run(
+        ["helm", "template", "ramen", str(CONSOLE_CHART), "--set", sets, "--set", "otel.collector=jaeger"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    env = dict(re.findall(r'- \{ name: (\w+), value: "([^"]*)" \}', out))
+    assert (env["RAMEN_CLOUD"], env["RAMEN_STORE"]) == (cloud, store), {
+        k: env[k] for k in ("RAMEN_CLOUD", "RAMEN_STORE")
+    }
+    assert env["RAMEN_BUILDER"] == "1" and env["RAMEN_BUILD_REGISTRY"].endswith("/ramen")
+    assert env["RAMEN_CONSOLE_INTERNAL_URL"].startswith("http://console.")

@@ -46,7 +46,7 @@
 {{- $_ := set $v1 "RAMEN_BUILD_REGISTRY" (include "ramen.builder.registry" .) }}
 {{- with .Values.builder.image }}{{- $_ := set $v1 "RAMEN_BUILDER_IMAGE" . }}{{- end }}
 {{- end }}
-{{- $env = merge (dict) .Values.console.env $env $v1 }}
+{{- $env = merge (dict) $env $v1 }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

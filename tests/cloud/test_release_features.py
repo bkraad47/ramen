@@ -407,6 +407,11 @@ def v24(admin, world, suffix):
     ok(admin.put("group", {"require_telemetry_consent": True}, group=GROUP))
     keys = {n: ok(admin.post("mcp_keys", {"name": f"v24-{n}-{suffix}"}, group=GROUP), 201).json()["key"]
             for n in ("prompt", "legacy", "sleep")}  # fmt: skip
+    # RAMEN_BUILD_REF: a ref of the demo repo whose `mcp/requirements.txt` names a package (main's is comments only,
+    # and a file of comments builds nothing) — same tools, so the compatibility gate has nothing to say
+    build_ref, env_before = E.env("RAMEN_BUILD_REF"), ok(admin.get("environment", group=GROUP, env=ENV)).json()
+    if build_ref:
+        ok(admin.put("environment", {"ref": build_ref}, group=GROUP, env=ENV))
     before = image_records(admin)
     job = admin.wait_job(ok(admin.deploy(GROUP, ENV, canary=True), 202).json()["id"], timeout=1800)
     assert job["status"] == "ok", {k: job.get(k) for k in ("status", "error")} | {"log": job.get("log", [])[-40:]}
@@ -416,6 +421,8 @@ def v24(admin, world, suffix):
     admin.put("group", {"require_telemetry_consent": False}, group=GROUP)
     if not otel_before.get("enabled"):
         admin.put("config_otel", {"enabled": False})
+    if build_ref:
+        admin.put("environment", {"ref": env_before.get("ref", "main")}, group=GROUP, env=ENV)
     admin.wait_job(admin.deploy(GROUP, ENV, canary=True).json()["id"], timeout=1800)
 
 

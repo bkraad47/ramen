@@ -120,10 +120,15 @@ class HttpsOnlyMiddleware(BaseHTTPMiddleware):
     in X-Forwarded-Proto; the kubelet's probes reach the pod directly, so the probe paths stay plain."""
 
     EXEMPT = ("/healthz", "/readyz")
+    INTERNAL = "/api/v1/internal/"
 
     async def dispatch(self, request: Request, call_next):
         proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip().lower()
         if proto == "https" or request.url.path in self.EXEMPT:
+            return await call_next(request)
+        # §24.1: the activator's wake call comes from inside the cluster over plain http; the internal routes refuse
+        # whatever an edge forwarded, so only a request no edge touched is let through here
+        if request.url.path.startswith(self.INTERNAL) and "x-forwarded-for" not in request.headers:
             return await call_next(request)
         if request.method in ("GET", "HEAD"):
             from .baseuri import base_of

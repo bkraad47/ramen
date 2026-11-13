@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_image_content",
+  "description": "Return one image/png content block (official suite: tools-call-image).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

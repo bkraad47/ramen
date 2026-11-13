@@ -139,6 +139,35 @@ and guarding it for the others on the same tool is the intended combination.
 gate with the rail's message. Write a case that is supposed to be blocked as `expect: {text_contains: "guardrail
 blocked"}` and the gate proves the rail.
 
+### Tools that ask for input, and tasks
+
+Since 1.0 a tool can take more than one call to answer ([multi round-trip requests](mrtr.md)) or run as a
+[task](tasks.md). The hooks follow the tool's function, which runs once per round:
+
+| When | `pre` | `post` |
+|---|---|---|
+| First call; the tool asks for input | runs, sees the arguments | does not run: there is no result yet |
+| The retry that carries the answers | runs again, sees the arguments plus `"$inputResponses": {<key>: <answer>}` | runs if this round produces the final result |
+| A task: the start | runs before the function starts | runs on the final result |
+| A task: after each `tasks/update` | runs again before the function re-runs, with `$inputResponses` | as above |
+
+So `pre` is on **every** round and `post` on the **final result only**. The point of the second `pre` is the
+answer itself: what a user typed into a form, or what a model returned for a sampling request, is new input and
+is checked before the tool acts on it. `$inputResponses` is present only when the call carries answers. In a
+`policy.py`:
+
+```python
+def pre(tool: str, arguments: dict) -> str | None:
+    answers = arguments.get("$inputResponses", {})     # {} on the first round
+    ...
+```
+
+A blocked round is the same tool error as any other block, with `_meta.ramen.guardrail`. For a task, the call that
+created it has already returned, so a block ends the task `completed` with that tool error as its `result`.
+
+The demo repo opts `confirm_delete_note` into `pre` for exactly this: its NeMo rail sees the confirmation answer
+before the note is deleted.
+
 ## 4. Where it shows
 
 The deploy's load result and the worker's reload carry `guardrails: {engine, fail, tools: {<tool>: ["pre","post"]}}`.

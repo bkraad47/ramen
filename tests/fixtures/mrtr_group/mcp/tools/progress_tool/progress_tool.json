@@ -1,0 +1,12 @@
+{
+  "type": "tool",
+  "name": "progress_tool",
+  "description": "Report `steps` progress updates (1..steps of steps, each with a message), then answer.",
+  "callable": "run",
+  "input": {
+    "steps": {
+      "type": "integer",
+      "description": "how many updates to send"
+    }
+  }
+}

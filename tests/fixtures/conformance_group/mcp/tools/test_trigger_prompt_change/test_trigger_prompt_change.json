@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_trigger_prompt_change",
+  "description": "Answer 'Mutation triggered'. A Ramen tool cannot change the manifest or write to subscription streams: prompts/list_changed follows a deploy (Admin/Reload), so the official trigger checks stay warnings.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

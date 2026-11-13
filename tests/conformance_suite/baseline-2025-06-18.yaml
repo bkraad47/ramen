@@ -1,0 +1,11 @@
+# Expected failures of the official suite on the 2025-06-18 (initialize handshake) wire, `--spec-version 2025-06-18`
+# (CONTRACTS §23.7). Every entry needs a `# reason`. The suite fails the run when an entry here starts passing,
+# so this file cannot go stale. `<scenario>:<check-id>` excuses one check and keeps the scenario's others enforced.
+server:
+  - logging-set-level  # reason: Ramen declares no `logging` capability (§23.1); logging/setLevel is -32601
+  - tools-call-with-logging  # reason: no log notifications are sent to clients; the tool returns a plain result
+  - tools-call-sampling  # reason: no server-initiated sampling on the legacy wire; sampling is an MRTR input request (2026-07-28 only, §23.4)
+  - tools-call-elicitation  # reason: no server-initiated elicitation on the legacy wire; elicitation is an MRTR input request (2026-07-28 only, §23.4)
+  - resources-subscribe  # reason: resources/subscribe is not offered (§23.1: no `resources.subscribe`)
+  - resources-unsubscribe  # reason: resources/unsubscribe is not offered (§23.1)
+  - server-session-lifecycle:server-session-terminated-returns-404  # reason: sessions are stateless signed ids (§16.2, D33): DELETE is 204 but ids are not stored, so a deleted id verifies until its TTL

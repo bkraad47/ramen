@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_tampered_state",
+  "description": "Ask for a confirmation with signed state; the node refuses a state that was altered on the way back.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

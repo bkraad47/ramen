@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.bkraad47/ramen",
   "title": "Ramen: self-hosted MCP for teams",
-  "description": "Multi-zone MCP server for GKE/EKS/AKS: Python tools from git, NeMo guardrails, SSO, autoscaling.",
-  "version": "0.8.0",
+  "description": "Multi-zone MCP server (spec 2026-07-28) for GKE/EKS/AKS: Python tools from git, guardrails, SSO.",
+  "version": "1.0.0",
   "repository": {
     "url": "https://github.com/bkraad47/ramen",
     "source": "github"

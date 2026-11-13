@@ -1,0 +1,7 @@
+{
+  "type": "prompt",
+  "name": "test_prompt_with_image",
+  "description": "A prompt with an image message followed by a text message.",
+  "callable": "build",
+  "input": {}
+}

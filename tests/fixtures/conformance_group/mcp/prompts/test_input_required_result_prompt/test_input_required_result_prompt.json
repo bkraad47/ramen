@@ -1,0 +1,7 @@
+{
+  "type": "prompt",
+  "name": "test_input_required_result_prompt",
+  "description": "A prompt that first asks the user for context (input_required), then uses it.",
+  "callable": "build",
+  "input": {}
+}

@@ -115,6 +115,36 @@ jobs:
       - name: both transports on real nodes (§16.5), tool propagation (R2), token expiry (A1/A2/A4/D2), 0.7.2 tool access (C10) / rollout notice (C11) / args hash (C12), 0.7.5 guardrails / custom roles / identity federation / golden gate / demo repo rails (§21), scripts
         working-directory: tests
         run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_tool_access.py conformance/test_rollout_notify.py conformance/test_call_args_hash.py conformance/test_guardrails.py conformance/test_custom_roles.py conformance/test_identity_federation.py conformance/test_golden_guardrails.py conformance/test_demo_repo_guardrails.py conformance/test_scripts.py
+      - name: "1.0.0 (§23): golden regression vs 0.8.0, stateless core, standard headers, MRTR (+ guardrails), tasks, subscriptions, modern bodies through the bridge"
+        working-directory: tests
+        run: uv run pytest -q -rs conformance/test_golden_regression.py conformance/test_stateless_core.py conformance/test_standard_headers.py conformance/test_mrtr.py conformance/test_mrtr_guardrails.py conformance/test_tasks.py conformance/test_subscriptions.py conformance/test_bridge_modern.py
+
+  conformance-suite:
+    # CONTRACTS §23.7: the official @modelcontextprotocol/conformance suite (version pinned in tests/conformance_suite/run.py)
+    # against a real worker serving tests/fixtures/conformance_group, through the credential-adding proxy; both wires,
+    # each with its checked-in expected-failures baseline (an entry that starts passing fails the job too).
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.14 3.12
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/download-artifact@v4
+        with: { name: ramen-node, path: bin }
+      - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
+      - name: runtime-py venv (sidecar, Python 3.12 — D45)
+        run: |
+          (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv pip install pip)
+          echo "RAMEN_RUNTIME_PYTHON=$PWD/runtime-py/.venv/bin/python" >> "$GITHUB_ENV"
+      - name: official suite, --requirements 2026-07-28 and --spec-version 2025-06-18
+        working-directory: tests
+        run: uv sync && uv run pytest -q -rs conformance_suite
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: conformance-suite-results, path: tests/conformance_suite/results, if-no-files-found: ignore }
 
   client-windows:
     # §16.4 / X7: the client flow on the platform where fresh-machine setups break — the node built natively, the
@@ -151,7 +181,7 @@ jobs:
         working-directory: tests
         env:
           RAMEN_NODE_BIN: ${{ github.workspace }}\node-rs\target\release\ramen-node.exe
-        run: export RAMEN_MCP_KEY=rmk_$(openssl rand -hex 16) && uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py conformance/test_numpy_deps.py
+        run: RAMEN_MCP_KEY=rmk_$(openssl rand -hex 16) && export RAMEN_MCP_KEY && uv sync && uv run pytest -q -rs conformance/test_transports_local.py conformance/test_mcp_node_local.py conformance/test_numpy_deps.py
 
   iac:
     # Terraform (fmt + validate, no backend, no credentials) and Helm (lint + render) for every provider: gcp, aws, azure.

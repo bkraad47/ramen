@@ -17,7 +17,7 @@ mcp/
   tools/<name>/<name>.json           the contract: type, name, description, callable, input, output, error
   tools/<name>/utils/                optional helpers; this folder is on sys.path, so `import calculator_utils` works
   resources/<name>/<name>.py+.json   the same shape, plus uri and mime_type
-  prompts/<name>/<name>.json         plus SKILL.md and settings.json
+  prompts/<name>/<name>.json         plus SKILL.md and settings.json, or a <name>.py callable (1.0)
 ```
 
 Three rules carry everything. The folder name, the `name` in the JSON and the Python file's stem must match.
@@ -88,6 +88,28 @@ matched field by field) or `exact` (the whole result). `args` may reference the 
 `{{$group.VAR}}`; the console resolves them before the call. A JSON-RPC error counts as a failure. A group without
 an MCP key skips the cases with a warning; a malformed file fails the deploy before any zone changes.
 
+**A tool that asks for input** (1.0, [multi round-trip requests](mrtr.md)) gets two more forms, both from the demo
+repo:
+
+```yaml title="mcp/tests.yaml"
+  - name: confirm_delete_note asks before it deletes
+    tool: confirm_delete_note
+    args: {note: todo}
+    expect: {input_required: [confirm]}
+  - name: confirm_delete_note deletes when the user confirms
+    tool: confirm_delete_note
+    args: {note: todo}
+    respond: {confirm: {action: accept, content: {confirm: true}}}
+    expect: {text_contains: 'Deleted the note "todo"'}
+```
+
+`expect: {input_required: [<keys>]}` passes when the tool's first answer asks for exactly those keys. `respond:
+{<key>: <answer>}` makes the case a two-step call: when the tool asks, the console calls again with these answers
+(and the `requestState`, if there was one), and `expect` applies to the final result. The console makes such a case
+as a 2026-07-28 client that declares elicitation (form and URL), sampling and roots. It retries once: a tool that
+asks again after the answers fails the case, and so does a tool that asks when the case has no `respond`. Every
+other case is sent exactly as before.
+
 ## Guardrails
 
 `mcp/guardrails.yaml` opts tools into a check before the call and after the result, run in the runtime next to the
@@ -99,7 +121,7 @@ The whole story, with the demo repo's deterministic rails, is on [Guardrails](gu
 A **resource** is a tool with a `uri` and a `mime_type` whose callable returns the content. The demo's
 `demo_readme` returns the group's README as `text/markdown`.
 
-A **prompt** has no code at all. Its JSON names a `skill` and a `settings` file instead of a `callable`, each
+A **prompt** needs no code. Its JSON names a `skill` and a `settings` file instead of a `callable`, each
 `input` parameter becomes a prompt argument, and `{{param}}` in the skill is substituted when a client asks for
 it. The settings file is appended as a `## Settings` block and exposed as `_meta.settings`:
 
@@ -113,6 +135,199 @@ Turn {{request}} into one call to demo_calculator_tool, then state the result in
 ```
 
 Both deploy exactly like tools.
+
+## New in 1.0: what a package can do
+
+Everything in this section is optional. A repo written for 0.8 loads unchanged and keeps its manifest hash (one
+exception: a prompt whose argument already declared an `enum` now lists it, which changes that hash once). The
+helpers come from the runtime that runs your code, so there is nothing to add to `requirements.txt`:
+
+```python
+from ramen_runtime import (text, image, audio, resource,                       # content
+                           InputRequired, elicit, elicit_url, sample, list_roots,  # asking the client
+                           input_responses, request_state, client_capabilities,
+                           MissingCapability, progress)
+```
+
+### Content blocks
+
+A tool may return one block or a list of blocks instead of a JSON value:
+
+```python title="mcp/tools/test_multiple_content_types/test_multiple_content_types.py"
+from ramen_runtime import image, resource, text
+
+def run():
+    return [
+        text("Multiple content types test:"),
+        image(_png(), "image/png"),               # bytes in, base64 on the wire
+        resource("test://mixed-content-resource", text='{"test":"data","value":123}', mime="application/json"),
+    ]
+```
+
+`image(data, mime)` and `audio(data, mime)` take `bytes`. `resource(uri, text=… or blob=…, mime="text/plain")`
+takes exactly one of `text` and `blob`. The blocks go into the result's `content` as given. A block result has no
+`structuredContent`, and a declared `output` schema is not applied to it. Only what these builders return counts as
+a block: a dict you write by hand, `{"type": "text", …}`, is still JSON-encoded into the result text as in 0.8.
+
+### A binary resource
+
+A resource callable that returns `bytes` is served as a base64 `blob` instead of `text`:
+
+```json title="mcp/resources/bowl_logo/bowl_logo.json"
+{"type": "resource", "name": "bowl_logo", "description": "A binary resource: eight bytes served as a base64 blob.",
+ "callable": "read", "input": {}, "uri": "ramen://bowl/logo", "mime_type": "application/octet-stream"}
+```
+```python title="mcp/resources/bowl_logo/bowl_logo.py"
+def read() -> bytes:
+    return bytes(range(8))
+```
+
+### A resource template
+
+A `uri` that contains `{var}` is a template. It is listed by `resources/templates/list` (as `uriTemplate`) and not
+by `resources/list`, and a `resources/read` of any matching URI calls the function with the variables as keyword
+strings:
+
+```json title="mcp/resources/bowl_recipe/bowl_recipe.json"
+{"type": "resource", "name": "bowl_recipe", "description": "A templated resource: the recipe for one flavour.",
+ "callable": "read", "uri": "ramen://bowl/{flavour}/recipe", "mime_type": "text/plain",
+ "input": {"flavour": {"enum": ["shoyu", "shio", "miso", "tonkotsu"], "description": "which bowl"}}}
+```
+```python title="mcp/resources/bowl_recipe/bowl_recipe.py"
+def read(flavour: str) -> str:
+    return f"recipe for {flavour}"
+```
+
+The rules: the variables in the `uri` must be exactly the parameters in `input`, each a `string` or an `enum`; a
+variable stands for one path segment (it never matches a `/`) and its value is passed as it appears in the URI; a
+value outside a declared `enum` is "resource not found"; a resource with that exact URI wins over a template. An
+`enum` is also what `completion/complete` suggests for the variable. Blocking the template by name on the group
+page blocks every URI it matches.
+
+### A callable prompt
+
+A prompt may name a Python `callable` instead of a `skill` file (exactly one of the two):
+
+```json title="mcp/prompts/pick_prompt/pick_prompt.json"
+{"type": "prompt", "name": "pick_prompt", "description": "A callable prompt: order a bowl of the given flavour and size.",
+ "callable": "build",
+ "input": {"flavour": {"enum": ["shoyu", "shio", "miso", "tonkotsu"], "description": "which bowl"},
+           "size": {"type": "string", "description": "small, regular or large"}}}
+```
+```python title="mcp/prompts/pick_prompt/pick_prompt.py"
+def build(flavour: str, size: str) -> str:
+    return f"Order one {size} bowl of {flavour} ramen."
+```
+
+The function gets the declared arguments as keywords and returns a string, one content block, or a list whose items
+are strings, blocks, or `{"role": …, "content": …}` messages. Anything without a role is a `user` message. Arguments
+reach a callable prompt as the client wrote them: a `{{$group.VAR}}` reference is **not** resolved, because a
+prompt's answer goes back to the client. An argument's `enum` is listed in `prompts/list` and is what
+`completion/complete` suggests.
+
+### A parameter mirrored in a header
+
+Add `"header": "<Name>"` to a tool parameter and a 2026-07-28 HTTP client sends that argument in an
+`Mcp-Param-<Name>` request header as well, where a load balancer can read it:
+
+```json title="mcp/tools/route_tool/route_tool.json (abridged)"
+{"type": "tool", "name": "route_tool", "callable": "run",
+ "input": {
+   "region": {"type": "string", "description": "mirrored as Mcp-Param-Region", "header": "Region"},
+   "count":  {"type": "integer", "description": "mirrored as Mcp-Param-Count", "header": "Count"},
+   "note":   {"type": "string", "description": "body only"}}}
+```
+
+The tool's code does not change; it still receives the argument from the body. The published `inputSchema` marks
+the property with `"x-mcp-header": "Region"`, which is how a client knows to send the header, and the worker
+refuses a call whose header disagrees with the body ([Transport → Standard headers](transport.md#standard-headers)).
+
+Only tool parameters of type `string`, `integer`, `boolean` or an `enum` can have a header (not `number`). The name
+must be a plain HTTP token and unique within the tool, ignoring case; otherwise the package fails to load. Adding,
+removing or renaming a `header` is a **breaking change** for the deploy's
+[compatibility gate](groups-zones.md), because a client holding the old schema would send the wrong headers.
+
+### Asking the client for input
+
+Raise `InputRequired` to ask the client for something and be called again with the answer. The demo repo's
+`confirm_delete_note`:
+
+```python title="mcp/tools/confirm_delete_note/confirm_delete_note.py (abridged)"
+from ramen_runtime import InputRequired, elicit, input_responses
+
+CONFIRM = {
+    "type": "object",
+    "properties": {"confirm": {"type": "boolean", "title": "Delete it?", "description": "true deletes the note"}},
+    "required": ["confirm"],
+}
+
+def confirm_delete(note: str) -> str:
+    answer = input_responses().get("confirm")
+    if answer is None:
+        raise InputRequired({"confirm": elicit(f'Delete the note "{note}"? This cannot be undone.', CONFIRM)})
+    confirmed = answer.get("action") == "accept" and (answer.get("content") or {}).get("confirm") is True
+    ...
+```
+
+The dictionary's keys are yours; the client answers under the same keys. The function runs again from the top on
+the retry, so ask before doing anything with a side effect. The whole flow, the other three kinds of request
+(`elicit_url`, `sample`, `list_roots`), carrying `state` between rounds and what an older client sees are on
+[Multi round-trip requests](mrtr.md).
+
+**A form may not ask for a secret.** `elicit()` is refused when a property of its schema is named like a
+credential, and the call answers the tool error `input request refused: <key>.<field> looks like a secret; use
+elicit_url`. The check reads the property names of the form, ignoring case:
+
+- refused when the name **contains** `password`, `passwd`, `secret`, `token`, `api_key` (also `api-key`, `apikey`),
+  `credential` or `cvv`: so `accessToken` and `db_password` are refused;
+- refused when `card` or `ssn` is a **whole word** of the name: `card_number` and `cardNumber` are refused,
+  `discard` is not.
+
+The refusal is an ordinary tool error, so a golden case that expects the tool to ask (or to succeed) fails on it and
+the mistake stops at the canary.
+
+### Saying a client cannot be served
+
+Raise `MissingCapability` with the capabilities the tool needs; a 2026-07-28 client gets error `-32021` naming
+them. `client_capabilities()` returns what this request declared:
+
+```python title="mcp/tools/needs_sampling/needs_sampling.py"
+from ramen_runtime import MissingCapability, client_capabilities, text
+
+def run():
+    if "sampling" not in client_capabilities():
+        raise MissingCapability({"sampling": {}})
+    return text("has sampling")
+```
+
+### Progress
+
+```python title="mcp/tools/progress_tool/progress_tool.py"
+import time
+from ramen_runtime import progress, text
+
+def run(steps: int):
+    for n in range(1, int(steps) + 1):
+        progress(n, total=int(steps), message=f"step {n}")
+        time.sleep(0.02)
+    return text(f"done {steps}")
+```
+
+`progress(progress, total=None, message=None)` does nothing unless the client asked for progress and can receive
+it ([Transport → Progress](transport.md#progress)), so it is safe to call always.
+
+### A long-running tool
+
+`"task": true` in a tool's JSON lets a client that speaks the MCP tasks extension get a task id at once and poll
+for the result; every other client waits for the answer as before. The demo repo's `slow_report`:
+
+```json title="mcp/tools/slow_report/slow_report.json (abridged)"
+{"type": "tool", "name": "slow_report", "callable": "report", "task": true,
+ "input": {"seconds": {"type": "integer", "description": "how long the report takes, in seconds"}},
+ "output": {"type": "string"}}
+```
+
+Lifecycle, limits and the Redis the zone needs for more than one worker: [Tasks](tasks.md).
 
 ## Secrets in code
 

@@ -1,0 +1,15 @@
+{
+  "type": "tool",
+  "name": "greet",
+  "description": "Greet `name`. Always synchronous: it does not support tasks.",
+  "callable": "run",
+  "input": {
+    "name": {
+      "type": "string",
+      "description": "who to greet"
+    }
+  },
+  "error": {
+    "type": "string"
+  }
+}

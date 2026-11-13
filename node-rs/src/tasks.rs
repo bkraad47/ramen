@@ -234,7 +234,12 @@ fn apply(record: &mut Value, polled: Result<Value, RpcErr>, cancelled: bool) {
                 .filter(|c| !(-32019..=-32000).contains(c))
                 .unwrap_or(-32603);
             let message = p["error"]["message"].as_str().unwrap_or("task failed");
-            o.insert("error".into(), json!({"code": code, "message": message}));
+            let mut error = json!({"code": code, "message": message});
+            // a `MissingCapability` raised inside a task keeps its `requiredCapabilities` (-32021)
+            if let Some(data) = p["error"].get("data").filter(|d| !d.is_null()) {
+                error["data"] = data.clone();
+            }
+            o.insert("error".into(), error);
         }
         _ => {}
     }
@@ -574,6 +579,15 @@ mod tests {
         assert_eq!(
             (r["error"]["code"].as_i64(), r["statusMessage"].as_str()),
             (Some(-32602), Some("why"))
+        );
+        let needs = json!({"requiredCapabilities": {"sampling": {}}});
+        let r = fold(
+            json!({"status": "failed", "error": {"code": -32021, "message": "needs sampling", "data": needs}}),
+            false,
+        );
+        assert_eq!(
+            r["error"],
+            json!({"code": -32021, "message": "needs sampling", "data": needs})
         );
         // cancel: a running or parked task ends cancelled, a finished one keeps its outcome
         assert_eq!(

@@ -1,0 +1,20 @@
+# GKE Gateway: send `tools/call slow_report` of group demo, zone a, to its own Service (`worker-reports`).
+# Matches the 2026-07-28 standard headers Mcp-Method and Mcp-Name next to Ramen's two routing headers.
+# EXAMPLE, not applied to a live cluster. `worker-reports` is yours to create; the Ramen chart does not make it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: worker-slow-report
+  namespace: ramen-demo-a
+spec:
+  parentRefs: [{ name: ramen, namespace: ramen-system }]
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /mcp }
+          method: POST
+          headers:
+            - { name: ramen-group, value: demo }
+            - { name: ramen-zone, value: a }
+            - { name: Mcp-Method, value: tools/call }
+            - { name: Mcp-Name, value: slow_report }
+      backendRefs: [{ name: worker-reports, port: 8080 }]

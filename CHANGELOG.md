@@ -3,6 +3,99 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [1.0.0] — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks
+2026-11-13. A worker now speaks MCP **2026-07-28** next to 2025-06-18, on the same `POST /mcp` and the same
+`ramen.v1.Mcp/Call`. Each request is served in the version it names; nothing has to be switched on.
+Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol-versions-on-one-endpoint),
+[Multi round-trip requests](https://bkraad47.github.io/ramen/wiki/mrtr/), [Tasks](https://bkraad47.github.io/ramen/wiki/tasks/),
+[The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/#new-in-10-what-a-package-can-do).
+
+### New: protocol
+- **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
+  and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,
+  `input_required` or `task`) and who answered (`_meta["io.modelcontextprotocol/serverInfo"]`); list results,
+  `resources/read` and `server/discover` carry `ttlMs` and `cacheScope: "private"`.
+- **`server/discover`** answers the supported versions and capabilities in one call.
+- **Standard headers** on HTTP: `Mcp-Method` and `Mcp-Name` are required and must agree with the body; a tool
+  parameter can be mirrored as `Mcp-Param-<Name>`. A header that disagrees with the body is refused (`-32020`), never
+  used. W3C trace context (`traceparent`, `tracestate`, `baggage`) is copied onto the access-log line.
+- **Multi round-trip requests.** A tool or a callable prompt can ask the client for input (a form, a URL to visit,
+  a model sample, the client's roots) and be called again with the answers. No session: what must survive between
+  the two calls travels as a signed `requestState`.
+- **Tasks** (`io.modelcontextprotocol/tasks`). A tool marked `"task": true` answers a client that declared the
+  extension with a task id at once; `tasks/get`, `tasks/update` and `tasks/cancel` follow it.
+- **`subscriptions/listen`** (HTTP): one event stream that announces `tools`, `prompts` and `resources`
+  `list_changed` after a deploy changes the manifest, and status changes of watched tasks.
+- **Progress.** `progress()` in a tool reaches a client that sent a `progressToken` and accepts
+  `text/event-stream`, as `notifications/progress` ahead of the response.
+- **`completion/complete`** suggests the declared `enum` values of a prompt argument or a template variable.
+- New error codes on 2026-07-28 only: `-32020` header mismatch, `-32021` missing client capability, `-32022`
+  unsupported protocol version. Codes `-32000` to `-32019` are not sent to a 2026-07-28 client.
+
+### New: group contract (all optional; a 0.8 repo loads unchanged, with the same manifest hash)
+- Content blocks from a tool: `text()`, `image()`, `audio()`, `resource()` from `ramen_runtime`.
+- A resource callable may return `bytes` (served as a base64 `blob`); a `uri` with `{var}` is a resource template.
+- A prompt can be a Python `callable` instead of a `skill` file.
+- `InputRequired` with `elicit()`, `elicit_url()`, `sample()`, `list_roots()`; `input_responses()`,
+  `request_state()`, `client_capabilities()`; `MissingCapability`; `progress()`.
+- `"header": "<Name>"` on a tool parameter; `"task": true` on a tool.
+- A form (`elicit`) that asks for a field named like a credential is refused; use `elicit_url`.
+- Golden cases: `respond: {<key>: <answer>}` answers a tool's input request, and
+  `expect: {input_required: [<keys>]}` asserts that it asks.
+
+### New: console
+- The Logs page shows the protocol version each call was served in; the live-workers cell of a zone (group page
+  and Zones page) shows calls by protocol version, open subscriptions and live tasks.
+- The group page marks tools that run as tasks (`task`) and tools with header-mirrored parameters (`headers`).
+- The compatibility gate treats adding, removing or renaming a parameter's `header` as a breaking change.
+- Golden cases with `respond` or `expect: {input_required: …}` are called as a 2026-07-28 client.
+
+### New: tests
+- A golden regression: every tool, resource and prompt of the fixture and demo groups, recorded from 0.8.0, is
+  compared with what 1.0.0 answers a 2025-06-18 client, on both transports.
+- The official `@modelcontextprotocol/conformance` suite (pinned at 0.2.0-alpha.12) runs in CI against a real worker,
+  once per protocol version, each with a checked-in list of expected failures and a reason per entry
+  (`tests/conformance_suite/`). The exceptions are listed on the
+  [Transport page](https://bkraad47.github.io/ramen/wiki/transport/#the-official-conformance-suite).
+- New conformance modules for the stateless core, standard headers, multi round-trip requests and their
+  guardrails, tasks, subscriptions and the bridge.
+
+### What changes for existing users
+A 2025-06-18 client is answered as in 0.8.0, with two additions and nothing removed:
+- `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
+- A `tools/call` or `prompts/get` that carries `_meta.progressToken` **and** accepts `text/event-stream` is
+  answered as an event stream: the tool's progress notifications, if it reports any, then the response.
+
+For operators and tool authors:
+- **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are
+  removed from the runtime's environment (task records now live in that Redis).
+- **SIGTERM now ends open `subscriptions/listen` streams** with a final result before the worker stops, so a
+  graceful stop is not held open by them.
+- **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest
+  hash changes once on its first 1.0 deploy.
+- Guardrails: `pre` runs on every round of a multi round-trip call, and sees the client's answers as
+  `$inputResponses`; `post` runs on the final result only.
+
+### Specification coverage
+MCP specification revision 2026-07-28: SEPs 2575, 2567, 2243, 2322, 2549 and 2577, and the tasks extension
+`io.modelcontextprotocol/tasks`.
+
+### Known limits
+- A task tool cannot also be a multi round-trip call before the task starts: a client that declared the tasks
+  extension gets the task at once, and the tool's input request arrives through the task (`tasks/get`,
+  `tasks/update`).
+- There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
+- A resource callable cannot raise `InputRequired`.
+- Task notifications on a `subscriptions/listen` stream come only from the pod that runs the task.
+- Without Redis the task store is the pod's memory: with more than one pod, `tasks/get` reaching another pod
+  answers `Unknown task`.
+- `tasks/cancel` discards the result; it cannot stop a tool body that is already running.
+- A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
+- A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor
+  `resources/subscribe`.
+- A `subscriptions/listen` stream hears about the pod it is connected to. gRPC has no subscriptions and no
+  progress.
+
 ## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 - **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as
   `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0

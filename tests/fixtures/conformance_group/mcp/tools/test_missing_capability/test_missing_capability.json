@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_missing_capability",
+  "description": "Needs the client's sampling capability; refused with -32021 for a client that did not declare it.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

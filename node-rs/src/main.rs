@@ -15,8 +15,28 @@ async fn main() {
         .await
         .expect("bind");
     let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
+        stop_signal().await;
         emit("info", "shutdown", json!({}));
     };
     ramen_node::server::run(cfg, listener, shutdown).await;
+}
+
+/// SIGINT, or SIGTERM — what Kubernetes sends a pod — so open streams get their closing result (§23.6).
+#[cfg(unix)]
+async fn stop_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    match signal(SignalKind::terminate()) {
+        Ok(mut term) => tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        },
+        Err(_) => {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn stop_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }

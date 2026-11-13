@@ -149,8 +149,13 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_ALLOWED_ORIGINS` | worker | Browser origins allowed on `/mcp`. Empty by default, so every browser origin is refused. |
 | `RAMEN_SESSION_SECRET` | console, handed to workers | Signs the MCP session ids and the OAuth tokens a worker verifies. The console generates one per group and writes it into each zone on deploy. |
 | `RAMEN_SESSION_TTL_SECS` | worker | How long an MCP session id stays valid, default 1800. |
+| `RAMEN_LIST_TTL_MS` | worker | 1.0: the `ttlMs` a 2026-07-28 client is given on list results and `server/discover`, default 60000. |
+| `RAMEN_MRTR_TTL_SECS` | worker | 1.0: how long a signed `requestState` of a [multi round-trip request](mrtr.md) stays valid, default 600. Not settable from the group's deploy file. |
+| `RAMEN_TASK_TTL_SECS` | worker | 1.0: how long a [task](tasks.md) and its result are kept, default 3600. |
+| `RAMEN_MAX_TASKS` | worker | 1.0: tasks running on one pod at a time, default 4; the next task call is `429`. |
+| `RAMEN_MAX_SUBSCRIPTIONS` | worker | 1.0: open [`subscriptions/listen`](transport.md#subscriptions) streams per pod, default 64; the next is `429`. |
 | `RAMEN_ADMIN_CIDRS` | worker | Source ranges allowed on the `Admin` gRPC service. Any by default; the admin key is the gate that always applies. |
-| `RAMEN_REDIS_ITEM_URL`, `RAMEN_REDIS_SCOPE_URL` | worker | The two throttle Redis instances, written by the console from the group page. Dialed when the node starts. |
+| `RAMEN_REDIS_ITEM_URL`, `RAMEN_REDIS_SCOPE_URL` | worker | The two throttle Redis instances, written by the console from the group page. Dialed when the node starts. Since 1.0 the same Redis (scope first, else item) is the [task store](tasks.md#where-tasks-live-and-why-redis-matters), and both URLs are removed from the environment tool code sees. |
 | `RAMEN_TLS_CERT`, `RAMEN_TLS_KEY` | worker | PEM paths that make the node terminate TLS itself. The console then also needs `RAMEN_WORKER_TLS=1`, or every deploy fails. |
 | `RAMEN_REFLECTION` | worker | gRPC server reflection. On by default, set to `0` on deployed workers by the charts. |
 | `RAMEN_BACKUP_ROOT` | console | Where a `local` backup is written. |
@@ -180,7 +185,8 @@ actually running.
 
 Workers are not rolled by that. Each group's zones pick up the new worker image on their **next deploy**, so a
 release reaches a group when someone deploys it, and a group pinned to a recorded image stays there until the pin
-is changed. Nothing breaks in the meantime: the transport has been stable since 0.3.1.
+is changed. Nothing breaks in the meantime: the transport has been stable since 0.3.1. A 1.0 worker keeps answering 2025-06-18 clients as
+0.8 did, so clients do not have to change when a group's workers move to 1.0.
 
 Open sessions and OAuth tokens survive an upgrade, because both are signed with the per-group session secret
 rather than anything version-specific. A restore into a *fresh* console is the case that invalidates them, and

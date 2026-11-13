@@ -1,0 +1,35 @@
+{
+  "type": "tool",
+  "name": "route_tool",
+  "description": "Echo its arguments as JSON. region, count, flag and mode are mirrored in Mcp-Param-* request headers; note is not.",
+  "callable": "run",
+  "input": {
+    "region": {
+      "type": "string",
+      "description": "mirrored as Mcp-Param-Region",
+      "header": "Region"
+    },
+    "count": {
+      "type": "integer",
+      "description": "mirrored as Mcp-Param-Count",
+      "header": "Count"
+    },
+    "flag": {
+      "type": "boolean",
+      "description": "mirrored as Mcp-Param-Flag",
+      "header": "Flag"
+    },
+    "mode": {
+      "enum": [
+        "fast",
+        "safe"
+      ],
+      "description": "mirrored as Mcp-Param-Mode",
+      "header": "Mode"
+    },
+    "note": {
+      "type": "string",
+      "description": "body only"
+    }
+  }
+}

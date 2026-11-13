@@ -1,0 +1,18 @@
+{
+  "type": "tool",
+  "name": "plain_tool",
+  "description": "Answer with its text unchanged. Not guarded.",
+  "callable": "run",
+  "input": {
+    "text": {
+      "type": "string",
+      "description": "what to answer"
+    }
+  },
+  "output": {
+    "type": "string"
+  },
+  "error": {
+    "type": "string"
+  }
+}

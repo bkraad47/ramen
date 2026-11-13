@@ -4,41 +4,84 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `0.8.0` **(current)** | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
-| `0.7.5` | 2026-10-11 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
+| `1.0.0` **(current)** | 2026-11-13 | MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
+| `0.8.0` | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
+| `0.7.5` | 2026-10-10 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
 | `0.7.1` | 2026-10-05 | blocked tools and golden cases | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.1) |
 | `0.7.0` | 2026-10-05 | your tests gate your rollout | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.0) |
-| `0.6.23` | 2026-10-05 | Ramen starts on its own for MCP directories | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.23) |
-| `0.6.21` | 2026-10-05 | a registry listing that says what Ramen is for | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.21) |
-| `0.6.2` | 2026-10-05 | Ramen on the official MCP registry | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.2) |
-| `0.6.1` | 2026-10-05 | instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.1) |
-| `0.6.0` | 2026-10-03 | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | [release](https://github.com/bkraad47/ramen/releases/tag/v0.6.0) · [architecture](architecture/v0.6.0.md) |
-| `0.5.95` | 2026-10-03 | roles are per group: the roles engine of instructions/v0.5.95.md | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.95) |
-| `0.5.94` | 2026-10-03 | group page zones and blocked packages as checkbox dropdowns | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.94) |
-| `0.5.93` | 2026-10-03 | OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.93) |
+| `0.6.23` | — | Ramen starts on its own for MCP directories | folded forward, never tagged |
+| `0.6.21` | — | a registry listing that says what Ramen is for | folded forward, never tagged |
+| `0.6.2` | — | Ramen on the official MCP registry | folded forward, never tagged |
+| `0.6.1` | — | instructions/v0.6.1.md: a base URI for every link, fixes from a fresh GCP and AWS run, deploy from GitHub Actions | folded forward, never tagged |
+| `0.6.0` | — | instructions/v0.6.0.md: deletions that delete, HTTPS only, secrets as environment, the documentation rebuilt | folded forward, never tagged · [architecture](architecture/v0.6.0.md) |
+| `0.5.95` | — | roles are per group: the roles engine of instructions/v0.5.95.md | folded forward, never tagged |
+| `0.5.94` | — | group page zones and blocked packages as checkbox dropdowns | folded forward, never tagged |
+| `0.5.93` | — | OAuth role mapping and `mcp_user`; scoped service-account permissions; every settings form works in a real browser | folded forward, never tagged |
 | `0.5.91` | — | Group page: per-zone package list back, Enable/Disable fixed, every admin page aligned | folded forward, never tagged |
-| `0.5.8` | 2026-10-03 | The published ramen-mcp-bridge package verified live against real AWS and GCP deployments | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.8) |
-| `0.5.7` | 2026-10-03 | The MCP bridge becomes its own pip-installable package | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.7) |
-| `0.5.6` | 2026-10-03 | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.6) |
-| `0.5.4` | 2026-09-30 | honest deploy pictures, aligned environment buttons, docs brought current | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.4) |
-| `0.5.3` | 2026-09-30 | how to add and deploy a tool | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.3) |
-| `0.5.2` | 2026-09-30 | the mark is the logo | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.2) |
-| `0.5.1` | 2026-09-30 | the end-to-end guide, and 0.5.0 proven on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.1) |
-| `0.5.0` | 2026-09-29 | Streamable HTTP at the edge, gRPC inside | [release](https://github.com/bkraad47/ramen/releases/tag/v0.5.0) |
+| `0.5.8` | — | The published ramen-mcp-bridge package verified live against real AWS and GCP deployments | folded forward, never tagged |
+| `0.5.7` | — | The MCP bridge becomes its own pip-installable package | folded forward, never tagged |
+| `0.5.6` | — | Auto-rebalance, email alerts, and the AWS deploy path verified for real on a live account | folded forward, never tagged |
+| `0.5.4` | — | honest deploy pictures, aligned environment buttons, docs brought current | folded forward, never tagged |
+| `0.5.3` | — | how to add and deploy a tool | folded forward, never tagged |
+| `0.5.2` | — | the mark is the logo | folded forward, never tagged |
+| `0.5.1` | — | the end-to-end guide, and 0.5.0 proven on GKE | folded forward, never tagged |
+| `0.5.0` | — | Streamable HTTP at the edge, gRPC inside | folded forward, never tagged |
 | `0.4.3` | — | screenshots that cannot go stale | folded forward, never tagged |
 | `0.4.2` | — | console usability and docs | folded forward, never tagged |
 | `0.4.1` | — | the three half-finished promises | folded forward, never tagged |
-| `0.4.0` | 2026-09-29 | console, docs, and evidence | [release](https://github.com/bkraad47/ramen/releases/tag/v0.4.0) · [architecture](architecture/v0.4.0.md) |
-| `0.3.2` | 2026-09-28 | verified on GKE | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.2) |
-| `0.3.1` | 2026-09-28 | gRPC transport | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.1) · [architecture](architecture/v0.3.1.md) |
-| `0.3.0` | 2026-09-28 | AWS, auth & policy, docs | [release](https://github.com/bkraad47/ramen/releases/tag/v0.3.0) · [architecture](architecture/v0.3.0.md) |
-| `0.2.0` | 2026-09-28 | GCP | [release](https://github.com/bkraad47/ramen/releases/tag/v0.2.0) · [architecture](architecture/v0.2.0.md) |
-| `0.1.0` | 2026-09-27 | local core | [release](https://github.com/bkraad47/ramen/releases/tag/v0.1.0) · [architecture](architecture/v0.1.0.md) |
+| `0.4.0` | — | console, docs, and evidence | folded forward, never tagged · [architecture](architecture/v0.4.0.md) |
+| `0.3.2` | — | verified on GKE | folded forward, never tagged |
+| `0.3.1` | — | gRPC transport | folded forward, never tagged · [architecture](architecture/v0.3.1.md) |
+| `0.3.0` | — | AWS, auth & policy, docs | folded forward, never tagged · [architecture](architecture/v0.3.0.md) |
+| `0.2.0` | — | GCP | folded forward, never tagged · [architecture](architecture/v0.2.0.md) |
+| `0.1.0` | — | local core | folded forward, never tagged · [architecture](architecture/v0.1.0.md) |
+
+## 1.0.0 — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks
+
+- **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta` and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`, `input_required` or `task`) and who answered (`_meta["io.modelcontextprotocol/serverInfo"]`); list results, `resources/read` and `server/discover` carry `ttlMs` and `cacheScope: "private"`.
+- **`server/discover`** answers the supported versions and capabilities in one call.
+- **Standard headers** on HTTP: `Mcp-Method` and `Mcp-Name` are required and must agree with the body; a tool parameter can be mirrored as `Mcp-Param-<Name>`. A header that disagrees with the body is refused (`-32020`), never used. W3C trace context (`traceparent`, `tracestate`, `baggage`) is copied onto the access-log line.
+- **Multi round-trip requests.** A tool or a callable prompt can ask the client for input (a form, a URL to visit, a model sample, the client's roots) and be called again with the answers. No session: what must survive between the two calls travels as a signed `requestState`.
+- **Tasks** (`io.modelcontextprotocol/tasks`). A tool marked `"task": true` answers a client that declared the extension with a task id at once; `tasks/get`, `tasks/update` and `tasks/cancel` follow it.
+- **`subscriptions/listen`** (HTTP): one event stream that announces `tools`, `prompts` and `resources` `list_changed` after a deploy changes the manifest, and status changes of watched tasks.
+- **Progress.** `progress()` in a tool reaches a client that sent a `progressToken` and accepts `text/event-stream`, as `notifications/progress` ahead of the response.
+- **`completion/complete`** suggests the declared `enum` values of a prompt argument or a template variable.
+- New error codes on 2026-07-28 only: `-32020` header mismatch, `-32021` missing client capability, `-32022` unsupported protocol version. Codes `-32000` to `-32019` are not sent to a 2026-07-28 client.
+- Content blocks from a tool: `text()`, `image()`, `audio()`, `resource()` from `ramen_runtime`.
+- A resource callable may return `bytes` (served as a base64 `blob`); a `uri` with `{var}` is a resource template.
+- A prompt can be a Python `callable` instead of a `skill` file.
+- `InputRequired` with `elicit()`, `elicit_url()`, `sample()`, `list_roots()`; `input_responses()`, `request_state()`, `client_capabilities()`; `MissingCapability`; `progress()`.
+- `"header": "<Name>"` on a tool parameter; `"task": true` on a tool.
+- A form (`elicit`) that asks for a field named like a credential is refused; use `elicit_url`.
+- Golden cases: `respond: {<key>: <answer>}` answers a tool's input request, and `expect: {input_required: [<keys>]}` asserts that it asks.
+- The Logs page shows the protocol version each call was served in; the live-workers cell of a zone (group page and Zones page) shows calls by protocol version, open subscriptions and live tasks.
+- The group page marks tools that run as tasks (`task`) and tools with header-mirrored parameters (`headers`).
+- The compatibility gate treats adding, removing or renaming a parameter's `header` as a breaking change.
+- Golden cases with `respond` or `expect: {input_required: …}` are called as a 2026-07-28 client.
+- A golden regression: every tool, resource and prompt of the fixture and demo groups, recorded from 0.8.0, is compared with what 1.0.0 answers a 2025-06-18 client, on both transports.
+- The official `@modelcontextprotocol/conformance` suite (pinned at 0.2.0-alpha.12) runs in CI against a real worker, once per protocol version, each with a checked-in list of expected failures and a reason per entry (`tests/conformance_suite/`). The exceptions are listed on the [Transport page](https://bkraad47.github.io/ramen/wiki/transport/#the-official-conformance-suite).
+- New conformance modules for the stateless core, standard headers, multi round-trip requests and their guardrails, tasks, subscriptions and the bridge.
+- `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
+- A `tools/call` or `prompts/get` that carries `_meta.progressToken` **and** accepts `text/event-stream` is answered as an event stream: the tool's progress notifications, if it reports any, then the response.
+- **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are removed from the runtime's environment (task records now live in that Redis).
+- **SIGTERM now ends open `subscriptions/listen` streams** with a final result before the worker stops, so a graceful stop is not held open by them.
+- **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest hash changes once on its first 1.0 deploy.
+- Guardrails: `pre` runs on every round of a multi round-trip call, and sees the client's answers as `$inputResponses`; `post` runs on the final result only.
+- A task tool cannot also be a multi round-trip call before the task starts: a client that declared the tasks extension gets the task at once, and the tool's input request arrives through the task (`tasks/get`, `tasks/update`).
+- There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
+- A resource callable cannot raise `InputRequired`.
+- Task notifications on a `subscriptions/listen` stream come only from the pod that runs the task.
+- Without Redis the task store is the pod's memory: with more than one pod, `tasks/get` reaching another pod answers `Unknown task`.
+- `tasks/cancel` discards the result; it cannot stop a tool body that is already running.
+- A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
+- A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor `resources/subscribe`.
+- A `subscriptions/listen` stream hears about the pod it is connected to. gRPC has no subscriptions and no progress.
 
 ## 0.8.0 — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 
-- **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0 failed), six load-test scenarios per cloud (no 5xx; `429` back-pressure only), the mail flows on compose; every environment torn down afterwards. Record: the Transport page.
+- **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0 failed), six load-test scenarios per cloud (no 5xx; `429` back-pressure only), the mail flows on compose, a live Entra ID sign-in with the groups lookup on all three (group removal → `analyst_sso`) and the same person through the bridge's `--oauth`; every environment torn down afterwards. Record: the Transport page.
+- Console: the sidebar's role pill has a default background, so a custom role (`analyst_sso`, any custom kind) is readable — it rendered white on white next to the signed-in name (seen on the live Entra sign-in).
 - **Security and concurrency review before the release** (`reports/security-concurrency-v0.8.0.md`, an independent read of the console, node and runtime), every finding fixed with a test:
 - A crafted loopback `redirect_uri` could pass the OAuth client match (`localhost:1' autofocus onfocus=…` still reads as `localhost`) and was reflected into the consent hand-off page's `href` with a JavaScript escape instead of an HTML one. The netloc must now be exactly `host[:port]`, and the hand-off page encodes the target per context (HTML-escaped attribute, JSON string in the script with `<`, `>`, `&` as `\u` escapes).
 - A group admin could set `repo_url` to `ext::sh -c …` and the next deploy ran it in the console. `repo_url` must be an `https://`, `http://`, `ssh://` or `git://` URL with a host (no `ext::`, scp-like or `-`-prefixed values; a path or `file://` only on the local adapter), git runs with `GIT_ALLOW_PROTOCOL` (no remote helpers) and `--` before the URL.

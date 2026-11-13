@@ -906,7 +906,8 @@ answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11
 - A POST answered as `text/event-stream` (`X-Accel-Buffering: no`): first the ack
   `notifications/subscriptions/acknowledged` with `params._meta["io.modelcontextprotocol/subscriptionId"]` = the
   request id and `params.notifications` = the honoured subset of `toolsListChanged`, `promptsListChanged`,
-  `resourcesListChanged` (+ `taskIds` when the extension is declared; `resourceSubscriptions` is never honoured);
+  `resourcesListChanged` (+ `taskIds` when the extension is declared — asking for `taskIds` without declaring it is
+  `-32021`, as the extension requires; `resourceSubscriptions` is never honoured);
   then, after each load whose manifest hash differs, one `notifications/{tools,prompts,resources}/list_changed` per
   requested kind, each tagged with the subscription id; `notifications/tasks` for watched tasks; an SSE comment every
   15 s. On shutdown/drain the node sends `{"id", "result": {"resultType": "complete", "_meta": {subscriptionId}}}`.

@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.8.0
+  version_current: 1.0.0
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -76,6 +76,8 @@ nav:
       - Throttling with Redis: wiki/throttling.md
       - Entra ID and Google Workspace: wiki/sso.md
       - Guardrails (NeMo or your own policy): wiki/guardrails.md
+      - Multi round-trip requests: wiki/mrtr.md
+      - Tasks: wiki/tasks.md
       - Backups: wiki/backups.md
       - Configuration: wiki/configuration.md
   - Changelog: changelog.md

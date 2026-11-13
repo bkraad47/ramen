@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_tool_with_progress",
+  "description": "Report progress 0, 50 and 100 of 100, then answer (official suite: tools-call-with-progress).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

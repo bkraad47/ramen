@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "ask_name",
+  "description": "Ask for a name (key `who`, no state) and greet. Not guarded.",
+  "callable": "run",
+  "input": {}
+}

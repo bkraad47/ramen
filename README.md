@@ -27,6 +27,12 @@ and six load-test scenarios on each cloud — then torn down; CI proves both tra
 record of what each run covered, and what is tested only, is
 [Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
 
+**What's new in 1.0.** Workers speak MCP **2026-07-28** next to 2025-06-18 on the same endpoint: stateless requests,
+standard headers a load balancer can route on, tools that ask the user before they act
+([multi round-trip requests](https://bkraad47.github.io/ramen/wiki/mrtr/)) and long-running tools as
+[tasks](https://bkraad47.github.io/ramen/wiki/tasks/). 2025-06-18 clients are answered as before. What changed and the
+known limits: [CHANGELOG](CHANGELOG.md).
+
 **Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts**
 into a fleet of MCP workers behind a cloud load balancer, and keeps who-can-call-what, secrets, guardrails, canary
 gates and the audit trail in one console. It is a platform for *your* tools, not a gateway in front of someone else's.
@@ -124,7 +130,8 @@ Every form, with the pages you will see:
 
 ## Transport and security, in short
 
-Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2025-06-18) and **gRPC** (`ramen.v1.Mcp/Call`) on one port
+Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2026-07-28 (2025-06-18 still accepted)) and **gRPC**
+(`ramen.v1.Mcp/Call`) on one port
 through one implementation of every guard, so a check is on both transports or on neither. TLS ends at the load
 balancer. The node checks the credential, the source range at the provider's `x-forwarded-for` hop, blocked names
 and the size and in-flight caps. The runtime reaches the bucket as the zone's own cloud identity, and guardrails run

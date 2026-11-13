@@ -1,4 +1,4 @@
-# Ramen architecture (v0.8.0)
+# Ramen architecture (v1.0.0)
 
 Full version on the docs site: https://bkraad47.github.io/ramen/architecture/ (with per-version pages).
 Binding interface contracts: [docs/CONTRACTS.md](docs/CONTRACTS.md) — §11 is gRPC, §16 is Streamable HTTP.
@@ -7,6 +7,11 @@ Diagram of one call end to end, and what protects every hop:
 
 Hierarchy: **Group → Environment → Zone → Worker** (D5). One zone first, every layer multi-zone capable (D6).
 Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19) — one port, one set of guards.
+Protocol (1.0.0): each request is served as MCP **2026-07-28** (stateless, `server/discover`, standard headers,
+multi round-trip requests, tasks, `subscriptions/listen`) or **2025-06-18** (as in 0.8), chosen per request by the
+`MCP-Protocol-Version` header or `params._meta`; on gRPC by the body alone. Node: `modern.rs` (era, envelope, headers,
+signed `requestState`), `tasks.rs` (task store: Redis or memory), `subs.rs` (streams). Runtime: `content.py`,
+`context.py`, `tasks.py`. Contract: [docs/CONTRACTS.md](docs/CONTRACTS.md) §23.
 
 ```
 browser / rmn_ key ──▶ console (FastAPI, HTTP) ──▶ Store: Firestore | DynamoDB | Azure Tables | Postgres | memory

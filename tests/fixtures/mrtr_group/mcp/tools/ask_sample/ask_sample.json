@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "ask_sample",
+  "description": "Ask the client's model one question (key `llm`).",
+  "callable": "run",
+  "input": {}
+}

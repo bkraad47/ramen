@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "needs_sampling",
+  "description": "Runs only for a client that declared sampling; MissingCapability otherwise.",
+  "callable": "run",
+  "input": {}
+}

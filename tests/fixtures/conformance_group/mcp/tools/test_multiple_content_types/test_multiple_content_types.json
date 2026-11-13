@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_multiple_content_types",
+  "description": "Return a text, an image and a resource block in one result (official suite: tools-call-mixed-content).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

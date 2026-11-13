@@ -1,0 +1,16 @@
+{
+  "type": "tool",
+  "name": "header_echo",
+  "description": "Echo `region`, which is mirrored in the Mcp-Param-Region request header (x-mcp-header).",
+  "callable": "run",
+  "input": {
+    "region": {
+      "type": "string",
+      "description": "routing hint, mirrored as Mcp-Param-Region",
+      "header": "Region"
+    }
+  },
+  "error": {
+    "type": "string"
+  }
+}

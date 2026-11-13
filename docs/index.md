@@ -16,14 +16,14 @@ hide: [toc]
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
       "operatingSystem": "Kubernetes (GKE, EKS, AKS), Docker",
-      "softwareVersion": "0.8.0",
+      "softwareVersion": "1.0.0",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
       "downloadUrl": "https://github.com/bkraad47/ramen/releases",
       "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
       "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
       "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
-      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC; a Python 3.12 runtime runs your tools, resources and prompts from a git repo, with NeMo Guardrails per tool; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group and custom roles, OAuth 2.1 sign-in with Entra ID and Google Workspace groups, autoscaling, IP rules, throttling and audit.",
+      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC, MCP spec 2026-07-28 and 2025-06-18 on one endpoint (1.0); a Python 3.12 runtime runs your tools, resources and prompts from a git repo, with NeMo Guardrails per tool; a FastAPI console manages groups, environments, zones, secrets, canary deploys, roles per group and custom roles, OAuth 2.1 sign-in with Entra ID and Google Workspace groups, autoscaling, IP rules, throttling and audit.",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "author": {
         "@type": "Person",
@@ -51,7 +51,7 @@ hide: [toc]
         "Docker"
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
-      "version": "0.8.0",
+      "version": "1.0.0",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"
@@ -101,7 +101,7 @@ signs you in through the console. [On PyPI](https://pypi.org/project/ramen-mcp-b
 </div>
 <div markdown>
 ### [ramen-demo-mcp](https://github.com/bkraad47/ramen-demo-mcp-group)
-The demo group repo every guide deploys: three tools, a resource, a prompt, an `env.yaml`, golden cases and NeMo
+The demo group repo every guide deploys: five tools (one asks before it acts, one runs as a task), a resource, a prompt, an `env.yaml`, golden cases and NeMo
 rails. Point a group at it and press Deploy.
 </div>
 </div>

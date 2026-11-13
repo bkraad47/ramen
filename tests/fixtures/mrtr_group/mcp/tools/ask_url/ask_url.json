@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "ask_url",
+  "description": "Send the user to a URL to sign in (URL-mode elicitation, key `signin`).",
+  "callable": "run",
+  "input": {}
+}

@@ -1,0 +1,15 @@
+{
+  "type": "resource",
+  "name": "static_text",
+  "description": "A fixed text resource.",
+  "callable": "read",
+  "input": {},
+  "uri": "test://static-text",
+  "mime_type": "text/plain",
+  "output": {
+    "type": "string"
+  },
+  "error": {
+    "type": "string"
+  }
+}

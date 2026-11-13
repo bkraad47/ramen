@@ -317,6 +317,7 @@ class HttpNode:
         v: bool | str = E.tls_verify() if verify is None else verify
         if isinstance(ca, (str, bytes)):
             v = ca if isinstance(ca, str) else _ca_file(ca)
+        self.verify = v
         self._client = httpx.Client(timeout=timeout, verify=v)
 
     @classmethod

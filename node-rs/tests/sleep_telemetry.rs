@@ -775,7 +775,8 @@ async fn a_zone_that_does_not_wake_is_503_with_retry_after_and_the_wake_is_retri
     }
 }
 
-/// While the workers exist the activator only forwards; once they are gone the next call wakes the zone again.
+/// While workers answer the activator forwards — and still asks for the wake, once: right after a sleep those are
+/// the old workers draining, and a call they served must not leave the zone asleep. Gone, the next call asks again.
 #[tokio::test]
 async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_left() {
     let (console_addr, console, _) = recorder(200).await;
@@ -798,7 +799,7 @@ async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_lef
     let auth = format!("Bearer {MCP_KEY}");
     let md = [("authorization", auth.as_str())];
     let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
-    // the sleep sequence applies the activator before the workers go: it forwards, nobody is woken
+    // the sleep sequence applies the activator before the workers go: it forwards, and asks for the wake once
     assert_eq!(
         legacy(a.addr, MCP_KEY, "tools/list", json!({}))
             .await
@@ -806,8 +807,18 @@ async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_lef
         200
     );
     assert!(grpc_call(a.addr, &md, list.clone()).await.unwrap()["result"]["tools"].is_array());
-    assert!(console.lock().unwrap().is_empty());
-    assert_eq!(admin_metrics(a.addr).await["woken"], 0);
+    for _ in 0..50 {
+        if admin_metrics(a.addr).await["woken"] == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        console.lock().unwrap().len(),
+        1,
+        "two calls, one wake request"
+    );
+    assert_eq!(admin_metrics(a.addr).await["woken"], 1);
     // the workers are scaled to 0
     let Node {
         app: w1_app, _stop, ..
@@ -822,7 +833,7 @@ async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_lef
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     tokio::time::sleep(Duration::from_millis(1100)).await; // past the freshness of the last SERVING answer
-    // a call now asks the console, and — nobody coming up — is told to retry
+    // the wake was already asked for; nobody coming up, the call is told to retry
     let r = legacy(a.addr, MCP_KEY, "tools/list", json!({})).await;
     assert_eq!(
         (r.status, r.header("retry-after")),
@@ -833,7 +844,13 @@ async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_lef
     assert_eq!(console.lock().unwrap().len(), 1);
     let st = grpc_call(a.addr, &md, list.clone()).await.unwrap_err();
     assert_eq!(st.code(), tonic::Code::Unavailable);
-    // the console had taken the first request and the zone never came: the next call asked again
+    // the console had taken the request and the zone never came: the next call asked again
+    for _ in 0..50 {
+        if admin_metrics(a.addr).await["woken"] == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(console.lock().unwrap().len(), 2);
     assert_eq!(admin_metrics(a.addr).await["woken"], 2);
     // the workers come back on the same address: answered again

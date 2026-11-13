@@ -899,6 +899,9 @@ answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11
 - Node: the owning pod polls the runtime (500 ms) and writes the record to the task store: the scope Redis
   (`RAMEN_REDIS_SCOPE_URL`), else the item Redis, else process memory (single pod; documented). Any pod of the zone
   answers `tasks/get` from the store; `update`/`cancel` reaching another pod are queued in the store for the owner.
+  **In a pod without a Redis store no tasks are handed out**: a zone normally runs two pods (stable and
+  canary) and a poll would reach the wrong one, so `task: true` tools answer synchronously and the extension is not
+  advertised (`RAMEN_TASKS=1|0` forces either way).
   A `working` task whose owner stopped heart-beating (30 s) is `failed` (`-32603 worker lost`). The sidecar is not
   idle-killed while a task runs. Access log: `tasks/*` lines carry `name` = the tool and `task` = the id.
 

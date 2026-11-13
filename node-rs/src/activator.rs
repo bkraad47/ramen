@@ -164,8 +164,6 @@ impl Activator {
 
     fn mark_up(&self) {
         *self.up_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
-        // this wake is over: the next time the workers are gone, the console is asked again
-        self.wake.store(IDLE, Relaxed);
     }
 
     fn mark_down(&self) {
@@ -256,6 +254,10 @@ impl Activator {
 
     /// Returns once the workers answer SERVING; `Err` when they did not within the wake timeout.
     pub async fn ready(self: &Arc<Self>) -> Result<Ready, Status> {
+        // An accepted call always asks for the wake (once: `request_wake` is a no-op while one is posted). A SERVING
+        // upstream does not mean the zone is awake — right after a sleep the old workers still answer while they
+        // drain, and a call they served used to leave the zone asleep with nobody behind it (kind run, 1.0.0).
+        self.request_wake();
         if self.fresh() {
             return Ok(Ready::Up);
         }
@@ -265,7 +267,6 @@ impl Activator {
         }
         self.mark_down();
         let mut up = self.up.subscribe();
-        self.request_wake();
         let deadline = tokio::time::sleep(self.timeout);
         tokio::pin!(deadline);
         loop {

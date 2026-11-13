@@ -177,6 +177,19 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         None => tasks::Store::memory(),
     };
     let (store, consent) = (shared(), shared());
+    let offer = tasks::offered(
+        matches!(store, tasks::Store::Redis(_)),
+        std::env::var_os("KUBERNETES_SERVICE_HOST").is_some(),
+        std::env::var("RAMEN_TASKS").ok().as_deref(),
+    );
+    tasks::set_enabled(offer);
+    if !offer {
+        emit(
+            "warn",
+            "tasks are off: this pod has no shared store (set the group's throttle Redis); task tools answer synchronously",
+            json!({}),
+        );
+    }
     let otel = Otel::new(&cfg);
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),

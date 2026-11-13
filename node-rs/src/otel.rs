@@ -311,6 +311,7 @@ async fn export(inner: Arc<Inner>, mut rx: mpsc::Receiver<Item>) {
         dirty: false,
     };
     let mut warned: Option<Instant> = None;
+    let mut no_metrics = false; // reset with the process; a changed endpoint is rare enough
     let mut tick = tokio::time::interval(FLUSH);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -344,11 +345,20 @@ async fn export(inner: Arc<Inner>, mut rx: mpsc::Receiver<Item>) {
                     .await
                     .err();
             }
-            if counters.dirty {
-                failed = post(t, "/v1/metrics", counters.otlp(&t.resource))
-                    .await
-                    .err()
-                    .or(failed);
+            if counters.dirty && !no_metrics {
+                match post(t, "/v1/metrics", counters.otlp(&t.resource)).await {
+                    Ok(()) => {}
+                    // a traces-only collector (Jaeger): say so once and stop offering it counters
+                    Err(e) if e.contains(" 404 ") => {
+                        no_metrics = true;
+                        emit(
+                            "info",
+                            "the collector has no /v1/metrics: counters are not exported",
+                            json!({}),
+                        );
+                    }
+                    Err(e) => failed = Some(e).or(failed),
+                }
             }
         }
         // sent or not, the batch is done with: an unreachable collector loses data, it does not grow a backlog

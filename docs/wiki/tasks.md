@@ -94,9 +94,11 @@ These are the same Redis instances the [throttle](throttling.md) uses, set on th
 **With Redis**, any pod of the zone answers `tasks/get` from the store, and a `tasks/update` or `tasks/cancel`
 that lands on another pod is queued there for the owner. A load balancer can send each poll to a different pod.
 
-**Without Redis, tasks are per pod.** A poll that reaches a pod other than the one running the task answers
-`Unknown task`. That is fine for one worker (the local stack, a zone at count 1) and not for a zone with several:
-give the group a Redis before relying on tasks there.
+**Without Redis, a worker in a cluster hands out no tasks.** A zone normally runs two pods, the stable worker and
+the canary, and a poll that reached the other pod would answer `Unknown task`. So a pod with no Redis store does not
+advertise the extension and a `task: true` tool simply answers when it is done, as it does for a client that did not
+declare the extension; the worker logs one warning at start. A single worker outside Kubernetes (the local stack)
+keeps tasks in process memory. `RAMEN_TASKS=1` or `0` forces either behaviour.
 
 If the owning pod stops, its tasks cannot continue. With Redis, the next `tasks/get` after 30 seconds without a
 heartbeat from the owner marks the task `failed` with `-32603 worker lost`. The same happens at once on the owner

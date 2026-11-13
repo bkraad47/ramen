@@ -37,6 +37,23 @@ from .conftest import audit_entries
 pytestmark = pytest.mark.kind
 NS_TESTS = "ramen-tests"
 REPO_URL = f"git://gitrepo.{NS_TESTS}.svc.cluster.local/repo"
+REDIS_URL = f"redis://redis.{NS_TESTS}.svc.cluster.local:6379"
+REDIS = """
+apiVersion: apps/v1
+kind: Deployment
+metadata: {{name: redis, namespace: {ns}}}
+spec:
+  replicas: 1
+  selector: {{matchLabels: {{app: redis}}}}
+  template:
+    metadata: {{labels: {{app: redis}}}}
+    spec: {{containers: [{{name: redis, image: "redis:7-alpine", ports: [{{containerPort: 6379}}]}}]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {{name: redis, namespace: {ns}}}
+spec: {{selector: {{app: redis}}, ports: [{{port: 6379}}]}}
+"""
 REQUIREMENTS = "# the kind build proof: one small pure-Python package\nsix==1.17.0\n"
 OTLP = "http://jaeger.ramen-system:4318"
 CONSENT = "ramen_telemetry_consent"
@@ -132,10 +149,20 @@ def serve_repo(root) -> None:
     kube.apply(json.dumps(cm))
     kube.apply(GITREPO.format(ns=NS_TESTS, image=image, digest=hashlib.sha256(data).hexdigest()[:16]))
     kube.write("-n", NS_TESTS, "rollout", "status", "deployment/gitrepo", "--timeout=180s", timeout=200)
+    # the group's Redis: with it a task is found from either pod of a zone (stable and canary) and a consent is
+    # remembered across them; without it a pod hands out no tasks (§23.5)
+    kube.apply(REDIS.format(ns=NS_TESTS))
+    kube.write("-n", NS_TESTS, "rollout", "status", "deployment/redis", "--timeout=180s", timeout=200)
+
+
+def start_deploy(admin, group, env_name):
+    """This module swaps the group's repo for its own and back, so every deploy here replaces the whole tool set:
+    the compatibility gate (§19) rightly calls that breaking, and the module accepts it."""
+    return admin.post("deploy", {"canary": True, "breaking": True}, group=group, env=env_name)
 
 
 def deploy(admin, group, env_name) -> dict:
-    job = admin.wait_job(admin.deploy(group, env_name).json()["id"], timeout=1500)
+    job = admin.wait_job(start_deploy(admin, group, env_name).json()["id"], timeout=1500)
     assert job["status"] == "ok", f"deploy failed: {job.get('error')}\n" + "\n".join(job.get("log", [])[-60:])
     return job
 
@@ -156,6 +183,11 @@ def v1(admin, stack, kube_ready, group, env_name, tmp_path_factory):
     put_ok(admin, "config_otel", {"enabled": True, "endpoint": OTLP})
     put_ok(admin, "group", {"repo_url": REPO_URL, "ref": "main"}, group=group)
     put_ok(admin, "group", {"build_image": True}, group=group)
+    r = admin.http.put(  # base_url and the csrf hook are the client's own
+        f"/api/v1/groups/{group}/throttle",
+        json={"redis_url": REDIS_URL, "ip_per_min": 100000, "token_per_min": 100000},
+    )
+    assert r.status_code == 200, f"group throttle (Redis): {r.status_code} {r.text[:300]}"
     put_ok(admin, "group", {"require_telemetry_consent": True}, group=group)
     put_ok(admin, "config_scheduler", {"interval_seconds": 10})
     keys = {}  # consent is remembered per key: one per consent case, minted before the deploy that hands them out
@@ -173,7 +205,7 @@ def v1(admin, stack, kube_ready, group, env_name, tmp_path_factory):
     admin.put("config_otel", {"enabled": False})
     admin.put("config_scheduler", before_sched)
     admin.put("group", {"repo_url": before_group["repo_url"], "ref": before_group.get("ref", "main")}, group=group)
-    admin.wait_job(admin.deploy(group, env_name).json()["id"], timeout=1500)
+    admin.wait_job(start_deploy(admin, group, env_name).json()["id"], timeout=1500)
     kube.write("delete", "namespace", NS_TESTS, "--ignore-not-found", "--wait=false")
 
 

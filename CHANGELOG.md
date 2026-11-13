@@ -137,8 +137,8 @@ MCP specification revision 2026-07-28: SEPs 2575, 2567, 2243, 2322, 2549 and 257
 - There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
 - A resource callable cannot raise `InputRequired`.
 - Task notifications on a `subscriptions/listen` stream come only from the pod that runs the task.
-- Without Redis the task store is the pod's memory: with more than one pod, `tasks/get` reaching another pod
-  answers `Unknown task`.
+- Tasks need the group's Redis in a cluster: a pod without one hands out no tasks and its `task: true` tools
+  answer synchronously (a zone runs two pods, and a poll would reach the wrong one).
 - `tasks/cancel` discards the result; it cannot stop a tool body that is already running.
 - A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
 - A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor

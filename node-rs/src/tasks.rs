@@ -248,6 +248,29 @@ fn apply(record: &mut Value, polled: Result<Value, RpcErr>, cancelled: bool) {
     }
 }
 
+/// §23.5: whether this node hands out tasks at all. A task lives on the pod that started it; a poll that reaches
+/// another pod finds it only through a shared (Redis) store — and a zone normally has two pods, the stable worker
+/// and the canary. So in a pod without a shared store a `task: true` tool runs synchronously for everyone, as it
+/// does for a client that did not declare the extension, rather than answer "Unknown task" to every other poll
+/// (seen on kind in the 1.0.0 run). Outside Kubernetes (one local node) process memory is enough.
+static DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn offered(shared_store: bool, in_kubernetes: bool, forced: Option<&str>) -> bool {
+    match forced {
+        Some("1") => true,
+        Some("0") => false,
+        _ => shared_store || !in_kubernetes,
+    }
+}
+
+pub fn set_enabled(on: bool) {
+    DISABLED.store(!on, Relaxed);
+}
+
+pub fn enabled() -> bool {
+    !DISABLED.load(Relaxed)
+}
+
 impl Tasks {
     pub fn new(store: Store) -> Arc<Self> {
         Arc::new(Tasks {
@@ -476,6 +499,21 @@ impl Tasks {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tasks_are_offered_with_a_shared_store_or_outside_a_cluster() {
+        use super::offered;
+        assert!(offered(true, true, None) && offered(true, false, None));
+        assert!(
+            offered(false, false, None),
+            "one local node: memory is enough"
+        );
+        assert!(
+            !offered(false, true, None),
+            "a pod without Redis: tools run synchronously"
+        );
+        assert!(offered(false, true, Some("1")) && !offered(true, true, Some("0")));
+    }
+
     use super::*;
 
     fn cfg() -> Config {

@@ -292,6 +292,9 @@ fn tool_error(msg: String) -> Value {
 
 /// §23.5: a loaded tool the runtime marked as able to run as a task (`"task": true` in its proto).
 pub fn is_task_tool(tool: &Value) -> bool {
+    if !crate::tasks::enabled() {
+        return false; // §23.5: no shared store in a pod → every tool answers synchronously
+    }
     tool.get("task").and_then(Value::as_bool) == Some(true)
         || matches!(
             tool.pointer("/execution/taskSupport")

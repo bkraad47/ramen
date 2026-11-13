@@ -430,7 +430,10 @@ async def test_deploy_config_reaches_workers_and_the_activator_through_the_secre
     assert "collector-credential" not in stored and "client-credential" not in stored
 
 
-async def test_local_adapter_keeps_otel_credentials_out_of_the_runtimes_env_file(tmp_path):
+async def test_local_adapter_hands_the_telemetry_settings_to_the_worker_in_its_deploy_file(tmp_path):
+    """On the local stack the deploy file is the only channel for settings made on the Config page (the node keeps
+    them out of the runtime's environment); the kube adapters use the Secret, tested above."""
+
     class Rpc:
         async def reload(self, target, key):
             return {"tools": []}
@@ -440,9 +443,7 @@ async def test_local_adapter_keeps_otel_credentials_out_of_the_runtimes_env_file
     assert r["ok"]
     for name in ("env", "env-a"):
         text = (tmp_path / "demo" / ".ramen" / name).read_text()
-        assert "RAMEN_OTEL_HEADERS" not in text and "RAMEN_OTEL_CLIENT" not in text
-        assert "collector-credential" not in text and "client-credential" not in text
-        for k in ("RAMEN_OTEL_ENDPOINT", "RAMEN_TELEMETRY_CONSENT", "RAMEN_TELEMETRY_NOTICE", "RAMEN_SOMETHING_NEW"):
+        for k in OTEL:
             assert f"{k}={OTEL[k]}\n" in text
 
 

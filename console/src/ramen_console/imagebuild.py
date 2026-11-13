@@ -66,6 +66,12 @@ def dockerfile(base: str, requirements: bytes) -> str:
     )
 
 
+def packages(requirements: bytes | str) -> list[str]:
+    """The lines pip would act on: a file of comments and blank lines has nothing to bake (the runtime agrees)."""
+    text = requirements.decode("utf-8", "replace") if isinstance(requirements, bytes) else requirements
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
 def tail(text: str | None, n: int = LOG_TAIL) -> list[str]:
     return [ln for ln in (text or "").splitlines() if ln.strip()][-n:]
 
@@ -107,7 +113,7 @@ async def ensure(svc, group: str, log) -> str | None:
         await _use(svc.store, group, None)
         return None
     raw = await svc.cloud.read_file(group, REQUIREMENTS)
-    if raw is None or not raw.strip():
+    if raw is None or not packages(raw):
         await _use(svc.store, group, None)
         return None
     if (g.get("image") or {}).get("ref"):

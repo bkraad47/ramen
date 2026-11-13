@@ -156,7 +156,8 @@ pub struct Config {
     /// §24.1: where the zone's real workers answer (`RAMEN_ACTIVATOR_UPSTREAM`, default `worker-direct:8080`;
     /// `host:port` or `http://host:port`, h2c).
     pub activator_upstream: String,
-    /// §24.1: how long a call waits for the zone to wake (`RAMEN_WAKE_TIMEOUT_SECS`, default 90).
+    /// §24.1: how long a call waits for the zone to wake (`RAMEN_WAKE_TIMEOUT_SECS`, default 25: under the
+    /// default backend timeout of every edge — GKE 30 s, ALB 60 s — so the caller gets our 503, not the edge's 504).
     pub wake_timeout_secs: u64,
     /// §24.3: OTLP/HTTP base URL (`RAMEN_OTEL_ENDPOINT`); unset = nothing is exported.
     pub otel_endpoint: Option<String>,
@@ -336,7 +337,7 @@ impl Config {
             activator_upstream: get("RAMEN_ACTIVATOR_UPSTREAM")
                 .map(|u| u.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| "worker-direct:8080".into()),
-            wake_timeout_secs: num("RAMEN_WAKE_TIMEOUT_SECS", 90)?.max(1),
+            wake_timeout_secs: num("RAMEN_WAKE_TIMEOUT_SECS", 25)?.max(1),
             otel_endpoint: get("RAMEN_OTEL_ENDPOINT")
                 .map(|u| u.trim_end_matches('/').to_string())
                 .filter(|u| !u.is_empty()),
@@ -719,7 +720,7 @@ mod tests {
         assert!(!c.activator && c.console_internal_url.is_none() && c.otel_endpoint.is_none());
         assert_eq!(
             (c.activator_upstream.as_str(), c.wake_timeout_secs),
-            ("worker-direct:8080", 90)
+            ("worker-direct:8080", 25)
         );
         assert!(c.otel_headers.is_empty() && c.otel_client.is_none() && !c.telemetry_consent);
         let m: HashMap<_, _> = [

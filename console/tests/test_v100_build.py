@@ -194,3 +194,13 @@ def test_the_toggle_is_shown_and_disabled_without_a_builder(demo, cloud):
     cloud.builder = False
     html = demo.get("/groups/demo").text
     assert "This deployment has no image builder, so it cannot be turned on." in html
+
+
+def test_a_requirements_file_of_comments_has_nothing_to_bake():
+    from ramen_console import imagebuild
+
+    assert imagebuild.packages(b"# nothing yet\n\n   # numpy later\n") == []
+    assert imagebuild.packages(b"# pinned\nsix==1.17.0\n\nrequests>=2 # http\n") == [
+        "six==1.17.0",
+        "requests>=2 # http",
+    ]

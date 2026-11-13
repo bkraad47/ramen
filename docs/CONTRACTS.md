@@ -950,7 +950,8 @@ Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" 
   An accepted MCP call (HTTP or gRPC): `POST {RAMEN_CONSOLE_INTERNAL_URL}/api/v1/internal/zones/{g}/{z}/wake` with
   header `x-ramen-admin-key` (once per wake, concurrent calls share it), poll `worker-direct:8080` gRPC health until
   SERVING, then forward the request unchanged (HTTP: method, path, headers, body, streaming the answer; gRPC:
-  `Mcp/Call` bytes and metadata) and relay the answer. Not SERVING within `RAMEN_WAKE_TIMEOUT_SECS` (default 90) →
+  `Mcp/Call` bytes and metadata) and relay the answer. Not SERVING within `RAMEN_WAKE_TIMEOUT_SECS` (default 25, under every edge's default backend
+  timeout; the wake goes on, so the retry finds the zone awake) →
   HTTP 503 with `Retry-After: 10` / gRPC `UNAVAILABLE`, access-log reason `waking`. Its log lines carry
   `activator: true`.
 - Console: **sleep** = apply the activator (replicas 1), wait Ready, scale `worker` and `worker-canary` to 0 (the
@@ -966,7 +967,7 @@ Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" 
 ### 24.2 Worker images built on deploy
 - Per group: `build_image` (bool; default true on gcp/aws/azure when the deployment has a builder, false otherwise),
   group page → Worker image card, group admins. When true and the checkout has a non-empty `mcp/requirements.txt`,
-  a deploy first ensures the group's image: tag `b-<group>-<sha256(base image ref + "\n" + requirements.txt)[:16]>`
+  a deploy first ensures the group's image (a file of comments and blank lines counts as empty): tag `b-<group>-<sha256(base image ref + "\n" + requirements.txt)[:16]>`
   in the cloud's own registry next to the base image — `<region>-docker.pkg.dev/<project>/ramen/worker`, 
   `<account>.dkr.ecr.<region>.amazonaws.com/ramen/worker`, `<acr>/ramen/worker` (one repository, no per-group
   repository to create). An `images` record with that tag and `source: "build"`, `status: "ok"` means it exists:

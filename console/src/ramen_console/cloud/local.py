@@ -79,14 +79,13 @@ def redact(text: str, token: str | None) -> str:
 
 # Never written into the bucket's `.ramen/env*`: the runtime reads the bucket, and these are the node's alone. The
 # local worker takes them from its own environment instead (docker-compose.yml). Security review 0.5.0 L6.
-# §24.3: the collector credentials (`RAMEN_OTEL_HEADERS`) and what clients are told (`RAMEN_OTEL_CLIENT`, may hold
-# `client_headers`) are the node's too — tenant code in the runtime must never read them.
+# §24.3: the telemetry settings (`RAMEN_OTEL_HEADERS`, `RAMEN_OTEL_CLIENT`) are set on the Config page, so a local
+# worker cannot have them in its own environment: here the deploy file is their only way in. The node still keeps
+# them out of the runtime's environment (`hidden_from_runtime`); on the cloud adapters they travel in a Secret.
 NODE_ONLY = (
     "RAMEN_SESSION_SECRET",
     "RAMEN_OAUTH_ISSUER",
     "RAMEN_PUBLIC_URL",
-    "RAMEN_OTEL_HEADERS",
-    "RAMEN_OTEL_CLIENT",
 )
 
 

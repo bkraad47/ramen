@@ -134,3 +134,23 @@ details.help p{margin:6px 0}
 .act{font-size:14px}.zone-actions .act,.settings .act,.zone-actions button,.settings button{font-size:12px}
 details.multi>summary{padding-right:28px;background-color:#fff;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px;background-repeat:no-repeat}
 details.multi>summary::after{content:none}
+/* 1.0.0 UI pass, round 2 (group and config pages): one button system.
+   - every button sizes to its label (never a fixed width that clips it), at least 140px, one height per context;
+   - inside a table cell everything is compact: inputs, selects, dropdowns and buttons 32px, 13px text;
+   - action cells keep their buttons on one line, links styled as buttons centre their text like buttons. */
+.act{width:auto;flex:0 0 auto;min-width:150px;padding:0 16px}
+form.inline button,form.inline .btn,.row-actions button,.row-actions .btn,.act,td button,td .btn{min-width:140px;padding-left:16px;padding-right:16px}
+button,.btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;line-height:1.2}
+td{--ctl-h:32px}
+td input:not([type=checkbox]):not([type=radio]):not([type=hidden]),td select,td details.multi>summary{font-size:13px}
+td button,td .btn,td .act{height:var(--ctl-h);font-size:13px;white-space:nowrap}
+td button.sm,td .btn.sm{min-width:110px}
+td .row-actions,.zone-actions .row-actions{flex-wrap:nowrap}
+.zone-actions td:last-child .row-actions,.zone-actions td:last-child{text-align:right;justify-content:flex-end}
+th{white-space:nowrap}
+.row-actions.toggles{margin:8px 0}.row-actions.toggles form.inline{margin:0}
+table.formtable td input,table.formtable td select,table.formtable td details.multi{max-width:480px}
+form.inline button.sm,form.inline .btn.sm{min-width:110px;font-size:13px}
+td code{white-space:nowrap}
+td table.formtable input[type=number]{width:120px}
+.zone-actions td[colspan]{text-align:left}

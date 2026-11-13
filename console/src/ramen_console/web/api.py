@@ -51,6 +51,18 @@ async def update_group(request: Request, group: str, body: m.GroupUpdate, p: Pri
     return respond(request, await svc(request).update_group(group, **body.model_dump()))
 
 
+@r.get("/groups/{group}/zones")
+async def allowed_zones(request: Request, group: str, p: Principal = Depends(viewer_g)):
+    """1.0.0: the zones this group's environments may use."""
+    return {"allowed": await svc(request).allowed_zones(group)}
+
+
+@r.put("/groups/{group}/zones")
+async def set_allowed_zones(request: Request, group: str, body: m.AllowedZones, p: Principal = Depends(super_)):
+    note(request, "group.zones", group, [f"group:{group}"] + [f"zone:{z}" for z in body.allowed])
+    return {"allowed": await svc(request).set_allowed_zones(group, body.allowed)}
+
+
 @r.delete("/groups/{group}")
 async def delete_group(request: Request, group: str, p: Principal = Depends(super_)):
     note(request, "group.delete", group, [f"group:{group}"])
@@ -145,7 +157,8 @@ async def environments(
 @r.post("/groups/{group}/environments", status_code=201)
 async def create_env(request: Request, group: str, body: m.EnvIn, p: Principal = Depends(admin_g)):
     note(request, "environment.create", f"{group}/{body.name}", [f"group:{group}"])
-    return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones), 201)
+    by_super = p.role == "super_admin"
+    return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones, by_super), 201)
 
 
 @r.get("/groups/{group}/environments/{env}")
@@ -156,7 +169,7 @@ async def get_environment(request: Request, group: str, env: str, p: Principal =
 @r.put("/groups/{group}/environments/{env}")
 async def update_env(request: Request, group: str, env: str, body: m.EnvUpdate, p: Principal = Depends(admin_g)):
     note(request, "environment.update", f"{group}/{env}", [f"group:{group}"])
-    return respond(request, await svc(request).update_env(group, env, **body.model_dump()))
+    return respond(request, await svc(request).update_env(group, env, p.role == "super_admin", **body.model_dump()))
 
 
 @r.post("/groups/{group}/environments/{env}/verbose")

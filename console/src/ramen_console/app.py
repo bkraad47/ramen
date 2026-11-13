@@ -64,6 +64,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         await roles.load(app.state.store, force=True)  # D48: custom roles before any membership is read
         await providers.refresh(app.state, force=True)  # D50: identity providers from env + the store doc
         await app.state.accounts.migrate_memberships()  # 0.5.95 (D41) and 0.7.5 (§21.3) membership shapes
+        await app.state.services.migrate_allowed_zones()  # 1.0.0: groups keep the zones their environments use
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),

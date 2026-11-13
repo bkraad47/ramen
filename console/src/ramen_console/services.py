@@ -92,6 +92,7 @@ class Services:
             "created_by": by,
             "mcp_auth": {"mode": "bearer"},
             "sa_restrictions": [],
+            "allowed_zones": [],  # 1.0.0: a super admin allows the zones the group may use
         }
         if github_token:  # private GitHub or GitLab repos (I2); encrypted at rest, see storage/encrypted.py
             doc["github_token"] = github_token
@@ -268,6 +269,55 @@ class Services:
         if bad:
             raise invalid(f"Unknown zones: {', '.join(bad)}")
 
+    # --- 1.0.0: the zones a group may use, set by a super admin ------------------------------------------------
+    async def allowed_zones(self, group) -> list[str]:
+        return list((await self.get_group(group)).get("allowed_zones") or [])
+
+    async def _allow_zones(self, group, zones, by_super: bool) -> None:
+        """A group admin's environment may use only the group's allowed zones; a super admin's environment allows the
+        zones it names (the super admin is the one who decides)."""
+        g = await self.get_group(group)
+        allowed = list(g.get("allowed_zones") or [])
+        extra = [z for z in zones if z not in allowed]
+        if not extra:
+            return
+        if not by_super:
+            raise forbidden(
+                f"Zone(s) {', '.join(extra)} are not allowed for group {group}; a super admin allows a group's zones"
+            )
+        g["allowed_zones"] = allowed + extra
+        await self.store.put("groups", group, g)
+
+    async def set_allowed_zones(self, group, zones) -> list[str]:
+        """Replace the group's allowed zones. Every zone must exist; a zone an environment still uses cannot go."""
+        g = await self.get_group(group)
+        zones = list(dict.fromkeys(zones))
+        await self._check_zones(zones)
+        in_use = [
+            f"{e['name']} uses {z}"
+            for e in await self.environments(group)
+            for z in e.get("zones", [])
+            if z not in zones
+        ]
+        if in_use:
+            raise conflict(f"Remove the zone from the environment first: {'; '.join(in_use)}")
+        g["allowed_zones"] = zones
+        await self.store.put("groups", group, g)
+        return zones
+
+    async def migrate_allowed_zones(self) -> int:
+        """Groups from before 1.0.0 have no list: they get the zones their environments use, so nothing changes for
+        them. A group that has a list (even an empty one) is left alone."""
+        n = 0
+        for g in await self.store.list("groups"):
+            if "allowed_zones" in g:
+                continue
+            used = sorted({z for e in await self.environments(g["name"]) for z in e.get("zones", [])})
+            g["allowed_zones"] = used
+            await self.store.put("groups", g["name"], g)
+            n += 1
+        return n
+
     async def environments(self, group=None) -> list[dict]:
         envs = await self.store.list("environments", {"group": group} if group else None)
         return sorted(envs, key=lambda e: (e["group"], e["name"]))
@@ -278,13 +328,14 @@ class Services:
             raise not_found("environment")
         return e
 
-    async def create_env(self, group, name, ref=None, zones=()) -> dict:
+    async def create_env(self, group, name, ref=None, zones=(), by_super: bool = True) -> dict:
         g = await self.get_group(group)
         if not NAME_RE.match(name or ""):
             raise invalid("Environment name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("environments", f"{group}:{name}"):
             raise conflict(f"Environment {name} exists in {group}")
         await self._check_zones(zones)
+        await self._allow_zones(group, zones, by_super)
         doc = {
             "group": group,
             "name": name,
@@ -376,13 +427,14 @@ class Services:
         await self.store.put("groups", group, g)
         return doc
 
-    async def update_env(self, group, name, **fields) -> dict:
+    async def update_env(self, group, name, by_super: bool = True, **fields) -> dict:
         e = await self.get_env(group, name)
         if fields.get("blocked") is not None:
             fields["blocked"] = clean_blocked(fields["blocked"])
         before = list(e.get("zones", []))
         if fields.get("zones") is not None:
             await self._check_zones(fields["zones"])
+            await self._allow_zones(group, fields["zones"], by_super)
             await self._attach_zones(group, fields["zones"], already=before)
         e.update({k: v for k, v in fields.items() if v is not None})
         saved = await self.store.put("environments", e["id"], e)

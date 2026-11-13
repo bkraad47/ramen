@@ -79,6 +79,10 @@ class EnvUpdate(ListFields):
     blocked: list[str] | None = None
 
 
+class AllowedZones(ListFields):
+    allowed: list[str]
+
+
 class Blocked(ListFields):
     blocked: list[str]
 

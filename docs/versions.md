@@ -39,6 +39,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 ## 1.0.0 — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
 
+- **Each group has a list of allowed zones, set by super admins.** A group admin's environments can use only those zones (403 otherwise), and the group page shows only them. Existing groups keep the zones their environments use; a new group starts with none. ### New: protocol
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta` and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`, `input_required` or `task`) and who answered (`_meta["io.modelcontextprotocol/serverInfo"]`); list results, `resources/read` and `server/discover` carry `ttlMs` and `cacheScope: "private"`.
 - **`server/discover`** answers the supported versions and capabilities in one call.
 - **Standard headers** on HTTP: `Mcp-Method` and `Mcp-Name` are required and must agree with the body; a tool parameter can be mirrored as `Mcp-Param-<Name>`. A header that disagrees with the body is refused (`-32020`), never used. W3C trace context (`traceparent`, `tracestate`, `baggage`) is copied onto the access-log line.

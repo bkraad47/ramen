@@ -1042,3 +1042,16 @@ Unit tests per component; kind: a zone sleeps on idle, a call through the edge w
 builds and uses a group image, spans of a call and a deploy arrive in Jaeger, consent by prompt / by token / refused.
 Cloud (GKE, EKS, AKS): the same four, plus every sign-in path: password, API key, MCP key, person's OAuth token over
 HTTP and through the bridge, Entra with group lookup; Google Workspace against a fake unless a live client is given.
+
+## 25. v1.0.0 — the zones a group may use (binding)
+Asked for by the user on the live GKE console: a group must not reach every zone.
+- `groups[].allowed_zones: list[str]` — the zones the group's environments may use. `GET /api/v1/groups/{g}/zones` →
+  `{"allowed": [...]}` (viewers of the group); `PUT` the same body (super admin only; every zone must exist, 422
+  otherwise; a zone an environment of the group still uses cannot be removed, 409 naming the environment and zone).
+  Audited `group.zones` with a `zone:<z>` tag per zone.
+- A group admin's `POST …/environments` or `PUT …/environments/{env}` naming a zone outside the list → 403 naming the
+  zones. A super admin's environment adds the zones it names to the list (the super admin is the one who decides).
+- New groups start with `[]`. At startup a group without the field gets the zones its environments use, once; a list
+  a super admin set (even empty) is never widened.
+- Group page: the zone tables, zone actions and the environment zone picker show only allowed zones; a super admin
+  edits the list in the "Zones and workers" card, everyone else sees it read-only.

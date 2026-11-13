@@ -100,13 +100,18 @@ async def groups(request: Request, p: Principal = Depends(viewer)):
 async def group_detail(request: Request, group: str, p: Principal = Depends(require("viewer", "group"))):
     s = svc(request)
     g = await s.get_group(group)
-    zones = await s.zones()
+    all_zones = await s.zones()
+    allowed = list(g.get("allowed_zones") or [])
+    zones = [z for z in all_zones if z["id"] in allowed]  # 1.0.0: a group sees and uses only its allowed zones
     workers = {z["id"]: await s.worker_config(group, z["id"]) for z in zones}
     envs = await s.environments(group)
     return render(
         request,
         "group.html",
         group=g,
+        all_zones=all_zones,
+        allowed_zones=allowed,
+        is_super=p.role == "super_admin",
         envs=envs,
         kinds=toolaccess.kinds(),
         tool_rows={e["name"]: toolaccess.rows(e) for e in envs},

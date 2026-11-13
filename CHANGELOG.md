@@ -13,6 +13,10 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
 [Worker images](https://bkraad47.github.io/ramen/wiki/worker-images/),
 [Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/).
 
+
+- **Each group has a list of allowed zones, set by super admins.** A group admin's environments can use only those
+  zones (403 otherwise), and the group page shows only them. Existing groups keep the zones their environments use;
+  a new group starts with none.
 ### New: protocol
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
   and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,

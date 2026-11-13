@@ -7,6 +7,15 @@
 | **Zone** | Where workers run. A Kubernetes namespace `ramen-<group>-<zone>` pinned to a cloud zone, with its own service account, load-balancer route and IP rules. `local` is the compose worker. | Super admins create zones; group admins attach them to environments |
 | **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins |
 
+
+## Which zones a group may use
+Each group has a list of **allowed zones**, set by a super admin on the group page (Zones and workers → Allowed zones)
+or with `PUT /api/v1/groups/<group>/zones {"allowed": ["a", "b"]}`. A group admin's environments can use only those
+zones; asking for another is refused with `403` naming it. The group page shows only the allowed zones. A zone an
+environment still uses cannot be taken off the list (`409`): remove it from the environment first, which tears the
+group's deployment in that zone down. A new group starts with no zones. Groups from before 1.0 keep the zones their
+environments already use.
+
 ## Zones and regions
 
 A zone has a name, a provider and a region. The region is the cloud location the workers pin to: a GCP zone such

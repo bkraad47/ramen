@@ -320,7 +320,7 @@ def capture(
                         replies.append((r.url, r.status))
 
                 page.on("response", remember)
-                page.click("#key-groups > summary")  # an agent key names its groups (§14 W1; a checkbox dropdown since 1.0)
+                page.click("#key-groups > summary")  # an agent key names its groups (§14 W1; checkbox dropdown)
                 page.check("#key-groups input[value=demo]")
                 page.click("#key-groups > summary")
                 page.get_by_role("button", name="Generate key").click()

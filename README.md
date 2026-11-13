@@ -59,6 +59,12 @@ holds the keys. The shape, the data model and why each piece is where it is:
   Decide per environment who may see and who may call each tool; a drift signal flags a caller repeating one call.
 - **Autoscaling by Ramen.** Each zone runs between 1 worker and a max that admins set; the console scales up fast
   under load and back down when quiet, the same on all three clouds, with no HPA and every step in the audit log.
+- **Sleeping zones.** An idle zone can scale to 0 behind one small activator pod; the first authenticated call wakes it
+  ([Sleeping workers](https://bkraad47.github.io/ramen/wiki/sleeping-workers/)).
+- **Images built on deploy.** A group's `requirements.txt` is baked into its own worker image by a build Job, so new
+  pods start without installing ([Worker images](https://bkraad47.github.io/ramen/wiki/worker-images/)).
+- **OpenTelemetry, with consent.** A span per call and per deploy to your collector, never arguments or results; a group
+  can require each caller's consent ([Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/)).
 - **Three clouds.** Terraform and Helm for GKE, EKS and AKS, with the same console and guards on each
   ([Deploy to the cloud](#deploy-to-the-cloud)).
 - **Enterprise controls.** `rmk_` MCP keys and `rmn_` API keys stored as salted hashes, IP rules per zone at the node

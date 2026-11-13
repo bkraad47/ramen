@@ -17,6 +17,9 @@ and sets the max; viewers and MCP users see the count only, and an API attempt i
 
 A zone created before 0.7.5 starts with max = its current count, so nothing scales until an admin raises it.
 
+The one case with 0 workers is a zone an admin allowed to [sleep](sleeping-workers.md) (1.0, off by default): the
+autoscaler holds while a zone is asleep or waking.
+
 <figure markdown>
 ![Zone actions with count, max and the last autoscale decision](../img/group-autoscale.png){ .ramen-shot }
 <figcaption>Zone actions on the group page: zone <code>b</code> went from 1 to 2 because a worker was high.</figcaption>

@@ -62,7 +62,7 @@ cd ../../..
 Terraform creates the resource group `ramen-<suffix>`, the AKS cluster (OIDC issuer and workload identity on, Azure
 CNI overlay, one node pool in the zones of `node_zones`, or none), ACR, the storage account with the `groups` container and the `ramen` table,
 Key Vault in RBAC mode, the edge's static public IP, the console's user-assigned identity with its federated
-credential for `ramen-system/console`, and installs Envoy Gateway and cert-manager into the cluster. About fifteen
+credential for `ramen-system/console`, the `ramen-builder` identity that image builds push with, and installs Envoy Gateway and cert-manager into the cluster. About fifteen
 minutes. `terraform output helm_set` prints every Helm value the next steps need.
 
 If the first apply stops with a `404` on the federated identity credential, Azure had not finished creating the
@@ -108,6 +108,10 @@ HTTP-01 challenge on the Gateway's port 80, which serves nothing else but a redi
 cannot reach the IP, `--set azure.tls=selfsigned` issues a self-signed certificate instead (clients then need
 `--ca` / `--cacert`, as on AWS); `--set azure.acmeServer=https://acme-staging-v02.api.letsencrypt.org/directory`
 tests the flow against the staging CA first.
+
+`helm_set` includes `builder.clientId`, the `ramen-builder` identity's client id (also the Terraform output
+`builder_client_id`). It is what lets a deploy build a group's worker image from its `requirements.txt`
+([Worker images](worker-images.md)). Without it no image is ever built: workers install requirements when they load.
 
 ## 4. The first zone, group and deploy
 

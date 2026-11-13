@@ -66,7 +66,9 @@ nav:
       - Deploy on Azure: wiki/deploy-azure.md
       - Groups, zones and regions: wiki/groups-zones.md
       - Autoscaling: wiki/autoscaling.md
+      - Sleeping workers: wiki/sleeping-workers.md
       - The MCP repo, structure and local development: wiki/mcp-repo.md
+      - Worker images: wiki/worker-images.md
       - Secrets at runtime: wiki/secrets.md
       - Users and access: wiki/users-access.md
       - Connect a client with OAuth: wiki/connect-oauth.md
@@ -78,6 +80,7 @@ nav:
       - Guardrails (NeMo or your own policy): wiki/guardrails.md
       - Multi round-trip requests: wiki/mrtr.md
       - Tasks: wiki/tasks.md
+      - Telemetry: wiki/telemetry.md
       - Backups: wiki/backups.md
       - Configuration: wiki/configuration.md
   - Changelog: changelog.md

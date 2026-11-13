@@ -381,14 +381,8 @@ pre-commit check.
 ## Heavy dependencies
 
 The worker pip-installs `mcp/requirements.txt` on the first load of a new ref. Pin the versions. If the install
-fails, the deploy stops at the canary with pip's output in the job log, and the previous version keeps serving. For
-heavy stacks such as numpy, pandas or a CUDA wheel, build a worker image for the group and record it on the group page's
-**Worker image** card:
+fails, the deploy stops at the canary with pip's output in the job log, and the previous version keeps serving.
 
-```sh
-make push-worker PROJECT=<project> REGION=<region>    # tag it yourself if you keep several
-```
-
-The image is not tied to one group; each group pins the one it runs on its group page. The console records and
-recalls references and never builds. The pin reaches the zones on the next deploy, and **Recall** puts the group
-back on an older build.
+For heavy stacks such as numpy, pandas or a CUDA wheel, put the dependencies in the image instead. Since 1.0 a
+cloud deployment with a builder does that on deploy, from the same `requirements.txt`; or build an image yourself
+and pin it on the group. Both are on [Worker images](worker-images.md).

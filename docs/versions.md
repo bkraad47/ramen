@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `1.0.0` **(current)** | 2026-11-13 | MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
+| `1.0.0` **(current)** | 2026-11-13 | MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
 | `0.8.0` | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
 | `0.7.5` | 2026-10-10 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
@@ -37,7 +37,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | — | GCP | folded forward, never tagged · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | — | local core | folded forward, never tagged · [architecture](architecture/v0.1.0.md) |
 
-## 1.0.0 — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks
+## 1.0.0 — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
 
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta` and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`, `input_required` or `task`) and who answered (`_meta["io.modelcontextprotocol/serverInfo"]`); list results, `resources/read` and `server/discover` carry `ttlMs` and `cacheScope: "private"`.
 - **`server/discover`** answers the supported versions and capabilities in one call.
@@ -59,14 +59,25 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - The group page marks tools that run as tasks (`task`) and tools with header-mirrored parameters (`headers`).
 - The compatibility gate treats adding, removing or renaming a parameter's `header` as a breaking change.
 - Golden cases with `respond` or `expect: {input_required: …}` are called as a 2026-07-28 client.
+- **Sleeping workers.** A super admin or a group admin can let a zone sleep after a set idle time (`sleep_after_secs` per group × zone, 0 = never, the default). An idle zone's workers are scaled to 0 and one small activator pod (10m CPU / 32Mi requested, no Python runtime) answers behind the same Service and load-balancer route. It applies the zone's guards, so only an authenticated call wakes the zone; that call is held up to `RAMEN_WAKE_TIMEOUT_SECS` (default 25 s) and then forwarded, or answered `503` with `Retry-After: 10` while the wake goes on. Running tasks and open `subscriptions/listen` streams keep a zone awake; the console's own calls do not. Sleep and wake by hand from the group page or the API; every transition is audited (`workers.sleep`, `workers.wake`, with a `trigger`).
+- **Worker images built on deploy.** With a builder configured, a deploy of a group whose repo has a non-empty `mcp/requirements.txt` first builds `worker:b-<group>-<hash>` in the deployment's own registry (a kaniko Job running as the `ramen-builder` identity that Terraform creates; the console holds no registry credential) and runs the zones on it. The runtime sees the requirements are baked in and skips `pip install` (`deps baked`). The same requirements and base image build nothing; a failed build fails the deploy before the canary. A pinned image still wins. Per group: `build_image`, on the Worker image card.
+- **OpenTelemetry.** A super admin sets a collector on the Config page (`/api/v1/config/otel`). Each node then exports one span per MCP call (`mcp <method>`, joined to the caller's `traceparent`), a child span around the runtime round trip, and the counters `ramen.mcp.calls` and `ramen.mcp.errors`; the console exports one span per deploy (`ramen.deploy`). Tool names, timing and outcome only: never arguments, results or credentials. A collector that is down drops data and never fails a call. Connected agents are told where to send their own telemetry, in the OAuth token answer (`telemetry`) and on `server/discover` (`_meta["io.ramen/telemetry"]`).
+- **Telemetry consent.** A group can require it (`require_telemetry_consent`): `tools/call`, `prompts/get` and `resources/read` are then served only to a caller who accepted — a person by a required checkbox on the OAuth consent page, a 2026-07-28 client with `elicitation` by a one-time prompt (remembered 30 days). Others are refused: `-32021` (2026-07-28 without `elicitation`), `-32003` (2025-06-18).
+- Helm: `builder.*` (the builder identity and registry) and `otel.collector: jaeger` (a Jaeger all-in-one for trying telemetry out, not for production). Terraform on all three clouds creates the `ramen-builder` identity and outputs it (`builder_gsa`, `builder_role_arn`, `builder_client_id`).
 - A golden regression: every tool, resource and prompt of the fixture and demo groups, recorded from 0.8.0, is compared with what 1.0.0 answers a 2025-06-18 client, on both transports.
 - The official `@modelcontextprotocol/conformance` suite (pinned at 0.2.0-alpha.12) runs in CI against a real worker, once per protocol version, each with a checked-in list of expected failures and a reason per entry (`tests/conformance_suite/`). The exceptions are listed on the [Transport page](https://bkraad47.github.io/ramen/wiki/transport/#the-official-conformance-suite).
 - New conformance modules for the stateless core, standard headers, multi round-trip requests and their guardrails, tasks, subscriptions and the bridge.
+- Conformance modules for the activator, the idle metrics, the export, telemetry consent, baked dependencies and the console's side of all three (`test_activator.py`, `test_idle_metrics.py`, `test_otel.py`, `test_telemetry_consent.py`, `test_deps_baked.py`, `test_console_sleep_otel.py`), and cluster proofs in `tests/kind/test_v1_sleep_build_otel.py`.
 - `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
 - A `tools/call` or `prompts/get` that carries `_meta.progressToken` **and** accepts `text/event-stream` is answered as an event stream: the tool's progress notifications, if it reports any, then the response.
 - **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are removed from the runtime's environment (task records now live in that Redis).
-- **SIGTERM now ends open `subscriptions/listen` streams** with a final result before the worker stops, so a graceful stop is not held open by them.
+- **A worker now handles SIGTERM**: it keeps serving for `RAMEN_STOP_DRAIN_SECS` (20 s in a pod) while the load balancer takes the pod out of rotation, then ends open `subscriptions/listen` streams with a final result and stops. Up to 0.8.0 the worker ignored SIGTERM and served until the kubelet killed it at the end of the grace period.
+- **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write.
 - **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest hash changes once on its first 1.0 deploy.
+- **A zone can now have 0 workers**, but only where an admin turned sleeping on for it; the default is off and such a zone keeps at least 1 as before.
+- **A deploy may build an image first.** In a `gcp`, `aws` or `azure` deployment whose Helm release was given the builder identity (`builder.gsa`, `builder.roleArn`, `builder.clientId`), building is on by default for every group: the first deploy of a group with a non-empty `mcp/requirements.txt` takes a build longer, and a build that fails stops the deploy. Without the identity nothing is built and nothing changes. Turn it off per group on the Worker image card.
+- **The worker-settings API answer no longer includes the zone's Redis URL** (`redis_item_url`).
+- **Telemetry and consent are off until configured.** Nothing is exported and nobody is asked until a super admin enables telemetry and a group admin requires consent.
 - Guardrails: `pre` runs on every round of a multi round-trip call, and sees the client's answers as `$inputResponses`; `post` runs on the final result only.
 - A task tool cannot also be a multi round-trip call before the task starts: a client that declared the tasks extension gets the task at once, and the tool's input request arrives through the task (`tasks/get`, `tasks/update`).
 - There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
@@ -77,6 +88,10 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
 - A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor `resources/subscribe`.
 - A `subscriptions/listen` stream hears about the pod it is connected to. gRPC has no subscriptions and no progress.
+- Sleeping: the first call to a sleeping zone is answered `503` with `Retry-After: 10` when the wake takes longer than the 25 s hold (a node that has to be added, a slow image pull); the retry is served. A sleeping zone needs the session secret the console writes on deploy. On GKE Autopilot the saving is smaller than the activator's requests suggest, because Autopilot bills a per-pod minimum.
+- Telemetry consent is remembered per pod when the group has no Redis: another pod asks again.
+- Images are built with kaniko only. The local compose stack cannot build images.
+- Not run for this release so far: the sleeping, image-build and telemetry proofs on a kind cluster and on the three clouds (the tests are written); pushing with each cloud's builder identity; the consent store on Redis; export to an `https://` collector; a worker skipping its throttle for a call its activator forwarded.
 
 ## 0.8.0 — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 

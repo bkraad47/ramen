@@ -46,7 +46,7 @@ cd ../../..
 ```
 
 Terraform creates the cluster (Kubernetes 1.35 by default, in standard support until 2027-03-27; an older version
-in extended support bills the control plane at about $0.60 an hour instead of $0.10) and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role,
+in extended support bills the control plane at about $0.60 an hour instead of $0.10) and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role, the `ramen-builder` role that image builds push with,
 a permissions boundary for the zone roles, a self-signed certificate imported into ACM, the AWS Load Balancer
 Controller and Fluent Bit. A CloudFormation template with the same base resources is in `deploy/cloudformation`.
 
@@ -87,9 +87,11 @@ or push a new tag.
 aws eks update-kubeconfig --name ramen --region $REGION
 CERT=$(terraform -chdir=deploy/terraform/aws output -raw certificate_arn)
 TABLE=$(terraform -chdir=deploy/terraform/aws output -raw dynamodb_table)
+BUILDER=$(terraform -chdir=deploy/terraform/aws output -raw builder_role_arn)
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set provider=aws,region=$REGION --set-string aws.account=$ACCOUNT --set aws.cluster=ramen --set aws.table=$TABLE \
   --set aws.certificateArn=$CERT \
+  --set builder.roleArn=$BUILDER \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
@@ -105,6 +107,10 @@ Then set the public address, which is the OAuth issuer the workers trust, and up
 ```sh
 helm upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set console.env.RAMEN_PUBLIC_URL=https://$ALB
 ```
+
+`builder.roleArn` is the `ramen-builder` role Terraform made; it is what lets a deploy build a group's worker image
+from its `requirements.txt` ([Worker images](worker-images.md)). Leave it out and no image is ever built: workers
+install requirements when they load.
 
 The certificate is self-signed. Its name covers `*.<region>.elb.amazonaws.com`, so the exported PEM verifies the
 load balancer for `curl --cacert` and the bridge's `--ca`.

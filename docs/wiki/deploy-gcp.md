@@ -36,8 +36,9 @@ cd ../../..
 ```
 
 Terraform creates the cluster, Firestore, the Artifact Registry repo, the groups bucket, a static IP, the
-certificate map, and the console's service account with the access described below. It takes about ten minutes.
-The outputs you need later are `public_hostname`, `certificate_map` and `artifact_repo`.
+certificate map, the console's service account with the access described below, and the `ramen-builder` service
+account that [image builds](worker-images.md) push with. It takes about ten minutes.
+The outputs you need later are `public_hostname`, `certificate_map`, `artifact_repo` and `builder_gsa`.
 
 ## 3. Images
 
@@ -67,11 +68,13 @@ and push it with `crane`.
 gcloud container clusters get-credentials ramen --region $REGION
 HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
 CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
+BUILDER=$(terraform -chdir=deploy/terraform/gcp output -raw builder_gsa)
 kubectl create ns ramen-system
 kubectl label ns ramen-system ramen.io/routes=true      # the Gateway admits routes from labelled namespaces only
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   --set project=$PROJECT,region=$REGION \
   --set gateway.certificateMap=$CERTMAP \
+  --set builder.gsa=$BUILDER \
   --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
@@ -81,7 +84,9 @@ curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":
 ```
 
 Keep the three generated values in a password manager. `RAMEN_PUBLIC_URL` is the address people use and the OAuth
-issuer the workers trust. The Gateway reports `PROGRAMMED` after about five minutes and the managed certificate
+issuer the workers trust. `builder.gsa` is what lets a deploy build a group's worker image from its
+`requirements.txt` ([Worker images](worker-images.md)); leave it out and no image is ever built, workers install
+requirements when they load. The Gateway reports `PROGRAMMED` after about five minutes and the managed certificate
 turns `ACTIVE` a few minutes later.
 
 ## 5. The first zone, group and deploy

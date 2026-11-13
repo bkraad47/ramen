@@ -43,9 +43,9 @@ fi
 docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' | grep -qw "$REGISTRY_NAME" \
   || docker network connect kind "$REGISTRY_NAME"
 for node in $(kind get nodes --name "$CLUSTER"); do
-  # containerd pulls <registry>/... over plain http; needs the registry config_path kind enables since v0.27
+  # containerd pulls <registry>/... over plain http; needs the registry config_path that cluster.yaml patches in
   docker exec "$node" grep -q 'certs.d' /etc/containerd/config.toml \
-    || { echo "node $node: containerd has no registry config_path (kind >= 0.27 sets it); upgrade kind, then make kind-down kind-up" >&2; exit 2; }
+    || { echo "node $node: containerd has no registry config_path (deploy/kind/cluster.yaml sets it): the cluster predates it — make kind-down kind-up" >&2; exit 2; }
   docker exec "$node" mkdir -p "/etc/containerd/certs.d/$REGISTRY"
   printf '[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "$REGISTRY" \
     | docker exec -i "$node" cp /dev/stdin "/etc/containerd/certs.d/$REGISTRY/hosts.toml"

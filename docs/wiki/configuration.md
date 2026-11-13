@@ -41,8 +41,8 @@ autoscale:                                   # 0.7.5, see Autoscaling
 
 What the Config page edits is stored in the console store and layered over the file: the public address (base
 URI), authentication toggles, identity providers and their group source, custom roles, OAuth role rules, OAuth
-clients, SMTP and the warning-email list, the GitHub App, the auto-rebalance scheduler, the service-account rules
-and the permission catalogue.
+clients, SMTP and the warning-email list, the GitHub App, the auto-rebalance scheduler, [telemetry](telemetry.md),
+the service-account rules and the permission catalogue.
 
 ## The public address (base URI)
 
@@ -152,11 +152,17 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_LIST_TTL_MS` | worker | 1.0: the `ttlMs` a 2026-07-28 client is given on list results and `server/discover`, default 60000. |
 | `RAMEN_MRTR_TTL_SECS` | worker | 1.0: how long a signed `requestState` of a [multi round-trip request](mrtr.md) stays valid, default 600. Not settable from the group's deploy file. |
 | `RAMEN_STOP_DRAIN_SECS` | worker | 1.0: how long a worker keeps serving after SIGTERM before it closes its streams and stops, so a load balancer can take the pod out of rotation first. Default 20 in a pod, 0 elsewhere; keep it under the pod's termination grace period (30 s). |
+| `RAMEN_WAKE_TIMEOUT_SECS` | activator | 1.0: how long a call to a [sleeping zone](sleeping-workers.md) is held while the zone wakes, before `503` with `Retry-After: 10`. Default 25, minimum 1. Read from the pod's environment only, not from the group's deploy file. |
+| `RAMEN_ACTIVATOR`, `RAMEN_ACTIVATOR_UPSTREAM`, `RAMEN_CONSOLE_INTERNAL_URL` | activator | 1.0: set by the console on a sleeping zone's activator pod, never by hand. `RAMEN_ACTIVATOR=1` starts the node as an activator; the upstream is where the zone's real workers answer (default `worker-direct:8080`; `host:port` or `http://host:port`, an `https://` value stops the node at start); the internal URL is where it asks the console for the wake. The console reads `RAMEN_CONSOLE_INTERNAL_URL` too, to hand it on (the chart sets it; default `http://console.ramen-system.svc.cluster.local:80`). |
 | `RAMEN_TASK_TTL_SECS` | worker | 1.0: how long a [task](tasks.md) and its result are kept, default 3600. |
 | `RAMEN_MAX_TASKS` | worker | 1.0: tasks running on one pod at a time, default 4; the next task call is `429`. |
 | `RAMEN_MAX_SUBSCRIPTIONS` | worker | 1.0: open [`subscriptions/listen`](transport.md#subscriptions) streams per pod, default 64; the next is `429`. |
 | `RAMEN_ADMIN_CIDRS` | worker | Source ranges allowed on the `Admin` gRPC service. Any by default; the admin key is the gate that always applies. |
 | `RAMEN_REDIS_ITEM_URL`, `RAMEN_REDIS_SCOPE_URL` | worker | The two throttle Redis instances, written by the console from the group page. Dialed when the node starts. Since 1.0 the same Redis (scope first, else item) is the [task store](tasks.md#where-tasks-live-and-why-redis-matters), and both URLs are removed from the environment tool code sees. |
+| `RAMEN_OTEL_ENDPOINT`, `RAMEN_OTEL_HEADERS`, `RAMEN_OTEL_CLIENT` | worker | 1.0: [telemetry](telemetry.md), written by the console on deploy from the Config page's Telemetry card: the collector's OTLP/HTTP base URL (unset = nothing is exported), the headers Ramen sends (a JSON object of strings), and the object agents are handed on `server/discover`. The last two are removed from the environment tool code sees. |
+| `RAMEN_TELEMETRY_CONSENT`, `RAMEN_TELEMETRY_NOTICE` | worker | 1.0: written by the console on deploy when the group [requires telemetry consent](telemetry.md#consent): `1`, and the collector host the prompt names. Unset by default. |
+| `RAMEN_BUILDER`, `RAMEN_BUILD_REGISTRY` | console | 1.0: [images built on deploy](worker-images.md). `1` and the repository prefix images are pushed under; both are needed for a builder to exist, and the chart sets both when it is given the builder identity (`builder.*`). Unset by default. |
+| `RAMEN_BUILDER_IMAGE`, `RAMEN_BUILD_TIMEOUT_SECS`, `RAMEN_BUILD_CPU`, `RAMEN_BUILD_MEMORY`, `RAMEN_BUILD_ARGS`, `RAMEN_BUILD_INIT_IMAGE` | console | 1.0: the build Job: its image (default `gcr.io/kaniko-project/executor:v1.24.0`), how long the console waits for it (900 s), its CPU and memory (`500m`, `2Gi`), extra kaniko arguments (none) and the init container's image (the build's base image). |
 | `RAMEN_TLS_CERT`, `RAMEN_TLS_KEY` | worker | PEM paths that make the node terminate TLS itself. The console then also needs `RAMEN_WORKER_TLS=1`, or every deploy fails. |
 | `RAMEN_REFLECTION` | worker | gRPC server reflection. On by default, set to `0` on deployed workers by the charts. |
 | `RAMEN_BACKUP_ROOT` | console | Where a `local` backup is written. |

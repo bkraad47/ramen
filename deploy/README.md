@@ -51,6 +51,7 @@ kubectl label ns ramen-system ramen.io/routes=true      # Gateway only admits ro
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set project=$PROJECT,region=$REGION \
   --set gateway.certificateMap=$CERTMAP \
+  --set builder.gsa=$(terraform -chdir=deploy/terraform/gcp output -raw builder_gsa) \
   --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
@@ -149,6 +150,7 @@ TABLE=$(terraform -chdir=deploy/terraform/aws output -raw dynamodb_table)
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
   --set provider=aws,region=$AWS_REGION --set-string aws.account=$ACCOUNT --set aws.certificateArn=$CERT \
   --set aws.cluster=$CLUSTER --set aws.table=$TABLE \
+  --set builder.roleArn=$(terraform -chdir=deploy/terraform/aws output -raw builder_role_arn) \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)

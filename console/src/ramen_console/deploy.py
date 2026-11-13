@@ -3,7 +3,7 @@ import json
 import logging
 import os
 
-from . import baseuri, compat, github_app, golden, regions, roles, toolaccess
+from . import baseuri, compat, github_app, golden, imagebuild, otel, regions, roles, sleeping, toolaccess
 from .cloud.base import GateError
 from .services import Services
 from .util import now, uid
@@ -45,7 +45,16 @@ class Jobs:
 
 
 async def run_deploy(
-    svc: Services, job: dict, group: str, env_name: str, zone: str | None, canary: bool, audit, breaking: bool = False
+    svc: Services,
+    job: dict,
+    group: str,
+    env_name: str,
+    zone: str | None,
+    canary: bool,
+    audit,
+    breaking: bool = False,
+    user: str = "-",
+    ip: str = "-",
 ):
     zones: list[str] = []
     try:
@@ -60,6 +69,11 @@ async def run_deploy(
         job["log"].append(f"{now()} syncing repo {g['repo_url']}")
         await svc.cloud.sync_repo(group, g["repo_url"], env.get("ref") or g.get("ref", "main"), token)
         cases = await _golden_cases(svc, group, job)
+        # §24.2: the group's own image (base + mcp/requirements.txt) exists before any canary starts; a failed build
+        # stops the deploy here, with the build's log tail above, and the stable track is untouched
+        await imagebuild.ensure(svc, group, job["log"].append)
+        otel_cfg = await otel.get_config(svc.store)
+        g = await svc.get_group(group)
         prev = env.get("last_deploy") or {}
         blocked = await svc.blocked_regions()
         custom_roles = await roles.load(svc.store, force=True)
@@ -112,7 +126,11 @@ async def run_deploy(
                 job["log"].append(
                     f"{now()} zone {z}: no base URI or RAMEN_PUBLIC_URL, OAuth tokens are off for this worker"
                 )
+            cfg.update(otel.worker_env(otel_cfg, g, group, z))  # §24.3: where to export, what to tell agents, consent
             cfg = await svc.secrets_backend.resolve_config(cfg)
+            if sleeping.state_of(w) != sleeping.AWAKE:  # §24.1: a deploy wakes a sleeping zone first
+                job["log"].append(f"{now()} zone {z}: {sleeping.state_of(w)}, waking it before the deploy")
+                await svc.wake(group, z, "deploy", user=user, ip=ip)
             job["log"].append(f"{now()} zone {z}: deploying (canary={'on' if canary else 'off'})")
             gates[z] = {}
             stable = (prev.get("manifest") or {}).get((prev.get("stable") or {}).get(z))
@@ -127,6 +145,8 @@ async def run_deploy(
                 gate=_gate(job, group, env_name, z, breaking, stable, cases, cfg, gates[z]),
             )
             results[z].update(gates[z])
+            if results[z].get("ok"):
+                await svc.touch_zone(group, z)
         ok = all(r.get("ok") for r in results.values()) if results else False
         failed = [
             f"{z} {w['id']}: {w.get('error') or w.get('status')}"
@@ -169,6 +189,8 @@ async def run_deploy(
     except Exception:  # noqa: BLE001
         log.exception("could not record last_deploy")
     await audit("deploy", f"{group}/{env_name}", job["status"] == "ok", [f"group:{group}", f"job:{job['id']}"])
+    # §24.3: one span per deploy job; a collector that is down is a warning in the log, never a failed deploy
+    await otel.export_deploy(svc.store, job, group, env_name, zones, await svc.image_for(group))
 
 
 async def _golden_cases(svc: Services, group: str, job: dict) -> list[dict]:

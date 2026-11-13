@@ -35,6 +35,11 @@ http = "1"
 http-body-util = "0.1"
 ring = "0.17"
 base64 = "0.22"
+# §24 (1.0.0): the activator's forwarding client and the wake / OTLP posts. hyper and hyper-util are what tonic and
+# axum already run on (same lockfile versions); webpki-roots is the one new crate, for an `https://` collector.
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
+webpki-roots = "1"
 # N7: fixed-window throttling (item and scope Redis instances, §14)
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }
 

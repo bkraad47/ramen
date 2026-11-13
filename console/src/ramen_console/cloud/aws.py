@@ -26,7 +26,7 @@ from .aws_k8s import (
     weights,
 )
 from .gcp import GcpCloud, detail_of
-from .gcp_k8s import ns_name
+from .gcp_k8s import ACTIVATOR, ns_name
 
 
 def _guard(fn):
@@ -50,6 +50,8 @@ def _waf_halves(cidr: str) -> list[str]:
 
 
 class AwsCloud(GcpCloud):
+    PROVIDER = "AWS"
+
     def __init__(
         self,
         region="us-east-1",
@@ -97,6 +99,21 @@ class AwsCloud(GcpCloud):
     abort_deploy = _guard(GcpCloud.abort_deploy.__wrapped__)
     attach_zone = _guard(GcpCloud.attach_zone.__wrapped__)
     scale = _guard(GcpCloud.scale.__wrapped__)
+    zone_runtime = _guard(GcpCloud.zone_runtime.__wrapped__)
+    sleep_zone = _guard(GcpCloud.sleep_zone.__wrapped__)
+    wake_zone = _guard(GcpCloud.wake_zone.__wrapped__)
+
+    def _after_wake(self, ns, count, canary) -> None:
+        """The split `sleep_zone` took off the canary (via `_canary_out`) comes back with the woken replicas."""
+        self._set_weights(ns, *split_weights(count, canary))
+
+    def _build_extras(self, registry) -> dict:
+        """kaniko's bundled `ecr-login` helper signs in with the pod's IRSA web identity (`ramen-builder` role)."""
+        host = registry.split("/")[0]
+        return {
+            "docker_config": {"credHelpers": {host: "ecr-login"}},
+            "env": {"AWS_REGION": self.region, "AWS_SDK_LOAD_CONFIG": "true"},
+        }
 
     def _iam(self):
         return aws_api.Iam(self.c.iam, self.c.sts, self.c.eks, self.region, self.cluster, self.boundary)
@@ -232,7 +249,7 @@ class AwsCloud(GcpCloud):
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
         # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
-        for dep in ("worker", "worker-canary"):
+        for dep in ("worker", "worker-canary", ACTIVATOR):  # a sleeping zone's activator enforces the list too
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)

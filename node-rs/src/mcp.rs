@@ -75,6 +75,8 @@ pub struct Env<'a> {
     /// §23.4: where this call's `runtime.progress` lines go, when the client asked and can take a stream.
     pub progress: Option<ProgressFn>,
     pub host: Option<Host<'a>>,
+    /// §24.3: the call's span; each sidecar round trip becomes a child of it.
+    pub span: Option<&'a crate::otel::SpanCtx>,
 }
 
 static NO_CAPS: Value = Value::Null;
@@ -87,8 +89,23 @@ impl<'a> Env<'a> {
             caps: &NO_CAPS,
             progress: None,
             host: None,
+            span: None,
         }
     }
+}
+
+/// One sidecar round trip for this call, timed as the child span `runtime <call>` when the call has a span (§24.3).
+async fn runtime(env: &Env<'_>, method: &str, params: Value) -> Result<Value, RpcErr> {
+    let start = std::time::SystemTime::now();
+    let r = env
+        .sc
+        .call_watched(method, params, env.progress.clone())
+        .await;
+    if let Some(span) = env.span {
+        let call = method.strip_prefix("runtime.").unwrap_or(method);
+        span.child(format!("runtime {call}"), start, r.is_ok());
+    }
+    r
 }
 
 /// The 2025-06-18 dispatch, as every caller before 1.0.0 knew it.
@@ -190,7 +207,8 @@ pub async fn dispatch_env(
                 && is_task(sc, name).await
             {
                 let app = host.app;
-                let mut task = app
+                let start = std::time::SystemTime::now();
+                let started = app
                     .tasks
                     .start(
                         &app.sidecar,
@@ -201,13 +219,15 @@ pub async fn dispatch_env(
                         &call["arguments"],
                         env.caps,
                     )
-                    .await?;
+                    .await;
+                if let Some(span) = env.span {
+                    span.child("runtime task_start".into(), start, started.is_ok());
+                }
+                let mut task = started?;
                 task["resultType"] = json!("task");
                 return Ok(Some(task));
             }
-            let r = sc
-                .call_watched("runtime.call_tool", call, env.progress.clone())
-                .await?;
+            let r = runtime(env, "runtime.call_tool", call).await?;
             match round_result(env, method, name, params, r)? {
                 Round::Done(r) => r,
                 Round::Legacy(msg) => tool_error(msg),
@@ -219,8 +239,7 @@ pub async fn dispatch_env(
             if let Some(name) = resource_name(sc, uri).await {
                 deny_if_blocked(blocked, &name, "resource")?;
             }
-            sc.call("runtime.read_resource", json!({"uri": uri}))
-                .await?
+            runtime(env, "runtime.read_resource", json!({"uri": uri})).await?
         }
         "prompts/get" => {
             let name = str_param(params, "name")?;
@@ -234,9 +253,7 @@ pub async fn dispatch_env(
             }
             let mut call = json!({"name": name, "arguments": arguments});
             round_params(env, method, name, params, &mut call)?;
-            let r = sc
-                .call_watched("runtime.get_prompt", call, env.progress.clone())
-                .await?;
+            let r = runtime(env, "runtime.get_prompt", call).await?;
             match round_result(env, method, name, params, r)? {
                 Round::Done(r) => r,
                 Round::Legacy(msg) => return Err(RpcErr::new(-32602, msg)),

@@ -168,6 +168,10 @@ class FakeAwsClients:
     def rbac(self):
         return self.k8s.rbac
 
+    @property
+    def batch(self):
+        return self.k8s.batch
+
     def to_dict(self, obj):
         return obj
 

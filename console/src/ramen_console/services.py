@@ -3,7 +3,7 @@ import logging
 import os
 import time
 
-from . import autoscale, regions
+from . import autoscale, imagebuild, otel, regions, sleeping
 from .audit import write_audit
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
@@ -59,6 +59,11 @@ class Services:
     def __init__(self, store: Store, cloud: Cloud, secrets: SecretsBackend | None = None):
         self.store, self.cloud = store, cloud
         self.secrets_backend = secrets or StoreBackend()
+        # §24.3: golden cases must pass a group's telemetry-consent gate — the adapter's gRPC client presents the
+        # worker admin key on `Mcp/Call` too (it already does on `Admin/*`)
+        rpc = getattr(cloud, "rpc", None)
+        if rpc is not None and hasattr(rpc, "admin_key") and not rpc.admin_key:
+            rpc.admin_key = getattr(cloud, "admin_key", "") or None
 
     async def visible_groups(self, p: Principal) -> list[dict]:
         groups = await self.store.list("groups")
@@ -98,6 +103,10 @@ class Services:
         g = await self.get_group(name)
         if fields.get("repo_url") is not None:
             validate_repo_url(fields["repo_url"])
+        if fields.get("build_image") and not await imagebuild.builder_available(self.cloud):
+            raise invalid(imagebuild.missing_builder())  # §24.2
+        if fields.get("require_telemetry_consent") and not (await otel.get_config(self.store))["enabled"]:
+            raise invalid("Telemetry consent can only be required while telemetry is enabled (Config → Telemetry)")
         g.update({k: v for k, v in fields.items() if v is not None})
         return public(await self.store.put("groups", name, g))
 
@@ -309,18 +318,24 @@ class Services:
 
     # --- per-group worker images (§13.3, F9.3) --------------------------------
     async def image_for(self, group) -> str | None:
-        return ((await self.store.get("groups", group) or {}).get("image") or {}).get("ref")
+        """§24.2 precedence: an admin's pinned image → the image built for the group on deploy → None (the base)."""
+        g = await self.store.get("groups", group) or {}
+        return (g.get("image") or {}).get("ref") or (g.get("built_image") or {}).get("ref")
+
+    async def builds_images(self, group_doc: dict) -> bool:
+        return await imagebuild.enabled(self.cloud, group_doc)
 
     async def images(self, group) -> list[dict]:
         g = await self.get_group(group)
         pinned = (g.get("image") or {}).get("id")
+        built = None if pinned else (g.get("built_image") or {}).get("id")
         # `created` has second resolution, so two builds recorded in the same second need `seq` to stay ordered.
         rows = sorted(
             await self.store.list("images", {"group": group}),
             key=lambda d: (d["created"], d.get("seq", 0)),
             reverse=True,
         )
-        return [{**d, "current": d["id"] == pinned} for d in rows]
+        return [{**d, "current": d["id"] == pinned, "in_use": d["id"] in (pinned, built)} for d in rows]
 
     async def record_image(self, group, tag, digest=None, note="", by="") -> dict:
         """Record a build that already exists in a registry and pin it. The console never builds (§13.3)."""
@@ -344,7 +359,7 @@ class Services:
 
     async def recall_image(self, group, image_id) -> dict:
         doc = await self.store.get("images", image_id)
-        if not doc or doc.get("group") != group:
+        if not doc or doc.get("group") != group or not doc.get("ref"):  # a failed build has nothing to pin
             raise not_found("image")
         return {**await self._pin(group, doc), "current": True}
 
@@ -357,7 +372,7 @@ class Services:
 
     async def _pin(self, group, doc) -> dict:
         g = await self.get_group(group)
-        g["image"] = {"id": doc["id"], "ref": doc["ref"]}
+        g["image"] = {"id": doc["id"], "ref": doc["ref"], "source": "manual"}
         await self.store.put("groups", group, g)
         return doc
 
@@ -415,6 +430,8 @@ class Services:
             raise not_found("group")
         if not await self.store.get("zones", zone):
             raise not_found("zone")
+        if sleeping.state_of(await self.worker_config(group, zone)) != sleeping.AWAKE:
+            await self.wake(group, zone, "manual", user=user, ip=ip)  # §24.1: a rebalance wakes a sleeping zone first
         out = await self.cloud.rebalance(group, zone)
         out["autoscale"] = await self.autoscale(group, zone, user=user, ip=ip)
         return out
@@ -432,6 +449,8 @@ class Services:
     async def _autoscale(self, group, zone, user: str, ip: str, now: float | None) -> dict:
         now = time.time() if now is None else now
         w = await self.worker_config(group, zone)
+        if (state := sleeping.state_of(w)) != sleeping.AWAKE:  # §24.1: a sleeping zone has 0 workers on purpose
+            return {"action": "hold", "from": w.get("count", 1), "to": w.get("count", 1), "reason": f"zone is {state}"}
         try:
             live = await self.cloud.workers(group, zone)
         except Exception as e:  # noqa: BLE001 - a dead API must not fail the rebalance; nothing is changed
@@ -474,10 +493,121 @@ class Services:
             "allowed_sizes": [],
         }
 
+    # --- §24.1 sleeping workers ---------------------------------------------------------------------------------
+    async def _audit_sleep(self, action, group, zone, trigger, user, ip, ok=True, extra=()):
+        tags = [f"group:{group}", f"zone:{zone}", f"trigger:{trigger}", *extra]
+        await write_audit(
+            self.store, user=user or "-", ip=ip, action=action, target=f"{group}/{zone}", ok=ok, tags=tags
+        )
+
+    async def sleep(self, group, zone, trigger: str = "manual", user: str | None = None, ip: str = "-") -> dict:
+        """Activator up, workers and canary to 0, state `asleep`; the count and canary count are remembered. A zone
+        that is not awake is left alone. Audited `workers.sleep` when `user` is given (a route audits itself)."""
+        async with self._zone_lock(group, zone):
+            w = await self.worker_config(group, zone)
+            if sleeping.state_of(w) != sleeping.AWAKE:
+                return w
+            try:
+                rt = await self.cloud.zone_runtime(group, zone) or {}
+                result = await self.cloud.sleep_zone(group, zone) or {}
+                # the canary replicas asked for before the sleep (kube adapters say so), else what was Ready
+                canary = (result.get("previous") or {}).get("canary", rt.get("canary"))
+                saved = {"count": max(1, int(w.get("count") or 1)), "canary": int(canary or 0)}
+            except Exception as e:
+                await self._audit_sleep("workers.sleep", group, zone, trigger, user, ip, False, [f"error:{e}"[:200]])
+                raise
+            w.update(state=sleeping.ASLEEP, state_since=time.time(), sleep_saved=saved)
+            w["last_sleep"] = {"trigger": trigger, "at": now()}
+            w = await self.store.put("workers", w["id"], w)
+        log.info("sleep %s/%s (%s)", group, zone, trigger)
+        if user is not None:
+            await self._audit_sleep("workers.sleep", group, zone, trigger, user, ip)
+        return {**w, "cloud": result}
+
+    async def wake_begin(self, group, zone) -> tuple[dict, bool]:
+        """Flip an `asleep` zone to `waking`. (record, started): `started` is True for exactly one caller per wake —
+        a call that finds the zone `waking` or `awake` gets the record as it is, at once, and must not scale."""
+        w = await self.worker_config(group, zone)
+        st = sleeping.state_of(w)
+        if st == sleeping.AWAKE or (st == sleeping.WAKING and not self._stale(w)):
+            return w, False
+        async with self._zone_lock(group, zone):
+            w = await self.worker_config(group, zone)
+            st = sleeping.state_of(w)
+            if st == sleeping.AWAKE or (st == sleeping.WAKING and not self._stale(w)):
+                return w, False
+            w.update(state=sleeping.WAKING, state_since=time.time())
+            return await self.store.put("workers", w["id"], w), True
+
+    @staticmethod
+    def _stale(w: dict) -> bool:
+        return time.time() - float(w.get("state_since") or 0) > sleeping.WAKE_STALE
+
+    async def wake_finish(self, group, zone, trigger: str, user: str | None = None, ip: str = "-") -> dict:
+        """The scale behind a `wake_begin` that returned started: workers back to the zone's count, the canary to
+        what it was, wait Ready, state `awake`. A failed wake leaves the zone `asleep` so the next call tries again."""
+        async with self._zone_lock(group, zone):
+            w = await self.worker_config(group, zone)
+            if sleeping.state_of(w) != sleeping.WAKING:
+                return w
+            saved = w.get("sleep_saved") or {}
+            count = max(1, int(w.get("count") or saved.get("count") or 1))
+            try:
+                result = await self.cloud.wake_zone(group, zone, count, int(saved.get("canary") or 0))
+            except Exception as e:
+                w.update(state=sleeping.ASLEEP, state_since=time.time())
+                await self.store.put("workers", w["id"], w)
+                await self._audit_sleep("workers.wake", group, zone, trigger, user, ip, False, [f"error:{e}"[:200]])
+                raise
+            w.update(state=sleeping.AWAKE, state_since=time.time())
+            w["last_wake"] = {"trigger": trigger, "at": now()}
+            w.pop("sleep_saved", None)
+            w = await self.store.put("workers", w["id"], w)
+        log.info("wake %s/%s (%s) to %s", group, zone, trigger, count)
+        if user is not None:
+            await self._audit_sleep("workers.wake", group, zone, trigger, user, ip, extra=[f"count:{count}"])
+        return {**w, "cloud": result}
+
+    async def wake(self, group, zone, trigger: str = "manual", user: str | None = None, ip: str = "-") -> dict:
+        w, started = await self.wake_begin(group, zone)
+        return await self.wake_finish(group, zone, trigger, user, ip) if started else w
+
+    async def touch_zone(self, group, zone) -> None:
+        """A deploy counts as activity (§24.1 idle): the zone is not put to sleep sooner than its setting after it."""
+        w = await self.worker_config(group, zone)
+        if int(w.get("sleep_after_secs") or 0) > 0:
+            w["state_since"] = time.time()
+            await self.store.put("workers", w["id"], w)
+
+    async def sleep_if_idle(self, group, zone, at: float | None = None) -> dict | None:
+        """The scheduler's check: put an awake zone to sleep when §24.1 calls it idle. None when it stays awake."""
+        w = await self.worker_config(group, zone)
+        secs = int(w.get("sleep_after_secs") or 0)
+        if secs <= 0 or sleeping.state_of(w) != sleeping.AWAKE:
+            return None
+        at = time.time() if at is None else at
+        if at - float(w.get("state_since") or 0) < secs:
+            return None
+        ok, _ = sleeping.idle(await self.cloud.workers(group, zone), secs, at, float(w.get("state_since") or 0))
+        return await self.sleep(group, zone, "idle", user="scheduler") if ok else None
+
     async def set_workers(
-        self, group, zone, p: Principal, count=None, size=None, allowed_sizes=None, max_count=None
+        self,
+        group,
+        zone,
+        p: Principal,
+        count=None,
+        size=None,
+        allowed_sizes=None,
+        max_count=None,
+        sleep_after_secs=None,
+        ip: str = "-",
     ) -> dict:
         w = await self.worker_config(group, zone)
+        if sleep_after_secs is not None:  # §24.1: the route admits super admins and the group's admins only
+            if sleep_after_secs != 0 and sleep_after_secs < sleeping.MIN_SECS:
+                raise invalid(f"sleep_after_secs must be 0 (never) or {sleeping.MIN_SECS} or more")
+            w["sleep_after_secs"] = sleep_after_secs
         if allowed_sizes is not None:
             if p.role != "super_admin":
                 raise forbidden("Only super admins set allowed sizes")
@@ -503,7 +633,14 @@ class Services:
                 raise invalid(f"Count must be between 1 and max_count ({w['max_count']})")
             w["count"] = count
         doc = await self.store.put("workers", w["id"], w)
-        doc["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
+        sizing = any(v is not None for v in (count, size, allowed_sizes, max_count))
+        if sleeping.state_of(w) != sleeping.AWAKE:
+            if count is None and size is None:  # nothing to run it on: the setting is applied when the zone wakes
+                return {**doc, "cloud": {"ok": True, "note": f"zone is {sleeping.state_of(w)}; applied when it wakes"}}
+            await self.wake(group, zone, "manual", user=p.name, ip=ip)  # a count change wakes the zone first
+            doc = await self.worker_config(group, zone)
+        if sizing or sleep_after_secs is None:
+            doc["cloud"] = await self.cloud.scale(group, zone, await self.zone_spec(group, zone))
         return doc
 
     async def refresh(self) -> dict:

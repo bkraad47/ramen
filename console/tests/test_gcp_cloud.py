@@ -73,6 +73,7 @@ def test_manifests_shape():
         "Deployment",
         "HTTPRoute",
         "HealthCheckPolicy",
+        "Service",  # §24.1 worker-direct
     ]
     assert docs[0]["metadata"]["labels"]["ramen.io/routes"] == "true"
     route = docs[6]

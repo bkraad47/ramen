@@ -382,6 +382,14 @@ pub fn hidden_from_runtime(name: &str) -> bool {
             // §23.5: the task store lives in these; tenant code has no business reading other callers' tasks
             | "RAMEN_REDIS_ITEM_URL"
             | "RAMEN_REDIS_SCOPE_URL"
+            // §24.3: collector credentials — the node's own headers, and the ones handed to connected agents
+            // (`RAMEN_OTEL_CLIENT` carries `headers`). The endpoint and the consent keys are no secret.
+            | "RAMEN_OTEL_HEADERS"
+            | "RAMEN_OTEL_CLIENT"
+            // §24.1: tenant code has no business with the console's internal API or the direct worker address
+            // (an activator never starts a runtime, but a worker pod may carry the same env)
+            | "RAMEN_CONSOLE_INTERNAL_URL"
+            | "RAMEN_ACTIVATOR_UPSTREAM"
     )
 }
 
@@ -450,6 +458,30 @@ mod tests {
             "AWS_REGION",
             "PATH",
             "HOME",
+        ] {
+            assert!(!hidden_from_runtime(kept), "{kept}");
+        }
+    }
+
+    /// §24 (1.0.0): the collector credential and the activator's internal addresses are the node's; what every
+    /// caller is told anyway, and what the runtime itself reads, stays.
+    #[test]
+    fn the_runtime_never_inherits_the_collector_credential_or_internal_addresses() {
+        for hidden in [
+            "RAMEN_OTEL_HEADERS",
+            "RAMEN_OTEL_CLIENT",
+            "RAMEN_CONSOLE_INTERNAL_URL",
+            "RAMEN_ACTIVATOR_UPSTREAM",
+        ] {
+            assert!(hidden_from_runtime(hidden), "{hidden}");
+        }
+        for kept in [
+            "RAMEN_DEPS_BAKED",
+            "RAMEN_OTEL_ENDPOINT",
+            "RAMEN_TELEMETRY_CONSENT",
+            "RAMEN_TELEMETRY_NOTICE",
+            "RAMEN_ACTIVATOR",
+            "RAMEN_WAKE_TIMEOUT_SECS",
         ] {
             assert!(!hidden_from_runtime(kept), "{kept}");
         }

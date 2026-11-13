@@ -42,7 +42,7 @@ from .security import (
 )
 from .services import Services
 from .storage import make_store
-from .web import api, api_admin, auth_routes, oauth_routes, pages
+from .web import api, api_admin, auth_routes, internal, oauth_routes, pages
 
 HERE = Path(__file__).parent
 
@@ -122,7 +122,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     redact_tokens_in_access_log()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     st.oauth_server = OAuthServer(st.services, st.accounts)
-    for router in (auth_routes.r, pages.r, api.r, api_admin.r, oauth_routes.r):
+    for router in (auth_routes.r, pages.r, api.r, api_admin.r, internal.r, oauth_routes.r):
         app.include_router(router)
 
     @app.exception_handler(OAuthError)

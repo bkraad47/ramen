@@ -64,6 +64,17 @@
 <td><div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/oauth/clients/{{ c.client_id }}" hx-confirm="Remove the client {{ c.name }}? Its refresh tokens stop working." hx-swap="none">Remove client</button></div></td></tr>
 {% else %}<tr><td colspan="5" class="muted">No OAuth clients registered</td></tr>{% endfor %}</table>
 <p class="muted">Clients discover the flow at <code>/.well-known/oauth-authorization-server</code>; a worker points them here from <code>/.well-known/oauth-protected-resource</code>.</p></div>
+<div class="card" id="telemetry"><h2 style="margin-top:0">Telemetry (OpenTelemetry)</h2><p class="muted">When on, every worker exports one span per MCP call and call/error counters, and the console one span per deploy, as OTLP/HTTP to the endpoint below — tool name, timing and outcome, never arguments, results or credentials. Workers pick the setting up on their next deploy. Connected agents are told the <b>client</b> endpoint and headers (in their OAuth token answer and in <code>server/discover</code>) so their own telemetry lands in the same place; they are never given the headers Ramen itself sends. Header values are write-only and stored encrypted. A group admin can then require each person's consent on the group page.</p>
+<table class="settings">
+<tr><th>Telemetry</th><td><span class="badge {{ 'ok' if otel.enabled else '' }}">{{ 'on' if otel.enabled else 'off' }}</span></td>
+<td><form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-vals='{"enabled": {{ 'false' if otel.enabled else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if otel.enabled else '' }}">Telemetry: {{ 'on → off' if otel.enabled else 'off → on' }}</button></form></td></tr>
+</table>
+<form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-swap="none">
+<label>Endpoint (OTLP/HTTP base URL)<input name="endpoint" value="{{ otel.endpoint }}" placeholder="http://jaeger.ramen-system:4318"></label>
+<label>Headers Ramen sends (JSON, {{ 'set: ' ~ otel.header_names|join(', ') if otel.headers_set else 'none set' }})<input name="headers" type="password" autocomplete="off" placeholder="{{ 'unchanged' if otel.headers_set else '{"Authorization": "Bearer …"}' }}"></label>
+<label>Client endpoint (empty = the endpoint above)<input name="client_endpoint" value="{{ otel.client_endpoint }}" placeholder="https://otel.example.com"></label>
+<label>Headers agents are told to send (JSON, {{ 'set: ' ~ otel.client_header_names|join(', ') if otel.client_headers_set else 'none set' }})<input name="client_headers" type="password" autocomplete="off" placeholder="{{ 'unchanged' if otel.client_headers_set else '{"x-team": "agents"}' }}"></label>
+<button class="act">Save telemetry</button></form></div>
 <div class="card"><h2 style="margin-top:0">Auto-rebalance scheduler</h2><p class="muted">Watches every group × zone for a skewed worker and rebalances it automatically, the same way the Rebalance button on a group page does. Each run is audited as user <code>scheduler</code>.</p>
 <table class="settings">
 <tr><th>Scheduler</th><td><span class="badge {{ 'ok' if scheduler.enabled else '' }}">{{ 'on' if scheduler.enabled else 'off' }}</span></td>

@@ -18,6 +18,8 @@ from .gcp_k8s import (
     PORT_NAME,
     Kube,
     _deployment,
+    direct_service,
+    ensure_direct,
     helm_available,
     networkpolicy,
     normalize_size,
@@ -180,6 +182,7 @@ def manifests(
         *deps,
         ingress(group, zone, alb_group, stable, canary),
         ingress(group, zone, alb_group, stable, canary, http=True),
+        direct_service(group, zone),  # §24.1: real workers of both tracks, for the activator of a sleeping zone
     ]
 
 
@@ -219,6 +222,7 @@ def helm_manifests(
         if d["kind"] == "Ingress":
             ann = d["metadata"].setdefault("annotations", {})
             ann[ACTION], ann[CONDITIONS] = weights(stable, canary), conditions(group, zone)
+    ensure_direct(docs, group, zone)
     names = {d["metadata"]["name"] for d in docs if d["kind"] == "Ingress"}
     for name, http in zip(INGRESSES, (False, True), strict=True):
         if name not in names:

@@ -33,6 +33,14 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_TASK_TTL_SECS",
     "RAMEN_MAX_TASKS",
     "RAMEN_MAX_SUBSCRIPTIONS",
+    // §24.3 (1.0.0): where the node exports, whether callers must consent, and what `server/discover` tells them.
+    // The activator keys (`RAMEN_ACTIVATOR*`, `RAMEN_CONSOLE_INTERNAL_URL`, `RAMEN_WAKE_TIMEOUT_SECS`) are the
+    // deployment's, never a group's.
+    "RAMEN_OTEL_ENDPOINT",
+    "RAMEN_OTEL_HEADERS",
+    "RAMEN_OTEL_CLIENT",
+    "RAMEN_TELEMETRY_CONSENT",
+    "RAMEN_TELEMETRY_NOTICE",
 ];
 
 /// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
@@ -140,6 +148,41 @@ pub struct Config {
     pub max_tasks: usize,
     /// §23.6: open `subscriptions/listen` streams per pod (`RAMEN_MAX_SUBSCRIPTIONS`, default 64), then 429.
     pub max_subscriptions: usize,
+    /// §24.1: this process is a zone's activator (`RAMEN_ACTIVATOR=1`): guards, wake, forward — never a runtime.
+    /// Startup-fixed.
+    pub activator: bool,
+    /// §24.1: the console's in-cluster base URL (`RAMEN_CONSOLE_INTERNAL_URL`) the activator posts the wake to.
+    pub console_internal_url: Option<String>,
+    /// §24.1: where the zone's real workers answer (`RAMEN_ACTIVATOR_UPSTREAM`, default `worker-direct:8080`;
+    /// `host:port` or `http://host:port`, h2c).
+    pub activator_upstream: String,
+    /// §24.1: how long a call waits for the zone to wake (`RAMEN_WAKE_TIMEOUT_SECS`, default 90).
+    pub wake_timeout_secs: u64,
+    /// §24.3: OTLP/HTTP base URL (`RAMEN_OTEL_ENDPOINT`); unset = nothing is exported.
+    pub otel_endpoint: Option<String>,
+    /// §24.3: headers sent to the collector (`RAMEN_OTEL_HEADERS`, a JSON object of strings). Secret.
+    pub otel_headers: Vec<(String, String)>,
+    /// §24.3: what `server/discover` hands a caller under `_meta["io.ramen/telemetry"]` (`RAMEN_OTEL_CLIENT`, a
+    /// JSON object written by the deploy); unset = no entry.
+    pub otel_client: Option<serde_json::Value>,
+    /// §24.3: `tools/call`, `prompts/get` and `resources/read` need the caller's consent (`RAMEN_TELEMETRY_CONSENT`).
+    pub telemetry_consent: bool,
+    /// §24.3: where the telemetry goes, as the consent prompt names it (`RAMEN_TELEMETRY_NOTICE`).
+    pub telemetry_notice: String,
+}
+
+/// `RAMEN_OTEL_HEADERS`: a JSON object of header name → string value.
+pub fn parse_otel_headers(text: &str) -> Result<Vec<(String, String)>, String> {
+    let bad = || "RAMEN_OTEL_HEADERS must be a JSON object of header → string".to_string();
+    let m: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(text).map_err(|_| bad())?; // the parse error could quote a header value: not echoed
+    if m.iter().any(|(k, v)| {
+        http::HeaderName::from_bytes(k.as_bytes()).is_err()
+            || http::HeaderValue::from_str(v).is_err()
+    }) {
+        return Err(bad());
+    }
+    Ok(m.into_iter().collect())
 }
 
 impl Config {
@@ -286,6 +329,33 @@ impl Config {
             task_ttl_secs: num("RAMEN_TASK_TTL_SECS", 3600)?.max(1),
             max_tasks: num("RAMEN_MAX_TASKS", 4)? as usize,
             max_subscriptions: num("RAMEN_MAX_SUBSCRIPTIONS", 64)? as usize,
+            activator: matches!(get("RAMEN_ACTIVATOR").as_deref(), Some("1" | "true")),
+            console_internal_url: get("RAMEN_CONSOLE_INTERNAL_URL")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            activator_upstream: get("RAMEN_ACTIVATOR_UPSTREAM")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "worker-direct:8080".into()),
+            wake_timeout_secs: num("RAMEN_WAKE_TIMEOUT_SECS", 90)?.max(1),
+            otel_endpoint: get("RAMEN_OTEL_ENDPOINT")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            otel_headers: get("RAMEN_OTEL_HEADERS")
+                .map_or(Ok(Vec::new()), |t| parse_otel_headers(&t))?,
+            otel_client: match get("RAMEN_OTEL_CLIENT") {
+                None => None,
+                Some(t) => Some(
+                    serde_json::from_str::<serde_json::Value>(&t)
+                        .ok()
+                        .filter(serde_json::Value::is_object)
+                        .ok_or("RAMEN_OTEL_CLIENT must be a JSON object")?,
+                ),
+            },
+            telemetry_consent: matches!(
+                get("RAMEN_TELEMETRY_CONSENT").as_deref(),
+                Some("1" | "true")
+            ),
+            telemetry_notice: get("RAMEN_TELEMETRY_NOTICE").unwrap_or_default(),
         })
     }
 }
@@ -640,5 +710,92 @@ mod tests {
                 .unwrap_err()
                 .contains("RAMEN_TRUST_PROXY_HOPS")
         );
+    }
+
+    /// §24 (1.0.0): activator, OpenTelemetry and consent keys.
+    #[test]
+    fn sleep_and_telemetry_keys_parse() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert!(!c.activator && c.console_internal_url.is_none() && c.otel_endpoint.is_none());
+        assert_eq!(
+            (c.activator_upstream.as_str(), c.wake_timeout_secs),
+            ("worker-direct:8080", 90)
+        );
+        assert!(c.otel_headers.is_empty() && c.otel_client.is_none() && !c.telemetry_consent);
+        let m: HashMap<_, _> = [
+            ("RAMEN_ACTIVATOR", "1"),
+            (
+                "RAMEN_CONSOLE_INTERNAL_URL",
+                "http://console.ramen-system:8000/",
+            ),
+            ("RAMEN_ACTIVATOR_UPSTREAM", "http://w:9/"),
+            ("RAMEN_WAKE_TIMEOUT_SECS", "0"),
+            ("RAMEN_OTEL_ENDPOINT", "http://jaeger:4318/"),
+            (
+                "RAMEN_OTEL_HEADERS",
+                r#"{"x-api-key": "abc", "authorization": "Bearer t"}"#,
+            ),
+            (
+                "RAMEN_OTEL_CLIENT",
+                r#"{"otlp_endpoint": "http://jaeger:4318", "headers": {}}"#,
+            ),
+            ("RAMEN_TELEMETRY_CONSENT", "1"),
+            ("RAMEN_TELEMETRY_NOTICE", "jaeger"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let c = Config::from_map(&m).unwrap();
+        assert!(c.activator && c.telemetry_consent);
+        assert_eq!(
+            c.console_internal_url.as_deref(),
+            Some("http://console.ramen-system:8000")
+        );
+        assert_eq!(
+            (c.activator_upstream.as_str(), c.wake_timeout_secs),
+            ("http://w:9", 1)
+        );
+        assert_eq!(c.otel_endpoint.as_deref(), Some("http://jaeger:4318"));
+        assert_eq!(
+            c.otel_headers,
+            vec![
+                ("authorization".to_string(), "Bearer t".to_string()),
+                ("x-api-key".to_string(), "abc".to_string())
+            ]
+        );
+        assert_eq!(
+            c.otel_client.unwrap()["otlp_endpoint"],
+            "http://jaeger:4318"
+        );
+        assert_eq!(c.telemetry_notice, "jaeger");
+        // a bad value is refused without being quoted back
+        for (k, v) in [
+            ("RAMEN_OTEL_HEADERS", r#"{"x": 1}"#),
+            ("RAMEN_OTEL_HEADERS", r#"{"bad name": "s3cr3t"}"#),
+            ("RAMEN_OTEL_HEADERS", "s3cr3t"),
+            ("RAMEN_OTEL_CLIENT", "[1]"),
+        ] {
+            let m: HashMap<_, _> = [(k.to_string(), v.to_string())].into();
+            let e = Config::from_map(&m).unwrap_err();
+            assert!(e.contains(k) && !e.contains("s3cr3t"), "{e}");
+        }
+        // a group's deploy file may carry the telemetry settings, never the activator's
+        for k in [
+            "RAMEN_OTEL_ENDPOINT",
+            "RAMEN_OTEL_HEADERS",
+            "RAMEN_OTEL_CLIENT",
+            "RAMEN_TELEMETRY_CONSENT",
+            "RAMEN_TELEMETRY_NOTICE",
+        ] {
+            assert!(DEPLOY_KEYS.contains(&k), "{k}");
+        }
+        for k in [
+            "RAMEN_ACTIVATOR",
+            "RAMEN_CONSOLE_INTERNAL_URL",
+            "RAMEN_ACTIVATOR_UPSTREAM",
+            "RAMEN_WAKE_TIMEOUT_SECS",
+        ] {
+            assert!(!DEPLOY_KEYS.contains(&k), "{k}");
+        }
     }
 }

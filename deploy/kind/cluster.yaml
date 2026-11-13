@@ -13,6 +13,7 @@ nodes:
       - { containerPort: 30083, hostPort: 18083, protocol: TCP }   # fake GCS (bucket inspection from the host)
       - { containerPort: 30084, hostPort: 18084, protocol: TCP }   # zone a, stable track only (autoscale load)
       - { containerPort: 30085, hostPort: 18085, protocol: TCP }   # zone b, stable track only (autoscale load)
+      - { containerPort: 30086, hostPort: 18086, protocol: TCP }   # Jaeger query API (§24.3 telemetry proofs)
   - role: worker
     labels: { topology.kubernetes.io/zone: kind-a }
   - role: worker

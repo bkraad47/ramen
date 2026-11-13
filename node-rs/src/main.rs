@@ -11,6 +11,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    ramen_node::log::set_activator(cfg.activator); // §24.1: every line of an activator says so
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", cfg.port))
         .await
         .expect("bind");
@@ -23,6 +24,10 @@ async fn main() {
 
 /// SIGINT stops at once; SIGTERM — what Kubernetes sends a pod — after the drain. Open streams then get their
 /// closing result (§23.6).
+///
+/// §24.1: an activator takes the same path on purpose. It sits behind the zone's `worker` Service, so when the
+/// console scales it to 0 after a wake the edge keeps routing to it for the same while as to a stopping worker;
+/// it goes on forwarding through the drain, and forwarded calls still in flight get the same `STOP_GRACE`.
 #[cfg(unix)]
 async fn stop_signal() {
     use tokio::signal::unix::{SignalKind, signal};

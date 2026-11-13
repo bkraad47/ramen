@@ -46,7 +46,8 @@ async def get_group(request: Request, group: str, p: Principal = Depends(viewer_
 
 @r.put("/groups/{group}")
 async def update_group(request: Request, group: str, body: m.GroupUpdate, p: Principal = Depends(admin_g)):
-    note(request, "group.update", group, [f"group:{group}"])
+    tags = [f"{k}:{v}" for k in ("build_image", "require_telemetry_consent") if (v := getattr(body, k)) is not None]
+    note(request, "group.update", group, [f"group:{group}", *tags])
     return respond(request, await svc(request).update_group(group, **body.model_dump()))
 
 
@@ -230,7 +231,7 @@ async def deploy(
     async def audit(action, target, ok, tags):
         await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)
 
-    bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit, body.breaking)
+    bg.add_task(dep.run_deploy, s, job, group, env, body.zone, body.canary, audit, body.breaking, p.name, ip)
     html = request.app.state.templates.get_template("partials/job.html").render(job=job, base=prefix(request))
     return respond(request, job, 202, hx_html=html)
 
@@ -276,11 +277,46 @@ async def set_workers(request: Request, group: str, zone: str, body: m.WorkersIn
     elif body.count is not None:
         old = [f"from:{before.get('count', 1)}"] if before else []
         note(request, "workers.count", f"{group}/{zone}", [*tags, *old, f"to:{body.count}"])
+    elif body.sleep_after_secs is not None:  # §24.1
+        old = [f"from:{before.get('sleep_after_secs', 0)}"] if before else []
+        note(request, "workers.sleep_after", f"{group}/{zone}", [*tags, *old, f"to:{body.sleep_after_secs}"])
     else:
         note(request, "workers.scale", f"{group}/{zone}", tags)
     _admin_or_refuse(p, group)
-    doc = await s.set_workers(group, zone, p, body.count, body.size, body.allowed_sizes, body.max_count)
-    return respond(request, doc)
+    from ..audit import client_ip
+    from ..util import public
+
+    doc = await s.set_workers(
+        group,
+        zone,
+        p,
+        body.count,
+        body.size,
+        body.allowed_sizes,
+        body.max_count,
+        body.sleep_after_secs,
+        client_ip(request),
+    )
+    return respond(request, public(doc))
+
+
+@r.post("/groups/{group}/zones/{zone}/sleep")
+async def sleep_zone(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
+    """§24.1: put the zone to sleep now (activator up, workers to 0). Same roles as the setting."""
+    from ..util import public
+
+    note(request, "workers.sleep", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}", "trigger:manual"])
+    _admin_or_refuse(p, group)
+    return respond(request, public(await svc(request).sleep(group, zone, "manual")))
+
+
+@r.post("/groups/{group}/zones/{zone}/wake")
+async def wake_zone(request: Request, group: str, zone: str, p: Principal = Depends(viewer_g)):
+    from ..util import public
+
+    note(request, "workers.wake", f"{group}/{zone}", [f"group:{group}", f"zone:{zone}", "trigger:manual"])
+    _admin_or_refuse(p, group)
+    return respond(request, public(await svc(request).wake(group, zone, "manual")))
 
 
 @r.post("/groups/{group}/zones/{zone}/rebalance")

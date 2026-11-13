@@ -15,6 +15,14 @@ static FILE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 #[cfg(test)]
 pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// §24.1: every line of an activator process says so. Set once by `main`; library code that runs as an activator
+/// adds the field itself, so tests that run both modes in one process do not mark each other's lines.
+static ACTIVATOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_activator(on: bool) {
+    ACTIVATOR.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn set_file(path: Option<PathBuf>) {
     if let Some(p) = &path
         && let Some(dir) = p.parent()
@@ -73,6 +81,9 @@ pub fn emit(level: &str, msg: &str, fields: Value) {
     m.insert("msg".into(), msg.into());
     if let Value::Object(f) = fields {
         m.extend(f);
+    }
+    if ACTIVATOR.load(std::sync::atomic::Ordering::Relaxed) {
+        m.insert("activator".into(), true.into());
     }
     let line = Value::Object(m).to_string();
     println!("{line}");

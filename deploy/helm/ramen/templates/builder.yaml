@@ -1,0 +1,53 @@
+{{- if include "ramen.builder.enabled" . }}
+# §24.2: the identity image builds run as. Its cloud identity (Terraform: GSA with artifactregistry.writer on the
+# `ramen` repository / IRSA role with ECR push on ramen/worker / managed identity with AcrPush) is the only thing
+# that can push; the console only creates the Job.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.builder.serviceAccount }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+  {{- if include "ramen.builder.identity" . }}
+  annotations:
+    {{- if eq .Values.provider "azure" }}
+    azure.workload.identity/client-id: {{ .Values.builder.clientId | quote }}
+    {{- with .Values.azure.tenantId }}
+    azure.workload.identity/tenant-id: {{ . | quote }}
+    {{- end }}
+    {{- else if eq .Values.provider "aws" }}
+    eks.amazonaws.com/role-arn: {{ .Values.builder.roleArn }}
+    {{- else }}
+    iam.gke.io/gcp-service-account: {{ .Values.builder.gsa }}
+    {{- end }}
+  {{- end }}
+{{- if .Values.rbac.create }}
+---
+# What the console needs to run a build and nothing more: the context ConfigMap, the Job, and the Job pod's log.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ramen-console-build
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ramen-console-build
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ramen-console-build }
+subjects: [{ kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }} }]
+{{- end }}
+{{- end }}

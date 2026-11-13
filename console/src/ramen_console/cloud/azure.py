@@ -18,9 +18,9 @@ from ..policy import permissions as perm
 from ..util import now
 from . import azure_api
 from .azure_api import BASELINE, BLOB_ROLES, MANAGED, SECRET_ROLE, AzureClients, Identities
-from .azure_k8s import WI_CLIENT_ID, AzureKube, azure_manifests, securitypolicy
+from .azure_k8s import WI_CLIENT_ID, WI_USE, AzureKube, azure_manifests, securitypolicy
 from .gcp import GcpCloud, detail_of
-from .gcp_k8s import ns_name
+from .gcp_k8s import ACTIVATOR, ns_name
 
 
 def _guard(fn):
@@ -41,6 +41,8 @@ def _open(cidrs: list[str]) -> bool:
 
 
 class AzureCloud(GcpCloud):
+    PROVIDER = "Azure"
+
     def __init__(
         self,
         subscription,
@@ -102,6 +104,15 @@ class AzureCloud(GcpCloud):
     abort_deploy = _guard(GcpCloud.abort_deploy.__wrapped__)
     attach_zone = _guard(GcpCloud.attach_zone.__wrapped__)
     scale = _guard(GcpCloud.scale.__wrapped__)
+    zone_runtime = _guard(GcpCloud.zone_runtime.__wrapped__)
+    sleep_zone = _guard(GcpCloud.sleep_zone.__wrapped__)
+    wake_zone = _guard(GcpCloud.wake_zone.__wrapped__)
+
+    def _build_extras(self, registry) -> dict:
+        """kaniko's bundled `acr-env` helper exchanges the federated token the workload-identity webhook injects (the
+        pod label asks for it; `ramen-builder`'s KSA names the identity) for an ACR token."""
+        host = registry.split("/")[0]
+        return {"docker_config": {"credHelpers": {host: "acr-env"}}, "pod_labels": {WI_USE: "true"}}
 
     def bucket_uri(self, group) -> str:
         return f"az://{self.account}/{self.container}/{group}"
@@ -286,7 +297,8 @@ class AzureCloud(GcpCloud):
         await asyncio.to_thread(
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
-        for dep in ("worker", "worker-canary"):  # env comes from the Secret at pod start: roll the workers
+        # env comes from the Secret at pod start: roll the workers (and a sleeping zone's activator, which enforces too)
+        for dep in ("worker", "worker-canary", ACTIVATOR):
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)

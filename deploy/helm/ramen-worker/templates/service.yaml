@@ -30,3 +30,17 @@ spec:
   selector: { app: worker, ramen.io/track: canary }
   ports: [{ name: grpc, port: {{ .Values.port }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }]
 {{- end }}
+---
+# §24.1: real worker pods only (both tracks). A sleeping zone's activator (Deployment/worker-activator, applied by the
+# console; labels app=worker + ramen.io/role=activator, so Service/worker above keeps selecting it for every edge)
+# forwards to this Service once the zone is awake. No edge object points here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-direct
+  namespace: {{ include "rw.ns" . }}
+  labels: {{- include "rw.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: { app: worker, ramen.io/role: worker }
+  ports: [{ name: grpc, port: {{ .Values.port }}, targetPort: grpc, appProtocol: kubernetes.io/h2c }]

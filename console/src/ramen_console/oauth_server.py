@@ -17,6 +17,7 @@ import secrets
 import time
 from urllib.parse import urlencode, urlparse, urlunparse
 
+from . import otel
 from .accounts import Accounts
 from .errors import ApiError, invalid, not_found
 from .rbac import Principal, can_connect, principal_from
@@ -226,6 +227,8 @@ class OAuthServer:
         if not can_connect(p, group):
             raise OAuthError("access_denied", f"you have no access to group {group}", 403)
         return {
+            # §24.3: the host named in the telemetry notice when this group requires consent, else None
+            "telemetry": await self.consent_host(group),
             "client": client,
             "redirect_uri": redirect,
             "group": group,
@@ -235,7 +238,25 @@ class OAuthServer:
             "code_challenge": q["code_challenge"],
         }
 
-    async def issue_code(self, p: Principal, a: dict) -> str:
+    async def consent_host(self, group: str) -> str | None:
+        g = await self.store.get("groups", group) or {}
+        return otel.consent_host(await otel.get_config(self.store), g)
+
+    async def _consented(self, rec: dict) -> bool:
+        """§24.3: a grant made without the telemetry acceptance cannot mint for a group that requires it — not at the
+        code exchange, and not at a refresh after the group turned consent on: the person goes through consent again.
+        Returns what the token's `tel` claim is."""
+        if rec.get("tel"):
+            return True
+        if await self.consent_host(rec["group"]) is not None:
+            raise OAuthError(
+                "invalid_grant",
+                f"group {rec['group']} requires telemetry consent; authorize the client again",
+                reason="consent_required",
+            )
+        return False
+
+    async def issue_code(self, p: Principal, a: dict, tel: bool = False) -> str:
         code = b64url(secrets.token_bytes(32))
         user = await self.store.get("users", p.id)
         await self.store.put(
@@ -252,6 +273,7 @@ class OAuthServer:
                 "zone": a["zone"],
                 "epoch": self.accounts.epoch_of(user or {}),
                 "exp": int(time.time()) + CODE_TTL,
+                **({"tel": True} if tel else {}),  # the person ticked the telemetry notice on the consent page
             },
         )
         return code
@@ -285,7 +307,8 @@ class OAuthServer:
         if not hmac.compare_digest(b64url(hashlib.sha256(verifier.encode()).digest()), rec["code_challenge"]):
             raise OAuthError("invalid_grant", "code_verifier does not match", reason="pkce_mismatch")
         user = await self._still_allowed(rec)
-        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=uid())
+        tel = await self._consented(rec)
+        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=uid(), tel=tel)
 
     async def _refresh(self, form: dict, issuer: str) -> dict:
         client = await self.client(form.get("client_id"))
@@ -308,7 +331,8 @@ class OAuthServer:
                 "invalid_grant", "refresh token is unknown, expired, or not for this client", reason="refresh_invalid"
             )
         user = await self._still_allowed(rec)
-        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=rec["family"])
+        tel = await self._consented(rec)
+        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=rec["family"], tel=tel)
 
     async def _still_allowed(self, rec: dict) -> dict:
         """M2: what was true at consent is re-checked at every mint — the user exists, can still log in, still has
@@ -324,7 +348,9 @@ class OAuthServer:
             )
         return user
 
-    async def _tokens(self, client: dict, user: dict, group: str, zone: str, issuer: str, family: str) -> dict:
+    async def _tokens(
+        self, client: dict, user: dict, group: str, zone: str, issuer: str, family: str, tel: bool = False
+    ) -> dict:
         scope = f"mcp:{group}:{zone}"
         iat = int(time.time())
         claims = {
@@ -343,6 +369,8 @@ class OAuthServer:
             "exp": iat + access_ttl(),
             "jti": uid(),
         }
+        if tel:  # §24.3: the node serves a consent-gated group to this caller without asking again
+            claims["tel"] = True
         access = mint_jwt(claims, await self.svc.session_secret(group))
         for r in await self.store.list("oauth_refresh", {"family": family}):
             if r["exp"] < iat:  # tombstones and dead chains of this grant are swept as it renews
@@ -361,15 +389,20 @@ class OAuthServer:
                 "used": False,
                 "exp": iat + refresh_ttl(),
                 "created": now(),
+                **({"tel": True} if tel else {}),
             },
         )
-        return {
+        out = {
             "access_token": access,
             "token_type": "Bearer",
             "expires_in": access_ttl(),
             "refresh_token": refresh,
             "scope": scope,
         }
+        # §24.3: where the connected agent should send its own telemetry (never Ramen's export headers)
+        if (telemetry := otel.client_info(await otel.get_config(self.store), group, zone)) is not None:
+            out["telemetry"] = telemetry
+        return out
 
 
 def token_key(session_secret: str) -> bytes:

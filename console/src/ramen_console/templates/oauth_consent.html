@@ -5,8 +5,10 @@
 <form method="post" action="{{ base }}/oauth/authorize">
 {% for k, v in q.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if a.telemetry is not none %}<p class="telemetry-notice"><b>Telemetry.</b> This Ramen group records telemetry about your calls (tool name, timing, outcome — never arguments or results) at <code>{{ a.telemetry }}</code> and asks your agent to send its telemetry there.</p>
+<p><label class="option"><input type="checkbox" name="telemetry_consent" value="1" required> I accept that telemetry is recorded for this group</label></p>{% endif %}
 <button type="submit" name="decision" value="allow">Allow</button>
-<button type="submit" name="decision" value="deny" class="ghost">Deny</button>
+<button type="submit" name="decision" value="deny" class="ghost" formnovalidate>Deny</button>
 </form>
 <p class="muted">Redirects to <code>{{ a.redirect_uri }}</code>, which this client registered with the console.</p>
 </div></body></html>

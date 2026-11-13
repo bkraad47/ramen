@@ -9,12 +9,15 @@
 //!
 //! §23 (1.0.0): `dispatch_call` is that one implementation for both eras — 2025-06-18 exactly as before, and
 //! 2026-07-28 (`modern.rs`) selected per message. `dispatch_body` is the same function behind its pre-1.0 signature.
+use crate::activator::Activator;
 use crate::auth;
 use crate::config::Config;
+use crate::consent;
 use crate::log::emit;
 use crate::mcp;
 use crate::metrics::Metrics;
 use crate::modern;
+use crate::otel::Otel;
 use crate::pb::admin_server::{Admin, AdminServer};
 use crate::pb::mcp_server::{Mcp, McpServer};
 use crate::pb::{JsonRpc, LoadResult, MetricsReply, MetricsRequest, ReloadRequest};
@@ -28,6 +31,7 @@ use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
 use tokio::sync::{RwLock, Semaphore, mpsc};
 use tonic::codegen::tokio_stream::Stream;
@@ -42,6 +46,12 @@ pub const MAX_MESSAGE_BYTES: usize = 4 << 20;
 /// Health service names: `""` (overall) and `MCP_SERVICE` follow the load state; `ADMIN_SERVICE` is always serving.
 pub const MCP_SERVICE: &str = "ramen.v1.Mcp";
 pub const ADMIN_SERVICE: &str = "ramen.v1.Admin";
+/// §24.1: what an activator adds to a call it forwards — the client address its own guard resolved, and the proof
+/// that it is this zone's activator saying so. Without a valid proof a worker ignores both, whoever sent them.
+pub const CLIENT_IP_HEADER: &str = "x-ramen-client-ip";
+pub const ACTIVATOR_HEADER: &str = "x-ramen-activator";
+/// §24.3: the `_meta` key of `server/discover` that tells a client where to send its own telemetry.
+pub const TELEMETRY_META: &str = "io.ramen/telemetry";
 
 pub type ConfigSource = Box<dyn Fn() -> Result<Config, String> + Send + Sync>;
 
@@ -72,6 +82,47 @@ pub struct App {
     pub tasks: Arc<Tasks>,
     /// §23.6: open `subscriptions/listen` streams.
     pub subs: Arc<Subs>,
+    /// §24.1: `Some` when this process is a zone's activator (`RAMEN_ACTIVATOR=1`); startup-fixed. No runtime is
+    /// ever started then: every call that passes the guards is forwarded to the real workers.
+    pub activator: Option<Arc<Activator>>,
+    /// §24.3: span and counter export; idle unless `RAMEN_OTEL_ENDPOINT` is set.
+    pub otel: Arc<Otel>,
+    /// §24.3: recorded telemetry consents, in the same Redis as the task store (else this pod's memory).
+    pub consent: tasks::Store,
+    /// §24.1: `activator_proof` for this group and zone; startup-fixed like `sessions`.
+    pub activator_proof: String,
+}
+
+/// §24.1: hex HMAC-SHA256 over `activator:<group>:<zone>` with a key derived from the session secret (label
+/// `activator`). Every pod of a zone holds that secret, nobody outside does — so it only works with the
+/// deploy-provided `RAMEN_SESSION_SECRET`, never with a per-pod generated one.
+pub fn activator_proof(sessions: &Sessions, group: &str, zone: &str) -> String {
+    let mac = ring::hmac::sign(
+        &sessions.derived_key("activator"),
+        format!("activator:{group}:{zone}").as_bytes(),
+    );
+    mac.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The address a call is judged as (CIDR, throttle keys, access log), and whether this zone's activator vouched
+/// for it. §24.1: with a valid proof it is the address the activator resolved; otherwise `auth::client_ip` as
+/// ever, and the two headers count for nothing.
+pub fn client_addr(
+    app: &App,
+    cfg: &Config,
+    peer: Option<SocketAddr>,
+    md: &MetadataMap,
+) -> (IpAddr, bool) {
+    use subtle::ConstantTimeEq;
+    let get = |k: &str| md.get(k).and_then(|v| v.to_str().ok());
+    let proved = get(ACTIVATOR_HEADER).is_some_and(|p| {
+        p.len() == app.activator_proof.len()
+            && bool::from(p.as_bytes().ct_eq(app.activator_proof.as_bytes()))
+    });
+    match get(CLIENT_IP_HEADER).and_then(|ip| ip.parse::<IpAddr>().ok()) {
+        Some(ip) if proved => (ip, true),
+        _ => (auth::client_ip(cfg, peer, md), false),
+    }
 }
 
 pub type Shared = Arc<App>;
@@ -82,9 +133,14 @@ pub async fn app(cfg: Config) -> Shared {
 
 pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
     let health = HealthReporter::new();
+    // §24.1: an activator is SERVING from the start — it is what keeps the zone's edge route healthy
+    let mcp_status = match cfg.activator {
+        true => ServingStatus::Serving,
+        false => ServingStatus::NotServing,
+    };
     for (name, st) in [
-        ("", ServingStatus::NotServing),
-        (MCP_SERVICE, ServingStatus::NotServing),
+        ("", mcp_status),
+        (MCP_SERVICE, mcp_status),
         (ADMIN_SERVICE, ServingStatus::Serving),
     ] {
         health.set_service_status(name, st).await;
@@ -98,13 +154,30 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
             json!({}),
         );
     }
+    if sessions.generated && cfg.activator {
+        emit(
+            "warn",
+            "RAMEN_SESSION_SECRET unset: the workers will not recognise this activator (client address, throttle); a sleeping zone needs the deploy-provided secret",
+            json!({"activator": true}),
+        );
+    }
+    let activator_proof = activator_proof(&sessions, &cfg.group, &cfg.zone);
+    let activator = match cfg.activator {
+        true => Some(
+            Activator::new(&cfg, activator_proof.clone())
+                .unwrap_or_else(|e| panic!("activator: {e}")),
+        ),
+        false => None,
+    };
     let token_key = sessions.derived_key("oauth");
     let mrtr_key = sessions.derived_key("mrtr");
     let throttle = crate::throttle::Throttle::connect(&cfg).await;
-    let store = match throttle.shared_store() {
+    let shared = || match throttle.shared_store() {
         Some(conn) => tasks::Store::Redis(conn),
         None => tasks::Store::memory(),
     };
+    let (store, consent) = (shared(), shared());
+    let otel = Otel::new(&cfg);
     Arc::new(App {
         sem: Semaphore::new(cfg.max_inflight),
         sem_max: cfg.max_inflight,
@@ -121,6 +194,10 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         mrtr_key,
         tasks: Tasks::new(store),
         subs: Subs::new(),
+        activator,
+        otel,
+        consent,
+        activator_proof,
     })
 }
 
@@ -144,6 +221,10 @@ impl App {
 
     /// Same JSON as the former `GET /metrics`.
     pub async fn metrics_json(&self) -> Value {
+        if let Some(act) = &self.activator {
+            // §24.1: nothing of a worker's to report
+            return act.metrics_json(self.metrics.last_call_at.load(Relaxed));
+        }
         let max = self.cfg.read().await.max_inflight;
         let loaded = self.sidecar.loaded().await;
         let packages = loaded.as_ref().map(|l| json!({"tools": len(&l.result, "tools"), "resources": len(&l.result, "resources"), "prompts": len(&l.result, "prompts"), "errors": len(&l.result, "errors")})).unwrap_or(Value::Null);
@@ -227,6 +308,19 @@ pub struct CallLog {
     pub protocol: Option<String>,
     /// §23.2: W3C trace context of a modern call, for this line only.
     pub trace: Option<Value>,
+    /// §24.3: the caller needs no telemetry consent prompt — a console token with `tel: true`, or the console's
+    /// own call (the worker admin key in `x-ramen-admin-key` next to the credential). Set by `guard`.
+    pub consented: bool,
+    /// The console's own call (valid worker admin key next to the credential): answered like any other, but it
+    /// does not move `last_call_at` — opening the group page must not keep a zone awake (§24.1).
+    pub console: bool,
+    /// §24.1: this zone's activator forwarded the call and already judged it (`ip` is the address it resolved; the
+    /// throttle was counted there).
+    pub via_activator: bool,
+    /// §24.3: W3C trace context from gRPC metadata (HTTP hands its headers to `dispatch_call` itself).
+    pub md_trace: Option<Value>,
+    /// §24.3: this call's span, when export is on. Set by `guard`, ended by `emit`.
+    pub span: Option<crate::otel::SpanCtx>,
     t0: Instant,
 }
 
@@ -240,6 +334,11 @@ impl CallLog {
             transport,
             protocol: None,
             trace: None,
+            consented: false,
+            console: false,
+            via_activator: false,
+            md_trace: None,
+            span: None,
             t0: Instant::now(),
         }
     }
@@ -259,6 +358,35 @@ impl CallLog {
         }
         if let Value::Object(m) = extra {
             line.as_object_mut().unwrap().extend(m);
+        }
+        if cfg.activator {
+            line["activator"] = json!(true); // §24.1
+        }
+        if self.via_activator {
+            line["via"] = json!("activator"); // §24.1
+        }
+        // §24.3: the span carries a fixed pick of this line's fields — never `request` / `response` (verbose)
+        if let (Some(span), Some(method)) = (&self.span, &self.method) {
+            let mut fields = vec![
+                ("mcp.method", method.clone()),
+                ("ramen.group", cfg.group.clone()),
+                ("ramen.zone", cfg.zone.clone()),
+                ("ramen.env", cfg.env.clone()),
+                ("ramen.transport", self.transport.to_string()),
+                ("ramen.status", status.to_string()),
+            ];
+            let optional = [
+                ("mcp.name", line["name"].as_str()),
+                ("mcp.protocol", self.protocol.as_deref()),
+                ("ramen.reason", line["reason"].as_str()),
+                ("ramen.key_id", self.key_id.as_deref()),
+            ];
+            for (k, v) in optional {
+                if let Some(v) = v {
+                    fields.push((k, v.to_string()));
+                }
+            }
+            span.end(method, line["name"].as_str(), status, fields);
         }
         emit(level, "mcp", line);
     }
@@ -347,7 +475,9 @@ pub fn guard(
     md: &MetadataMap,
     transport: &'static str,
 ) -> Result<(CallLog, Caller), Status> {
-    let mut log = CallLog::new(auth::client_ip(cfg, peer, md), transport);
+    let (ip, via_activator) = client_addr(app, cfg, peer, md);
+    let mut log = CallLog::new(ip, transport);
+    log.via_activator = via_activator;
     if !auth::ip_allowed(cfg, log.ip) {
         return Err(log.deny(cfg, Status::permission_denied("ip not allowed"), "cidr"));
     }
@@ -358,6 +488,12 @@ pub fn guard(
         }
     };
     log.key_id = Some(caller.id.clone());
+    log.console = auth::check_admin(cfg, md);
+    log.consented = log.console || caller.principal.as_ref().is_some_and(|p| p.tel);
+    if transport == "grpc" {
+        log.md_trace = modern::trace(Some(&md.clone().into_headers()), &Value::Null);
+    }
+    log.span = app.otel.begin();
     Ok((log, caller))
 }
 
@@ -385,6 +521,9 @@ pub struct Reply {
     pub modern: bool,
     /// §23.6: the frames of a `subscriptions/listen` stream, the ack already in it.
     pub listen: Option<mpsc::UnboundedReceiver<String>>,
+    /// §24.1: an activator let the call through; the transport forwards the request it holds and writes the log
+    /// line. Nothing was dispatched.
+    pub forward: bool,
 }
 
 impl Reply {
@@ -394,6 +533,7 @@ impl Reply {
             status: 200,
             modern: false,
             listen: None,
+            forward: false,
         }
     }
     fn modern(body: Option<Value>, status: u16) -> Self {
@@ -402,6 +542,7 @@ impl Reply {
             status,
             modern: true,
             listen: None,
+            forward: false,
         }
     }
 }
@@ -464,13 +605,19 @@ pub async fn dispatch_call(
     let params = rpc.get("params").cloned().unwrap_or(json!({}));
     log.method = Some(method.clone());
     log.name = mcp::target_name(&method, &params);
+    // §24.3: the span continues the caller's trace (`traceparent` header, else `_meta`), on either era
+    // (over gRPC: the metadata, else `_meta`)
+    let trace = modern::trace(ctx.http, &params).or_else(|| log.md_trace.clone());
+    if let (Some(span), Some(trace)) = (log.span.as_mut(), &trace) {
+        span.adopt(trace);
+    }
     // §23.1: era → modern checks 1–5, each answered with the request id, all before throttle and inflight
     let is_modern = modern::is_modern(ctx.http, &params);
     let no_caps = json!({});
     let mut caps = &no_caps;
     if is_modern {
         log.protocol = Some(modern::MODERN.into());
-        log.trace = modern::trace(ctx.http, &params);
+        log.trace = trace;
         caps = match modern::envelope(ctx.http, &params) {
             Ok(c) => c,
             Err(r) => return Ok(refuse(cfg, log, id, r)),
@@ -511,10 +658,12 @@ pub async fn dispatch_call(
             .and_then(Result::ok);
         log.protocol = Some(named.unwrap_or(modern::LEGACY[0]).to_string());
     }
-    if !app
-        .throttle
-        .allow(cfg, log.ip, log.key_id.as_deref(), log.name.as_deref())
-        .await
+    // §24.1: a call this zone's activator forwarded was counted there, once
+    if !log.via_activator
+        && !app
+            .throttle
+            .allow(cfg, log.ip, log.key_id.as_deref(), log.name.as_deref())
+            .await
     {
         app.metrics.record(false);
         return Err(log.deny(
@@ -522,6 +671,17 @@ pub async fn dispatch_call(
             Status::resource_exhausted("throttled: rate limit exceeded"),
             "throttled",
         ));
+    }
+    if app.activator.is_some() {
+        // §24.1: the call passed every guard a worker would apply before running it — that, and nothing less, is
+        // what wakes the zone. The transport forwards the request as it received it.
+        if !log.console {
+            app.metrics.touch();
+        }
+        return Ok(Reply {
+            forward: true,
+            ..Reply::legacy(None)
+        });
     }
     if is_modern && method == "subscriptions/listen" {
         return listen(app, cfg, log, &ctx, id, &params, caps).await;
@@ -562,21 +722,60 @@ pub async fn dispatch_call(
             "max_tasks",
         ));
     }
-    let env = mcp::Env {
-        sc: &app.sidecar,
-        modern: is_modern,
-        caps,
-        progress: progress_fn(&ctx, &method, &params),
-        host: Some(mcp::Host {
-            app,
-            cfg,
-            binding: ctx.binding,
-        }),
+    // §24.1: accepted — this is what keeps a zone awake (the console's own calls do not)
+    if !log.console {
+        app.metrics.touch();
+    }
+    // §24.3: the consent gate — after the access checks (a hidden or forbidden tool is answered as ever, nobody
+    // is asked to consent to a call they cannot make), before the runtime
+    let gate = if cfg.telemetry_consent
+        && consent::gated(&method)
+        && !log.consented
+        && !blocked
+        && access_denial.is_none()
+    {
+        consent::gate(app, cfg, ctx.binding, is_modern, caps, &method, &params).await
+    } else {
+        consent::Gate::Pass {
+            granted: false,
+            params: None,
+        }
     };
-    let out = mcp::dispatch_env(&env, &policy, &method, &params).await;
+    let (out, consent_granted, consent_reason) = match gate {
+        consent::Gate::Answer(answer, reason) => (answer.map(Some), false, Some(reason)),
+        consent::Gate::Pass {
+            granted,
+            params: stripped,
+        } => {
+            let env = mcp::Env {
+                sc: &app.sidecar,
+                modern: is_modern,
+                caps,
+                progress: progress_fn(&ctx, &method, &params),
+                host: Some(mcp::Host {
+                    app,
+                    cfg,
+                    binding: ctx.binding,
+                }),
+                span: log.span.as_ref(),
+            };
+            // without the consent round's answer and state when the request carried them
+            let call_params = stripped.as_ref().unwrap_or(&params);
+            let out = mcp::dispatch_env(&env, &policy, &method, call_params).await;
+            (out, granted, None)
+        }
+    };
     // §23.1: the modern envelope and error codes are put on here, so `mcp` raises one set of errors
     let out = match out {
-        Ok(Some(r)) if is_modern => Ok(Some(modern::decorate(&method, r, cfg.list_ttl_ms))),
+        Ok(Some(mut r)) if is_modern => {
+            // §24.3: where a connected agent may send its own telemetry
+            if method == "server/discover"
+                && let (Some(t), Some(o)) = (&cfg.otel_client, r.as_object_mut())
+            {
+                o.insert("_meta".into(), json!({TELEMETRY_META: t}));
+            }
+            Ok(Some(modern::decorate(&method, r, cfg.list_ttl_ms)))
+        }
         Err(e) if is_modern => Err(modern::map_error(&method, &params, e)),
         other => other,
     };
@@ -598,6 +797,26 @@ pub async fn dispatch_call(
     };
     if method == "tools/call" {
         extra["args"] = json!(args_digest(params.get("arguments"))); // C12
+    }
+    if consent_granted {
+        extra["consent"] = json!("granted"); // §24.3
+    }
+    // §24.3: a rail's refusal is named on the span
+    if let Some(span) = log.span.as_mut()
+        && let Some(g) = out
+            .as_ref()
+            .ok()
+            .and_then(|o| o.as_ref())
+            .and_then(|r| r.pointer("/_meta/ramen/guardrail"))
+    {
+        for (attr, field) in [
+            ("ramen.guardrail.stage", "stage"),
+            ("ramen.guardrail.engine", "engine"),
+        ] {
+            if let Some(v) = g.get(field).and_then(Value::as_str) {
+                span.attrs.push((attr, v.to_string()));
+            }
+        }
     }
     // §23.5: `tasks/*` lines name the tool and the task; the call that created one names the task too
     if is_modern {
@@ -624,6 +843,10 @@ pub async fn dispatch_call(
         extra["reason"] = json!("blocked_name");
         "denied"
     } else if let Some(reason) = access_denial {
+        extra["reason"] = json!(reason);
+        "denied"
+    } else if let Some(reason) = consent_reason {
+        // §24.3: `consent_required` / `consent_declined` (and `state_invalid` for an answer without our state)
         extra["reason"] = json!(reason);
         "denied"
     } else if let Some(reason) = out.as_ref().ok().and_then(|o| guardrail_reason(o.as_ref())) {
@@ -654,6 +877,7 @@ pub async fn dispatch_call(
         status: http_status,
         modern: is_modern,
         listen: None,
+        forward: false,
     })
 }
 
@@ -740,6 +964,7 @@ async fn listen(
         status: 200,
         modern: true,
         listen: Some(frames),
+        forward: false,
     })
 }
 
@@ -781,7 +1006,8 @@ impl Mcp for McpSvc {
         let app = &self.0;
         let cfg = app.cfg.read().await.clone();
         let (mut log, caller) = guard(app, &cfg, req.remote_addr(), req.metadata(), "grpc")?;
-        let body = req.into_inner().body;
+        let (md, _, msg) = req.into_parts();
+        let body = msg.body;
         // §23.1: no headers handed over — on gRPC the body alone selects the era, and there is no stream to carry
         // progress or a subscription
         let ctx = Ctx {
@@ -790,12 +1016,14 @@ impl Mcp for McpSvc {
             http: None,
             progress: None,
         };
-        Ok(
-            match dispatch_call(app, &cfg, &mut log, ctx, &body).await?.body {
-                Some(v) => reply(v),
-                None => Response::new(JsonRpc::default()),
-            },
-        )
+        let out = dispatch_call(app, &cfg, &mut log, ctx, &body).await?;
+        if let (true, Some(act)) = (out.forward, &app.activator) {
+            return act.grpc(&cfg, &log, &md, body).await; // §24.1
+        }
+        Ok(match out.body {
+            Some(v) => reply(v),
+            None => Response::new(JsonRpc::default()),
+        })
     }
 
     async fn session(
@@ -829,9 +1057,16 @@ impl Admin for AdminSvc {
     async fn reload(&self, req: Request<ReloadRequest>) -> Result<Response<LoadResult>, Status> {
         self.guard(&req).await?;
         let app = &self.0;
+        if app.activator.is_some() {
+            // §24.1: there is no runtime here to load anything into
+            return Err(Status::failed_precondition(
+                "this is the zone's activator: the workers are asleep",
+            ));
+        }
         match (app.config_source)() {
             Ok(fresh) => {
                 crate::log::set_file(fresh.log_file.clone());
+                app.otel.configure(&fresh); // §24.3: the collector may change with a deploy
                 app.sidecar.set_config(fresh.clone()).await;
                 *app.cfg.write().await = fresh;
             }
@@ -1396,5 +1631,55 @@ mod tests {
         );
         assert_eq!(guardrail_reason(Some(&json!({"isError": true}))), None);
         assert_eq!(guardrail_reason(None), None);
+    }
+
+    /// §24.1: the activator's word is taken only with the zone's proof; otherwise the headers are not there.
+    #[tokio::test]
+    async fn the_client_address_is_the_activators_only_with_the_zones_proof() {
+        let pairs = [
+            ("RAMEN_SESSION_SECRET", "s"),
+            ("RAMEN_GROUP", "demo"),
+            ("RAMEN_ZONE", "a"),
+        ];
+        let c = cfg(&pairs);
+        let a = app(c.clone()).await;
+        let proof = activator_proof(&Sessions::new(Some("s"), 60), "demo", "a");
+        assert_eq!(proof.len(), 64);
+        assert_eq!(a.activator_proof, proof);
+        let peer: Option<SocketAddr> = Some("10.0.0.7:5000".parse().unwrap());
+        let at = |pairs: &[(&'static str, &str)]| client_addr(&a, &c, peer, &h(pairs));
+        let (mine, client): (IpAddr, IpAddr) =
+            ("10.0.0.7".parse().unwrap(), "203.0.113.9".parse().unwrap());
+        assert_eq!(
+            at(&[
+                (CLIENT_IP_HEADER, "203.0.113.9"),
+                (ACTIVATOR_HEADER, &proof)
+            ]),
+            (client, true)
+        );
+        for other in [
+            Sessions::new(Some("another secret"), 60),
+            Sessions::new(None, 60), // a per-pod generated secret never matches
+        ] {
+            let p = activator_proof(&other, "demo", "a");
+            let got = at(&[(CLIENT_IP_HEADER, "203.0.113.9"), (ACTIVATOR_HEADER, &p)]);
+            assert_eq!(got, (mine, false));
+        }
+        let wrong_zone = activator_proof(&Sessions::new(Some("s"), 60), "demo", "b");
+        for pairs in [
+            vec![(CLIENT_IP_HEADER, "203.0.113.9")],
+            vec![(CLIENT_IP_HEADER, "203.0.113.9"), (ACTIVATOR_HEADER, "")],
+            vec![
+                (CLIENT_IP_HEADER, "203.0.113.9"),
+                (ACTIVATOR_HEADER, &wrong_zone[..]),
+            ],
+            vec![
+                (CLIENT_IP_HEADER, "not an address"),
+                (ACTIVATOR_HEADER, &proof[..]),
+            ],
+            vec![(ACTIVATOR_HEADER, &proof[..])],
+        ] {
+            assert_eq!(at(&pairs), (mine, false), "{pairs:?}");
+        }
     }
 }

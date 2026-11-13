@@ -10,6 +10,8 @@ pub struct Metrics {
     pub errors: AtomicU64,
     /// §23.1: dispatched calls per protocol version served.
     by_protocol: Mutex<BTreeMap<String, u64>>,
+    /// §24.1: epoch seconds of the last authenticated, accepted MCP call on either transport; 0 = never.
+    pub last_call_at: AtomicU64,
 }
 
 impl Metrics {
@@ -18,6 +20,12 @@ impl Metrics {
         if !ok {
             self.errors.fetch_add(1, Relaxed);
         }
+    }
+
+    /// §24.1: an MCP call got past every guard (credential, throttle, inflight). Health, reflection, `Admin/*` and
+    /// denied calls never get here, so they do not keep a zone awake.
+    pub fn touch(&self) {
+        self.last_call_at.store(crate::session::now(), Relaxed);
     }
 
     /// §23.1 `calls_by_protocol`. The key is always one of the versions the node serves, never client text.
@@ -52,6 +60,7 @@ impl Metrics {
         json!({"inflight": inflight, "max_inflight": max, "total": self.total.load(Relaxed), "errors": self.errors.load(Relaxed), "load": load,
                "sidecar_alive": sidecar_alive, "loaded_at": loaded_at, "packages": packages,
                "manifest_hash": manifest_hash, "guardrails": guardrails,
+               "last_call_at": self.last_call_at.load(Relaxed),
                "calls_by_protocol": *self.by_protocol.lock().unwrap_or_else(|e| e.into_inner())})
     }
 }
@@ -123,5 +132,18 @@ mod tests {
             m.snapshot(0, 1, true, None, Value::Null, "ab12", json!({}))["manifest_hash"],
             "ab12"
         );
+    }
+
+    /// §24.1 (1.0.0): what the console's idle check reads; 0 until the first accepted call.
+    #[test]
+    fn last_call_at_is_zero_until_a_call_is_accepted() {
+        let m = Metrics::default();
+        let snap = |m: &Metrics| m.snapshot(0, 1, false, None, Value::Null, "", json!({}));
+        assert_eq!(snap(&m)["last_call_at"], 0);
+        m.record(false); // a refused call is counted, but does not keep the zone awake
+        assert_eq!(snap(&m)["last_call_at"], 0);
+        m.touch();
+        let at = snap(&m)["last_call_at"].as_u64().unwrap();
+        assert!(at.abs_diff(crate::session::now()) <= 2, "{at}");
     }
 }

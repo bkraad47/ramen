@@ -58,7 +58,8 @@ Two more kind-only deviations, both deliberate and both visible in the files:
 | `fake-gcs.yaml` | the groups-bucket stand-in, bucket `ramen-kind-groups` |
 | `worker.Dockerfile` | release worker image + the two kind-only env defaults above |
 | `values.yaml` | console chart values (`gateway.enabled=false`, memory store, store secrets, fake GCS endpoint) |
-| `nodeports.yaml` | the console's host NodePort |
+| `nodeports.yaml` | the console's host NodePort, and Jaeger's query API on 18086 (§24.3; `otel.collector: jaeger` in `values.yaml`) |
+| build registry | not a file: `up.sh` runs `kind-registry` (a `registry` container on the `kind` docker network, host port 5001), teaches each node's containerd to pull from it over http, pushes the worker image there, and the chart (`builder.*`) creates `ServiceAccount/ramen-builder` and sets `RAMEN_BUILDER=1` + `RAMEN_BUILD_REGISTRY=kind-registry:5000/ramen` — images built on deploy (§24.2) run for real |
 | `zones.yaml` | namespaces `ramen-demo-a`/`ramen-demo-b`, their pre-annotated `worker` ServiceAccounts and their NodePorts |
 | `netpol-host.yaml` | the kind stand-in for the Google front-end CIDRs (templated by `up.sh`) |
 | `up.sh` / `test.sh` / `down.sh` | `make kind-up` / `kind-test` / `kind-down` |

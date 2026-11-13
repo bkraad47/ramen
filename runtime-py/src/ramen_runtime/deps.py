@@ -1,6 +1,7 @@
-"""pip install mcp/requirements.txt with the current interpreter; skipped when unchanged."""
+"""pip install mcp/requirements.txt with the current interpreter; skipped when unchanged or baked into the image."""
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,11 @@ def install(bucket: Path) -> dict:
     pkgs = [line for line in lines if line and not line.startswith("#")]
     if not pkgs:
         return {"installed": False, "reason": "no requirements"}
+    # §24.2: a group image built on deploy carries `RAMEN_DEPS_BAKED` = sha256 of the exact file it installed
+    baked = os.environ.get("RAMEN_DEPS_BAKED", "").strip().lower()
+    if baked and baked == hashlib.sha256(req.read_bytes()).hexdigest():
+        log("info", "deps baked", requirements=str(req), packages=len(pkgs))
+        return {"installed": False, "reason": "baked"}
     digest = hashlib.sha256("\n".join(pkgs).encode()).hexdigest()
     marker = req.with_name(".ramen_requirements.sha256")
     if marker.is_file() and marker.read_text().strip() == digest:

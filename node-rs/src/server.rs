@@ -34,6 +34,13 @@ pub async fn run(
         "ramen-node start",
         json!({"version": env!("CARGO_PKG_VERSION"), "addr": listener.local_addr().ok(), "bucket": cfg.bucket, "group": cfg.group, "zone": cfg.zone, "keys": cfg.mcp_keys.len(), "tls": cfg.tls.is_some()}),
     );
+    if cfg.activator {
+        emit(
+            "info",
+            "activator mode: no runtime; calls wake the zone and are forwarded",
+            json!({"activator": true, "upstream": cfg.activator_upstream, "wake_timeout_secs": cfg.wake_timeout_secs}),
+        );
+    }
     {
         // v0.5.5: `FILE` (log.rs) is process-global; cargo test runs tests on parallel threads, so this
         // ordinary startup side effect can redirect it mid-way through an unrelated test that briefly needs
@@ -47,19 +54,22 @@ pub async fn run(
         crate::log::set_file(cfg.log_file.clone());
     }
     let app = grpc::app(cfg.clone()).await;
-    app.sidecar.start_reaper();
-    // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.
-    if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
-        if let Err(e) = app.load().await {
-            emit("warn", "initial load failed", json!({"error": e.message}));
-            retry_initial_load(app.clone(), cfg.load_retry_secs);
+    // §24.1: an activator never starts a runtime — no reaper, no load (and `Admin/Reload` is refused)
+    if app.activator.is_none() {
+        app.sidecar.start_reaper();
+        // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.
+        if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
+            if let Err(e) = app.load().await {
+                emit("warn", "initial load failed", json!({"error": e.message}));
+                retry_initial_load(app.clone(), cfg.load_retry_secs);
+            }
+        } else {
+            emit(
+                "warn",
+                "bucket has no mcp/ yet; waiting for Admin/Reload",
+                json!({"bucket": cfg.bucket}),
+            );
         }
-    } else {
-        emit(
-            "warn",
-            "bucket has no mcp/ yet; waiting for Admin/Reload",
-            json!({"bucket": cfg.bucket}),
-        );
     }
     // §16.1: the HTTP handler joins the gRPC services on the same router; HTTP/1.1 must be accepted because
     // Streamable HTTP clients speak it (gRPC stays h2/h2c).
@@ -112,6 +122,10 @@ pub async fn run(
         emit("error", "serve failed", json!({"error": e.to_string()}));
     }
     app.sidecar.kill("shutdown").await;
+    // §24.3: what the last calls produced still goes out — after the listener stopped, and for a second at most
+    if app.otel.enabled() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), app.otel.flush()).await;
+    }
     app
 }
 
@@ -308,5 +322,44 @@ mod tests {
         );
         let app = run(c, listener, async {}).await;
         assert!(!app.sidecar.alive().await);
+    }
+
+    /// §24.1: an activator is SERVING from the start, with a bucket that would make a worker load — and never
+    /// starts a runtime, at startup or on shutdown.
+    #[tokio::test]
+    async fn an_activator_serves_health_at_once_and_starts_no_runtime() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let c = cfg(&[
+            ("RAMEN_ACTIVATOR", "1"),
+            ("RAMEN_ACTIVATOR_UPSTREAM", "127.0.0.1:1"),
+            ("RAMEN_BUCKET_URI", "gs://b/g"),
+            ("RAMEN_PYTHON", "/nonexistent/python"),
+        ]);
+        let server = tokio::spawn(run(c, listener, async move {
+            let _ = rx.await;
+        }));
+        let ch = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let st = tonic_health::pb::health_client::HealthClient::new(ch)
+            .check(tonic_health::pb::HealthCheckRequest {
+                service: String::new(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .status;
+        assert_eq!(
+            st,
+            tonic_health::pb::health_check_response::ServingStatus::Serving as i32
+        );
+        tx.send(()).unwrap();
+        let app = server.await.unwrap();
+        assert!(app.activator.is_some());
+        assert!(!app.sidecar.alive().await && app.sidecar.loaded().await.is_none());
     }
 }

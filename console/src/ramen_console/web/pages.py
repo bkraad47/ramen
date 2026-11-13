@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, compat, drift, github_app, oauth_server, regions, toolaccess
+from .. import alerts, baseuri, compat, drift, github_app, imagebuild, oauth_server, otel, regions, toolaccess
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -117,6 +117,9 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         workers=workers,
         mcp_keys=await s.secrets(group, kind="mcp_key"),
         images=await s.images(group),
+        builds=await s.builds_images(g),  # §24.2
+        builder=await imagebuild.builder_available(s.cloud),
+        otel=otel.public_config(await otel.get_config(s.store)),  # §24.3
         jobs=request.app.state.jobs.recent(f"{group}/"),
         can_admin=can(p, "group_admin", group),
         permissions=perm.table(),
@@ -314,4 +317,5 @@ async def config(request: Request, p: Principal = Depends(super_)):
         regions_note=regions.NOTE,
         oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
         drift={"warn_pct": await drift.threshold(store)},
+        otel=otel.public_config(await otel.get_config(store)),
     )

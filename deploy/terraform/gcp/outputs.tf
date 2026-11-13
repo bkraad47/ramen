@@ -7,3 +7,4 @@ output "artifact_repo" { value = "${var.region}-docker.pkg.dev/${var.project}/${
 output "console_gsa" { value = google_service_account.console.email }
 output "groups_bucket" { value = google_storage_bucket.groups.name }
 output "project" { value = var.project }
+output "builder_gsa" { value = google_service_account.builder.email } # helm: --set builder.gsa=<this> (§24.2)

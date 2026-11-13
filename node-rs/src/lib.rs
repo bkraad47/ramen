@@ -1,11 +1,15 @@
+pub mod activator;
 pub mod auth;
 pub mod config;
+pub mod consent;
 pub mod grpc;
 pub mod http;
 pub mod log;
 pub mod mcp;
 pub mod metrics;
 pub mod modern;
+pub mod netc;
+pub mod otel;
 pub mod server;
 pub mod session;
 pub mod sidecar;

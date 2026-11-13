@@ -220,14 +220,13 @@ class _AzureCore:
         return getattr(self.base, name)
 
     def read_namespaced_pod_log(self, name, namespace, container=None, tail_lines=None, timestamps=False):
-        lines = self.s.pod_logs.get((namespace, name), [])
+        lines = self.s.pod_logs.get((namespace, name, container)) or self.s.pod_logs.get((namespace, name), [])
         return "\n".join(lines[-tail_lines:] if tail_lines else lines)
 
 
 class FakeAzureK8s(FakeK8s):
     def __init__(self):
         super().__init__()
-        self.pod_logs: dict[tuple, list[str]] = {}
 
     @property
     def core(self):

@@ -240,20 +240,30 @@ fn with_headers(mut resp: Response, version: &str, session: Option<&str>) -> Res
 }
 
 /// A log record for a request refused before the credential was read, so the denial is still logged.
-fn log_for(cfg: &Config, peer: Option<SocketAddr>, md: &MetadataMap) -> grpc::CallLog {
-    grpc::CallLog::new(crate::auth::client_ip(cfg, peer, md), "http")
+fn log_for(
+    app: &Shared,
+    cfg: &Config,
+    peer: Option<SocketAddr>,
+    md: &MetadataMap,
+) -> grpc::CallLog {
+    // §24.1: the same address `grpc::guard` judges — the activator's word when this zone's activator forwarded it
+    let (ip, via_activator) = grpc::client_addr(app, cfg, peer, md);
+    let mut log = grpc::CallLog::new(ip, "http");
+    log.via_activator = via_activator;
+    log
 }
 
 /// Address first, then Origin (HTTP only), then the credential — the order every call goes through. A browser
 /// from a foreign origin is refused even with a valid key (DNS rebinding), and before the credential is looked
 /// at, so a refused page learns nothing about whether its key was any good.
 fn pre_guard(
+    app: &Shared,
     cfg: &Config,
     peer: Option<SocketAddr>,
     md: &MetadataMap,
     headers: &HeaderMap,
 ) -> Option<Response> {
-    let log = log_for(cfg, peer, md);
+    let log = log_for(app, cfg, peer, md);
     if !crate::auth::ip_allowed(cfg, log.ip) {
         return Some(denied(
             &log.deny(cfg, Status::permission_denied("ip not allowed"), "cidr"),
@@ -333,7 +343,7 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
         )
             .into_response();
     }
-    if let Some(resp) = pre_guard(&cfg, peer, &md, &headers) {
+    if let Some(resp) = pre_guard(&app, &cfg, peer, &md, &headers) {
         return resp;
     }
     let (mut log, caller) = match grpc::guard(&app, &cfg, peer, &md, "http") {
@@ -391,6 +401,23 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
             is_init: method == Some("initialize"),
         })
     };
+    if let Some(act) = app.activator.clone() {
+        // §24.1: the same checks, then the request goes to the real workers exactly as it came — their answer
+        // (JSON, SSE or a `subscriptions/listen` stream, with its own headers) is passed through as it arrives
+        let ctx = grpc::Ctx {
+            kind: &caller.kind,
+            binding: &caller.binding,
+            http: Some(&headers),
+            progress: None,
+        };
+        return match grpc::dispatch_call(&app, &cfg, &mut log, ctx, &body).await {
+            Ok(r) if r.forward => {
+                act.http(&cfg, &log, parts.method, &parts.uri, &headers, body)
+                    .await
+            }
+            out => finish(&app, &cfg, &headers, legacy.as_ref(), out, false).await,
+        };
+    }
     // §23.4: progress is streamed only to a request that named a token and can take a stream (either era)
     let streams = accepts_sse(&headers)
         && matches!(method, Some("tools/call" | "prompts/get"))
@@ -580,7 +607,7 @@ async fn delete_mcp(State(app): State<Shared>, req: Request) -> Response {
     let cfg = app.cfg.read().await.clone();
     let peer = peer_of(&req);
     let md = MetadataMap::from_headers(req.headers().clone());
-    if let Some(resp) = pre_guard(&cfg, peer, &md, req.headers()) {
+    if let Some(resp) = pre_guard(&app, &cfg, peer, &md, req.headers()) {
         return resp;
     }
     let (log, caller) = match grpc::guard(&app, &cfg, peer, &md, "http") {

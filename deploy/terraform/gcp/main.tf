@@ -137,6 +137,28 @@ resource "google_service_account_iam_member" "console_wi" {
   depends_on         = [google_container_cluster.ramen] # the WI pool exists only once the cluster does
 }
 
+# §24.2: the identity worker-image builds run as (Job pods of KSA ramen-system/ramen-builder, started by the console).
+# It can write the `ramen` repository and nothing else; the console's own GSA gets no registry role.
+resource "google_service_account" "builder" {
+  account_id   = "ramen-builder"
+  display_name = "Ramen worker image builder"
+  depends_on   = [google_project_service.apis]
+}
+
+resource "google_artifact_registry_repository_iam_member" "builder" {
+  repository = google_artifact_registry_repository.ramen.name
+  location   = google_artifact_registry_repository.ramen.location
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.builder.email}"
+}
+
+resource "google_service_account_iam_member" "builder_wi" {
+  service_account_id = google_service_account.builder.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project}.svc.id.goog[ramen-system/ramen-builder]"
+  depends_on         = [google_container_cluster.ramen] # the WI pool exists only once the cluster does
+}
+
 # Google-managed TLS for the Gateway (D17 supersession, §gateway.yaml `networking.gke.io/certmap`): a
 # publicly-trusted cert for local.public_hostname, so an MCP bridge (or any client) trusts it with the
 # system CA store — no kubectl secret pull, no --tls custom-CA flag. Validated by the LB it's attached to

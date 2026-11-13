@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, rbac, regions, roles, scheduler
+from .. import alerts, baseuri, drift, github_app, oauth_server, otel, rbac, regions, roles, scheduler
 from .. import mail as mail_mod
 from ..audit import note
 from ..auth import providers
@@ -602,6 +602,20 @@ async def set_scheduler_config(request: Request, body: m.SchedulerConfig, p: Pri
     """N1: super-admin on/off + check-interval toggle for the auto-rebalance scheduler."""
     doc = await scheduler.set_config(svc(request).store, **body.model_dump())
     note(request, "config.scheduler", "scheduler", [f"{k}:{v}" for k, v in doc.items()])
+    return respond(request, doc)
+
+
+@r.get("/config/otel")
+async def get_otel_config(request: Request, p: Principal = Depends(super_)):
+    return otel.public_config(await otel.get_config(svc(request).store))
+
+
+@r.put("/config/otel")
+async def set_otel_config(request: Request, body: m.OtelConfig, p: Principal = Depends(super_)):
+    """§24.3: where Ramen exports telemetry and what connected agents are told. Header values are write-only."""
+    note(request, "config.otel", "otel", [f"enabled:{body.enabled}"] if body.enabled is not None else [])
+    doc = otel.public_config(await otel.set_config(svc(request).store, **body.model_dump()))
+    note(request, "config.otel", "otel", [f"enabled:{doc['enabled']}", f"endpoint:{doc['endpoint'] or '-'}"])
     return respond(request, doc)
 
 

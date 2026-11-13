@@ -8,6 +8,7 @@ output "storage_account" { value = azurerm_storage_account.ramen.name }
 output "key_vault" { value = azurerm_key_vault.ramen.name }
 output "oidc_issuer" { value = azurerm_kubernetes_cluster.ramen.oidc_issuer_url }
 output "console_client_id" { value = azurerm_user_assigned_identity.console.client_id }
+output "builder_client_id" { value = azurerm_user_assigned_identity.builder.client_id } # helm: builder.clientId (§24.2)
 output "public_ip" { value = azurerm_public_ip.edge.ip_address }
 output "public_ip_name" { value = azurerm_public_ip.edge.name }
 output "public_hostname" { value = local.public_hostname }
@@ -25,5 +26,6 @@ output "helm_set" {
     "--set azure.oidcIssuer=${azurerm_kubernetes_cluster.ramen.oidc_issuer_url},azure.publicHostname=${local.public_hostname}",
     "--set-string azure.tenantId=${data.azurerm_client_config.me.tenant_id}",
     "--set azure.zonal=${length(var.node_zones) > 0}",
+    "--set builder.clientId=${azurerm_user_assigned_identity.builder.client_id}",
   ])
 }

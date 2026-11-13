@@ -317,7 +317,8 @@ def test_a_garbage_or_expired_token_gets_the_rfc_9728_challenge(people):
             assert (
                 url.endswith("/.well-known/oauth-protected-resource") or "/.well-known/oauth-protected-resource" in url
             )
-            meta = httpx.get(url, verify=E.tls_verify(), timeout=30)
+            # the metadata is the zone's: like every call to a shared edge it carries the routing headers
+            meta = httpx.get(url, headers=dict(E.routing_metadata()), verify=E.tls_verify(), timeout=30)
             assert meta.status_code == 200, f"{url}: {meta.status_code}"
             doc = meta.json()
             assert doc.get("authorization_servers") and doc.get("resource"), doc

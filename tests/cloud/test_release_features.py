@@ -578,13 +578,26 @@ def test_the_zone_sleeps_on_idle_and_a_call_through_the_load_balancer_wakes_it(a
         woke, t0 = time.time(), time.monotonic()
         with edge_client(key, timeout=150) as h:
             m = Modern(h, ALL_INPUT)
-            reply = m.call_raw(CALC, {"var1": 9, "var2": 9, "func": "add"}, timeout=150)
-            took = time.monotonic() - t0
+            # The call is held up to RAMEN_WAKE_TIMEOUT_SECS (25 s, under every edge's own timeout). A zone that
+            # takes longer to start — a new node on GKE Autopilot — answers 503 with Retry-After while the wake goes
+            # on, and the retry is answered. A 502/504 would be the load balancer cutting a held call: never.
+            retries = 0
+            while True:
+                reply = m.call_raw(CALC, {"var1": 9, "var2": 9, "func": "add"}, timeout=150)
+                took = time.monotonic() - t0
+                if reply.status != 503 or took > 300:
+                    break
+                assert reply.headers.get("retry-after") == "10", reply.headers
+                assert "waking" in str(reply.message), reply.message
+                retries += 1
+                time.sleep(10)
             assert reply.status == 200 and reply.result, (
-                f"the waking call was not answered: HTTP {reply.status} after {took:.0f}s {reply.message} — a 502/504 "
-                "here is the load balancer's own timeout cutting a held call"
+                f"the waking call was not answered: HTTP {reply.status} after {took:.0f}s and {retries} retries "
+                f"{reply.message}"
             )
-            assert took <= 95, f"answered within RAMEN_WAKE_TIMEOUT_SECS: {took:.0f}s"
+            print(
+                f"wake through the edge: answered after {took:.0f}s, {retries} 503 retr{'y' if retries == 1 else 'ies'}"
+            )
             assert float(text_of(consenting(m, CALC, {"var1": 9, "var2": 9, "func": "add"}))) == 18
         poll(lambda: zone_state(admin) == "awake", timeout=300, every=5, what="the zone awake")
         assert audit_rows(admin, "workers.wake", "call", woke), "workers.wake with trigger:call in the audit log"

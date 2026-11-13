@@ -860,6 +860,35 @@ async fn it_forwards_while_the_workers_are_up_and_wakes_them_again_when_they_lef
     assert!(grpc_call(a.addr, &md, list).await.unwrap()["result"]["tools"].is_array());
 }
 
+/// An activator pod can outlive a wake (scaled to 0 and straight back to 1 when the zone is put to sleep again):
+/// it must not go on believing the wake it asked for earlier, even while draining workers still answer.
+#[tokio::test]
+async fn an_activator_that_outlives_a_wake_asks_again() {
+    let (console_addr, console, _) = recorder(200).await;
+    let w = worker(&[]).await;
+    let a = serve(
+        config(&[
+            ("RAMEN_ACTIVATOR", "1"),
+            ("RAMEN_ACTIVATOR_UPSTREAM", &format!("http://{}", w.addr)),
+            (
+                "RAMEN_CONSOLE_INTERNAL_URL",
+                &format!("http://{console_addr}"),
+            ),
+        ]),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    )
+    .await;
+    let call = || legacy(a.addr, MCP_KEY, "tools/list", json!({}));
+    assert_eq!(call().await.status, 200);
+    assert_eq!(call().await.status, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(console.lock().unwrap().len(), 1, "one wake for a burst");
+    tokio::time::sleep(Duration::from_millis(5200)).await;
+    assert_eq!(call().await.status, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(console.lock().unwrap().len(), 2, "a later call asks again");
+}
+
 /// A forwarded call is judged once, as the original caller: the worker takes the client address from the
 /// activator (proved with the zone's session secret) for its CIDR check and its log, and from nobody else.
 #[tokio::test]

@@ -42,6 +42,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const IDLE: u8 = 0;
 const POSTING: u8 = 1;
 const POSTED: u8 = 2;
+/// A taken wake request is believed this long; after it an accepted call asks again (the console's wake is
+/// idempotent). An activator pod can outlive a wake — the console scales it to 0 and, when the zone is put back to
+/// sleep at once, to 1 again before the pod was removed — and must not go on believing the last wake (kind, 1.0.0).
+const REPOST: Duration = Duration::from_secs(5);
 
 pub struct Activator {
     group: String,
@@ -60,6 +64,8 @@ pub struct Activator {
     /// Counts SERVING observations by the poller; waiting calls watch it change.
     up: watch::Sender<u64>,
     up_at: Mutex<Option<Instant>>,
+    /// When the console last took a wake request (`REPOST`).
+    posted_at: Mutex<Option<Instant>>,
     /// Wake requests the console accepted.
     pub woken: AtomicU64,
     /// The health poll period while waking, in ms (500; tests shorten it).
@@ -136,6 +142,7 @@ impl Activator {
             polling: AtomicBool::new(false),
             up: watch::channel(0).0,
             up_at: Mutex::new(None),
+            posted_at: Mutex::new(None),
             woken: AtomicU64::new(0),
             poll_ms: AtomicU64::new(500),
         }))
@@ -180,10 +187,21 @@ impl Activator {
     /// Ask the console to wake the zone, unless a request is under way or was accepted for this wake. Never waits:
     /// the console may answer only when the workers are Ready, and the callers poll for that themselves.
     fn request_wake(self: &Arc<Self>) {
+        let stale = self
+            .posted_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none_or(|at| at.elapsed() >= REPOST);
+        let from = if stale { POSTED } else { IDLE };
         if self
             .wake
             .compare_exchange(IDLE, POSTING, Relaxed, Relaxed)
             .is_err()
+            && (from == IDLE
+                || self
+                    .wake
+                    .compare_exchange(POSTED, POSTING, Relaxed, Relaxed)
+                    .is_err())
         {
             return;
         }
@@ -210,6 +228,7 @@ impl Activator {
                 Ok((status, _)) if (200..300).contains(&status) => {
                     me.woken.fetch_add(1, Relaxed);
                     // IDLE again if the workers came up meanwhile (`mark_up`); otherwise this wake is asked for
+                    *me.posted_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
                     let _ = me.wake.compare_exchange(POSTING, POSTED, Relaxed, Relaxed);
                     emit("info", "wake requested", fields(json!({"status": status})));
                 }

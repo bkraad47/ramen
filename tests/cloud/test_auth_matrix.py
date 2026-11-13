@@ -339,6 +339,13 @@ def test_a_token_for_another_zone_is_refused(people):
             assert h.post(PING).status_code == 401
 
 
+def edge_health(n) -> str:
+    try:
+        return n.health()
+    except grpc.RpcError as e:
+        return e.code().name
+
+
 # --- the address ------------------------------------------------------------------------------------------------------
 def test_the_ip_allow_list_refuses_this_address(console_url):
     with path("IP allow-list: a caller outside it is refused before its credential is read"):
@@ -347,7 +354,11 @@ def test_the_ip_allow_list_refuses_this_address(console_url):
         key = E.env("RAMEN_MCP_KEY")
         with grpc_node(key) as n:
             assert settled(lambda: n.status(PING)) == S.PERMISSION_DENIED
-            assert n.health() == "SERVING", "health stays reachable"
+            # the worker itself keeps health open to everyone; an edge firewall (Envoy's policy on AKS) closes the
+            # whole route to an address outside the list, health included — either is a refusal of this caller
+            assert edge_health(n) in ("SERVING", "PERMISSION_DENIED"), (
+                "health: open at the worker, or closed by the edge"
+            )
         with http_node(key) as h:
             assert h.post(PING).status_code == 403
         with http_node(None) as h:

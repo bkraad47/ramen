@@ -19,6 +19,7 @@ from ramen_tests import env as E
 from ramen_tests.console import Console
 from ramen_tests.localconsole import REDIRECT, pkce
 from ramen_tests.mcp_client import HttpNode, JsonRpcError, Node, bridge_command, bridge_session, sdk_text, text_of
+from ramen_tests.modern import ALL_INPUT, MODERN, SUB_ID, TASKS, WITH_TASKS, Modern, assert_envelope
 from ramen_tests.tokens import claims_of
 
 from .conftest import ENV, GROUP, ZONE, ok, poll
@@ -263,3 +264,75 @@ def test_the_access_log_names_the_reasons(admin, world, analyst_tokens, http_as)
 
     text = poll(lines, timeout=300, every=10, what="log lines with both reasons")  # cloud logging lags
     assert world["key"] not in text and analyst_tokens["access_token"] not in text
+
+
+# --- 1.0.0: MCP 2026-07-28 through the edge (§23) ---------------------------------------------------------------------
+NOTE_TOOL, REPORT_TOOL = "confirm_delete_note", "slow_report"
+
+
+@pytest.fixture(scope="module")
+def modern(http_as) -> Modern:
+    """The group key on the 2026-07-28 era: per-request `_meta`, standard headers, no handshake, no session."""
+    return Modern(http_as(None), ALL_INPUT)
+
+
+def test_a_modern_client_needs_no_handshake_and_discovers_the_server(modern):
+    d = modern.request("server/discover")
+    assert d["supportedVersions"][0] == MODERN and "2025-06-18" in d["supportedVersions"], d
+    assert TASKS in d["capabilities"].get("extensions", {}), "the demo repo ships a task tool"
+    listed = modern.request("tools/list")
+    assert {NOTE_TOOL, REPORT_TOOL, CALC} <= names(listed["tools"]) and listed["cacheScope"] == "private"
+    assert_envelope(modern.call(CALC, {"var1": 40, "var2": 2, "func": "add"}))
+
+
+def test_the_edge_carries_the_standard_headers_and_the_status(modern):
+    """A load balancer that dropped `Mcp-Name`, or rewrote the 400, would show here."""
+    r = modern.raw(
+        "tools/call", {"name": CALC, "arguments": {"var1": 1, "var2": 1, "func": "add"}}, headers={"Mcp-Name": "x"}
+    )
+    assert (r.status, r.code) == (400, -32020), (r.status, r.message)
+    r = modern.raw("ping")
+    assert (r.status, r.code) == (404, -32601), (r.status, r.message)
+
+
+def test_the_demo_tool_asks_and_resumes_through_the_edge(modern, http_as):
+    first = modern.call(NOTE_TOOL, {"note": "todo"})
+    assert first["resultType"] == "input_required" and set(first["inputRequests"]) == {"confirm"}, first
+    yes = {"confirm": {"action": "accept", "content": {"confirm": True}}}
+    extra = {"requestState": first["requestState"]} if "requestState" in first else {}
+    done = modern.call(NOTE_TOOL, {"note": "todo"}, inputResponses=yes, **extra)
+    assert done["resultType"] == "complete" and 'Deleted the note "todo"' in text_of(done), done
+    declined = modern.call(NOTE_TOOL, {"note": "todo"}, inputResponses={"confirm": {"action": "decline"}})
+    assert "Nothing was deleted" in text_of(declined) and declined["isError"] is False
+    # a 2025-06-18 client cannot be asked: a plain tool error, not a hang
+    old = http_as(None).call_tool(NOTE_TOOL, {"note": "todo"})
+    assert old["isError"] is True and "2026-07-28" in text_of(old), old
+
+
+def test_a_task_runs_in_the_background_and_any_poll_finds_it(modern):
+    """Polls go through the load balancer: with several workers they reach pods that did not start the task."""
+    tasks = modern.with_caps({**ALL_INPUT, **WITH_TASKS})
+    created = tasks.call(REPORT_TOOL, {"seconds": 3})
+    assert created["resultType"] == "task" and created["status"] == "working", created
+    done = tasks.wait_task(created["taskId"], timeout=60)
+    assert done["status"] == "completed" and "Report ready after 3 s" in text_of(done["result"]), done
+    # without the extension the same tool simply answers
+    assert "Report ready after 0 s" in text_of(modern.call(REPORT_TOOL, {"seconds": 0}))
+
+
+def test_a_subscription_stream_opens_through_the_edge(modern):
+    with modern.listen({"toolsListChanged": True}, rid=7) as s:
+        assert s.status == 200, (s.status, s.body[:200])
+        ack = s.next(15)
+        assert ack and ack["method"] == "notifications/subscriptions/acknowledged", ack
+        assert ack["params"]["_meta"][SUB_ID] == 7 and ack["params"]["notifications"] == {"toolsListChanged": True}
+
+
+def test_the_access_log_names_the_protocol(admin, modern):
+    modern.request("tools/list")
+
+    def lines():
+        r = admin.get("logs", params={"group": GROUP, "zone": ZONE, "tail": 400})
+        return r.text if r.status_code == 200 and MODERN in r.text and "2025-06-18" in r.text else None
+
+    poll(lines, timeout=300, every=10, what="log lines of both protocol versions")

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time
 
+import grpc
 import pytest
 
 from ramen_tests import env as E
@@ -33,6 +34,19 @@ def _serves(nodes, zone) -> bool:
     n = nodes[zone]
     n.initialize()
     return text_of(n.call_tool(TOOL, {"var1": 2, "var2": 3, "func": "add"})).strip().startswith("5")
+
+
+def _serves_within(nodes, zone, seconds: float) -> bool:
+    """`_serves`, retried while the zone's pods roll: canary (in place) then stable are replaced one after the other,
+    and `rollout status` can return between the two."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return _serves(nodes, zone)
+        except grpc.RpcError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(3)
 
 
 # --- §13.3 per-group worker images -------------------------------------------------------------------------------
@@ -162,9 +176,11 @@ def test_restore_puts_a_populated_deployment_back_and_the_zones_keep_serving(adm
     assert admin.get("group", group=group).status_code == 200
     assert admin.get("workers", group=group, zone=zone).json()["count"] == 2  # the scale came back
 
-    kube.kubectl("-n", kube.ns_name(group, zone), "rollout", "status", "deployment/worker", "--timeout=300s")
+    # the reconcile re-applies every live zone, so each one rolls: wait for all of them, not only the scaled one
     for z in stack["zones"]:
-        assert _serves(nodes, z), z  # a restore that reconciles live zones leaves them serving
+        kube.kubectl("-n", kube.ns_name(group, z), "rollout", "status", "deployment/worker", "--timeout=300s")
+    for z in stack["zones"]:
+        assert _serves_within(nodes, z, 120), z  # a restore that reconciles live zones leaves them serving
     deadline = time.monotonic() + 120
     while kube.replicas(kube.ns_name(group, zone))[0] != 2 and time.monotonic() < deadline:
         time.sleep(5)

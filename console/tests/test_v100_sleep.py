@@ -317,3 +317,13 @@ def test_the_group_page_has_the_control_in_minutes_and_the_table_shows_the_state
     assert ">asleep</span>" in demo.get("/ui/groups/demo/zones/zone-a/workers").text
     html = demo.get("/groups/demo").text
     assert "Wake now" in html and f'hx-post="{ZONE}/wake"' in html
+
+
+def test_the_sleep_buttons_sit_apart_in_a_row_actions_cell(demo):
+    """The user, on the live GKE console: "between Save sleep and Sleep now buttons create space"."""
+    import re
+
+    html = demo.get("/groups/demo").text
+    row = re.search(r"<tr><th>Sleep</th>.*?</tr>", html, re.S).group(0)
+    cell = re.search(r'<div class="row-actions">(.*?)</div>', row, re.S)
+    assert cell and "Save sleep" in cell.group(1) and "Sleep now" in cell.group(1), row

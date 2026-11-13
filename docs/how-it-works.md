@@ -71,6 +71,7 @@ it is about to return, and secret values never reach it.
 
 ## What is verified
 
-0.8.0 passed the release suite and the load tests live on GKE, EKS and AKS; what each run covered, and what is tested only:
+1.0.0 ran live on GKE, EKS and AKS — smoke, the full check set (one check failed on GKE, none on EKS or AKS) and the
+load tests; what each run covered, and what is tested only:
 [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). The boundaries:
 [Threat model](threat-model.md).

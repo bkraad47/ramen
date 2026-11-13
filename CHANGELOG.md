@@ -4,7 +4,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 ## [Unreleased]
 
 ## [1.0.0] — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
-2026-11-13. A worker now speaks MCP **2026-07-28** next to 2025-06-18, on the same `POST /mcp` and the same
+2026-11-14. A worker now speaks MCP **2026-07-28** next to 2025-06-18, on the same `POST /mcp` and the same
 `ramen.v1.Mcp/Call`. Each request is served in the version it names; nothing has to be switched on.
 Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol-versions-on-one-endpoint),
 [Multi round-trip requests](https://bkraad47.github.io/ramen/wiki/mrtr/), [Tasks](https://bkraad47.github.io/ramen/wiki/tasks/),
@@ -96,6 +96,29 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
   `test_telemetry_consent.py`, `test_deps_baked.py`, `test_console_sleep_otel.py`), and cluster proofs in
   `tests/kind/test_v1_sleep_build_otel.py`.
 
+### Fixed during the cloud run
+Found on GKE, EKS and AKS on 2026-11-13 and 14, each fixed with a test. What the run covered and its results:
+[Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
+- **GCP: a deleted zone identity poisoned the groups bucket policy.** See "What changes for existing users" below.
+  **Also affects 0.8.0.**
+- **A worker whose Redis is unreachable never started.** The dial is now bounded at 5 s and the worker starts
+  without it (no throttle and no shared task store until the pod restarts). **Also affects 0.8.0.**
+- **Calls were dropped during rollouts** once the new SIGTERM handler stopped the worker at once. It now drains for
+  `RAMEN_STOP_DRAIN_SECS` first (see below).
+- **Tasks without Redis**: a zone runs two pods (stable and canary), and a poll could reach the one that did not
+  hold the task. A pod without a shared store now hands out no tasks.
+- **The activator forwarded to draining workers without asking for the wake**, and trusted an earlier wake when the
+  pod outlived it. It now always asks, and asks again after 5 s.
+- **A public console answered the activator's in-cluster wake call `403`** (the HTTPS-only rule), so a call never
+  woke a sleeping zone on any cloud. Internal routes are exempt when no edge forwarded the request.
+- **Chart: the environment block for sleeping, builds and telemetry overrode the provider's backend selectors**, so
+  a console on AWS or Azure came up as GCP.
+- **The build Job requested 2Gi of memory** and could not be scheduled on small nodes (EKS, AKS). It now requests
+  250m CPU and 768Mi, with a 2Gi limit.
+- Also: the kind cluster's containerd is configured for the local registry; the wake hold went from 90 s to 25 s,
+  under every edge's own timeout; a `requirements.txt` of comments only builds nothing; a traces-only collector
+  (Jaeger) is no longer warned about every minute.
+
 ### What changes for existing users
 A 2025-06-18 client is answered as in 0.8.0, with two additions and nothing removed:
 - `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
@@ -111,6 +134,10 @@ For operators and tool authors:
 - **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account
   left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach
   a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write.
+  This affects 0.8.0 too.
+- **A worker starts when its Redis is unreachable.** It used to wait on the connection and never start; the dial
+  is now bounded at 5 s, and the worker runs without the throttle and the shared task store until the pod
+  restarts. This affects 0.8.0 too.
 - **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest
   hash changes once on its first 1.0 deploy.
 - **A zone can now have 0 workers**, but only where an admin turned sleeping on for it; the default is off and
@@ -147,13 +174,18 @@ MCP specification revision 2026-07-28: SEPs 2575, 2567, 2243, 2322, 2549 and 257
   progress.
 - Sleeping: the first call to a sleeping zone is answered `503` with `Retry-After: 10` when the wake takes longer
   than the 25 s hold (a node that has to be added, a slow image pull); the retry is served. A sleeping zone needs
-  the session secret the console writes on deploy. On GKE Autopilot the saving is smaller than the activator's
+  the session secret the console writes on deploy. On GKE Autopilot, where a cold wake can take longer than the
+  hold, the first call to a sleeping zone may get that `503` instead of being held. On GKE Autopilot the saving is smaller than the activator's
   requests suggest, because Autopilot bills a per-pod minimum.
 - Telemetry consent is remembered per pod when the group has no Redis: another pod asks again.
 - Images are built with kaniko only. The local compose stack cannot build images.
-- Not run for this release so far: the sleeping, image-build and telemetry proofs on a kind cluster and on the
-  three clouds (the tests are written); pushing with each cloud's builder identity; the consent store on Redis;
-  export to an `https://` collector; a worker skipping its throttle for a call its activator forwarded.
+- On GKE a call can meet a `503` from the load balancer for a moment after a rollout. One check of the cloud run
+  failed this way on the first call after a deploy and passed on a re-run minutes later.
+- Not run for this release: a sign-in that maps a looked-up Google group to a role (the Cloud Identity lookup ran
+  live with a consumer Google account; the mapping is tested against a fake, and a Workspace-domain account was
+  never tried); the kind module for sleeping, builds and telemetry after the last activator fix; export to an
+  `https://` collector; a worker skipping its throttle for a call its activator forwarded. No test looks at the
+  consent store on Redis itself.
 
 ## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 - **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as

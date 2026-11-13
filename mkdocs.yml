@@ -92,7 +92,7 @@ nav:
       - Interface contracts: CONTRACTS.md
       - Contributing and modifying: contributing.md
       - Version tracker: versions.md
-      - Architecture (v0.7.x): architecture/index.md
+      - Architecture: architecture/index.md
       - Architecture history:
           - v0.6.0: architecture/v0.6.0.md
           - v0.4.0: architecture/v0.4.0.md

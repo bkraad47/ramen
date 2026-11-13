@@ -139,7 +139,7 @@ went away mid-call has reason `upstream` and gets the same `503`.
 
 ## What is verified
 
-Unit and process-level tests only so far:
+By tests:
 
 - `tests/conformance/test_activator.py`: a real node in activator mode in front of a real worker — the guards
   before any wake, concurrent calls sharing one wake, the hold, forwarding on HTTP and gRPC with headers, metadata
@@ -151,7 +151,12 @@ Unit and process-level tests only so far:
 - `tests/kind/test_v1_sleep_build_otel.py` holds the cluster proofs (an idle zone sleeps, a call through the edge
   wakes it and is answered, an open stream or a running task keeps it awake, a deploy wakes it first).
 
-The kind and cloud runs are recorded on the
-[Transport page](transport.md#what-is-verified-and-what-is-not) once done. A worker skipping its throttle for a
-forwarded call is not exercised by a test.
-<!-- CLOUD-1.0.0-S24 -->
+On GKE, EKS and AKS (1.0.0, 2026-11-13 to 2026-11-14): an idle zone slept and a call through each cloud's real
+load balancer woke it and was answered. EKS answered the waking call after 13 s (held, no retry). GKE and AKS
+answered after 1 s, from workers that were still draining while the zone was woken behind them. On GKE Autopilot
+a cold wake can take longer than the 25 s hold: the caller then gets the activator's `503` with `Retry-After: 10`
+(seen once) and retries; it never got the load balancer's `504`.
+
+The kind numbers and the rest of the cloud run are on the
+[Transport page](transport.md#what-is-verified-and-what-is-not). A worker skipping its throttle for a forwarded
+call is not exercised by a test.

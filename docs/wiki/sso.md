@@ -12,8 +12,18 @@ sign in with a password.
     group lost that membership at the next sign-in and got it back when re-added; the bridge then signed the same
     person in (`--oauth`), and the worker listed and refused tools by that role. **Google** sign-in, on GKE, with the
     provider added on the Config page: mapped on `email`, same account as Entra, and the bridge's tool list followed
-    the Google role. **Google Workspace groups** (the Cloud Identity lookup) are covered by tests against a fake
-    endpoint only: the maintainer's Google account has no Workspace. If you run it, please open an issue.
+    the Google role.
+
+    **In 1.0.0** (GKE, EKS and AKS): Entra ID sign-in with the groups lookup on all three mapped a group id to
+    Group Admin on the group; on AKS, a person removed from that group got the fallback role at the next sign-in.
+    A **Google** sign-in with the Cloud Identity group lookup ran on all three consoles: the lookup returned the
+    account's groups (more than one page), and a first attempt on GKE where the lookup answered `403` was refused,
+    because a sign-in is denied when the groups cannot be read.
+
+    Still open for **Google Workspace groups**: that account was a consumer Google account that belongs to Google
+    Groups, not an account of a Workspace domain, and no sign-in applied a group → role rule to a looked-up Google
+    group. That mapping is covered by tests against a fake endpoint only, and a Workspace-domain account has never
+    been tried. If you run it, please open an issue.
 
 Nothing here depends on the cloud the console runs on: Entra ID works on GKE, Workspace on EKS, both at once
 anywhere. A super admin sets a provider up on the Config page; environment variables remain a second source.

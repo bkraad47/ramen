@@ -136,6 +136,6 @@ rails. Point a group at it and press Deploy.
 - **Rust where it counts.** The Rust node owns auth, limits and the transport. Your Python runs in a separate
   process it can restart at any time.
 
-**What is verified.** 0.8.0 passed the release suite and the load tests live on GKE, EKS and AKS; what each run covered, and what is
-tested only: [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). Everything else is
+**What is verified.** 1.0.0 ran live on GKE, EKS and AKS — smoke, the full check set (one check failed on GKE, none on
+EKS or AKS) and the load tests; what each run covered, and what is tested only: [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). Everything else is
 in the [wiki](wiki/index.md).

@@ -22,9 +22,9 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. The stdio
 > bridge stays for clients that only speak stdio.
 
-**Status.** Current release **0.8.0**, verified live on GKE, EKS and AKS on 2026-10-17 — smoke, the 63-check release suite
-and six load-test scenarios on each cloud — then torn down; CI proves both transports on Linux and Windows. The single
-record of what each run covered, and what is tested only, is
+**Status.** Current release **1.0.0**, run live on GKE, EKS and AKS on 2026-11-13 and 14 — smoke, the full check set
+(134 passed on EKS and on AKS; 133 passed and 1 failed on GKE) and the load test on each cloud — then torn down; CI
+proves both transports on Linux and Windows. The single record of what each run covered, the failure included, is
 [Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
 
 **What's new in 1.0.** Workers speak MCP **2026-07-28** next to 2025-06-18 on the same endpoint: stateless requests,

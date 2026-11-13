@@ -12,6 +12,11 @@ multi round-trip requests, tasks, `subscriptions/listen`) or **2025-06-18** (as 
 `MCP-Protocol-Version` header or `params._meta`; on gRPC by the body alone. Node: `modern.rs` (era, envelope, headers,
 signed `requestState`), `tasks.rs` (task store: Redis or memory), `subs.rs` (streams). Runtime: `content.py`,
 `context.py`, `tasks.py`. Contract: [docs/CONTRACTS.md](docs/CONTRACTS.md) §23.
+Since 1.0.0, not drawn below: an activator pod that answers for a zone sleeping at 0 workers and wakes it on the
+first authenticated call ([Sleeping workers](https://bkraad47.github.io/ramen/wiki/sleeping-workers/)), a build Job
+that bakes a group's `requirements.txt` into its own worker image on deploy
+([Worker images](https://bkraad47.github.io/ramen/wiki/worker-images/)), and OpenTelemetry export with per-group
+caller consent ([Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/)).
 
 ```
 browser / rmn_ key ──▶ console (FastAPI, HTTP) ──▶ Store: Firestore | DynamoDB | Azure Tables | Postgres | memory

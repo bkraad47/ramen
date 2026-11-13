@@ -207,7 +207,7 @@ Written by the console on deploy; never set by hand in the cloud.
 
 ## What is verified
 
-Unit and process-level tests only so far:
+By tests:
 
 - `tests/conformance/test_otel.py`: a real node against a recording collector — the span and its attribute list
   on both transports, the runtime child span, the parent from `traceparent`, the guardrail attributes, the two
@@ -222,7 +222,10 @@ Unit and process-level tests only so far:
 - `tests/kind/test_v1_sleep_build_otel.py` holds the cluster proofs (the spans of a call and of a deploy arriving
   in the chart's Jaeger, discovery, consent by prompt, by token and refused).
 
-The kind and cloud runs are recorded on the
-[Transport page](transport.md#what-is-verified-and-what-is-not) once done. Not run at all: the consent store on
-Redis, and export to an `https://` collector (only a failing TLS connection is tested).
-<!-- CLOUD-1.0.0-S24 -->
+On GKE, EKS and AKS (1.0.0, 2026-11-13 to 2026-11-14), with the chart's Jaeger in each cluster: the spans of a
+call and of a deploy arrived in Jaeger, consent was given by prompt (a group key) and by token (a signed-in
+person), and a 2025-06-18 client was refused.
+
+The kind numbers and the rest of the cloud run are on the
+[Transport page](transport.md#what-is-verified-and-what-is-not). No test looks at the consent store on Redis
+itself, and export to an `https://` collector has not been run (only a failing TLS connection is tested).

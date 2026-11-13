@@ -185,4 +185,7 @@ purges the Key Vault (soft delete would otherwise keep its name for a week). Che
   workers `Pending`; add `"2"` to `node_zones` and apply. On a cluster without zones the console sends
   `nodeSelector: null`, which also clears a zone pin an earlier deploy left.
 - `AvailabilityZoneNotSupported` or a refused VM size: see Prerequisites (`node_zones = []`, `Standard_B2s_v2`).
+- The default node size needs quota in its own VM family (a subscription can have regional cores free and none in
+  that family), and some sizes are not offered for AKS in every region. The error message lists the sizes that
+  are; set `node_size` to one of them.
 - A client that omits the two headers gets the console, not a worker.

@@ -2,7 +2,7 @@
 
 A regional GKE Autopilot cluster, Firestore, a bucket, Secret Manager and a global HTTPS load balancer with a
 Google-managed certificate on a free `sslip.io` hostname. About 25 minutes, most of it waiting for GKE and the
-load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down the same day ([the record](transport.md#what-is-verified-and-what-is-not)).
+load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down afterwards ([the record](transport.md#what-is-verified-and-what-is-not)).
 
 Cost while it runs: the Autopilot pods (around $0.05 an hour for the console and two small workers, plus the
 control-plane fee after the free tier), the load balancer forwarding rule (around $0.025 an hour), a static IP
@@ -180,6 +180,10 @@ file first. `scripts/gcp_cost_check.sh` lists anything billable that is left.
 - A dropped zone's namespace can sit in `Terminating` for ten minutes or more while the Gateway controller
   garbage-collects its backend service. If it never clears, find it with
   `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete it by hand.
+- Deleting a cluster while group namespaces are still terminating can leave that cluster's network endpoint groups
+  behind. A new cluster in the same project then cannot use the same names: the worker backend never becomes
+  healthy, and the `ServiceNetworkEndpointGroup` reports `conflicting description`. Wait for the namespaces to go
+  before deleting the cluster, or delete the leftover groups (`gcloud compute network-endpoint-groups list`).
 - Gateway-managed backend services report "not ready" for minutes after a rollout. Rebalance and IP rules answer
   `applied: false` with a note and retry in the background.
 - A client that omits the two headers gets a `404` from the Gateway, not a worker error.

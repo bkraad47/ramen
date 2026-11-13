@@ -4,7 +4,7 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `1.0.0` **(current)** | 2026-11-13 | MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
+| `1.0.0` **(current)** | 2026-11-14 | MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
 | `0.8.0` | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
 | `0.7.5` | 2026-10-10 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
@@ -68,11 +68,21 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - The official `@modelcontextprotocol/conformance` suite (pinned at 0.2.0-alpha.12) runs in CI against a real worker, once per protocol version, each with a checked-in list of expected failures and a reason per entry (`tests/conformance_suite/`). The exceptions are listed on the [Transport page](https://bkraad47.github.io/ramen/wiki/transport/#the-official-conformance-suite).
 - New conformance modules for the stateless core, standard headers, multi round-trip requests and their guardrails, tasks, subscriptions and the bridge.
 - Conformance modules for the activator, the idle metrics, the export, telemetry consent, baked dependencies and the console's side of all three (`test_activator.py`, `test_idle_metrics.py`, `test_otel.py`, `test_telemetry_consent.py`, `test_deps_baked.py`, `test_console_sleep_otel.py`), and cluster proofs in `tests/kind/test_v1_sleep_build_otel.py`.
+- **GCP: a deleted zone identity poisoned the groups bucket policy.** See "What changes for existing users" below. **Also affects 0.8.0.**
+- **A worker whose Redis is unreachable never started.** The dial is now bounded at 5 s and the worker starts without it (no throttle and no shared task store until the pod restarts). **Also affects 0.8.0.**
+- **Calls were dropped during rollouts** once the new SIGTERM handler stopped the worker at once. It now drains for `RAMEN_STOP_DRAIN_SECS` first (see below).
+- **Tasks without Redis**: a zone runs two pods (stable and canary), and a poll could reach the one that did not hold the task. A pod without a shared store now hands out no tasks.
+- **The activator forwarded to draining workers without asking for the wake**, and trusted an earlier wake when the pod outlived it. It now always asks, and asks again after 5 s.
+- **A public console answered the activator's in-cluster wake call `403`** (the HTTPS-only rule), so a call never woke a sleeping zone on any cloud. Internal routes are exempt when no edge forwarded the request.
+- **Chart: the environment block for sleeping, builds and telemetry overrode the provider's backend selectors**, so a console on AWS or Azure came up as GCP.
+- **The build Job requested 2Gi of memory** and could not be scheduled on small nodes (EKS, AKS). It now requests 250m CPU and 768Mi, with a 2Gi limit.
+- Also: the kind cluster's containerd is configured for the local registry; the wake hold went from 90 s to 25 s, under every edge's own timeout; a `requirements.txt` of comments only builds nothing; a traces-only collector (Jaeger) is no longer warned about every minute.
 - `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
 - A `tools/call` or `prompts/get` that carries `_meta.progressToken` **and** accepts `text/event-stream` is answered as an event stream: the tool's progress notifications, if it reports any, then the response.
 - **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are removed from the runtime's environment (task records now live in that Redis).
 - **A worker now handles SIGTERM**: it keeps serving for `RAMEN_STOP_DRAIN_SECS` (20 s in a pod) while the load balancer takes the pod out of rotation, then ends open `subscriptions/listen` streams with a final result and stops. Up to 0.8.0 the worker ignored SIGTERM and served until the kubelet killed it at the end of the grace period.
-- **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write.
+- **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write. This affects 0.8.0 too.
+- **A worker starts when its Redis is unreachable.** It used to wait on the connection and never start; the dial is now bounded at 5 s, and the worker runs without the throttle and the shared task store until the pod restarts. This affects 0.8.0 too.
 - **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest hash changes once on its first 1.0 deploy.
 - **A zone can now have 0 workers**, but only where an admin turned sleeping on for it; the default is off and such a zone keeps at least 1 as before.
 - **A deploy may build an image first.** In a `gcp`, `aws` or `azure` deployment whose Helm release was given the builder identity (`builder.gsa`, `builder.roleArn`, `builder.clientId`), building is on by default for every group: the first deploy of a group with a non-empty `mcp/requirements.txt` takes a build longer, and a build that fails stops the deploy. Without the identity nothing is built and nothing changes. Turn it off per group on the Worker image card.
@@ -83,15 +93,16 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 - There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
 - A resource callable cannot raise `InputRequired`.
 - Task notifications on a `subscriptions/listen` stream come only from the pod that runs the task.
-- Without Redis the task store is the pod's memory: with more than one pod, `tasks/get` reaching another pod answers `Unknown task`.
+- Tasks need the group's Redis in a cluster: a pod without one hands out no tasks and its `task: true` tools answer synchronously (a zone runs two pods, and a poll would reach the wrong one).
 - `tasks/cancel` discards the result; it cannot stop a tool body that is already running.
 - A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
 - A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor `resources/subscribe`.
 - A `subscriptions/listen` stream hears about the pod it is connected to. gRPC has no subscriptions and no progress.
-- Sleeping: the first call to a sleeping zone is answered `503` with `Retry-After: 10` when the wake takes longer than the 25 s hold (a node that has to be added, a slow image pull); the retry is served. A sleeping zone needs the session secret the console writes on deploy. On GKE Autopilot the saving is smaller than the activator's requests suggest, because Autopilot bills a per-pod minimum.
+- Sleeping: the first call to a sleeping zone is answered `503` with `Retry-After: 10` when the wake takes longer than the 25 s hold (a node that has to be added, a slow image pull); the retry is served. A sleeping zone needs the session secret the console writes on deploy. On GKE Autopilot, where a cold wake can take longer than the hold, the first call to a sleeping zone may get that `503` instead of being held. On GKE Autopilot the saving is smaller than the activator's requests suggest, because Autopilot bills a per-pod minimum.
 - Telemetry consent is remembered per pod when the group has no Redis: another pod asks again.
 - Images are built with kaniko only. The local compose stack cannot build images.
-- Not run for this release so far: the sleeping, image-build and telemetry proofs on a kind cluster and on the three clouds (the tests are written); pushing with each cloud's builder identity; the consent store on Redis; export to an `https://` collector; a worker skipping its throttle for a call its activator forwarded.
+- On GKE a call can meet a `503` from the load balancer for a moment after a rollout. One check of the cloud run failed this way on the first call after a deploy and passed on a re-run minutes later.
+- Not run for this release: a sign-in that maps a looked-up Google group to a role (the Cloud Identity lookup ran live with a consumer Google account; the mapping is tested against a fake, and a Workspace-domain account was never tried); the kind module for sleeping, builds and telemetry after the last activator fix; export to an `https://` collector; a worker skipping its throttle for a call its activator forwarded. No test looks at the consent store on Redis itself.
 
 ## 0.8.0 — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 

@@ -397,8 +397,8 @@ stdio bridge forwards each message unchanged, so a 2026-07-28 client behind it i
 This section is the single record; [How it works](../how-it-works.md), the [threat model](../threat-model.md) and
 the home page point here.
 
-- **1.0.0, verified locally** on real node and runtime processes (no cloud run yet). What the local harness
-  covers:
+- **1.0.0, verified locally** on real node and runtime processes (the cloud run is the next entry). What the
+  local harness covers:
     - `tests/conformance/test_golden_regression.py`: every tool, resource and prompt of the fixture groups and the
       demo repo, recorded from a 0.8.0 node, answers a 2025-06-18 client the same in 1.0.0, and a 2026-07-28 client
       the same plus the new envelope.
@@ -413,9 +413,50 @@ the home page point here.
     - The Redis task store, against a real Redis: two workers sharing one store, a task started on one and read,
       answered and cancelled through the other (`test_tasks.py`; skipped when `RAMEN_TEST_REDIS_URL` is unset, as in CI).
     - The official conformance suite: [below](#the-official-conformance-suite).
-    - Final local run (2026-11-13): node 126 tests, runtime 153 (99 % coverage), console 825 (97 %), the suites
-      above 550 passed with 118 skipped (the skipped ones need a running console or cluster).
-<!-- CLOUD-1.0.0 -->
+    - Final local run: node 166 tests (121 unit, 15 integration, 12 modern, 18 sleep and telemetry), runtime 155
+      (99 % coverage), console 950 (97 %). On a kind cluster the existing kind, e2e and conformance suites ran 870
+      passed. The module for sleeping, image builds and telemetry (`tests/kind/test_v1_sleep_build_otel.py`) ran
+      21 passed, 1 failed, 1 skipped on its last cluster run. One more fix followed that run (an activator asking
+      for the wake again); it was verified by unit and integration tests and on the three clouds, and the module
+      was not re-run on kind afterwards.
+- **Verified live in 1.0.0 on GKE, EKS and AKS** (2026-11-13 to 2026-11-14, each torn down afterwards and checked
+  empty): GKE Autopilot on Firestore behind the Gateway, EKS on DynamoDB behind the ALB, AKS on Table Storage behind
+  Envoy Gateway, each with the chart's Jaeger, an in-cluster Redis as the group's throttle Redis and the
+  `ramen-builder` identity.
+    - `scripts/cloud_smoke.sh` passed on each.
+    - The full check set — `tests/cloud/test_release_features.py` (the 0.8 checks, six 2026-07-28 checks through
+      the edge, and the 1.0 block: a deploy building the group's image in the cloud's registry, workers on the
+      built image, spans in Jaeger, consent by prompt and by token, refusal of a 2025-06-18 client, sleep on idle
+      and wake by a call through the load balancer), `tests/cloud/test_auth_matrix.py`, `tests/e2e` and the remote
+      conformance modules — ran **134 passed, 0 failed, 11 skipped on EKS and on AKS; 133 passed, 1 failed,
+      11 skipped on GKE**. The GKE failure was `upstream connect error … connection timeout`, a `503` from the
+      Google load balancer on the first call after a deploy; the same four checks passed on a re-run minutes later.
+      It is listed as a known limit: on GKE a call can meet a `503` for a moment after a rollout.
+    - `scripts/load_test.py` (five scenarios and console readiness): all passed on each cloud. GKE reached 3
+      workers at 159 s and was back to 1 at 615 s, with 25,004 calls answered and 17 answered `429`; EKS 148 s and
+      609 s, 11,743 answered and 621 `429`; AKS 134 s and 600 s, 26,269 answered and no errors. No 5xx in any load
+      test.
+    - Waking a sleeping zone through the edge: EKS answered the waking call after 13 s (held, no retry); GKE and
+      AKS after 1 s, served by workers that were still draining while the zone was woken behind them. On GKE
+      Autopilot a cold wake can take longer than the 25 s hold: the caller then gets the activator's `503` with
+      `Retry-After: 10` (seen once) and retries, never the load balancer's `504`.
+    - The eleven checks an edge run skips, run separately on each cloud. Straight to a worker over a port-forward
+      (the Admin key, metrics, reload, the access-log line): 36 passed on each. A blocked tool hidden and denied
+      through the edge: passed on each. The two IP allow-list checks with a range that excludes the test host:
+      passed on each (Cloud Armor on GKE; Envoy on AKS, `RBAC: access denied`, health closed too; AWS WAF on EKS,
+      refusing within about 10 s of the rule and accepting again about 10 s after it was cleared). A change of the
+      sign-in configuration ending every session (the security matrix): 49 passed on each. Password reset through
+      the file mail backend: 5 of 5 on GKE, and 5 of 5 three runs in a row on EKS; on AKS it passed alone and
+      failed after the file's other tests, which was traced to the test harness's loop that copies mail out of
+      the pod (it rewrote old mails, so a stale invitation looked new), not to the product, and the corrected loop
+      was not re-run on AKS before teardown.
+    - Microsoft Entra ID sign-in with the groups lookup on all three: a group id mapped to Group Admin on the
+      group; on AKS, removal from that group gave the fallback role at the next sign-in. Google sign-in with the
+      Cloud Identity group lookup on all three consoles: the lookup returned the account's groups (more than one
+      page), and a first attempt on GKE where the lookup answered `403` was refused. Not done: the account was a
+      consumer Google account that belongs to Google Groups, not a Workspace-domain account, and no sign-in
+      applied a group → role rule to a looked-up Google group, so that mapping is still verified against a fake
+      only.
 - **Verified live in 0.8.0 on GKE, EKS and AKS** (2026-10-17, each torn down afterwards), on the build that carries the
   security review's fixes: `scripts/cloud_smoke.sh` (zone, group, key, canary deploy of the demo repo with its NeMo rails
   and golden cases, a call through the edge) on each; then `tests/cloud/test_release_features.py` with `tests/e2e` and the

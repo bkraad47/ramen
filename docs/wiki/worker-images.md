@@ -148,7 +148,7 @@ wins over a built image, and a pinned group builds nothing.
 
 ## What is verified
 
-Unit and process-level tests only so far:
+By tests:
 
 - `tests/conformance/test_deps_baked.py`: a real runtime and node with `RAMEN_DEPS_BAKED` — a matching digest
   skips pip and logs `deps baked`, any other value or a changed file installs.
@@ -157,7 +157,10 @@ Unit and process-level tests only so far:
   cluster's registry and records it, the Job and its context are cleaned up, the worker pods run the image and log
   `deps baked`, a second deploy builds nothing).
 
-The kind and cloud runs are recorded on the
-[Transport page](transport.md#what-is-verified-and-what-is-not) once done. Pushing with each cloud's builder
-identity has not been run.
-<!-- CLOUD-1.0.0-S24 -->
+On GKE, EKS and AKS (1.0.0, 2026-11-13 to 2026-11-14): a deploy built the group's image in each cloud's own
+registry with that cloud's `ramen-builder` identity, on GKE Autopilot too, and the workers served from the built
+image. The build Job's default requests (250m CPU, 768Mi memory, with a 2Gi memory limit) are what the small test
+nodes on EKS and AKS could place; the 2Gi request it had first was unschedulable there.
+
+The kind numbers and the rest of the cloud run are on the
+[Transport page](transport.md#what-is-verified-and-what-is-not).

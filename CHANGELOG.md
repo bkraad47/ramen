@@ -69,8 +69,12 @@ A 2025-06-18 client is answered as in 0.8.0, with two additions and nothing remo
 For operators and tool authors:
 - **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are
   removed from the runtime's environment (task records now live in that Redis).
-- **SIGTERM now ends open `subscriptions/listen` streams** with a final result before the worker stops, so a
-  graceful stop is not held open by them.
+- **A worker now handles SIGTERM**: it keeps serving for `RAMEN_STOP_DRAIN_SECS` (20 s in a pod) while the load
+  balancer takes the pod out of rotation, then ends open `subscriptions/listen` streams with a final result and
+  stops. Up to 0.8.0 the worker ignored SIGTERM and served until the kubelet killed it at the end of the grace period.
+- **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account
+  left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach
+  a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write.
 - **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest
   hash changes once on its first 1.0 deploy.
 - Guardrails: `pre` runs on every round of a multi round-trip call, and sees the client's answers as

@@ -9,6 +9,18 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
+/// How long the node keeps serving after SIGTERM before it stops (`RAMEN_STOP_DRAIN_SECS`; default 20 in a pod,
+/// 0 elsewhere). A pod that is told to stop is still in the load balancer's target list for a while — longest on
+/// GKE's container-native NEGs — and callers routed to it must be served, not refused. Up to 0.8.0 this happened
+/// by accident: the node is PID 1 in its container and installed no SIGTERM handler, so the kernel ignored the
+/// signal and the pod served until the kubelet's kill at the end of the grace period (30 s).
+pub fn stop_drain(configured: Option<&str>, in_kubernetes: bool) -> std::time::Duration {
+    let secs = configured
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(if in_kubernetes { 20 } else { 0 });
+    std::time::Duration::from_secs(secs.min(300))
+}
+
 /// How long open streams get to flush their closing frame after the stop signal.
 const STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 
@@ -206,6 +218,18 @@ fn tls_incoming(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pod_drains_by_default_and_a_laptop_does_not() {
+        use super::stop_drain;
+        use std::time::Duration;
+        assert_eq!(stop_drain(None, true), Duration::from_secs(20));
+        assert_eq!(stop_drain(None, false), Duration::ZERO);
+        assert_eq!(stop_drain(Some("5"), false), Duration::from_secs(5));
+        assert_eq!(stop_drain(Some("0"), true), Duration::ZERO);
+        assert_eq!(stop_drain(Some("nonsense"), true), Duration::from_secs(20));
+        assert_eq!(stop_drain(Some("9999"), true), Duration::from_secs(300));
+    }
+
     use super::*;
     use std::collections::HashMap;
 

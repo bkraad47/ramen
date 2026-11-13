@@ -151,6 +151,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_SESSION_TTL_SECS` | worker | How long an MCP session id stays valid, default 1800. |
 | `RAMEN_LIST_TTL_MS` | worker | 1.0: the `ttlMs` a 2026-07-28 client is given on list results and `server/discover`, default 60000. |
 | `RAMEN_MRTR_TTL_SECS` | worker | 1.0: how long a signed `requestState` of a [multi round-trip request](mrtr.md) stays valid, default 600. Not settable from the group's deploy file. |
+| `RAMEN_STOP_DRAIN_SECS` | worker | 1.0: how long a worker keeps serving after SIGTERM before it closes its streams and stops, so a load balancer can take the pod out of rotation first. Default 20 in a pod, 0 elsewhere; keep it under the pod's termination grace period (30 s). |
 | `RAMEN_TASK_TTL_SECS` | worker | 1.0: how long a [task](tasks.md) and its result are kept, default 3600. |
 | `RAMEN_MAX_TASKS` | worker | 1.0: tasks running on one pod at a time, default 4; the next task call is `429`. |
 | `RAMEN_MAX_SUBSCRIPTIONS` | worker | 1.0: open [`subscriptions/listen`](transport.md#subscriptions) streams per pod, default 64; the next is `429`. |

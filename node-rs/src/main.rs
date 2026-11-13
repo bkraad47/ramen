@@ -21,14 +21,25 @@ async fn main() {
     ramen_node::server::run(cfg, listener, shutdown).await;
 }
 
-/// SIGINT, or SIGTERM — what Kubernetes sends a pod — so open streams get their closing result (§23.6).
+/// SIGINT stops at once; SIGTERM — what Kubernetes sends a pod — after the drain. Open streams then get their
+/// closing result (§23.6).
 #[cfg(unix)]
 async fn stop_signal() {
     use tokio::signal::unix::{SignalKind, signal};
     match signal(SignalKind::terminate()) {
         Ok(mut term) => tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
+            _ = term.recv() => {
+                // keep serving while the load balancer takes this pod out of rotation (see `server::stop_drain`)
+                let drain = ramen_node::server::stop_drain(
+                    std::env::var("RAMEN_STOP_DRAIN_SECS").ok().as_deref(),
+                    std::env::var_os("KUBERNETES_SERVICE_HOST").is_some(),
+                );
+                if !drain.is_zero() {
+                    emit("info", "draining", json!({"secs": drain.as_secs()}));
+                    tokio::time::sleep(drain).await;
+                }
+            }
         },
         Err(_) => {
             let _ = tokio::signal::ctrl_c().await;

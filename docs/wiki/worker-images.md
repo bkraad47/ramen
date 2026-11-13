@@ -120,7 +120,7 @@ Read by the console.
 | `RAMEN_BUILD_REGISTRY` | unset | The repository prefix images are pushed under, as `<prefix>/worker:<tag>`. Set by the chart. Both this and `RAMEN_BUILDER=1` are needed. |
 | `RAMEN_BUILDER_IMAGE` | `gcr.io/kaniko-project/executor:v1.24.0` | The image the build Job runs (`builder.image` in the chart). |
 | `RAMEN_BUILD_TIMEOUT_SECS` | 900 | How long the console waits for a build. |
-| `RAMEN_BUILD_CPU`, `RAMEN_BUILD_MEMORY` | `500m`, `2Gi` | The build container's requests and limits. |
+| `RAMEN_BUILD_CPU`, `RAMEN_BUILD_MEMORY`, `RAMEN_BUILD_MEMORY_LIMIT` | `250m`, `768Mi`, `2Gi` | The build container's CPU, its memory request (what a node must have free for the Job to be placed) and its memory limit. Raise them for a large requirements file. |
 | `RAMEN_BUILD_ARGS` | none | Extra arguments for the kaniko executor. |
 | `RAMEN_BUILD_INIT_IMAGE` | the build's base image | The image of the init container that copies the build context into place. |
 

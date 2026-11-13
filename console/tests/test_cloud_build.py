@@ -95,8 +95,9 @@ async def test_build_job_shape_and_success(env):
     ]
     # GKE Autopilot: no privileged pod, no host access, explicit requests (with ephemeral storage) = limits
     assert "privileged" not in json.dumps(job) and "hostPath" not in json.dumps(job)
-    assert build["resources"]["requests"] == build["resources"]["limits"]
-    assert set(build["resources"]["requests"]) == {"cpu", "memory", "ephemeral-storage"}
+    # requests a small node can place (1.0.0 cloud run: 2Gi fitted no EKS or AKS test node), a roomier memory limit
+    assert build["resources"]["requests"] == {"cpu": "250m", "memory": "768Mi", "ephemeral-storage": "2Gi"}
+    assert build["resources"]["limits"] == {"cpu": "250m", "memory": "2Gi", "ephemeral-storage": "4Gi"}
     # the context: ConfigMap keys mapped back to their paths, copied into the emptyDir kaniko reads
     items = {i["path"]: cm["data"][i["key"]] for i in pod["volumes"][0]["configMap"]["items"]}
     assert items == {"Dockerfile": DOCKERFILE, **FILES} and pod["volumes"][0]["configMap"]["name"] == JOB

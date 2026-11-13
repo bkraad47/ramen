@@ -304,8 +304,9 @@ def build_objects(
     env: dict[str, str] | None = None,
     pod_labels: dict[str, str] | None = None,
     docker_config: dict | None = None,
-    cpu: str = "500m",
-    memory: str = "2Gi",
+    cpu: str = "250m",
+    memory: str = "768Mi",
+    memory_limit: str = "2Gi",
 ) -> tuple[dict, dict]:
     """(ConfigMap, Job) of one image build (§24.2). The ConfigMap is the build context; an init container (the base
     image of the build: the nodes already pull it and it has `cp`) copies it into an emptyDir, because kaniko copies a
@@ -329,7 +330,10 @@ def build_objects(
             {"name": "docker", "configMap": {"name": name, "items": [{"key": "docker-config", "path": "config.json"}]}}
         )
         mounts.append({"name": "docker", "mountPath": "/kaniko/.docker"})
-    res = {"cpu": cpu, "memory": memory, "ephemeral-storage": "4Gi"}
+    # Requests a small node can place (a 2 GiB node allocates about 1.4 GiB: the first cloud run asked for 2Gi and
+    # no EKS or AKS node could take the Job); the memory limit leaves room for a larger requirements file.
+    requests = {"cpu": cpu, "memory": memory, "ephemeral-storage": "2Gi"}
+    limits = {"cpu": cpu, "memory": memory_limit, "ephemeral-storage": "4Gi"}
     pod = {
         "serviceAccountName": "ramen-builder",
         "restartPolicy": "Never",
@@ -355,7 +359,7 @@ def build_objects(
                     *args,
                 ],
                 "env": [{"name": k, "value": v} for k, v in (env or {}).items()],
-                "resources": {"requests": res, "limits": res},
+                "resources": {"requests": requests, "limits": limits},
                 "volumeMounts": mounts,
             }
         ],

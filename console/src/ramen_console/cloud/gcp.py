@@ -439,8 +439,9 @@ class GcpCloud(Cloud):
             env=extras.get("env"),
             pod_labels=extras.get("pod_labels"),
             docker_config=extras.get("docker_config"),
-            cpu=os.environ.get("RAMEN_BUILD_CPU", "500m"),
-            memory=os.environ.get("RAMEN_BUILD_MEMORY", "2Gi"),
+            cpu=os.environ.get("RAMEN_BUILD_CPU", "250m"),
+            memory=os.environ.get("RAMEN_BUILD_MEMORY", "768Mi"),
+            memory_limit=os.environ.get("RAMEN_BUILD_MEMORY_LIMIT", "2Gi"),
         )
         name = job["metadata"]["name"]
         live = self.kube.read("Job", BUILD_NS, name)

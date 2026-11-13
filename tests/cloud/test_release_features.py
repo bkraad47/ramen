@@ -565,6 +565,9 @@ def test_the_zone_sleeps_on_idle_and_a_call_through_the_load_balancer_wakes_it(a
     real edge is held by the activator, the zone is woken and that very call is answered. Restored by `v24`."""
     key = v24["keys"]["sleep"]
     before = ok(admin.get("workers", group=GROUP, zone=ZONE)).json().get("sleep_after_secs", 0)
+    # idle is counted from the last call, not from when the setting was made: make one now, so "not before 45 s" holds
+    with edge_client(key) as h:
+        consenting(Modern(h, ALL_INPUT), CALC, {"var1": 1, "var2": 1, "func": "add"})
     ok(admin.put("workers", {"sleep_after_secs": 60}, group=GROUP, zone=ZONE))
     began = time.time()
     try:

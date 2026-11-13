@@ -73,7 +73,10 @@ def demo(root):
         == 201
     )
     assert (
-        root.post("/api/v1/zones", json={"name": "a", "provider": "gcp", "region": "us-central1-a"}).status_code == 201
+        root.post(
+            "/api/v1/zones", json={"name": "a", "provider": "gcp", "region": "us-central1-a", "groups": ["demo"]}
+        ).status_code
+        == 201
     )
     r = root.post("/api/v1/groups/demo/environments", json={"name": "prod", "zones": ["a"]})
     assert r.status_code == 201, r.text
@@ -84,7 +87,10 @@ def test_env_attach_creates_namespace(demo, fk):
     dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
     assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-central1-a"}
     assert (
-        demo.post("/api/v1/zones", json={"name": "b", "provider": "gcp", "region": "us-central1-b"}).status_code == 201
+        demo.post(
+            "/api/v1/zones", json={"name": "b", "provider": "gcp", "region": "us-central1-b", "groups": ["demo"]}
+        ).status_code
+        == 201
     )
     assert demo.put("/api/v1/groups/demo/environments/prod", json={"zones": ["a", "b"]}).status_code == 200
     assert ("Namespace", None, "ramen-demo-b") in fk.k8s.objs

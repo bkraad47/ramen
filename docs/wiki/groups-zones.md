@@ -8,13 +8,17 @@
 | **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins |
 
 
-## Which zones a group may use
-Each group has a list of **allowed zones**, set by a super admin on the group page (Zones and workers → Allowed zones)
-or with `PUT /api/v1/groups/<group>/zones {"allowed": ["a", "b"]}`. A group admin's environments can use only those
-zones; asking for another is refused with `403` naming it. The group page shows only the allowed zones. A zone an
-environment still uses cannot be taken off the list (`409`): remove it from the environment first, which tears the
-group's deployment in that zone down. A new group starts with no zones. Groups from before 1.0 keep the zones their
-environments already use.
+## Zones are bound to groups (1.0.0a)
+A zone lists the **groups** it serves. A super admin sets the list on the Zones page (the *Groups* column, **Save
+groups** per row), when creating the zone (`POST /api/v1/zones {"name": "a", "groups": ["demo"]}`) or with
+`PUT /api/v1/zones/<zone>/groups {"groups": ["demo", "analytics"]}`; every group must exist (`422`). A group's zones
+are the zones listing it: `GET /api/v1/groups/<group>/zones` → `{"zones": [...]}` (read-only). An environment, whoever
+creates it, may name only the group's zones; another is refused with `403` naming it. Binding a group creates the
+pair's worker record (count 1, size `s`); unbinding tears the group's deployment in that zone down (namespace,
+workers, zone identity, record), so a group whose environment still uses the zone cannot be unbound (`409`): remove
+the zone from the environment first. The group page shows the group's zones under each environment that uses them,
+and the rest once as *Bound, unused*. Zones from before 1.0.0a are bound to the groups whose environments used them
+(and to the groups that allowed them, where a 1.0.0 list existed).
 
 ## Zones and regions
 
@@ -27,12 +31,12 @@ location inside it. Two zones in two locations is what makes a group highly avai
 
 **Zones and workers → Add zone** creates the record. Nothing runs until a group attaches the zone to an
 environment and deploys. Since 0.7.5 the form offers only the cloud this console runs on (`RAMEN_CLOUD`), with
-that cloud's zones grouped by region. The page lists every zone, then one row per group × zone with the live
+that cloud's zones grouped by region. The page lists every zone with its groups, then one row per bound group × zone with the live
 workers, their load, and for super admins and group admins the **max workers** and the last autoscale decision.
 
 <figure markdown>
 ![The zones page](../img/zones.png){ .ramen-shot }
-<figcaption>Zones and workers on a seeded local console: live workers per group × zone, the max, the last decision.</figcaption>
+<figcaption>Zones and workers on a seeded local console: each zone's groups, live workers per bound pair, the max, the last decision.</figcaption>
 </figure>
 
 A zone that is deleted, or dropped from the last environment that used it, is torn down for real: the namespace,
@@ -59,15 +63,21 @@ On the zones page the location is a dropdown of the provider's zones grouped by 
 on the group, or a GitHub App installation id with the App configured on the Config page. The console clones;
 workers never do.
 
-The group page is where the group lives: environments, deploy jobs, zones and workers, the packages each zone
-serves, service-account permissions, MCP keys, the worker image and restrictions.
+The group page is where the group lives: environments with their zones and workers, deploy jobs, the packages each
+zone serves, service-account permissions, MCP keys, the worker image and restrictions.
 
 ## Environments
 
-**Add environment** on the group page: a name, a ref and the zones, picked from a checkbox list of the zones that
-exist. Any group admin may attach any zone that exists, so a zone is a shared resource: which zones exist at all,
-decided by a super admin, is the control over where a group can run. `dev` can follow `main` while `prod` sits on a
-tag. Rolling back is deploying the older ref.
+**Add environment** on the group page: a name, a ref and the zones, picked from a checkbox list of the zones
+[bound to the group](#zones-are-bound-to-groups-100a). Which zones a group may run in is a super admin's decision,
+made on the Zones page; group admins pick among them. `dev` can follow `main` while `prod` sits on a tag. Rolling
+back is deploying the older ref.
+
+The **Environments** table on the group page is the one place for a group's zones: under each environment, one row
+per zone with the zone (and its namespace on GKE), the live workers (refreshed as you watch), the size, the sleep
+state, the IP allow-list and the service account, and under that **Zone actions** — a disclosure with the count and
+max, sleep, IP rules, throttle, service account, rebalance and the logs. A zone two environments share is shown
+under both.
 
 The **Environments** page lists every environment you can see, across the groups you belong to, with the last
 deploy flattened into the row: the outcome, when it ran, and the error if it failed. *Open group* goes to where
@@ -97,7 +107,11 @@ deploys are started.
 
 Any failure in steps 3 to 6 scales the canary to zero and leaves the stable pods untouched, a bad image pin
 included. The job log on the group page shows each step; a stuck rollout names the pod that is not running and
-the scheduler's reason.
+the scheduler's reason. Since 1.0.0a deploy jobs are kept in the state store (`jobs`, the last 50 per environment),
+so they are there after a console restart and on every replica; `GET /api/v1/jobs/{id}` reads the store. A job the
+console was restarted under stays `running` in the store until `RAMEN_JOB_STALE_SECS` (default 1800) pass without a
+change; then it is shown as `error: lost (console restarted)` and no longer blocks the next deploy. Backups do not
+include jobs.
 
 A deploy refused as breaking offers **Deploy again, accept breaking changes** on its job card (the API takes
 `"breaking": true`). Clients that hold a session keep talking to the stable workers meanwhile and see the new set on
@@ -109,7 +123,7 @@ passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-githu
 ## Scaling and sizes
 
 Since 0.7.5 Ramen scales the workers itself, between **1** and a **max** per zone that super admins and group
-admins set in the group page's **Zone actions** card (*Count (min 1)*, *Max (autoscale up to)*, **Scale workers**) or
+admins set under the zone's **Zone actions** on the group page (*Count (min 1)*, *Max (autoscale up to)*, **Scale workers**) or
 on the Zones page. There is no HPA any more. How it decides, the cooldowns and the load tests are on
 [Autoscaling](autoscaling.md). Super admins set the **size** (`s` 250m CPU and 512Mi, `m` 500m and 1Gi, `l` 1 CPU and 2Gi)
 and the sizes a zone allows.
@@ -157,7 +171,7 @@ digest email carries. `GET /api/v1/groups/{g}/zones/{z}/drift`.
 
 ## IP rules
 
-**IP rules** in the group page's *Zone actions* card takes a CIDR list. It becomes the node's allow-list and an edge
+**IP rules** under the zone's *Zone actions* on the group page takes a CIDR list. It becomes the node's allow-list and an edge
 rule: a Cloud Armor policy per group on GCP, a WAF IP set per group on AWS, an Envoy Gateway `SecurityPolicy` per
 zone route on AKS. **The Cloud Armor policy is one per group**, so two zones of the same group share the edge rule
 even though their node allow-lists stay separate. An empty list allows every source. Include the console's own range, because a deploy smoke-tests the

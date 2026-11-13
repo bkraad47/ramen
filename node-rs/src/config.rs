@@ -41,6 +41,7 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_OTEL_CLIENT",
     "RAMEN_TELEMETRY_CONSENT",
     "RAMEN_TELEMETRY_NOTICE",
+    "RAMEN_TELEMETRY_VERSION",
 ];
 
 /// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
@@ -170,6 +171,9 @@ pub struct Config {
     pub telemetry_consent: bool,
     /// §24.3: where the telemetry goes, as the consent prompt names it (`RAMEN_TELEMETRY_NOTICE`).
     pub telemetry_notice: String,
+    /// §26.3: the console's telemetry config version a report must name (`RAMEN_TELEMETRY_VERSION`, else the
+    /// `version` key of `RAMEN_OTEL_CLIENT`); empty = not told yet, any version is taken.
+    pub telemetry_version: String,
 }
 
 /// `RAMEN_OTEL_HEADERS`: a JSON object of header name → string value.
@@ -357,6 +361,13 @@ impl Config {
                 Some("1" | "true")
             ),
             telemetry_notice: get("RAMEN_TELEMETRY_NOTICE").unwrap_or_default(),
+            telemetry_version: get("RAMEN_TELEMETRY_VERSION")
+                .or_else(|| {
+                    get("RAMEN_OTEL_CLIENT")
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| v["version"].as_str().map(String::from))
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -769,6 +780,16 @@ mod tests {
             "http://jaeger:4318"
         );
         assert_eq!(c.telemetry_notice, "jaeger");
+        // §26.3: the version the console named, else the one inside the client object, else none
+        assert_eq!(c.telemetry_version, "");
+        let mut m2 = m.clone();
+        m2.insert(
+            "RAMEN_OTEL_CLIENT".into(),
+            r#"{"otlp_endpoint": "x", "version": "abc123"}"#.into(),
+        );
+        assert_eq!(Config::from_map(&m2).unwrap().telemetry_version, "abc123");
+        m2.insert("RAMEN_TELEMETRY_VERSION".into(), "def456".into());
+        assert_eq!(Config::from_map(&m2).unwrap().telemetry_version, "def456");
         // a bad value is refused without being quoted back
         for (k, v) in [
             ("RAMEN_OTEL_HEADERS", r#"{"x": 1}"#),
@@ -787,6 +808,7 @@ mod tests {
             "RAMEN_OTEL_CLIENT",
             "RAMEN_TELEMETRY_CONSENT",
             "RAMEN_TELEMETRY_NOTICE",
+            "RAMEN_TELEMETRY_VERSION",
         ] {
             assert!(DEPLOY_KEYS.contains(&k), "{k}");
         }

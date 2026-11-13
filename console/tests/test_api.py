@@ -59,7 +59,8 @@ def demo(root):
     assert r.status_code == 201, r.text
     assert root.post("/api/v1/groups", json={"name": "other"}).status_code == 201
     for z in ("zone-a", "zone-b"):
-        assert root.post("/api/v1/zones", json={"name": z, "provider": "local", "region": "local"}).status_code == 201
+        zone = {"name": z, "provider": "local", "region": "local", "groups": ["demo"]}  # §26.1: bound to demo
+        assert root.post("/api/v1/zones", json=zone).status_code == 201
     r = root.post(
         "/api/v1/groups/demo/environments", json={"name": "prod", "ref": "main", "zones": ["zone-a", "zone-b"]}
     )

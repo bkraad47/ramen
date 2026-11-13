@@ -92,7 +92,6 @@ class Services:
             "created_by": by,
             "mcp_auth": {"mode": "bearer"},
             "sa_restrictions": [],
-            "allowed_zones": [],  # 1.0.0: a super admin allows the zones the group may use
         }
         if github_token:  # private GitHub or GitLab repos (I2); encrypted at rest, see storage/encrypted.py
             doc["github_token"] = github_token
@@ -119,6 +118,10 @@ class Services:
         for col in ("environments", "secrets", "workers"):
             for d in await self.store.list(col, {"group": name}):
                 await self.store.delete(col, d["id"])
+        for z in await self.store.list("zones"):  # §26.1: the zone no longer lists the group
+            if name in (z.get("groups") or []):
+                z["groups"] = [g for g in z["groups"] if g != name]
+                await self.store.put("zones", z["id"], z)
         await self.store.delete("groups", name)
 
     async def set_sa_restrictions(self, name, rules: list[dict]) -> dict:
@@ -223,16 +226,20 @@ class Services:
         """The blocked region a zone's `region` falls in, or None."""
         return regions.blocked_region(provider, region or "", await self.blocked_regions())
 
-    async def create_zone(self, name, provider="local", region="") -> dict:
+    async def create_zone(self, name, provider="local", region="", groups=()) -> dict:
         if not NAME_RE.match(name or ""):
             raise invalid("Zone name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("zones", name):
             raise conflict(f"Zone {name} exists")
         if hit := await self.region_block(provider, region):
             raise forbidden(regions.message(hit))
-        return await self.store.put(
-            "zones", name, {"name": name, "provider": provider, "region": region, "created": now()}
-        )
+        groups = list(dict.fromkeys(groups))
+        await self._check_groups(groups)
+        doc = {"name": name, "provider": provider, "region": region, "created": now(), "groups": groups}
+        z = await self.store.put("zones", name, doc)
+        for g in groups:  # §26.1: binding creates the worker record
+            await self._bind(g, name)
+        return z
 
     async def detach_zone(self, group, zone) -> dict:
         """Tear one group's deployment in one zone down for real (0.6.0): the cloud namespace, workers and zone
@@ -269,53 +276,74 @@ class Services:
         if bad:
             raise invalid(f"Unknown zones: {', '.join(bad)}")
 
-    # --- 1.0.0: the zones a group may use, set by a super admin ------------------------------------------------
-    async def allowed_zones(self, group) -> list[str]:
-        return list((await self.get_group(group)).get("allowed_zones") or [])
+    # --- §26.1: zones bound to groups (D61) -------------------------------------------------------------------
+    @staticmethod
+    def default_worker(group, zone) -> dict:
+        doc = {"id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "max_count": 1}
+        return {**doc, "size": "s", "allowed_sizes": []}
 
-    async def _allow_zones(self, group, zones, by_super: bool) -> None:
-        """A group admin's environment may use only the group's allowed zones; a super admin's environment allows the
-        zones it names (the super admin is the one who decides)."""
-        g = await self.get_group(group)
-        allowed = list(g.get("allowed_zones") or [])
-        extra = [z for z in zones if z not in allowed]
-        if not extra:
-            return
-        if not by_super:
-            raise forbidden(
-                f"Zone(s) {', '.join(extra)} are not allowed for group {group}; a super admin allows a group's zones"
-            )
-        g["allowed_zones"] = allowed + extra
-        await self.store.put("groups", group, g)
+    async def group_zones(self, group) -> list[str]:
+        """The group's zones: the zones listing it."""
+        await self.get_group(group)
+        return sorted(z["id"] for z in await self.store.list("zones") if group in (z.get("groups") or []))
 
-    async def set_allowed_zones(self, group, zones) -> list[str]:
-        """Replace the group's allowed zones. Every zone must exist; a zone an environment still uses cannot go."""
-        g = await self.get_group(group)
-        zones = list(dict.fromkeys(zones))
-        await self._check_zones(zones)
+    async def _check_groups(self, groups):
+        known = {g["id"] for g in await self.store.list("groups")}
+        if bad := [g for g in groups if g not in known]:
+            raise invalid(f"Unknown groups: {', '.join(bad)}")
+
+    async def _bind(self, group, zone) -> None:
+        if not await self.store.get("workers", f"{group}:{zone}"):
+            await self.store.put("workers", f"{group}:{zone}", self.default_worker(group, zone))
+
+    async def set_zone_groups(self, zone, groups) -> dict:
+        """Replace the groups a zone serves. Every group must exist (422); a group whose environment still uses the
+        zone cannot go (409); a group that goes is detached (namespace, workers, identity, record)."""
+        z = await self.store.get("zones", zone)
+        if not z:
+            raise not_found("zone")
+        groups = list(dict.fromkeys(groups))
+        await self._check_groups(groups)
+        gone = [g for g in z.get("groups") or [] if g not in groups]
         in_use = [
-            f"{e['name']} uses {z}"
-            for e in await self.environments(group)
-            for z in e.get("zones", [])
-            if z not in zones
+            f"{e['name']} uses {zone}" for g in gone for e in await self.environments(g) if zone in e.get("zones", [])
         ]
         if in_use:
             raise conflict(f"Remove the zone from the environment first: {'; '.join(in_use)}")
-        g["allowed_zones"] = zones
-        await self.store.put("groups", group, g)
-        return zones
+        for g in gone:
+            await self.detach_zone(g, zone)
+        for g in groups:
+            await self._bind(g, zone)
+        z["groups"] = groups
+        return await self.store.put("zones", zone, z)
 
-    async def migrate_allowed_zones(self) -> int:
-        """Groups from before 1.0.0 have no list: they get the zones their environments use, so nothing changes for
-        them. A group that has a list (even an empty one) is left alone."""
-        n = 0
-        for g in await self.store.list("groups"):
+    async def _check_bound(self, group, zones) -> None:
+        """An environment may name only the group's zones — whoever asks (a super admin binds first)."""
+        bound = await self.group_zones(group)
+        if extra := [z for z in zones if z not in bound]:
+            raise forbidden(
+                f"Zone(s) {', '.join(extra)} are not bound to group {group}; "
+                "a super admin binds a zone to a group on the Zones page"
+            )
+
+    async def migrate_zone_groups(self) -> int:
+        """Zones from before 1.0.0a get the groups whose `allowed_zones` named them or whose environments use them,
+        once; a zone with `groups` (even empty) is left alone. Every bound pair has a worker record; `allowed_zones`
+        goes. Returns the number of zones migrated."""
+        groups, envs, n = await self.store.list("groups"), await self.store.list("environments"), 0
+        for z in await self.store.list("zones"):
+            if "groups" not in z:
+                users = {g["id"] for g in groups if z["id"] in (g.get("allowed_zones") or [])}
+                users |= {e["group"] for e in envs if z["id"] in e.get("zones", [])}
+                z["groups"] = sorted(users)
+                await self.store.put("zones", z["id"], z)
+                n += 1
+            for g in z["groups"]:
+                await self._bind(g, z["id"])
+        for g in groups:
             if "allowed_zones" in g:
-                continue
-            used = sorted({z for e in await self.environments(g["name"]) for z in e.get("zones", [])})
-            g["allowed_zones"] = used
-            await self.store.put("groups", g["name"], g)
-            n += 1
+                g.pop("allowed_zones")
+                await self.store.put("groups", g["id"], g)
         return n
 
     async def environments(self, group=None) -> list[dict]:
@@ -328,14 +356,14 @@ class Services:
             raise not_found("environment")
         return e
 
-    async def create_env(self, group, name, ref=None, zones=(), by_super: bool = True) -> dict:
+    async def create_env(self, group, name, ref=None, zones=()) -> dict:
         g = await self.get_group(group)
         if not NAME_RE.match(name or ""):
             raise invalid("Environment name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("environments", f"{group}:{name}"):
             raise conflict(f"Environment {name} exists in {group}")
         await self._check_zones(zones)
-        await self._allow_zones(group, zones, by_super)
+        await self._check_bound(group, zones)
         doc = {
             "group": group,
             "name": name,
@@ -427,14 +455,14 @@ class Services:
         await self.store.put("groups", group, g)
         return doc
 
-    async def update_env(self, group, name, by_super: bool = True, **fields) -> dict:
+    async def update_env(self, group, name, **fields) -> dict:
         e = await self.get_env(group, name)
         if fields.get("blocked") is not None:
             fields["blocked"] = clean_blocked(fields["blocked"])
         before = list(e.get("zones", []))
         if fields.get("zones") is not None:
             await self._check_zones(fields["zones"])
-            await self._allow_zones(group, fields["zones"], by_super)
+            await self._check_bound(group, fields["zones"])
             await self._attach_zones(group, fields["zones"], already=before)
         e.update({k: v for k, v in fields.items() if v is not None})
         saved = await self.store.put("environments", e["id"], e)
@@ -533,17 +561,12 @@ class Services:
         return decision
 
     async def worker_config(self, group, zone) -> dict:
-        if not await self.store.get("zones", zone):
+        z = await self.store.get("zones", zone)
+        if not z:
             raise not_found("zone")
-        return await self.store.get("workers", f"{group}:{zone}") or {
-            "id": f"{group}:{zone}",
-            "group": group,
-            "zone": zone,
-            "count": 1,
-            "max_count": 1,
-            "size": "s",
-            "allowed_sizes": [],
-        }
+        if group not in (z.get("groups") or []):  # §26.1: a worker record exists only for a bound pair
+            raise not_found(f"worker: zone {zone} is not bound to group {group}")
+        return await self.store.get("workers", f"{group}:{zone}") or self.default_worker(group, zone)
 
     # --- §24.1 sleeping workers ---------------------------------------------------------------------------------
     async def _audit_sleep(self, action, group, zone, trigger, user, ip, ok=True, extra=()):
@@ -697,18 +720,13 @@ class Services:
 
     async def refresh(self) -> dict:
         r = await self.cloud.refresh()
+        bound = {(g, z["id"]) for z in await self.store.list("zones") for g in z.get("groups") or []}
         for z in r.get("zones", []):
-            if not (z.get("group") and z.get("zone")):
-                continue
-            w = await self.store.get("workers", f"{z['group']}:{z['zone']}") or {
-                "id": f"{z['group']}:{z['zone']}",
-                "group": z["group"],
-                "zone": z["zone"],
-                "count": 1,
-                "max_count": 1,
-                "size": "s",
-                "allowed_sizes": [],
-            }
+            if not (z.get("group") and z.get("zone")) or (z["group"], z["zone"]) not in bound:
+                continue  # §26.1: only bound pairs have a record
+            w = await self.store.get("workers", f"{z['group']}:{z['zone']}") or self.default_worker(
+                z["group"], z["zone"]
+            )
             w["live_state"] = {
                 k: z.get(k) for k in ("namespace", "replicas", "ready", "canary_replicas", "canary_ready")
             }

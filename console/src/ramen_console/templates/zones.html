@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "partials/table.html" import table %}{% block title %}Zones and workers{% endblock %}
+{% extends "base.html" %}{% from "partials/multi.html" import multi %}{% block title %}Zones and workers{% endblock %}
 {% block body %}
 {% if p.role == 'super_admin' %}<h2>New zone</h2>
 {% set ck = cloud_kind() %}{% set clouds = [ck] if ck in ('gcp', 'aws', 'azure') else [] %}
@@ -7,11 +7,17 @@
 <label>{{ cloud_label(prov) }} zone name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="{{ {'gcp': 'a', 'aws': 'use1', 'azure': 'eus1'}[prov] }}"></label><label>Location<select name="region">{% for r, zs in region_zones[prov].items() %}<optgroup label="{{ r }}">{% for z in zs %}<option>{{ z }}</option>{% endfor %}</optgroup>{% else %}<option value="">Every {{ cloud_label(prov) }} region is blocked</option>{% endfor %}</select></label><button class="act">Add {{ cloud_label(prov) }} zone</button></form>
 {% endfor %}{% if ck == 'local' %}<form class="inline controls" hx-post="{{ base }}/api/v1/zones" hx-ext="json" hx-swap="none"><input type="hidden" name="provider" value="local">
 <label>Local zone name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="local"></label><label>Location (free text)<input name="region" placeholder="local"></label><button class="act">Add local zone</button></form>{% endif %}</div>{% endif %}
-{% macro act(r) %}{% if p.role == 'super_admin' %}<div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/zones/{{ r.id }}" hx-confirm="Delete zone {{ r.id }}?" hx-swap="none">Delete zone</button></div>{% endif %}{% endmacro %}
-{{ table(zones, ['name', 'provider', 'region', 'created'], u('/api/v1/zones'), 'Zones', act) }}
-<h2>Workers per group</h2><div class="card"><p class="muted">One row per group × zone. A worker is one pod: the Rust node (gRPC + Streamable HTTP, auth, limits) plus a Python sidecar that runs the group's tools. The sidecar starts on the first call and is stopped after <code>RAMEN_SIDECAR_IDLE_SECS</code> (default 300) without calls, then starts again on the next one — "sidecar stopped" in a log is idle, not broken; set a very large value on the deploy to keep it warm. The live cell refreshes every 15 s: one entry per worker with its load (low / even / high, calls in flight over total) and the canary when one is running.</p>
+{% set group_opts = [] %}{% for g in groups %}{% set _ = group_opts.append((g.id, g.id)) %}{% endfor %}{% set visible = groups|map(attribute='id')|list %}
+<div class="card"><div class="dl">Download: <a href="{{ base }}/api/v1/zones?format=csv">CSV</a><a href="{{ base }}/api/v1/zones?format=json">JSON</a></div>
+<h2 style="margin-top:0">Zones</h2><p class="muted">A zone serves the groups it lists: binding a group creates its worker record for the zone, unbinding tears the group's deployment in the zone down (a zone an environment still uses cannot be unbound). Environments pick from the zones bound to their group.</p>
+<table><thead><tr><th>Name</th><th>Provider</th><th>Region</th><th>Created</th><th>Groups</th>{% if p.role == 'super_admin' %}<th>Actions</th>{% endif %}</tr></thead><tbody>
+{% for z in zones %}<tr><td>{{ z.name }}</td><td>{{ z.provider }}</td><td>{{ z.region }}</td><td>{{ z.created }}</td>
+<td>{% if p.role == 'super_admin' %}<form class="inline" style="margin:0" hx-put="{{ base }}/api/v1/zones/{{ z.id }}/groups" hx-ext="json" hx-swap="none">{{ multi('groups', group_opts, z.groups or [], 'zone-groups-' ~ z.id, '', 'No groups') }}<button class="act ghost">Save groups</button></form>{% else %}{{ (z.groups or [])|join(', ') or '—' }}{% endif %}</td>
+{% if p.role == 'super_admin' %}<td><div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/zones/{{ z.id }}" hx-confirm="Delete zone {{ z.id }}?" hx-swap="none">Delete zone</button></div></td>{% endif %}</tr>
+{% else %}<tr><td colspan="6" class="muted">Nothing yet</td></tr>{% endfor %}</tbody></table></div>
+<h2>Workers per group</h2><div class="card"><p class="muted">One row per bound group × zone. A worker is one pod: the Rust node (gRPC + Streamable HTTP, auth, limits) plus a Python sidecar that runs the group's tools. The sidecar starts on the first call and is stopped after <code>RAMEN_SIDECAR_IDLE_SECS</code> (default 300) without calls, then starts again on the next one — "sidecar stopped" in a log is idle, not broken; set a very large value on the deploy to keep it warm. The live cell refreshes every 15 s: one entry per worker with its load (low / even / high, calls in flight over total) and the canary when one is running.</p>
 <table><tr><th>Group</th><th>Zone</th><th>Namespace</th><th>Live workers and canary</th></tr>
-{% for g in groups %}{% for z in zones %}<tr><td><a href="{{ base }}/groups/{{ g.id }}">{{ g.id }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
-<td>{% if z.provider == 'gcp' %}<code>ramen-{{ g.id }}-{{ z.id }}</code>{% else %}—{% endif %}</td>
-<td hx-get="{{ base }}/ui/groups/{{ g.id }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endfor %}{% else %}<tr><td colspan="4" class="muted">No groups</td></tr>{% endfor %}</table></div>
+{% set ns = namespace(n=0) %}{% for z in zones %}{% for g in z.groups or [] %}{% if g in visible %}{% set ns.n = ns.n + 1 %}<tr><td><a href="{{ base }}/groups/{{ g }}">{{ g }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
+<td>{% if z.provider == 'gcp' %}<code>ramen-{{ g }}-{{ z.id }}</code>{% else %}—{% endif %}</td>
+<td hx-get="{{ base }}/ui/groups/{{ g }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endif %}{% endfor %}{% endfor %}{% if not ns.n %}<tr><td colspan="4" class="muted">No zone is bound to a group yet</td></tr>{% endif %}</table></div>
 {% endblock %}

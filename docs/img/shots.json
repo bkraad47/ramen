@@ -39,7 +39,7 @@
     },
     "group-autoscale.png": {
       "captured_for": "1.0.0",
-      "page": "Group page: zone actions with count, max (autoscale up to) and the last autoscale decision"
+      "page": "Group page: a zone's actions (count, max to autoscale up to, the last decision) under its environment"
     },
     "group-signin.png": {
       "captured_for": "1.0.0",
@@ -47,7 +47,7 @@
     },
     "group.png": {
       "captured_for": "1.0.0",
-      "page": "A group: environments, zones, packages, permissions, worker image"
+      "page": "A group: environments with their zones and workers, packages, permissions"
     },
     "key-shown.png": {
       "captured_for": "1.0.0",
@@ -79,7 +79,7 @@
     },
     "zones.png": {
       "captured_for": "1.0.0",
-      "page": "Zones and workers: this cloud's zones, the workers per group with their max"
+      "page": "Zones and workers: this cloud's zones with their groups, the workers per bound pair"
     }
   },
   "ui_contract": "1.0.0"

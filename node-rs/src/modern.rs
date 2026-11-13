@@ -226,13 +226,16 @@ pub fn known_method(method: &str, http: bool) -> bool {
             | "tasks/get"
             | "tasks/update"
             | "tasks/cancel"
+            | "telemetry/report"
     ) || (http && method == "subscriptions/listen")
 }
 
-/// §23.1: the HTTP status of a modern JSON-RPC error raised by dispatch (the `_meta` `-32602` is a `Refusal`).
+/// §23.1: the HTTP status of a modern JSON-RPC error raised by dispatch (the `_meta` `-32602` is a `Refusal`);
+/// §26.3: a missing or stale telemetry report is 428.
 pub fn http_status(code: i64) -> u16 {
     match code {
         -32022..=-32020 => 400,
+        -32025 | -32024 => 428,
         -32601 => 404,
         _ => 200,
     }

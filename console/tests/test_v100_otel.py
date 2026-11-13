@@ -74,6 +74,7 @@ def claims(token):
 def test_the_settings_round_trip_and_header_values_never_come_back(demo):
     assert demo.get(CFG).json() == {
         "enabled": False,
+        "telemetry_version": otel.telemetry_version({"enabled": False}),  # §26.3
         "endpoint": "",
         "client_endpoint": "",
         "headers_set": False,
@@ -91,6 +92,7 @@ def test_the_settings_round_trip_and_header_values_never_come_back(demo):
     assert r.status_code == 200, r.text
     want = {
         "enabled": True,
+        "telemetry_version": r.json()["telemetry_version"],
         "endpoint": "http://jaeger.ramen-system:4318",
         "client_endpoint": "https://otel.example.com:4318",
         "headers_set": True,
@@ -98,7 +100,7 @@ def test_the_settings_round_trip_and_header_values_never_come_back(demo):
         "client_headers_set": True,
         "client_header_names": ["x-team"],
     }
-    assert r.json() == want and demo.get(CFG).json() == want
+    assert r.json() == {**want, "pushed": {}} and demo.get(CFG).json() == want
     for text in (r.text, demo.get(CFG).text, demo.get("/config").text, demo.get("/api/v1/audit?limit=50").text):
         assert "s3cret" not in text and "t0ken" not in text
     # the form posts strings: an empty header field means unchanged, JSON text sets, {} clears
@@ -162,6 +164,8 @@ def test_workers_get_the_export_and_client_settings_on_deploy(demo, cloud, colle
         "otlp_endpoint": "https://otel.example.com:4318",
         "headers": {"x-team": "agents-t0ken"},
         "resource_attributes": {"ramen.group": "demo", "ramen.zone": "zone-a"},
+        "version": cfg["RAMEN_TELEMETRY_VERSION"],  # §26.3
+        "required": False,
     }
     assert "s3cret" not in cfg["RAMEN_OTEL_CLIENT"]  # never Ramen's own headers
     assert "RAMEN_TELEMETRY_CONSENT" not in cfg and "RAMEN_TELEMETRY_NOTICE" not in cfg
@@ -178,6 +182,7 @@ def test_the_client_endpoint_defaults_to_the_endpoint_with_no_headers():
         "otlp_endpoint": "http://j:4318",
         "headers": {},
         "resource_attributes": {"ramen.group": "g", "ramen.zone": "z"},
+        "version": otel.telemetry_version(cfg),
     }
     env = otel.worker_env(cfg, {"require_telemetry_consent": True}, "g", "z")
     assert env["RAMEN_TELEMETRY_NOTICE"] == "j:4318" and env["RAMEN_OTEL_HEADERS"] == '{"a":"b"}'
@@ -198,6 +203,8 @@ def test_token_answers_carry_telemetry_when_enabled_and_no_tel_claim_without_con
         "otlp_endpoint": "https://otel.example.com:4318",
         "headers": {"x-team": "agents-t0ken"},
         "resource_attributes": {"ramen.group": "demo", "ramen.zone": "zone-a"},
+        "version": demo.get(CFG).json()["telemetry_version"],
+        "required": False,
     }
     t = refresh(demo, cid, t["refresh_token"]).json()
     assert t["telemetry"] == want and "tel" not in claims(t["access_token"])

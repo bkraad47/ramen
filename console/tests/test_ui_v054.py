@@ -9,7 +9,7 @@ from tests.test_api import app, client, cloud, demo, root  # noqa: F401 - pytest
 def test_environment_row_buttons_are_equal_width_and_on_one_line(demo):
     page = demo.get("/groups/demo").text
     rows = re.findall(
-        r"<tr>(.*?)</tr>", page[page.index("<h2>Environments</h2>") : page.index("<h2>Deploy jobs</h2>")], re.S
+        r"<tr[^>]*>(.*?)</tr>", page[page.index("<h2>Environments</h2>") : page.index("<h2>Deploy jobs</h2>")], re.S
     )
     env_rows = [r for r in rows if "Deploy (canary)" in r]
     assert env_rows, "the seeded group has environments"

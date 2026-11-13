@@ -14,9 +14,27 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
 [Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/).
 
 
-- **Each group has a list of allowed zones, set by super admins.** A group admin's environments can use only those
-  zones (403 otherwise), and the group page shows only them. Existing groups keep the zones their environments use;
-  a new group starts with none.
+- **Zones are bound to groups.** A zone lists the groups it serves (Zones page, *Groups* column; `POST /api/v1/zones`
+  takes `groups`, `PUT /api/v1/zones/{zone}/groups`); a group's zones are the zones listing it
+  (`GET /api/v1/groups/{g}/zones` → `{"zones": [...]}`). An environment may name only the group's zones, whoever
+  creates it; binding creates the pair's worker record, unbinding tears the group's deployment in the zone down
+  (refused while an environment uses it). The group page is one **Environments** table: under each environment, a
+  row per zone with the live workers, size, sleep state, IP allow-list and service account, and the zone's actions in
+  a disclosure; the "Zones and workers" and "Zone actions" cards are gone. Existing zones are bound to the groups
+  whose environments used them.
+- **Deploy jobs are kept in the store** (`jobs`, the last 50 per environment): a job and its log are there after a
+  console restart and on every replica. A job still `running` after `RAMEN_JOB_STALE_SECS` (1800) without a change
+  reads as `lost (console restarted)`. Backups leave jobs out.
+- **Telemetry through Ramen.** The telemetry settings have a `telemetry_version` (Config page, `GET /api/v1/config/otel`,
+  every token answer's `telemetry` object, which also says whether the group `required`s reports; workers get
+  `RAMEN_TELEMETRY_VERSION`). Saving the settings pushes the new worker config to every deployed zone and reloads its
+  workers (`pushed` in the answer, audited `telemetry.push`), no deploy needed. When a group requires telemetry, a
+  worker serves `tools/call`, `prompts/get` and `resources/read` only with the client's report in
+  `_meta["io.ramen/telemetry"]` (its calls since the last one, MCP or not, with the model's reasoning) at the current
+  version — missing → `-32024`, stale → `-32025: sign in again` — and forwards each event as a span under the call's
+  own, tagged with the caller's IP, user, group, zone and worker. The bridge does this for its host: it holds the
+  config encrypted in memory, records every call, offers `ramen_report`, and signs in again when the config changed.
+  With the chart's Jaeger on, the Config page names its UI (`RAMEN_OTEL_UI_URL`).
 - **The console's own secrets live in the cloud's secret manager.** SMTP password, GitHub App key, identity-provider
   client secrets, telemetry headers, repo tokens and Redis URLs are each a secret of their own (`ramenc-…`,
   `ramen-console/…`) the store only references; no worker can read them; locally they stay encrypted in the store.

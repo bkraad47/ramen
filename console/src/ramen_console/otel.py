@@ -6,6 +6,7 @@ Stored doc: `{"enabled", "endpoint", "client_endpoint", "otel_headers", "otel_cl
 as JSON strings so the store encrypts them (storage/encrypted.py) and backups drop them like every secret.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -95,10 +96,23 @@ async def set_config(store, *, enabled=None, endpoint=None, headers=None, client
     return cfg
 
 
+def telemetry_version(cfg: dict) -> str:
+    """§26.3: the first 12 hex of sha256 over the canonical JSON of what clients are told — `enabled`, `endpoint`,
+    `client_endpoint`, `client_headers`; never Ramen's own `headers`. A change makes every pushed config stale."""
+    doc = {
+        "enabled": bool(cfg.get("enabled")),
+        "endpoint": cfg.get("endpoint") or "",
+        "client_endpoint": cfg.get("client_endpoint") or "",
+        "client_headers": {str(k): str(v) for k, v in (cfg.get("client_headers") or {}).items()},
+    }
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+
+
 def public_config(cfg: dict) -> dict:
     """Header values are write-only: only whether each map is set, and its header names, come back."""
     return {
         "enabled": cfg["enabled"],
+        "telemetry_version": telemetry_version(cfg),
         "endpoint": cfg["endpoint"],
         "client_endpoint": cfg["client_endpoint"],
         "headers_set": bool(cfg["headers"]),
@@ -113,15 +127,20 @@ def host(url: str) -> str:
     return u.netloc.rsplit("@", 1)[-1] if u.netloc else ""
 
 
-def client_info(cfg: dict, group: str, zone: str) -> dict | None:
-    """What a connected agent is told to use — the client endpoint and headers, never Ramen's own `headers`."""
+def client_info(cfg: dict, group: str, zone: str, required: bool | None = None) -> dict | None:
+    """What a connected agent is told to use — the client endpoint and headers, never Ramen's own `headers` — with
+    the config `version` (§26.3) and, when known, whether the group `required`s telemetry reports."""
     if not cfg["enabled"]:
         return None
-    return {
+    out = {
         "otlp_endpoint": cfg["client_endpoint"] or cfg["endpoint"],
         "headers": dict(cfg["client_headers"]),
         "resource_attributes": {"ramen.group": group, "ramen.zone": zone},
+        "version": telemetry_version(cfg),
     }
+    if required is not None:
+        out["required"] = bool(required)
+    return out
 
 
 def consent_host(cfg: dict, group_doc: dict) -> str | None:
@@ -135,10 +154,12 @@ def worker_env(cfg: dict, group_doc: dict, group: str, zone: str) -> dict[str, s
     """The deploy config a zone's workers get on their next deploy; nothing when telemetry is off."""
     if not cfg["enabled"]:
         return {}
+    required = bool(group_doc.get("require_telemetry_consent"))
     env = {
         "RAMEN_OTEL_ENDPOINT": cfg["endpoint"],
         "RAMEN_OTEL_HEADERS": json.dumps(cfg["headers"], sort_keys=True, separators=(",", ":")),
-        "RAMEN_OTEL_CLIENT": json.dumps(client_info(cfg, group, zone), sort_keys=True, separators=(",", ":")),
+        "RAMEN_OTEL_CLIENT": json.dumps(client_info(cfg, group, zone, required), sort_keys=True, separators=(",", ":")),
+        "RAMEN_TELEMETRY_VERSION": telemetry_version(cfg),  # §26.3: what a report must name
     }
     if (notice := consent_host(cfg, group_doc)) is not None:
         env["RAMEN_TELEMETRY_CONSENT"] = "1"

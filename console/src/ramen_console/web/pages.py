@@ -88,7 +88,7 @@ async def drift_partial(request: Request, group: str, zone: str, p: Principal = 
 
 @r.get("/ui/jobs/{jid}")
 async def job_partial(request: Request, jid: str, p: Principal = Depends(viewer)):
-    return render(request, "partials/job.html", job=request.app.state.jobs.get(jid))
+    return render(request, "partials/job.html", job=await request.app.state.jobs.get(jid))
 
 
 @r.get("/groups")
@@ -100,18 +100,17 @@ async def groups(request: Request, p: Principal = Depends(viewer)):
 async def group_detail(request: Request, group: str, p: Principal = Depends(require("viewer", "group"))):
     s = svc(request)
     g = await s.get_group(group)
-    all_zones = await s.zones()
-    allowed = list(g.get("allowed_zones") or [])
-    zones = [z for z in all_zones if z["id"] in allowed]  # 1.0.0: a group sees and uses only its allowed zones
+    bound = await s.group_zones(group)  # §26.1: the group sees and uses the zones bound to it
+    zones = [z for z in await s.zones() if z["id"] in bound]
     workers = {z["id"]: await s.worker_config(group, z["id"]) for z in zones}
     envs = await s.environments(group)
+    used = {z for e in envs for z in e.get("zones") or []}
     return render(
         request,
         "group.html",
         group=g,
-        all_zones=all_zones,
-        allowed_zones=allowed,
-        is_super=p.role == "super_admin",
+        zone_by={z["id"]: z for z in zones},
+        unused_zones=[z for z in bound if z not in used],
         envs=envs,
         kinds=toolaccess.kinds(),
         tool_rows={e["name"]: toolaccess.rows(e) for e in envs},
@@ -125,7 +124,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         builds=await s.builds_images(g),  # §24.2
         builder=await imagebuild.builder_available(s.cloud),
         otel=otel.public_config(await otel.get_config(s.store)),  # §24.3
-        jobs=request.app.state.jobs.recent(f"{group}/"),
+        jobs=await request.app.state.jobs.recent(f"{group}/"),
         can_admin=can(p, "group_admin", group),
         permissions=perm.table(),
         requests=[
@@ -323,4 +322,5 @@ async def config(request: Request, p: Principal = Depends(super_)):
         oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
         drift={"warn_pct": await drift.threshold(store)},
         otel=otel.public_config(await otel.get_config(store)),
+        otel_ui_url=os.environ.get("RAMEN_OTEL_UI_URL", "").strip(),  # §26.3: the chart's Jaeger UI
     )

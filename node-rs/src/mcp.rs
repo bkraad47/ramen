@@ -77,6 +77,8 @@ pub struct Env<'a> {
     pub host: Option<Host<'a>>,
     /// §24.3: the call's span; each sidecar round trip becomes a child of it.
     pub span: Option<&'a crate::otel::SpanCtx>,
+    /// §26.3: who is calling, for the events a `telemetry/report` forwards.
+    pub tel: Option<crate::telemetry::Sender<'a>>,
 }
 
 static NO_CAPS: Value = Value::Null;
@@ -90,6 +92,7 @@ impl<'a> Env<'a> {
             progress: None,
             host: None,
             span: None,
+            tel: None,
         }
     }
 }
@@ -260,6 +263,11 @@ pub async fn dispatch_env(
             }
         }
         "completion/complete" => complete(sc, blocked, params).await?,
+        // §26.3: a report between calls; never consent-gated
+        "telemetry/report" if env.modern => {
+            let host = env.host.ok_or_else(|| RpcErr::internal("no config"))?;
+            crate::telemetry::report(host.cfg, env.tel.as_ref(), params)?
+        }
         "tasks/get" | "tasks/update" | "tasks/cancel" if env.modern => {
             // §23.5: without the extension declared on this request the methods do not exist for the caller
             if !modern::tasks_declared(env.caps) {

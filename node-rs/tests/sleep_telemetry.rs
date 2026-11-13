@@ -61,8 +61,17 @@ fn config(extra: &[(&str, &str)]) -> Config {
 /// A node (worker with the fake runtime loaded, or an activator) serving on `listener`.
 async fn serve(cfg: Config, listener: TcpListener) -> Node {
     let again = cfg.clone();
+    serve_from(cfg, Box::new(move || Ok(again.clone())), listener).await
+}
+
+/// Like `serve`, with what an `Admin/Reload` re-reads (§26.3: the console pushes a new telemetry config).
+async fn serve_from(
+    cfg: Config,
+    source: ramen_node::grpc::ConfigSource,
+    listener: TcpListener,
+) -> Node {
     let activator = cfg.activator;
-    let app = app_with(cfg, Box::new(move || Ok(again.clone()))).await;
+    let app = app_with(cfg, source).await;
     if !activator {
         app.load().await.expect("the fake runtime loads");
     }
@@ -1082,7 +1091,13 @@ fn with(mut params: Value, extra: Value) -> Value {
 async fn consent_by_prompt_then_the_tools_own_rounds() {
     log_path();
     let n = worker(CONSENT).await;
-    let ask = || json!({"name": "ask", "arguments": {"mode": "state"}});
+    // §26.3: once consent is on record the call must also report (an empty report here)
+    let ask = || {
+        with(
+            json!({"name": "ask", "arguments": {"mode": "state"}}),
+            empty_report(),
+        )
+    };
     let call = |params: Value| modern(n.addr, MCP_KEY, elicit(), "tools/call", params, &[]);
 
     // round 1: the node asks, the runtime is not reached
@@ -1198,7 +1213,10 @@ async fn consent_by_prompt_then_the_tools_own_rounds() {
 
     // on record: never asked again — a stale consent state on a later call is dropped, not handed to the tool
     let r = call(with(
-        json!({"name": "echo", "arguments": {"q": "1"}}),
+        with(
+            json!({"name": "echo", "arguments": {"q": "1"}}),
+            empty_report(),
+        ),
         json!({"inputResponses": accept(true)}),
     ))
     .await;
@@ -1215,12 +1233,12 @@ async fn consent_by_prompt_then_the_tools_own_rounds() {
         "{}",
         r.body
     );
-    // …on the legacy era too, and over gRPC; another caller is still asked
+    // …on the legacy era too (with the report in the body, §26.3), and over gRPC; another caller is still asked
     let r = legacy(
         n.addr,
         MCP_KEY,
         "tools/call",
-        json!({"name": "echo", "arguments": {}}),
+        with(json!({"name": "echo", "arguments": {}}), empty_report()),
     )
     .await;
     assert!(r.json()["result"]["content"].is_array(), "{}", r.body);
@@ -1402,11 +1420,28 @@ async fn a_tel_token_and_the_consoles_own_calls_are_never_asked() {
         ramen_node::token::mint(&c, &key)
     };
     let echo = || json!({"name": "echo", "arguments": {"q": "t"}});
-    // 1. the person approved the notice on the OAuth consent page: served on both eras, nothing recorded
+    // 1. the person approved the notice on the OAuth consent page: never asked, nothing recorded — but §26.3
+    // still wants the report, which a 2025-06-18 client cannot give
     let t = token("u-yes", json!(true));
     let r = legacy(n.addr, &t, "tools/call", echo()).await;
-    assert!(r.text().contains(r#""q": "t""#), "{}", r.body);
-    let r = modern(n.addr, &t, json!({}), "tools/call", echo(), &[]).await;
+    assert_eq!(r.code(), Some(-32003), "{}", r.body);
+    assert!(
+        r.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("forbidden: this group requires telemetry;"),
+        "{}",
+        r.body
+    );
+    let r = modern(
+        n.addr,
+        &t,
+        json!({}),
+        "tools/call",
+        with(echo(), empty_report()),
+        &[],
+    )
+    .await;
     assert_eq!(r.json()["result"]["resultType"], "complete", "{}", r.body);
     assert!(
         n.app
@@ -1435,19 +1470,22 @@ async fn a_tel_token_and_the_consoles_own_calls_are_never_asked() {
         elicit(),
         "tools/call",
         with(
-            echo(),
+            with(echo(), empty_report()),
             json!({"inputResponses": accept(true), "requestState": state}),
         ),
         &[],
     )
     .await;
     assert_eq!(r.json()["result"]["resultType"], "complete", "{}", r.body);
-    let later = token("u-no", Value::Null); // a refreshed token
+    let later = token("u-no", Value::Null); // a refreshed token: consent on record, so only the report is missing
+    let r = legacy(n.addr, &later, "tools/call", echo()).await;
     assert!(
-        legacy(n.addr, &later, "tools/call", echo())
-            .await
-            .text()
-            .contains("\"q\"")
+        r.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("forbidden: this group requires telemetry;"),
+        "{}",
+        r.body
     );
     assert!(
         n.app
@@ -1786,4 +1824,443 @@ async fn a_dead_collector_never_fails_or_slows_a_call() {
     // and with no endpoint, nothing is even collected
     let off = worker(&[]).await;
     assert!(!off.app.otel.enabled());
+}
+
+// ------------------------------------------------------------------------------------ §26.3 telemetry through Ramen
+
+const VERSION: &str = "0f1e2d3c4b5a";
+
+fn report(version: &str, events: Value) -> Value {
+    json!({"_meta": {"io.ramen/telemetry": {"version": version, "seq": 3, "events": events}}})
+}
+
+/// A report with nothing in it, for a worker that was never told a version.
+fn empty_report() -> Value {
+    report("", json!([]))
+}
+
+fn tel_token(sub: &str) -> String {
+    let key = ramen_node::session::Sessions::new(Some("s"), 60).derived_key("oauth");
+    ramen_node::token::mint(
+        &json!({"iss": "https://console.example", "sub": sub, "email": "ada@example.com", "aud": "mcp:demo:a",
+                "scope": "mcp:demo:a", "exp": ramen_node::session::now() + 600, "tel": true}),
+        &key,
+    )
+}
+
+async fn reporting_worker(collector: SocketAddr) -> Node {
+    let endpoint = format!("http://{collector}");
+    let client = format!(
+        r#"{{"otlp_endpoint": "{endpoint}", "headers": {{}}, "version": "{VERSION}", "required": true}}"#
+    );
+    let mut vars = CONSENT.to_vec();
+    vars.extend([
+        ("RAMEN_OTEL_ENDPOINT", endpoint.as_str()),
+        ("RAMEN_OTEL_CLIENT", client.as_str()),
+        ("RAMEN_TELEMETRY_VERSION", VERSION),
+        ("RAMEN_ENV", "prod"),
+        ("RAMEN_VERBOSE", "1"), // the access log quotes the request — minus the report
+    ]);
+    worker(&vars).await
+}
+
+fn echo() -> Value {
+    json!({"name": "echo", "arguments": {"q": "t"}})
+}
+
+#[tokio::test]
+async fn a_gated_call_carries_a_fresh_report_whose_events_become_client_spans() {
+    log_path();
+    let (collector, seen, _) = recorder(200).await;
+    let n = reporting_worker(collector).await;
+    let t = tel_token("u-rep");
+    const REASONING: &str = "the-model-thought-about-it-7e3a9c";
+    let events = json!([
+        {"ts": "2026-11-14T10:00:00Z", "kind": "llm", "name": "gpt-x", "ms": 1200, "ok": true,
+         "reasoning": format!("{REASONING}{}", "x".repeat(5000))},
+        {"ts": "2026-11-14T10:00:01.250+01:00", "kind": "tool", "name": "shell", "ms": 40, "ok": false}
+    ]);
+
+    // without the report: -32024, HTTP 428, the version to report with
+    let r = modern(n.addr, &t, json!({}), "tools/call", echo(), &[]).await;
+    assert_eq!((r.status, r.code()), (428, Some(-32024)), "{}", r.body);
+    assert_eq!(r.json()["error"]["message"], "telemetry report required");
+    assert_eq!(r.json()["error"]["data"]["version"], VERSION);
+    let line = log_line(|v| v["reason"] == "telemetry_required").expect("logged");
+    assert_eq!(line["status"], "denied");
+    // a stale version: -32025, nothing of it forwarded
+    let r = modern(
+        n.addr,
+        &t,
+        json!({}),
+        "tools/call",
+        with(echo(), report("deadbeef0000", events.clone())),
+        &[],
+    )
+    .await;
+    assert_eq!((r.status, r.code()), (428, Some(-32025)), "{}", r.body);
+    assert_eq!(
+        r.json()["error"]["message"],
+        "telemetry config changed: sign in again"
+    );
+    assert_eq!(r.json()["error"]["data"]["version"], VERSION);
+    assert!(log_line(|v| v["reason"] == "telemetry_stale").is_some());
+    // limits: 200 events, 64 KiB
+    let many: Vec<Value> = (0..201)
+        .map(|_| json!({"ts": "2026-11-14T10:00:00Z", "kind": "mcp", "name": "x", "ms": 1, "ok": true}))
+        .collect();
+    let big = json!([{"ts": "2026-11-14T10:00:00Z", "kind": "other", "name": "x", "ms": 1, "ok": true,
+                      "reasoning": "r".repeat(70_000)}]);
+    for bad in [json!(many), big, json!("nope")] {
+        let r = modern(
+            n.addr,
+            &t,
+            json!({}),
+            "tools/call",
+            with(echo(), report(VERSION, bad)),
+            &[],
+        )
+        .await;
+        assert_eq!((r.status, r.code()), (200, Some(-32602)), "{}", r.body);
+    }
+    // a 2025-06-18 client is told what to use instead
+    let r = legacy(n.addr, &t, "tools/call", echo()).await;
+    assert_eq!((r.status, r.code()), (200, Some(-32003)), "{}", r.body);
+    assert_eq!(
+        r.json()["error"]["message"],
+        "forbidden: this group requires telemetry; use a client that reports it (MCP 2026-07-28 or the Ramen bridge)"
+    );
+    // the console's own calls are not asked
+    let auth = format!("Bearer {MCP_KEY}");
+    let r = post(
+        n.addr,
+        &[("Authorization", &auth), ("x-ramen-admin-key", ADMIN_KEY)],
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": echo()}).to_string(),
+    )
+    .await;
+    assert!(r.text().contains(r#""q": "t""#), "{}", r.body);
+    // lists are not gated
+    let r = modern(n.addr, &t, json!({}), "tools/list", json!({}), &[]).await;
+    assert_eq!(r.json()["result"]["resultType"], "complete", "{}", r.body);
+
+    // the report accepted: the call runs, the tool never sees the report
+    let r = modern(
+        n.addr,
+        &t,
+        json!({}),
+        "tools/call",
+        with(echo(), report(VERSION, events.clone())),
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.text().contains(r#""q": "t""#), "{}", r.body);
+    assert!(!r.body.contains("io.ramen/telemetry"), "{}", r.body);
+    // `events: []` is a report too; and over gRPC the same gate
+    let r = modern(
+        n.addr,
+        &t,
+        json!({}),
+        "resources/read",
+        with(
+            json!({"uri": "ramen://demo/readme"}),
+            report(VERSION, json!([])),
+        ),
+        &[],
+    )
+    .await;
+    assert_eq!(r.json()["result"]["resultType"], "complete", "{}", r.body);
+    let bearer = format!("Bearer {t}");
+    let md = [("authorization", bearer.as_str())];
+    let g = grpc_call(
+        n.addr,
+        &md,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": with(echo(), json!({"_meta": meta(json!({}))}))}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(g["error"]["code"], -32024, "{g}");
+    let mut p = with(echo(), json!({"_meta": meta(json!({}))}));
+    p["_meta"]["io.ramen/telemetry"] =
+        report(VERSION, events.clone())["_meta"]["io.ramen/telemetry"].clone();
+    let g = grpc_call(
+        n.addr,
+        &md,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": p}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(g["result"]["resultType"], "complete", "{g}");
+
+    // `telemetry/report` between calls: modern, authenticated, never consent-gated (an rmk key, nothing recorded)
+    let r = modern(
+        n.addr,
+        MCP_KEY,
+        json!({}),
+        "telemetry/report",
+        report(VERSION, events.clone())["_meta"]["io.ramen/telemetry"].clone(),
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["result"]["accepted"], 2, "{}", r.body);
+    assert_eq!(r.json()["result"]["version"], VERSION);
+    assert_eq!(r.json()["result"]["resultType"], "complete");
+    let r = modern(
+        n.addr,
+        MCP_KEY,
+        json!({}),
+        "telemetry/report",
+        json!({"version": "old", "seq": 1, "events": []}),
+        &[],
+    )
+    .await;
+    assert_eq!((r.status, r.code()), (428, Some(-32025)), "{}", r.body);
+    let r = modern(
+        n.addr,
+        MCP_KEY,
+        json!({}),
+        "telemetry/report",
+        json!({"version": VERSION, "seq": 1}),
+        &[],
+    )
+    .await;
+    assert_eq!(r.code(), Some(-32602), "{}", r.body);
+    let r = legacy(
+        n.addr,
+        MCP_KEY,
+        "telemetry/report",
+        json!({"version": VERSION, "seq": 1, "events": []}),
+    )
+    .await;
+    assert_eq!(r.code(), Some(-32601), "{}", r.body);
+
+    // nothing of the events reaches the access log, verbose or not
+    let log = std::fs::read_to_string(log_path()).unwrap();
+    assert!(!log.contains(REASONING) && !log.contains("gpt-x"), "{log}");
+
+    // the events are CLIENT spans under the call's span, with the fixed attributes
+    n.app.otel.flush().await;
+    let seen = seen.lock().unwrap().clone();
+    let spans: Vec<Value> = seen
+        .iter()
+        .filter(|(p, _, _)| p == "/v1/traces")
+        .flat_map(|(_, _, b)| {
+            serde_json::from_str::<Value>(b).unwrap()["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    let client: Vec<&Value> = spans.iter().filter(|s| s["kind"] == 3).collect();
+    // the HTTP call, the gRPC call, the report: 2 events each; the stale report and `events: []`: none
+    assert_eq!(client.len(), 6, "{client:?}");
+    let llm = client
+        .iter()
+        .find(|s| s["name"] == "client llm gpt-x" && attr(s, "ramen.transport") == Some("http"))
+        .expect("the llm event");
+    let parent = spans
+        .iter()
+        .find(|s| s["spanId"] == llm["parentSpanId"])
+        .expect("under the call's span");
+    assert_eq!(parent["name"], "mcp tools/call");
+    assert_eq!(attr(parent, "mcp.name"), Some("echo"));
+    assert_eq!(llm["traceId"], parent["traceId"]);
+    assert_eq!(llm["startTimeUnixNano"], "1794650400000000000");
+    assert_eq!(llm["endTimeUnixNano"], "1794650401200000000");
+    assert!(llm.get("status").is_none());
+    for (k, v) in [
+        ("ramen.client.ip", "127.0.0.1"),
+        ("ramen.user", "ada@example.com"),
+        ("ramen.key_id", "user:u-rep"),
+        ("ramen.group", "demo"),
+        ("ramen.zone", "a"),
+        ("ramen.env", "prod"),
+        ("ramen.worker", ramen_node::telemetry::worker()),
+        ("ramen.event.kind", "llm"),
+        ("ramen.event.seq", "3"),
+        ("ramen.transport", "http"),
+    ] {
+        assert_eq!(attr(llm, k), Some(v), "{k}");
+    }
+    let reasoning = attr(llm, "ramen.reasoning").unwrap();
+    assert!(reasoning.starts_with(REASONING) && reasoning.len() == 4096);
+    let tool = client
+        .iter()
+        .find(|s| s["name"] == "client tool shell" && attr(s, "ramen.transport") == Some("grpc"))
+        .unwrap();
+    assert_eq!(tool["status"]["code"], 2);
+    assert_eq!(tool["startTimeUnixNano"], "1794646801250000000");
+    assert!(attr(tool, "ramen.reasoning").is_none());
+    // an rmk key: the user is the key id
+    let by_key = client
+        .iter()
+        .find(|s| attr(s, "ramen.key_id") != Some("user:u-rep"))
+        .unwrap();
+    assert_eq!(attr(by_key, "ramen.user"), attr(by_key, "ramen.key_id"));
+    assert!(spans.iter().any(|s| s["name"] == "mcp telemetry/report"));
+    // counted by kind / ok
+    let (_, _, body) = seen.iter().rfind(|(p, _, _)| p == "/v1/metrics").unwrap();
+    let v: Value = serde_json::from_str(body).unwrap();
+    let metric = v["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "ramen.client.events")
+        .expect("the counter")
+        .clone();
+    let points = metric["sum"]["dataPoints"].as_array().unwrap();
+    let count = |kind: &str, ok: &str| {
+        points
+            .iter()
+            .find(|p| {
+                attr(p, "ramen.event.kind") == Some(kind) && attr(p, "ramen.event.ok") == Some(ok)
+            })
+            .map(|p| p["asInt"].as_str().unwrap().to_string())
+    };
+    assert_eq!(count("llm", "true").as_deref(), Some("3"), "{points:?}");
+    assert_eq!(count("tool", "false").as_deref(), Some("3"));
+    // the whole export never quotes the keys
+    let all: String = seen.iter().map(|(_, _, b)| b.as_str()).collect();
+    assert!(!all.contains(MCP_KEY) && !all.contains(ADMIN_KEY));
+}
+
+#[tokio::test]
+async fn a_reload_makes_a_pushed_telemetry_config_live() {
+    let (c1, seen1, _) = recorder(200).await;
+    let (c2, seen2, _) = recorder(200).await;
+    let cfg_for = |collector: SocketAddr, version: &str| {
+        let endpoint = format!("http://{collector}");
+        let client = format!(
+            r#"{{"otlp_endpoint": "{endpoint}", "headers": {{}}, "version": "{version}", "required": true}}"#
+        );
+        // the reload re-sets the process-global log file: keep this process's
+        let log = log_path().display().to_string();
+        let mut vars = CONSENT.to_vec();
+        vars.extend([
+            ("RAMEN_OTEL_ENDPOINT", endpoint.as_str()),
+            ("RAMEN_OTEL_CLIENT", client.as_str()),
+            ("RAMEN_TELEMETRY_VERSION", version),
+            ("RAMEN_LOG_FILE", log.as_str()),
+        ]);
+        config(&vars)
+    };
+    let live = Arc::new(Mutex::new(cfg_for(c1, "v1-aaaaaaaaaa")));
+    let source = live.clone();
+    let first = live.lock().unwrap().clone();
+    let n = serve_from(
+        first,
+        Box::new(move || Ok(source.lock().unwrap().clone())),
+        TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    )
+    .await;
+    let t = tel_token("u-reload");
+    let event = json!([{"ts": "2026-11-14T10:00:00Z", "kind": "mcp", "name": "tools/list", "ms": 5, "ok": true}]);
+    let call = |version: &str| {
+        modern(
+            n.addr,
+            &t,
+            json!({}),
+            "tools/call",
+            with(echo(), report(version, event.clone())),
+            &[],
+        )
+    };
+    assert_eq!(call("v1-aaaaaaaaaa").await.status, 200);
+    n.app.otel.flush().await; // export is batched: what was reported so far goes to the old collector
+    // the console pushes a new config and reloads
+    *live.lock().unwrap() = cfg_for(c2, "v2-bbbbbbbbbb");
+    let mut admin = AdminClient::connect(format!("http://{}", n.addr))
+        .await
+        .unwrap();
+    let mut req = tonic::Request::new(ReloadRequest {});
+    req.metadata_mut()
+        .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
+    admin.reload(req).await.unwrap();
+    let r = call("v1-aaaaaaaaaa").await;
+    assert_eq!((r.status, r.code()), (428, Some(-32025)), "{}", r.body);
+    assert_eq!(r.json()["error"]["data"]["version"], "v2-bbbbbbbbbb");
+    assert_eq!(call("v2-bbbbbbbbbb").await.status, 200);
+    let r = modern(n.addr, &t, json!({}), "server/discover", json!({}), &[]).await;
+    let tel = &r.json()["result"]["_meta"]["io.ramen/telemetry"];
+    assert_eq!(tel["version"], "v2-bbbbbbbbbb", "{}", r.body);
+    assert_eq!(tel["required"], true);
+    assert_eq!(tel["otlp_endpoint"], format!("http://{c2}"));
+    // and the events now go to the new collector
+    n.app.otel.flush().await;
+    let client_spans = |seen: &Seen| -> usize {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _, _)| p == "/v1/traces")
+            .flat_map(|(_, _, b)| {
+                serde_json::from_str::<Value>(b).unwrap()["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                    .as_array()
+                    .unwrap()
+                    .clone()
+            })
+            .filter(|s| s["kind"] == 3)
+            .count()
+    };
+    assert_eq!((client_spans(&seen1), client_spans(&seen2)), (1, 1));
+}
+
+/// Amendment to §26.3: the bridge is a raw passthrough in front of 2025-06-18 hosts and puts the report into the
+/// legacy body — such a call is served and forwarded like a modern one; only a legacy call without one is -32003.
+#[tokio::test]
+async fn a_legacy_body_carrying_the_report_is_served_and_forwarded() {
+    let (collector, seen, _) = recorder(200).await;
+    let n = reporting_worker(collector).await;
+    let t = tel_token("u-legacy");
+    let event = json!([{"ts": "2026-11-14T10:00:00Z", "kind": "mcp", "name": "tools/list", "ms": 5, "ok": true,
+                        "reasoning": "legacy-thought-5b1c"}]);
+    let r = legacy(
+        n.addr,
+        &t,
+        "tools/call",
+        with(echo(), report(VERSION, event.clone())),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.text().contains(r#""q": "t""#), "{}", r.body);
+    // stale: -32025, HTTP 200 on this era (§23.1)
+    let r = legacy(
+        n.addr,
+        &t,
+        "tools/call",
+        with(echo(), report("old-version00", event)),
+    )
+    .await;
+    assert_eq!((r.status, r.code()), (200, Some(-32025)), "{}", r.body);
+    assert_eq!(r.json()["error"]["data"]["version"], VERSION);
+    // without: -32003
+    let r = legacy(n.addr, &t, "tools/call", echo()).await;
+    assert_eq!((r.status, r.code()), (200, Some(-32003)), "{}", r.body);
+    n.app.otel.flush().await;
+    let seen = seen.lock().unwrap().clone();
+    let spans: Vec<Value> = seen
+        .iter()
+        .filter(|(p, _, _)| p == "/v1/traces")
+        .flat_map(|(_, _, b)| {
+            serde_json::from_str::<Value>(b).unwrap()["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    let client: Vec<&Value> = spans.iter().filter(|s| s["kind"] == 3).collect();
+    assert_eq!(client.len(), 1, "the fresh report's event only: {client:?}");
+    assert_eq!(client[0]["name"], "client mcp tools/list");
+    assert_eq!(
+        attr(client[0], "ramen.reasoning"),
+        Some("legacy-thought-5b1c")
+    );
+    let parent = spans
+        .iter()
+        .find(|s| s["spanId"] == client[0]["parentSpanId"])
+        .unwrap();
+    assert_eq!(attr(parent, "mcp.protocol"), Some("2025-06-18"));
+    let log = std::fs::read_to_string(log_path()).unwrap_or_default();
+    assert!(!log.contains("legacy-thought-5b1c"));
 }

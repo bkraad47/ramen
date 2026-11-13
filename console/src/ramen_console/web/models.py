@@ -60,10 +60,15 @@ class Rules(BaseModel):
         return {"rules": rules}
 
 
-class ZoneIn(BaseModel):
+class ZoneIn(ListFields):
     name: str
     provider: str = "local"
     region: str = ""
+    groups: list[str] = []  # §26.1: the groups the zone serves
+
+
+class ZoneGroups(ListFields):
+    groups: list[str]
 
 
 class EnvIn(ListFields):
@@ -77,10 +82,6 @@ class EnvUpdate(ListFields):
     zones: list[str] | None = None
     verbose: bool | None = None
     blocked: list[str] | None = None
-
-
-class AllowedZones(ListFields):
-    allowed: list[str]
 
 
 class Blocked(ListFields):

@@ -1135,3 +1135,20 @@ async def test_a_deleted_member_left_in_the_bucket_policy_is_shed_on_the_next_wr
     members = _bucket_members(fk, cloud)
     assert stale not in members and "serviceAccount:console@p1.iam.gserviceaccount.com" in members
     assert any("ramen-demo-a@" in m for m in members)
+
+
+async def test_push_config_rewrites_the_secret_reloads_the_pods_and_rolls_the_workers(
+    cloud, fk, http_state, monkeypatch
+):
+    """§26.3: the same secret the deploy writes, Admin/Reload on every worker pod, then a rolling restart of the
+    stable track (the pods read the secret as environment, so a reload alone cannot see new values)."""
+    cfg = {"RAMEN_VERBOSE": "0", "RAMEN_MCP_KEYS": "rmk_1", "RAMEN_TELEMETRY_VERSION": "abc"}
+    res = await cloud.deploy("demo", "prod", "a", canary=False, config=cfg, spec=SPEC)
+    assert res["ok"], res
+    before, restarted = len(http_state.calls), []
+    monkeypatch.setattr(cloud.kube, "restart", lambda ns, name: restarted.append((ns, name)))
+    r = await cloud.push_config("demo", "prod", "a", {**cfg, "RAMEN_TELEMETRY_VERSION": "def"})
+    assert r["ok"] and r["reloaded"] >= 1, r
+    sec = obj(fk, "Secret", "ramen-demo-a", "ramen-deploy")["stringData"]
+    assert sec["RAMEN_TELEMETRY_VERSION"] == "def" and sec["RAMEN_ENV"] == "prod" and sec["RAMEN_ADMIN_KEY"] == ADMIN
+    assert "Admin/Reload" in http_state.paths()[before:] and restarted == [("ramen-demo-a", "worker")]

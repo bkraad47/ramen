@@ -25,6 +25,7 @@ def test_get_zone_and_environment(monkeypatch):
         ).status_code
         == 201
     )
+    assert c.put("/api/v1/zones/z1/groups", json={"groups": ["g1"]}).status_code == 200  # §26.1
     assert (
         c.post("/api/v1/groups/g1/environments", json={"name": "dev", "ref": "main", "zones": ["z1"]}).status_code
         == 201

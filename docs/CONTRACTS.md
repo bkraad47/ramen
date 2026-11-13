@@ -1053,7 +1053,7 @@ settings; a secret shows only as set/not set. Every secret read or written is sc
 deploy job logs and backups; `scheme://user:pass@` is scrubbed always. Backups keep no nested provider secret and a
 restore merges per entry so the live one survives.
 
-## 25. v1.0.0 — the zones a group may use (binding)
+## 25. v1.0.0 — the zones a group may use (superseded by §26.1 in v1.0.0a: zones are bound to groups, `allowed_zones` is gone)
 Asked for by the user on the live GKE console: a group must not reach every zone.
 - `groups[].allowed_zones: list[str]` — the zones the group's environments may use. `GET /api/v1/groups/{g}/zones` →
   `{"allowed": [...]}` (viewers of the group); `PUT` the same body (super admin only; every zone must exist, 422
@@ -1065,3 +1065,82 @@ Asked for by the user on the live GKE console: a group must not reach every zone
   a super admin set (even empty) is never widened.
 - Group page: the zone tables, zone actions and the environment zone picker show only allowed zones; a super admin
   edits the list in the "Zones and workers" card, everyone else sees it read-only.
+
+## 26. v1.0.0a — zones bound to groups, persisted deploy jobs, telemetry through Ramen (binding)
+Asked for by the user (D60–D63, 2026-11-14). Supersedes §25.
+
+### 26.1 Zones bound to groups
+- `zones[].groups: list[str]` — the groups a zone serves. Super admin only: `POST /api/v1/zones` takes `groups`
+  (default `[]`), `PUT /api/v1/zones/{zone}/groups {"groups": [...]}` replaces the list (every group must exist, 422;
+  a group whose environment still uses the zone cannot be removed, 409 naming environment and zone). Audited
+  `zone.groups` with a `group:<g>` tag per group.
+- A group's zones are the zones listing it: `GET /api/v1/groups/{g}/zones` → `{"zones": [...]}` (read-only, viewers of
+  the group); `PUT` on it is gone (404). `groups[].allowed_zones` is gone; at startup a zone gets the groups whose
+  `allowed_zones` named it or whose environments use it, once (`zones[].groups` present → left alone).
+- An environment (`POST`/`PUT …/environments`) may name only the group's zones — 403 naming the zones, for every role
+  (a super admin binds the zone to the group first). A worker record (`workers/<g>:<z>`) exists only for a bound
+  pair: binding creates it (defaults as today), unbinding detaches the zone for that group (namespace, workers, zone
+  identity, record) after the 409 check; `worker_config(g, z)` for an unbound pair → 404.
+- Zones page: the zone table gains a `Groups` column with a checkbox dropdown + "Save groups" per row (super admin);
+  "Workers per group" lists bound pairs only. Group page: the "Zones and workers" and "Zone actions" cards are gone;
+  one **Environments** table (environment, ref, verbose, last deploy, actions) with, under each environment row, one
+  row per zone of it: zone (namespace), workers (live cell), size, sleep state, IP allow-list, service account, and
+  the zone's actions (scale, sleep, IP rules, throttle, service account, rebalance, logs) in a `details` disclosure
+  — every zone action keeps its route. The group's zones not used by any environment are listed once below the table
+  ("Bound, unused: …"). The environment zone picker offers the group's zones.
+
+### 26.2 Deploy jobs persisted
+- `jobs` collection: `{id, kind, target, status, started, finished, result, error, log: [...]}`, written at creation
+  and at every log line / end (the log is scrubbed, §24.5). `GET /api/v1/jobs/{id}` and the group page read the store,
+  so a job is visible after a console restart and from every replica. A job still `running` after
+  `RAMEN_JOB_STALE_SECS` (default 1800) without a change is shown and answered as `error: "lost (console restarted)"`.
+  Kept: the last 50 per target (older deleted at creation). Backups do not include jobs.
+
+### 26.3 Telemetry through Ramen
+- **Config version.** `telemetry_version` = first 12 hex of sha256 over the canonical JSON of
+  `{enabled, endpoint, client_endpoint, client_headers}` of `config/otel`. `GET /api/v1/config/otel` (public form) and
+  the Config page show it. The token answer's `telemetry` object (§24.3) gains `version` and `required` (the group's
+  consent switch); `server/discover`'s `_meta["io.ramen/telemetry"]` likewise. Workers get it in `RAMEN_OTEL_CLIENT`
+  (`version` key) and in `RAMEN_TELEMETRY_VERSION`.
+- **Push on update.** Saving `config/otel` rewrites every deployed zone's worker config (the same `cfg` the deploy
+  writes) and sends `Admin/Reload` to each zone's workers, so the new endpoint/headers/version are live without a
+  deploy; the reload's outcome per zone is in the `PUT` answer (`pushed: {"<g>/<z>": "ok" | "<error>"}`) and audited
+  `telemetry.push`. A worker that cannot be reached keeps the old config until its next deploy.
+  On Kubernetes the worker pods read the deploy Secret as env, so the push rewrites the Secret, reloads every pod and
+  rolling-restarts the stable track (a 20 s drain per pod, §24 — calls are not dropped); locally the env files are
+  rewritten and the workers reloaded.
+- **Report on every call.** When the group requires telemetry (`RAMEN_TELEMETRY_CONSENT=1`), a gated call
+  (`tools/call`, `prompts/get`, `resources/read`) from anyone but the console must carry
+  `params._meta["io.ramen/telemetry"]`:
+  `{"version": "<telemetry_version>", "seq": <int, +1 per report>, "events": [{"ts": "<RFC 3339>", "kind":
+  "mcp" | "llm" | "tool" | "other", "name": "<method or model or tool>", "ms": <int>, "ok": <bool>, "reasoning":
+  "<text, optional, ≤ 4 KiB kept>"}, …]}` — everything the client did since its last report (its MCP calls to any
+  server, its model calls with the reasoning, its other tool calls); `events: []` is a valid report. The same object is
+  accepted on `telemetry/report` (modern, authenticated; answer `{"accepted": <n>, "version": "<current>"}`) for
+  reporting between calls. Limits: ≤ 200 events and ≤ 64 KiB per report (`-32602` beyond).
+  - Missing on a gated call → `-32024 telemetry report required` (HTTP 428), `data: {"version": "<current>"}`;
+    a 2025-06-18 client without the report → `-32003 forbidden: this group requires telemetry; use a client that
+    reports it (MCP 2026-07-28 or the Ramen bridge)`. A 2025-06-18 body that carries the report (the bridge in front
+    of a legacy host) is accepted and forwarded like a modern one — the report is what matters, not the era; a
+    stale version on a legacy body → `-32025` too (HTTP 200 on the legacy era, §23.1). Access-log reason
+    `telemetry_required`.
+  - `version` ≠ the worker's → `-32025 telemetry config changed: sign in again` (HTTP 428), `data: {"version":
+    "<current>"}`; reason `telemetry_stale`. Nothing of the stale report is forwarded.
+  - The gate runs after the consent gate (§24.3) and before the runtime; a call refused here is not dispatched.
+  - A worker not yet told a version (`RAMEN_TELEMETRY_VERSION` empty, a deploy from before this console) accepts
+    any version; a malformed report (shape, limits) is `-32602 invalid telemetry report: <what>` with no reason.
+- **Forwarding.** Each event becomes a span (kind `CLIENT`, name `client <kind> <name>`, start `ts`, duration `ms`,
+  error `!ok`) under the call's own span (§24.3), attributes `ramen.client.ip`, `ramen.user` (the token's subject /
+  email, else the key id), `ramen.key_id`, `ramen.group`, `ramen.zone`, `ramen.env`, `ramen.worker` (the pod's
+  hostname), `ramen.event.kind`, `ramen.event.seq`, `ramen.reasoning` (the text, ≤ 4 KiB), `ramen.transport`;
+  counter `ramen.client.events` by kind/ok. Reasoning and events never reach the access log or the console; they go
+  to the collector only. A collector that is down drops them (one warning a minute, §24.3) — the call still runs.
+- **Client side (the bridge).** At sign-in the bridge keeps the token answer's `telemetry` object encrypted in memory
+  (a per-process random key, never on disk); it records every call it forwards and offers the host a tool
+  `ramen_report(kind, name, ms, ok, reasoning)` (listed with instructions that the model must report its model and
+  non-MCP tool calls with its reasoning before the next Ramen call); every gated call it forwards carries the report
+  since the last one; `-32025` → it signs in again (refresh grant, else the interactive flow) and retries once;
+  `-32024` from a server it has no config for → it signs in, then retries. Not consenting at sign-in ends the flow
+  as today (§24.3).
+- Chart: `otel.collector: jaeger` is the default for the test deploys (`cloud2.sh`); the Config page's Telemetry
+  section lists the Jaeger UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).

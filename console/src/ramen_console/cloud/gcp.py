@@ -173,6 +173,36 @@ class GcpCloud(Cloud):
         )
 
     # deploy -------------------------------------------------------------
+    async def _write_deploy_secret(self, ns, group, env, zone, config) -> dict:
+        """The `ramen-deploy` Secret the worker pods read as environment: identity, admin key, the kept IP
+        allow-list, then the deploy config."""
+        existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
+        data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
+        if self.admin_key:
+            data["RAMEN_ADMIN_KEY"] = self.admin_key
+        if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
+            data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
+        data.update(config)
+        await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+        return data
+
+    @_guard
+    async def push_config(self, group, env, zone, config) -> dict[str, Any]:
+        """§26.3: the Secret rewritten, `Admin/Reload` on every worker pod, then a rolling restart of the stable
+        track — the pods read the Secret as environment, so a reload alone cannot see the new values."""
+        ns = ns_name(group, zone)
+        await self._write_deploy_secret(ns, group, env, zone, dict(config))
+        n, failed = 0, []
+        for p in await asyncio.to_thread(self.kube.pods, ns, WORKERS):
+            try:
+                await self.rpc.reload(self._target(p), self.admin_key)
+                n += 1
+            except GrpcError as e:
+                failed.append(f"{p['metadata']['name']}: {e.code.name}")
+        if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker"):
+            await asyncio.to_thread(self.kube.restart, ns, "worker")
+        return {"ok": not failed, "reloaded": n, "restarted": "worker", "error": "; ".join(failed) or None}
+
     def _target(self, pod) -> str:
         return f"{pod['status'].get('podIP')}:{PORT}"
 
@@ -229,14 +259,7 @@ class GcpCloud(Cloud):
             note(f"{ns}: applying zone manifests")
             held: list[dict] = []
             await asyncio.to_thread(self._attach, group, zone, spec or {}, held if canary else None)
-            existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
-            data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
-            if self.admin_key:
-                data["RAMEN_ADMIN_KEY"] = self.admin_key
-            if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
-                data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
-            data.update(config)
-            await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+            data = await self._write_deploy_secret(ns, group, env, zone, config)
             note(f"{ns}: secret ramen-deploy written ({len(data)} keys)")
             mcp_key = (config.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
             if not canary:

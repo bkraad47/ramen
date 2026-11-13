@@ -66,7 +66,8 @@ def root(app):
         assert c.post("/login", data={"email": "root@ramen.local", "password": "rootpw"}).status_code == 200
         assert c.post("/api/v1/groups", json={"name": "demo"}).status_code == 201
         assert c.post("/api/v1/groups", json={"name": "other"}).status_code == 201
-        assert c.post("/api/v1/zones", json={"name": "zone-a", "provider": "local"}).status_code == 201
+        zone = {"name": "zone-a", "provider": "local", "groups": ["demo"]}
+        assert c.post("/api/v1/zones", json=zone).status_code == 201
         assert c.post("/api/v1/groups/demo/environments", json={"name": "dev", "zones": ["zone-a"]}).status_code == 201
         yield c
 

@@ -15,6 +15,7 @@ pub mod session;
 pub mod sidecar;
 pub mod subs;
 pub mod tasks;
+pub mod telemetry;
 pub mod throttle;
 pub mod token;
 

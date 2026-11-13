@@ -21,8 +21,20 @@ stored encrypted and are left out of [backups](backups.md) like every secret. Ag
 `headers`; they are given `client_headers`, so treat those as known to every caller of the group and give them a
 credential that can only write.
 
-A change is audited as `config.otel`. The console uses the settings for its next deploy span at once; **workers
-pick them up on their next deploy**.
+A change is audited as `config.otel`. The console uses the settings for its next deploy span at once. Since 1.0.0a
+**saving pushes the settings to every deployed zone**: the console rewrites the zone's worker config (the same one
+a deploy writes) and sends `Admin/Reload` to its workers (on Kubernetes the pods read the config as environment, so
+the stable track is also rolled), and the `PUT` answer carries the outcome per zone, `pushed: {"demo/a": "ok",
+"demo/b": "<error>"}`, audited as `telemetry.push`. A zone that could not be reached keeps the old settings until
+its next deploy.
+
+### The config version (1.0.0a)
+
+`telemetry_version` is the first 12 hex digits of SHA-256 over the canonical JSON of what clients are told —
+`enabled`, `endpoint`, `client_endpoint`, `client_headers` (never Ramen's own `headers`). `GET /api/v1/config/otel`
+and the Config page show it; every token answer carries it; workers get it as `RAMEN_TELEMETRY_VERSION`. A client
+that reports with an older version is told to sign in again (below), which is how a change of endpoint or client
+headers invalidates what every connected agent holds.
 
 ## What is exported
 
@@ -82,13 +94,33 @@ Ramen tells a connected agent where telemetry goes, in two places. Whether the a
 
     ```json
     "telemetry": {"otlp_endpoint": "http://jaeger.ramen-system:4318", "headers": {},
-                  "resource_attributes": {"ramen.group": "demo", "ramen.zone": "a"}}
+                  "resource_attributes": {"ramen.group": "demo", "ramen.zone": "a"},
+                  "version": "3f9c0a1b2d4e", "required": false}
     ```
+
+    `version` is the [config version](#the-config-version-100a); `required` is the group's consent switch — when
+    true, every gated call must carry a [telemetry report](#telemetry-through-ramen-100a).
 
 - **Discovery.** `server/discover` carries the same object under `result._meta["io.ramen/telemetry"]`, for any
   authenticated 2026-07-28 caller, once the zone has been deployed with telemetry on.
 
 `otlp_endpoint` is `client_endpoint`, or `endpoint` when that is empty; `headers` is `client_headers`.
+
+## Telemetry through Ramen (1.0.0a)
+
+When a group requires telemetry (`required: true`, the same switch as consent), each gated call — `tools/call`,
+`prompts/get`, `resources/read` — from anyone but the console must carry `params._meta["io.ramen/telemetry"]`:
+`{"version": "<telemetry_version>", "seq": <n>, "events": [{"ts", "kind": "mcp" | "llm" | "tool" | "other", "name",
+"ms", "ok", "reasoning"?}, …]}` — everything the client did since its last report (its MCP calls to any server, its
+model calls with the reasoning, its other tool calls; `events: []` is a valid report). The same object is accepted
+on `telemetry/report` between calls. The worker turns each event into a `CLIENT` span under the call's own span,
+with the caller's IP, user or key id, group, zone, environment and worker, and the reasoning text (≤ 4 KiB); nothing
+of it reaches the access log or the console. A call without a report is refused with `-32024 telemetry report
+required` (HTTP 428; a 2025-06-18 client gets `-32003` and is told to use a client that reports); a report with
+another version with `-32025 telemetry config changed: sign in again`, and the client signs in again to get the
+current config. Limits: 200 events and 64 KiB per report. The Ramen bridge does all of this for the host it serves:
+it keeps the token answer's `telemetry` object encrypted in memory, records every call it forwards, offers the
+model a `ramen_report` tool for its model and non-MCP tool calls, and signs in again on `-32025`.
 
 ## Consent
 
@@ -182,19 +214,23 @@ look at the UI through a port-forward:
 kubectl -n ramen-system port-forward svc/jaeger 16686
 ```
 
+With the collector on, the chart hands the console `RAMEN_OTEL_UI_URL` and the Config page's Telemetry section
+names the Jaeger UI address (reachable through the port-forward only).
+
 It keeps traces in memory, has no authentication and no route from any load balancer. **It is for trying
 telemetry out and for the test runs, not for production**: there, point the settings at your own collector. The
 default is `otel.collector: none`.
 
 ## Settings a worker receives
 
-Written by the console on deploy; never set by hand in the cloud.
+Written by the console on deploy and on every save of the settings (1.0.0a); never set by hand in the cloud.
 
 | Variable | Meaning |
 |---|---|
 | `RAMEN_OTEL_ENDPOINT` | The collector base URL. Unset: nothing is exported. |
 | `RAMEN_OTEL_HEADERS` | Ramen's headers for the collector, a JSON object of strings. |
-| `RAMEN_OTEL_CLIENT` | The object handed to agents on `server/discover`. |
+| `RAMEN_OTEL_CLIENT` | The object handed to agents on `server/discover`, with `version` and `required`. |
+| `RAMEN_TELEMETRY_VERSION` | The config version a report must name (1.0.0a). |
 | `RAMEN_TELEMETRY_CONSENT` | `1` when the group requires consent. |
 | `RAMEN_TELEMETRY_NOTICE` | The host the consent prompt names: the client endpoint's, else the endpoint's. |
 

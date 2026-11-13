@@ -22,6 +22,8 @@ input,select,textarea{padding:7px 9px;border:1px solid var(--line);border-radius
 select[multiple]{min-height:70px;min-width:160px}
 button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer;text-decoration:none;text-align:center}button.ghost,.btn.ghost{background:#fff;color:var(--coral);border:1px solid var(--coral)}button.danger{background:var(--red)}button.sm,.btn.sm{padding:4px 9px;font-size:12px}
 .zone-table>tr>th.zone-name,.zone-table>tbody>tr>th.zone-name{width:6em;font-size:14px;color:inherit;vertical-align:top;padding-top:14px}
+.env-table .zone-row td{background:#faf7f2;font-size:13px}.env-table .zone-row .zone-name{font-weight:600;font-size:14px}.env-table .zone-tools-row td{padding:4px 10px 10px 28px}
+details.zone-tools>summary{cursor:pointer;font-size:12px;color:var(--coral);font-weight:600}details.zone-tools[open]>summary{margin-bottom:6px}
 .zone-actions table{margin:0}
 .zone-actions tr:last-child th,.zone-actions tr:last-child td{border-bottom:0}
 .zone-actions th{font-weight:normal;white-space:nowrap;width:8em;vertical-align:middle}
@@ -154,3 +156,5 @@ form.inline button.sm,form.inline .btn.sm{min-width:110px;font-size:13px}
 td code{white-space:nowrap}
 td table.formtable input[type=number]{width:120px}
 .zone-actions td[colspan]{text-align:left}
+.env-table .zone-row td:nth-child(2){min-width:400px}
+.env-table .zone-row table.formtable td{--ctl-h:30px}.env-table .zone-row table.formtable input[type=number]{width:80px}.env-table .zone-row table.formtable .act{min-width:110px}

@@ -30,10 +30,11 @@ EMAIL = "admin@ramen.local"
 PASSWORD = os.environ.get("RAMEN_SHOTS_PASSWORD") or secrets.token_hex(10) + "Aa1!"  # generated per run, never static
 
 # file -> (path, what the page is, full page (True), viewport (False) or a CSS selector: just that part of the page)
+ADMIN_KEY = secrets.token_hex(24)  # generated per run (no static secrets, 0.7.6)
 PAGES = {
     "login.png": ("/login", "Sign-in page", False),
     "dashboard.png": ("/", "Dashboard: load per zone and group", False),
-    "group.png": ("/groups/demo", "A group: environments, zones, packages, permissions, worker image", True),
+    "group.png": ("/groups/demo", "A group: environments with their zones and workers, packages, permissions", True),
     "deploy-job.png": ("/groups/demo#jobs", "A deploy job with its log", True),
     "secrets.png": ("/secrets?group=demo", "Secrets: names only, never values", False),
     "logs.png": ("/logs?group=demo&zone=a", "Logs: entries on the left, the selected body on the right", False),
@@ -47,7 +48,7 @@ PAGES = {
         "Config: the public address (base URI), authentication, the permission catalogue, service-account rules",
         True,
     ),
-    "zones.png": ("/zones", "Zones and workers: this cloud's zones, the workers per group with their max", True),
+    "zones.png": ("/zones", "Zones and workers: this cloud's zones with their groups, the workers per bound pair", True),
     # 0.7.5: the parts of a page the identity, roles and autoscaling docs point at
     "config-roles.png": (
         "/config",
@@ -61,8 +62,8 @@ PAGES = {
     ),
     "group-autoscale.png": (
         "/groups/demo",
-        "Group page: zone actions with count, max (autoscale up to) and the last autoscale decision",
-        "h2:text-is('Zone actions') + .card",
+        "Group page: a zone's actions (count, max to autoscale up to, the last decision) under its environment",
+        "h2:text-is('Environments') + form + .card",
     ),
     "group-signin.png": (  # a one-zone group: two zones double every box
         "/groups/analytics",
@@ -88,8 +89,8 @@ def workers():
     sys.path.insert(0, str(ROOT / "console"))
     from tests.fake_grpc import FakeWorker  # noqa: PLC0415 - test helper, only needed here
 
-    cold = FakeWorker(admin_key="shots", mcp_keys=None).start()
-    hot = FakeWorker(admin_key="shots", mcp_keys=None).start()
+    cold = FakeWorker(admin_key=ADMIN_KEY, mcp_keys=None).start()
+    hot = FakeWorker(admin_key=ADMIN_KEY, mcp_keys=None).start()
     cold.metrics = {"inflight": 1, "total": 128, "errors": 0, "load": "low"}
     hot.metrics = {"inflight": 28, "total": 412, "errors": 1, "load": "high", "max_inflight": 32}
     for w in (cold, hot):
@@ -136,11 +137,13 @@ def seed(client, repo: str | None = None) -> dict:
         return {"X-Ramen-CSRF": t} if t else {}
 
     client.post("/login", data={"email": EMAIL, "password": PASSWORD})
-    for zone, region in (("a", "us-central1-a"), ("b", "us-central1-b")):
-        client.post("/api/v1/zones", json={"name": zone, "provider": "gcp", "region": region}, headers=h())
     repo = repo or "https://github.com/bkraad47/ramen-demo-mcp-group"
     client.post("/api/v1/groups", json={"name": "demo", "repo_url": repo, "ref": "main"}, headers=h())
     client.post("/api/v1/groups", json={"name": "analytics", "repo_url": repo, "ref": "main"}, headers=h())
+    # §26.1: a zone lists the groups it serves; environments pick from the zones bound to their group
+    for zone, region, groups in (("a", "us-central1-a", ["demo", "analytics"]), ("b", "us-central1-b", ["demo"])):
+        zone_doc = {"name": zone, "provider": "gcp", "region": region, "groups": groups}
+        client.post("/api/v1/zones", json=zone_doc, headers=h())
     envs = "/api/v1/groups/{}/environments"
     client.post(envs.format("demo"), json={"name": "prod", "ref": "main", "zones": ["a", "b"]}, headers=h())
     client.post(envs.format("analytics"), json={"name": "dev", "ref": "main", "zones": ["a"]}, headers=h())
@@ -329,6 +332,9 @@ def capture(
                 except Exception:  # noqa: BLE001 - say what the API answered instead of a blank picture
                     print(f"key-shown: no one-time display; api replies {replies}", file=sys.stderr)
                 page.wait_for_timeout(300)
+            if name in ("group.png", "group-autoscale.png"):  # §26.1: zone b's actions open under its environment
+                page.evaluate("document.querySelectorAll('details.zone-tools').forEach((d, i) => d.open = i == 1)")
+                page.wait_for_timeout(200)
             if name == "group-signin.png":  # the Entra section closed by default; open it next to the group key
                 page.evaluate("document.querySelectorAll('.signin-guide details').forEach((d, i) => d.open = i != 1)")
                 page.wait_for_timeout(200)
@@ -420,7 +426,7 @@ def main() -> int:
         "RAMEN_LOG_ROOT": "/tmp/ramen-shots/logs",
         "RAMEN_LOCAL_WORKERS": f"demo/a={cold.target},demo/b={hot.target},analytics/a={cold.target}",
         "RAMEN_WORKER_URL": cold.target,
-        "RAMEN_ADMIN_KEY": secrets.token_hex(24),
+        "RAMEN_ADMIN_KEY": ADMIN_KEY,  # the fake workers check the same key, so the shots show live workers
     }
     from cryptography.fernet import Fernet
 

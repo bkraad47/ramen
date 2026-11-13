@@ -49,6 +49,11 @@ class Cloud(ABC):
         """A file of the group's synced repo (`mcp/tests.yaml`), from wherever `sync_repo` put it; None if absent."""
         return None
 
+    async def push_config(self, group: str, env: str, zone: str, config: dict[str, str]) -> dict[str, Any]:
+        """§26.3: rewrite the zone's worker config (what `deploy` writes) and `Admin/Reload` its workers — no new
+        code, no canary. `{"ok", "reloaded", "error"}`; an adapter that cannot raises."""
+        raise NotImplementedError("this adapter cannot push a config without a deploy")
+
     @abstractmethod
     async def rebalance(self, group: str, zone: str) -> dict[str, Any]: ...
 

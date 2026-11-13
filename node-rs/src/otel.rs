@@ -29,6 +29,8 @@ const WARN_EVERY: Duration = Duration::from_secs(60);
 
 const KIND_INTERNAL: u8 = 1;
 const KIND_SERVER: u8 = 2;
+/// §26.3: what a client reported it did.
+const KIND_CLIENT: u8 = 3;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -85,6 +87,11 @@ enum Item {
         method: String,
         name: Option<String>,
         status: String,
+    },
+    /// §26.3: one reported client event, by kind / ok.
+    Event {
+        kind: String,
+        ok: bool,
     },
     Flush(oneshot::Sender<()>),
 }
@@ -220,6 +227,34 @@ impl SpanCtx {
         })));
     }
 
+    /// §26.3: a client's own event as a `CLIENT` span under this call, from `start` for `took`, plus one count.
+    pub fn client_event(
+        &self,
+        name: String,
+        start: SystemTime,
+        took: Duration,
+        ok: bool,
+        kind: &str,
+        attrs: Vec<(&'static str, String)>,
+    ) {
+        self.otel.send(Item::Span(Box::new(Span {
+            trace_id: self.trace_id.clone(),
+            span_id: hex(&random(8)),
+            parent: Some(self.span_id.clone()),
+            state: self.state.clone(),
+            name,
+            kind: KIND_CLIENT,
+            start,
+            end: start + took,
+            attrs,
+            error: !ok,
+        })));
+        self.otel.send(Item::Event {
+            kind: kind.to_string(),
+            ok,
+        });
+    }
+
     /// The call ended: its span, and one count. `fields` are the access-log fields of the line being written.
     pub fn end(
         &self,
@@ -255,6 +290,8 @@ type Series = (String, Option<String>, String);
 struct Counters {
     since: SystemTime,
     calls: BTreeMap<Series, u64>,
+    /// §26.3: `ramen.client.events` by (kind, ok).
+    events: BTreeMap<(String, bool), u64>,
     dirty: bool,
 }
 
@@ -265,6 +302,11 @@ impl Counters {
             key.1 = Some("(other)".into());
         }
         *self.calls.entry(key).or_insert(0) += 1;
+        self.dirty = true;
+    }
+
+    fn add_event(&mut self, kind: String, ok: bool) {
+        *self.events.entry((kind, ok)).or_insert(0) += 1;
         self.dirty = true;
     }
 
@@ -289,8 +331,18 @@ impl Counters {
             json!({"name": name, "unit": "{call}",
                    "sum": {"aggregationTemporality": 2, "isMonotonic": true, "dataPoints": points(errors_only)}})
         };
+        let events: Value = self
+            .events
+            .iter()
+            .map(|((kind, ok), n)| {
+                json!({"attributes": attrs(&[("ramen.event.kind", kind.clone()), ("ramen.event.ok", ok.to_string())]),
+                       "startTimeUnixNano": nanos(self.since), "timeUnixNano": now, "asInt": n.to_string()})
+            })
+            .collect();
+        let client = json!({"name": "ramen.client.events", "unit": "{event}",
+                            "sum": {"aggregationTemporality": 2, "isMonotonic": true, "dataPoints": events}});
         json!({"resourceMetrics": [{"resource": resource, "scopeMetrics": [{"scope": scope(),
-               "metrics": [sum("ramen.mcp.calls", false), sum("ramen.mcp.errors", true)]}]}]})
+               "metrics": [sum("ramen.mcp.calls", false), sum("ramen.mcp.errors", true), client]}]}]})
     }
 }
 
@@ -308,6 +360,7 @@ async fn export(inner: Arc<Inner>, mut rx: mpsc::Receiver<Item>) {
     let mut counters = Counters {
         since: SystemTime::now(),
         calls: BTreeMap::new(),
+        events: BTreeMap::new(),
         dirty: false,
     };
     let mut warned: Option<Instant> = None;
@@ -327,6 +380,10 @@ async fn export(inner: Arc<Inner>, mut rx: mpsc::Receiver<Item>) {
                 }
                 Some(Item::Count { method, name, status }) => {
                     counters.add(method, name, status);
+                    continue;
+                }
+                Some(Item::Event { kind, ok }) => {
+                    counters.add_event(kind, ok);
                     continue;
                 }
                 Some(Item::Flush(done)) => Some(done),
@@ -580,6 +637,7 @@ mod tests {
         let mut c = Counters {
             since: SystemTime::now(),
             calls: BTreeMap::new(),
+            events: BTreeMap::new(),
             dirty: false,
         };
         for i in 0..(MAX_SERIES + 50) {

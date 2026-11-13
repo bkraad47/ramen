@@ -52,15 +52,9 @@ async def update_group(request: Request, group: str, body: m.GroupUpdate, p: Pri
 
 
 @r.get("/groups/{group}/zones")
-async def allowed_zones(request: Request, group: str, p: Principal = Depends(viewer_g)):
-    """1.0.0: the zones this group's environments may use."""
-    return {"allowed": await svc(request).allowed_zones(group)}
-
-
-@r.put("/groups/{group}/zones")
-async def set_allowed_zones(request: Request, group: str, body: m.AllowedZones, p: Principal = Depends(super_)):
-    note(request, "group.zones", group, [f"group:{group}"] + [f"zone:{z}" for z in body.allowed])
-    return {"allowed": await svc(request).set_allowed_zones(group, body.allowed)}
+async def group_zones(request: Request, group: str, p: Principal = Depends(viewer_g)):
+    """§26.1: the group's zones are the zones listing it (read-only; a super admin binds on the Zones page)."""
+    return {"zones": await svc(request).group_zones(group)}
 
 
 @r.delete("/groups/{group}")
@@ -135,8 +129,16 @@ async def get_zone(request: Request, zone: str, p: Principal = Depends(viewer)):
 
 @r.post("/zones", status_code=201)
 async def create_zone(request: Request, body: m.ZoneIn, p: Principal = Depends(super_)):
-    note(request, "zone.create", body.name, [f"zone:{body.name}"])
-    return respond(request, await svc(request).create_zone(body.name, body.provider, body.region), 201)
+    note(request, "zone.create", body.name, [f"zone:{body.name}"] + [f"group:{g}" for g in body.groups])
+    s = svc(request)
+    return respond(request, await s.create_zone(body.name, body.provider, body.region, body.groups), 201)
+
+
+@r.put("/zones/{zone}/groups")
+async def set_zone_groups(request: Request, zone: str, body: m.ZoneGroups, p: Principal = Depends(super_)):
+    """§26.1: the groups a zone serves. Binding creates the pair's worker record; unbinding detaches the zone."""
+    note(request, "zone.groups", zone, [f"zone:{zone}"] + [f"group:{g}" for g in body.groups])
+    return respond(request, await svc(request).set_zone_groups(zone, body.groups))
 
 
 @r.delete("/zones/{zone}")
@@ -157,8 +159,7 @@ async def environments(
 @r.post("/groups/{group}/environments", status_code=201)
 async def create_env(request: Request, group: str, body: m.EnvIn, p: Principal = Depends(admin_g)):
     note(request, "environment.create", f"{group}/{body.name}", [f"group:{group}"])
-    by_super = p.role == "super_admin"
-    return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones, by_super), 201)
+    return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones), 201)
 
 
 @r.get("/groups/{group}/environments/{env}")
@@ -169,7 +170,7 @@ async def get_environment(request: Request, group: str, env: str, p: Principal =
 @r.put("/groups/{group}/environments/{env}")
 async def update_env(request: Request, group: str, env: str, body: m.EnvUpdate, p: Principal = Depends(admin_g)):
     note(request, "environment.update", f"{group}/{env}", [f"group:{group}"])
-    return respond(request, await svc(request).update_env(group, env, p.role == "super_admin", **body.model_dump()))
+    return respond(request, await svc(request).update_env(group, env, **body.model_dump()))
 
 
 @r.post("/groups/{group}/environments/{env}/verbose")
@@ -231,12 +232,13 @@ async def deploy(
     if body.zone and body.zone not in e.get("zones", []):
         raise invalid(f"Zone {body.zone} is not attached to {env}")
     target = f"{group}/{env}"
-    running = [j for j in request.app.state.jobs.recent(target) if j["target"] == target and j["status"] == "running"]
+    recent = await request.app.state.jobs.recent(target)
+    running = [j for j in recent if j["target"] == target and j["status"] == "running"]
     if running:  # 0.8.0 SC5: two deploys would drive one canary Deployment and race `last_deploy`
         raise conflict(f"A deploy of {target} is already running (job {running[0]['id']}); wait for it to finish")
     tags = [f"group:{group}", f"canary:{body.canary}"] + ([f"breaking:{body.breaking}"] if body.breaking else [])
     note(request, "deploy.start", target, tags)
-    job = request.app.state.jobs.create("deploy", target)
+    job = await request.app.state.jobs.create("deploy", target)
     from ..audit import client_ip
 
     ip = client_ip(request)
@@ -251,7 +253,7 @@ async def deploy(
 
 @r.get("/jobs/{jid}")
 async def job(request: Request, jid: str, p: Principal = Depends(viewer)):
-    j = request.app.state.jobs.get(jid)
+    j = await request.app.state.jobs.get(jid)
     if not j:
         raise not_found("job")
     return j

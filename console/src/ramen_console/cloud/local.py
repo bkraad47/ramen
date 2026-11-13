@@ -163,7 +163,8 @@ class LocalCloud(Cloud):
         p = self._bucket(group) / path
         return p.read_bytes() if p.is_file() else None
 
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+    def _write_env(self, group, env, zone, canary, config) -> tuple[dict, Path]:
+        """The deploy file the compose worker reads on `Admin/Reload`: `.ramen/env` and `.ramen/env-<zone>`."""
         vars_ = {
             "RAMEN_GROUP": group,
             "RAMEN_ENV": env,
@@ -180,6 +181,22 @@ class LocalCloud(Cloud):
         text = "".join(f"{k}={v}\n" for k, v in vars_.items() if k not in NODE_ONLY)
         (d / "env").write_text(text)
         (d / f"env-{zone}").write_text(text)
+        return vars_, d
+
+    async def push_config(self, group, env, zone, config):
+        """§26.3: the deploy file rewritten, every worker of the zone reloaded; no gate, no canary."""
+        self._write_env(group, env, zone, False, config)
+        n, failed = 0, []
+        for target in self._targets(group, zone):
+            try:
+                await self.rpc.reload(target, self.admin_key)
+                n += 1
+            except (GrpcError, ValueError) as e:
+                failed.append(f"{target}: {type(e).__name__}: {e}")
+        return {"ok": not failed, "reloaded": n, "error": "; ".join(failed) or None}
+
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+        vars_, d = self._write_env(group, env, zone, canary, config)
         results = []
         mcp_key = (vars_.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
         for target in self._targets(group, zone):

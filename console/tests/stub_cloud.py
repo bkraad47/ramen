@@ -27,10 +27,15 @@ class StubCloud(LocalCloud):
         self.sleep_error: Exception | None = None
         self.wake_gate: asyncio.Event | None = None
         self.deploys: list[dict] = []
+        self.pushes: list[dict] = []
 
     async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
         self.deploys.append({"zone": zone, "config": dict(config or {}), "spec": dict(spec or {})})
         return await super().deploy(group, env, zone, canary, config, spec, log, gate)
+
+    async def push_config(self, group, env, zone, config):  # §26.3
+        self.pushes.append({"zone": zone, "env": env, "config": dict(config)})
+        return await super().push_config(group, env, zone, config)
 
     async def zone_runtime(self, group, zone):
         return dict(self.runtime)

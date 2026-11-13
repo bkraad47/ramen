@@ -162,7 +162,7 @@ def test_a_group_admin_sees_their_own_role_written_out(demo, app):  # noqa: F811
 def test_each_zone_has_one_actions_section_in_a_fixed_order(demo):
     html = demo.get("/groups/demo").text
     assert html.count('class="zone-actions"') == 2  # zone-a and zone-b
-    section = re.search(r'<div class="zone-actions">(.*?)</table></div>\s*</td>', html, re.S).group(1)
+    section = re.search(r'<div class="zone-actions">(.*?)</table></div></details>', html, re.S).group(1)
     pat = r">(Scale workers|IP rules|Create service account|Rebalance and autoscale|View logs)<"
     order = re.findall(pat, section)
     assert order == ["Scale workers", "IP rules", "Create service account", "Rebalance and autoscale", "View logs"]
@@ -170,7 +170,7 @@ def test_each_zone_has_one_actions_section_in_a_fixed_order(demo):
 
 def test_the_action_buttons_share_one_width_class(demo):
     html = demo.get("/groups/demo").text
-    section = re.search(r'<div class="zone-actions">(.*?)</table></div>\s*</td>', html, re.S).group(1)
+    section = re.search(r'<div class="zone-actions">(.*?)</table></div></details>', html, re.S).group(1)
     controls = re.findall(r"<(?:button|a)[^>]*class=\"([^\"]*)\"[^>]*>", section)
     assert controls and all("act" in c for c in controls)
     css = Path(__file__).resolve().parents[1].joinpath("src/ramen_console/static/ramen.css").read_text()
@@ -181,14 +181,14 @@ def test_the_action_buttons_share_one_width_class(demo):
 # not just aria-label (sighted users can't see an aria attribute) ------------------------------------------------
 def test_the_action_buttons_all_share_the_same_colour_style(demo):
     html = demo.get("/groups/demo").text
-    section = re.search(r'<div class="zone-actions">(.*?)</table></div>\s*</td>', html, re.S).group(1)
+    section = re.search(r'<div class="zone-actions">(.*?)</table></div></details>', html, re.S).group(1)
     controls = re.findall(r"<(?:button|a)[^>]*class=\"([^\"]*)\"[^>]*>", section)
     assert controls and all("ghost" in c for c in controls), controls
 
 
 def test_the_zone_actions_fields_have_a_visible_label(demo):
     html = demo.get("/groups/demo").text
-    section = re.search(r'<div class="zone-actions">(.*?)</table></div>\s*</td>', html, re.S).group(1)
+    section = re.search(r'<div class="zone-actions">(.*?)</table></div></details>', html, re.S).group(1)
     fields = [("count", "Count (min 1)"), ("max_count", "Max (autoscale up to)"), ("size", "Size")]
     fields += [("allowed_sizes", "Allowed sizes"), ("cidrs", "CIDRs")]
     for field, text in fields:

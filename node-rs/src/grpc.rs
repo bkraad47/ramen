@@ -25,6 +25,7 @@ use crate::session::{self, Sessions};
 use crate::sidecar::{ProgressFn, RpcErr, Sidecar};
 use crate::subs::{Subs, Want};
 use crate::tasks::{self, Tasks};
+use crate::telemetry;
 use crate::token;
 use http::HeaderMap;
 use serde_json::{Value, json};
@@ -51,7 +52,7 @@ pub const ADMIN_SERVICE: &str = "ramen.v1.Admin";
 pub const CLIENT_IP_HEADER: &str = "x-ramen-client-ip";
 pub const ACTIVATOR_HEADER: &str = "x-ramen-activator";
 /// §24.3: the `_meta` key of `server/discover` that tells a client where to send its own telemetry.
-pub const TELEMETRY_META: &str = "io.ramen/telemetry";
+pub const TELEMETRY_META: &str = telemetry::META;
 
 pub type ConfigSource = Box<dyn Fn() -> Result<Config, String> + Send + Sync>;
 
@@ -316,6 +317,9 @@ pub struct CallLog {
     pub name: Option<String>,
     /// The key id for an `rmk_` key, `user:<sub>` for a console-issued token — never the credential itself.
     pub key_id: Option<String>,
+    /// §26.3: `ramen.user` of the client's spans — the token's email, else its subject, else the key id. Never
+    /// logged.
+    pub user: Option<String>,
     pub transport: &'static str,
     /// §23.1: the protocol version this call is served as; `null` on a line written before the body was read.
     pub protocol: Option<String>,
@@ -344,6 +348,7 @@ impl CallLog {
             method: None,
             name: None,
             key_id: None,
+            user: None,
             transport,
             protocol: None,
             trace: None,
@@ -501,6 +506,10 @@ pub fn guard(
         }
     };
     log.key_id = Some(caller.id.clone());
+    log.user = Some(caller.principal.as_ref().map_or_else(
+        || caller.id.clone(),
+        |p| p.email.clone().unwrap_or_else(|| p.sub.clone()),
+    ));
     log.console = auth::check_admin(cfg, md);
     log.consented = log.console || caller.principal.as_ref().is_some_and(|p| p.tel);
     if transport == "grpc" {
@@ -754,28 +763,57 @@ pub async fn dispatch_call(
             params: None,
         }
     };
+    let sender = telemetry::Sender {
+        ip: log.ip,
+        user: log.user.as_deref().unwrap_or(""),
+        key_id: log.key_id.as_deref().unwrap_or(""),
+        transport: log.transport,
+        span: log.span.as_ref(),
+    };
     let (out, consent_granted, consent_reason) = match gate {
         consent::Gate::Answer(answer, reason) => (answer.map(Some), false, Some(reason)),
         consent::Gate::Pass {
             granted,
-            params: stripped,
+            params: mut stripped,
         } => {
-            let env = mcp::Env {
-                sc: &app.sidecar,
-                modern: is_modern,
-                caps,
-                progress: progress_fn(&ctx, &method, &params),
-                host: Some(mcp::Host {
-                    app,
-                    cfg,
-                    binding: ctx.binding,
-                }),
-                span: log.span.as_ref(),
+            // §26.3: the telemetry report — after the consent gate, before the runtime; its events go to the
+            // collector, the tool never sees it
+            let report = if cfg.telemetry_consent
+                && consent::gated(&method)
+                && !log.console
+                && !blocked
+                && access_denial.is_none()
+            {
+                telemetry::gate(cfg, is_modern, stripped.as_ref().unwrap_or(&params)).map(Some)
+            } else {
+                Ok(None)
             };
-            // without the consent round's answer and state when the request carried them
-            let call_params = stripped.as_ref().unwrap_or(&params);
-            let out = mcp::dispatch_env(&env, &policy, &method, call_params).await;
-            (out, granted, None)
+            match report {
+                Err(e) => (Err(e), false, None),
+                Ok(report) => {
+                    if let Some((report, rest)) = report {
+                        telemetry::forward(cfg, &sender, &report);
+                        stripped = Some(rest);
+                    }
+                    let env = mcp::Env {
+                        sc: &app.sidecar,
+                        modern: is_modern,
+                        caps,
+                        progress: progress_fn(&ctx, &method, &params),
+                        host: Some(mcp::Host {
+                            app,
+                            cfg,
+                            binding: ctx.binding,
+                        }),
+                        span: log.span.as_ref(),
+                        tel: Some(sender),
+                    };
+                    // without the consent round's answer and state when the request carried them
+                    let call_params = stripped.as_ref().unwrap_or(&params);
+                    let out = mcp::dispatch_env(&env, &policy, &method, call_params).await;
+                    (out, granted, None)
+                }
+            }
         }
     };
     // §23.1: the modern envelope and error codes are put on here, so `mcp` raises one set of errors
@@ -801,7 +839,8 @@ pub async fn dispatch_call(
     app.metrics
         .record_protocol(log.protocol.as_deref().unwrap_or(""));
     let mut extra = if cfg.verbose {
-        json!({"request": rpc, "response": match &out {
+        // §26.3: never the client's events
+        json!({"request": telemetry::scrub(rpc), "response": match &out {
             Ok(v) => v.clone().unwrap_or(Value::Null),
             Err(e) => json!({"code": e.code, "message": e.message}),
         }})
@@ -867,7 +906,7 @@ pub async fn dispatch_call(
         extra["reason"] = json!(reason);
         "denied"
     } else if let Some(reason) = out.as_ref().err().and_then(|e| e.reason) {
-        // §23.4: `state_invalid`
+        // §23.4: `state_invalid`; §26.3: `telemetry_required` / `telemetry_stale`
         extra["reason"] = json!(reason);
         "denied"
     } else if ok {

@@ -399,8 +399,11 @@ class OAuthServer:
             "refresh_token": refresh,
             "scope": scope,
         }
-        # §24.3: where the connected agent should send its own telemetry (never Ramen's export headers)
-        if (telemetry := otel.client_info(await otel.get_config(self.store), group, zone)) is not None:
+        # §24.3 / §26.3: where the connected agent sends its own telemetry (never Ramen's export headers), the
+        # config version it must report with, and whether this group requires the report
+        g = await self.store.get("groups", group) or {}
+        cfg = await otel.get_config(self.store)
+        if (telemetry := otel.client_info(cfg, group, zone, bool(g.get("require_telemetry_consent")))) is not None:
             out["telemetry"] = telemetry
         return out
 

@@ -1,4 +1,4 @@
-"""Read-only kubectl helpers for the kind proofs (CONTRACTS §12.3).
+"""kubectl helpers for the kind proofs (CONTRACTS §12.3): read-only, but for the kind-only writers at the end.
 
 Only `tests/kind` uses these: the cloud suites assert through the console API and gcloud, never kubectl.
 Every helper skips (never fails) when kubectl or the cluster is not there.
@@ -96,3 +96,48 @@ def metrics_ready() -> bool:
         timeout=60,
     )
     return r.returncode == 0
+
+
+# -- v1.0.0 (§24): the only helpers that write, and only ever to a kind cluster -----------------------------------
+def kind_context() -> str:
+    """The context for a write. A kubeconfig can hold cloud contexts next to kind's: never touch one of those."""
+    ctx = context()
+    assert ctx.startswith("kind-"), f"refusing to write to kube context {ctx!r}: test fixtures go to kind only"
+    return ctx
+
+
+def apply(manifest: str, timeout: float = 60) -> None:
+    r = subprocess.run(
+        ["kubectl", "--context", kind_context(), "apply", "-f", "-"],
+        input=manifest,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    assert r.returncode == 0, f"kubectl apply failed: {r.stderr.strip()[:400]}"
+
+
+def write(*args: str, timeout: float = 120) -> str:
+    """A mutating kubectl call (`create`, `delete`, `rollout`), kind contexts only."""
+    r = subprocess.run(
+        ["kubectl", "--context", kind_context(), *args], capture_output=True, text=True, timeout=timeout, check=False
+    )
+    assert r.returncode == 0, f"kubectl {' '.join(args[:4])} failed: {r.stderr.strip()[:400]}"
+    return r.stdout
+
+
+def logs(ns: str, pod: str, container: str | None = None, tail: int = 2000) -> str:
+    args = ["logs", "-n", ns, pod, f"--tail={tail}"] + (["-c", container] if container else [])
+    return kubectl(*args, timeout=120)
+
+
+def deployment_or_none(ns: str, name: str) -> dict | None:
+    r = subprocess.run(
+        ["kubectl", "--context", context(), "get", "deployment", name, "-n", ns, "-o", "json"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return json.loads(r.stdout) if r.returncode == 0 else None

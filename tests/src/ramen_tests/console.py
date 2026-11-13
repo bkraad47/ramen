@@ -65,6 +65,11 @@ ROUTES = {
     "zone_permission": "/api/v1/groups/{group}/zones/{zone}/permissions/{permission}",  # DELETE → remaining set
     "images": "/api/v1/groups/{group}/images",  # GET history; POST {tag,digest?,note?} → 201 (super admin)
     "image_current": "/api/v1/groups/{group}/images/current",  # PUT {id} recall; DELETE unpin (super admin)
+    # v1.0.0 (CONTRACTS §24)
+    "zone_sleep": "/api/v1/groups/{group}/zones/{zone}/sleep",  # POST (group admin) → worker record, state asleep
+    "zone_wake": "/api/v1/groups/{group}/zones/{zone}/wake",  # POST (group admin) → worker record, state awake
+    "internal_wake": "/api/v1/internal/zones/{group}/{zone}/wake",  # POST, x-ramen-admin-key; in-cluster only
+    "config_otel": "/api/v1/config/otel",  # GET|PUT {enabled,endpoint,headers,client_endpoint,client_headers}
     "oauth_login": "/auth/{name}/login",
     "oauth_callback": "/auth/{name}/callback",
 }

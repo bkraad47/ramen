@@ -65,6 +65,15 @@ class AzureSecrets(SecretsBackend):
             self.on_create(f"secrets/{sid}", group)
         return {"value": None, "ref": self._ref(sid)}
 
+    async def put_value(self, name, value):
+        """1.0.0: `ramenc--…`; no group secret (`ramen--<group>--…`) can share the name."""
+        sid = ("ramenc--" + _esc(name))[:127]
+        try:
+            await asyncio.to_thread(lambda: self.client.set_secret(sid, value, tags={"ramen": "console"}))
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"Key Vault: {type(e).__name__}") from e
+        return self._ref(sid)
+
     async def put(self, group, env, zone, name, value, kind="secret"):
         try:
             return await asyncio.to_thread(self._put, group, env, zone, name, value, kind)

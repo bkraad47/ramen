@@ -1043,6 +1043,16 @@ builds and uses a group image, spans of a call and a deploy arrive in Jaeger, co
 Cloud (GKE, EKS, AKS): the same four, plus every sign-in path: password, API key, MCP key, person's OAuth token over
 HTTP and through the bridge, Entra with group lookup; Google Workspace against a fake unless a live client is given.
 
+### 24.5 The console's own secrets
+On a cloud (`RAMEN_SECRETS_BACKEND` ≠ `store`) every reversible secret the console stores (`storage/encrypted.py`
+SENSITIVE minus hashes and group secrets, plus a provider's `client_secret`) is written to the cloud's secret manager
+as its own secret and the doc keeps `vault:<ref>`; a changed value is a new secret, the old one deleted; refs are
+cached. Names: GCP/Azure `ramenc-…`, AWS `ramen-console/…` — outside every worker grant and boundary. Plaintext
+values found at start are moved. Locally nothing changes (Fernet in the store). The Config page lists each section's
+settings; a secret shows only as set/not set. Every secret read or written is scrubbed (`***`) from every log handler,
+deploy job logs and backups; `scheme://user:pass@` is scrubbed always. Backups keep no nested provider secret and a
+restore merges per entry so the live one survives.
+
 ## 25. v1.0.0 — the zones a group may use (binding)
 Asked for by the user on the live GKE console: a group must not reach every zone.
 - `groups[].allowed_zones: list[str]` — the zones the group's environments may use. `GET /api/v1/groups/{g}/zones` →

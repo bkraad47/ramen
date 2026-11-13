@@ -68,6 +68,10 @@
 <table class="kv">
 <tr><th>Telemetry</th><td><span class="badge {{ 'ok' if otel.enabled else '' }}">{{ 'on' if otel.enabled else 'off' }}</span>
 <form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-vals='{"enabled": {{ 'false' if otel.enabled else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if otel.enabled else '' }}">Telemetry: {{ 'on → off' if otel.enabled else 'off → on' }}</button></form></td></tr>
+<tr><th>Endpoint</th><td>{% if otel.endpoint %}<code>{{ otel.endpoint }}</code>{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+<tr><th>Headers Ramen sends</th><td><span class="badge {{ 'ok' if otel.headers_set else '' }}">{{ 'set (hidden)' if otel.headers_set else 'not set' }}</span>{% if otel.headers_set %} <span class="muted">{{ otel.header_names|join(', ') }}</span>{% endif %}</td></tr>
+<tr><th>Client endpoint</th><td>{% if otel.client_endpoint %}<code>{{ otel.client_endpoint }}</code>{% else %}<span class="muted">same as the endpoint</span>{% endif %}</td></tr>
+<tr><th>Headers agents send</th><td><span class="badge {{ 'ok' if otel.client_headers_set else '' }}">{{ 'set (hidden)' if otel.client_headers_set else 'not set' }}</span>{% if otel.client_headers_set %} <span class="muted">{{ otel.client_header_names|join(', ') }}</span>{% endif %}</td></tr>
 </table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-swap="none">
 <label>Endpoint (OTLP/HTTP base URL)<input name="endpoint" value="{{ otel.endpoint }}" placeholder="http://jaeger.ramen-system:4318"></label>
@@ -83,11 +87,21 @@
 <td><button class="act ghost" form="scheduler-interval">Set interval</button></td></tr>
 </table></div>
 <div class="card"><h2 style="margin-top:0">GitHub App (OIDC-free group repo access)</h2><p class="muted">Once set, a group with a GitHub App installation id needs no stored token — a short-lived installation token is minted per deploy. {{ 'A private key is set.' if github_app.private_key_set else 'No private key set.' }}</p>
+<table class="kv">
+<tr><th>App id</th><td>{% if github_app.app_id %}<code>{{ github_app.app_id }}</code>{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+<tr><th>Private key</th><td><span class="badge {{ 'ok' if github_app.private_key_set else '' }}">{{ 'set (hidden)' if github_app.private_key_set else 'not set' }}</span></td></tr>
+</table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/github-app" hx-ext="json" hx-swap="none">
 <label>App id<input name="app_id" value="{{ github_app.app_id }}" placeholder="123456"></label>
 <label>Private key (PEM)<textarea name="private_key" rows="3" placeholder="(unchanged)"></textarea></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server email (SMTP)</h2><p class="muted">Overrides RAMEN_SMTP_* env vars field by field; takes effect immediately. Password is write-only — {{ 'a password is set.' if smtp.password_set else 'no password set.' }}</p>
+<table class="kv">
+<tr><th>Server</th><td>{% if smtp.host %}<code>{{ smtp.host }}:{{ smtp.port }}</code> · {{ {'1': 'STARTTLS', 'ssl': 'SSL', '0': 'no TLS'}.get(smtp.tls, smtp.tls) }}{% else %}<span class="muted">not set (env RAMEN_SMTP_* or mail off)</span>{% endif %}</td></tr>
+<tr><th>User</th><td>{% if smtp.user %}{{ smtp.user }}{% else %}<span class="muted">none</span>{% endif %}</td></tr>
+<tr><th>Password</th><td><span class="badge {{ 'ok' if smtp.password_set else '' }}">{{ 'set (hidden)' if smtp.password_set else 'not set' }}</span></td></tr>
+<tr><th>From</th><td>{% if smtp.mail_from %}{{ smtp.mail_from }}{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+</table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/smtp" hx-ext="json" hx-swap="none">
 <label>Host<input name="host" value="{{ smtp.host }}" placeholder="smtp.example.com"></label>
 <label>Port<input name="port" type="number" min="1" value="{{ smtp.port }}" style="width:6em"></label>
@@ -97,9 +111,11 @@
 <label>TLS<select name="tls"><option value="1" {{ 'selected' if smtp.tls == '1' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.tls == 'ssl' }}>SSL</option><option value="0" {{ 'selected' if smtp.tls == '0' }}>None</option></select></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server warning/error emails</h2><p class="muted">These users get a digest email when the server logs a warning or error.</p>
+<table class="kv"><tr><th>Recipients</th><td>{% set rcpts = [] %}{% for u in users if u.id in notify_user_ids %}{% set _ = rcpts.append(u.email) %}{% endfor %}{{ rcpts|join(', ') if rcpts else '<span class="muted">nobody</span>'|safe }}</td></tr></table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/notify" hx-ext="json" hx-swap="none">{% set notify_opts = [] %}{% for u in users %}{% set _ = notify_opts.append((u.id, u.email)) %}{% endfor %}{{ multi('user_ids', notify_opts, notify_user_ids, 'notify-users', 'Users', 'Nobody') }}<button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Blocked regions</h2><p class="muted">Cloud regions no zone may be created in or deployed to — data-residency or cost rules. A zone whose region (GCP zone <code>us-west1-a</code> → region <code>us-west1</code>, AWS availability zone <code>eu-west-1a</code> → <code>eu-west-1</code>) is blocked is refused on creation, and an existing zone in a blocked region fails its next deploy with the reason in the job log and a server warning (see the digest above). The Zones page only offers what is left. {{ regions_note }}</p>
-<form class="inline" hx-put="{{ base }}/api/v1/config/regions" hx-ext="json" hx-swap="none">
+{% set ck = cloud_kind() %}{% if ck in ('gcp', 'aws', 'azure') %}<table class="kv"><tr><th>Blocked now</th><td>{{ blocked_regions[ck]|join(', ') if blocked_regions[ck] else '<span class="muted">none</span>'|safe }}</td></tr></table>
+{% endif %}<form class="inline" hx-put="{{ base }}/api/v1/config/regions" hx-ext="json" hx-swap="none">
 {% set ck = cloud_kind() %}{% for prov in ([ck] if ck in ('gcp', 'aws', 'azure') else []) %}{% set opts = [] %}{% for r in regions[prov] %}{% set _ = opts.append((r, r)) %}{% endfor %}{{ multi(prov, opts, blocked_regions[prov], 'blocked-' ~ prov, cloud_label(prov) ~ ' regions blocked', 'None blocked') }}{% else %}<p class="muted">This console runs the local (compose) stack: no cloud regions to block.</p>{% endfor %}
 <button class="act">Save blocked regions</button></form></div>
 <div class="card"><h2 style="margin-top:0">Drift warning threshold</h2><p class="muted">Each group page's Drift card reads a zone's recent log and counts, per tool, the calls that repeat an identical call (same key, tool and arguments) within a minute — a language model looping on a tool. When a tool's repeat rate reaches this share of its calls the console logs a <code>ramen.drift</code> warning (the digest above carries it) and the card shows the tool in red. 0 warns on any repeat, 100 only when every call repeats.</p>

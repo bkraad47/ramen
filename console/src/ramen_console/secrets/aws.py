@@ -3,6 +3,7 @@ ramen/<group>/<env|all>/<zone|all>/<NAME> (tagged group/env/zone); the store kee
 
 import asyncio
 import os
+import re
 
 from ..cloud.aws_api import aws_error_code
 from ..errors import ApiError
@@ -41,6 +42,17 @@ class AwsSecrets(SecretsBackend):
                 self.client.restore_secret(SecretId=sid)
             self.client.put_secret_value(SecretId=sid, SecretString=value)
         return {"value": None, "ref": f"{REF}{sid}"}
+
+    async def put_value(self, name, value):
+        """1.0.0: `ramen-console/…`, outside the `ramen/*` every worker role is bounded to."""
+        sid = "ramen-console/" + re.sub(r"[^A-Za-z0-9/_+=.@-]", "_", name)[:400]
+        try:
+            await asyncio.to_thread(
+                self.client.create_secret, Name=sid, SecretString=value, Tags=[{"Key": "ramen", "Value": "console"}]
+            )
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"Secrets Manager: {type(e).__name__}") from e
+        return f"{REF}{sid}"
 
     async def put(self, group, env, zone, name, value, kind="secret"):
         try:

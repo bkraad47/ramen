@@ -1,6 +1,8 @@
 """Cross-cutting hardening: password and key strength, signing-secret resolution, security headers, login rate
 limiting, log redaction."""
 
+import contextlib
+import json
 import logging
 import os
 import re
@@ -193,6 +195,53 @@ class _RedactTokens(logging.Filter):
             record.args = tuple(_redact(a) if isinstance(a, str) else a for a in record.args)
         record.msg = _redact(record.msg) if isinstance(record.msg, str) else record.msg
         return True
+
+
+_USERINFO = re.compile(r"(://)[^/@\s:]*:[^/@\s]+@")
+_KNOWN: set[str] = set()
+
+
+def remember_secret(value) -> None:
+    """1.0.0: every secret the console reads or writes is scrubbed from any log line and deploy log afterwards."""
+    if not isinstance(value, str):
+        return
+    if value.startswith("{"):  # telemetry headers: a JSON object whose values are the secrets
+        with contextlib.suppress(ValueError):
+            for v in json.loads(value).values():
+                remember_secret(v)
+    if len(value) >= 8:
+        _KNOWN.add(value)
+
+
+def scrub(text: str) -> str:
+    """Credentials in URLs (`scheme://user:pass@`) and every remembered secret become `***`."""
+    text = _USERINFO.sub(r"\1***@", _redact(text))
+    for v in sorted((v for v in _KNOWN if v in text), key=len, reverse=True):
+        text = text.replace(v, "***")
+    return text
+
+
+class ScrubbedLog(list):
+    """A deploy job's log: each line is scrubbed as it is written."""
+
+    def append(self, line) -> None:
+        super().append(scrub(line) if isinstance(line, str) else line)
+
+
+class _ScrubSecrets(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg, record.args = scrub(record.getMessage()), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))
+        return True
+
+
+def scrub_all_logs() -> None:
+    """On every handler the process logs through, so no logger can bypass it."""
+    for name in (None, "uvicorn", "uvicorn.error", "uvicorn.access"):
+        for h in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _ScrubSecrets) for f in h.filters):
+                h.addFilter(_ScrubSecrets())
 
 
 def redact_tokens_in_access_log() -> None:

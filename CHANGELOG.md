@@ -17,6 +17,11 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
 - **Each group has a list of allowed zones, set by super admins.** A group admin's environments can use only those
   zones (403 otherwise), and the group page shows only them. Existing groups keep the zones their environments use;
   a new group starts with none.
+- **The console's own secrets live in the cloud's secret manager.** SMTP password, GitHub App key, identity-provider
+  client secrets, telemetry headers, repo tokens and Redis URLs are each a secret of their own (`ramenc-…`,
+  `ramen-console/…`) the store only references; no worker can read them; locally they stay encrypted in the store.
+  Each Config section lists what is set, a secret only as *set (hidden)*; secrets are scrubbed from logs, deploy logs
+  and backups (backups no longer carried provider client secrets).
 ### New: protocol
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
   and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,

@@ -80,7 +80,10 @@ data "aws_iam_policy_document" "console" {
   statement { # secrets backend `aws`: ramen/<group>/<env>/<zone>/<NAME>
     actions = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
     "secretsmanager:DeleteSecret", "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UpdateSecret"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*"]
+    resources = [ # ramen-console/*: the console's own secrets (1.0.0), outside every worker's boundary
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*",
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen-console/*",
+    ]
   }
   statement {
     actions   = ["secretsmanager:ListSecrets"]

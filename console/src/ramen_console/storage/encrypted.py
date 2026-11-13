@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from cryptography.fernet import Fernet
 
+from ..security import remember_secret
 from .base import Doc, Filters, Store
 
 SENSITIVE: dict[str, set[str]] = {
@@ -23,12 +24,15 @@ class FieldCipher:
         self._f = Fernet(key.encode() if isinstance(key, str) else key)
 
     def encrypt(self, value: str) -> str:
+        remember_secret(value)
         return PREFIX + self._f.encrypt(value.encode()).decode()
 
     def decrypt(self, value: str) -> str:
         if not isinstance(value, str) or not value.startswith(PREFIX):
             return value
-        return self._f.decrypt(value[len(PREFIX) :].encode()).decode()
+        out = self._f.decrypt(value[len(PREFIX) :].encode()).decode()
+        remember_secret(out)
+        return out
 
 
 class EncryptedStore(Store):

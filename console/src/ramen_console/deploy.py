@@ -5,6 +5,7 @@ import os
 
 from . import baseuri, compat, github_app, golden, imagebuild, otel, regions, roles, sleeping, toolaccess
 from .cloud.base import GateError
+from .security import ScrubbedLog
 from .services import Services
 from .util import now, uid
 
@@ -28,7 +29,7 @@ class Jobs:
             "finished": None,
             "result": None,
             "error": None,
-            "log": [],
+            "log": ScrubbedLog(),
         }
         self._jobs[job["id"]] = job
         return job

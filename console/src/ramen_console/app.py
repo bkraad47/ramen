@@ -39,9 +39,11 @@ from .security import (
     SecurityHeadersMiddleware,
     redact_tokens_in_access_log,
     resolve_signing_secret,
+    scrub_all_logs,
 )
 from .services import Services
 from .storage import make_store
+from .storage.vaulted import VaultedStore
 from .web import api, api_admin, auth_routes, internal, oauth_routes, pages
 
 HERE = Path(__file__).parent
@@ -60,6 +62,11 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if isinstance(app.state.store, VaultedStore):
+            try:
+                await app.state.store.migrate()
+            except Exception as e:  # noqa: BLE001 - values stay encrypted in the store until the next start
+                logging.getLogger("ramen.vault").warning("vault: migration failed (%s)", type(e).__name__)
         await ensure_super_admin(app.state.store)
         await roles.load(app.state.store, force=True)  # D48: custom roles before any membership is read
         await providers.refresh(app.state, force=True)  # D50: identity providers from env + the store doc
@@ -84,6 +91,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.store = store or make_store()
     st.cloud = cloud or make_cloud()
     st.secrets = secrets or make_secrets_backend(st.cloud)
+    if st.secrets.kind != "store":  # 1.0.0: the console's own secrets live in the cloud's secret manager
+        st.store = VaultedStore(st.store, st.secrets)
     st.services = Services(st.store, st.cloud, st.secrets)
     st.accounts = Accounts(st.store)
     st.backups = Backups(st.services)
@@ -121,6 +130,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
     app.add_middleware(baseuri.BaseUriMiddleware)  # outermost: every layer below may build links
     redact_tokens_in_access_log()
+    scrub_all_logs()
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     st.oauth_server = OAuthServer(st.services, st.accounts)
     for router in (auth_routes.r, pages.r, api.r, api_admin.r, internal.r, oauth_routes.r):

@@ -326,6 +326,10 @@ class FakeBucket:
         if self.iam_lag > 0:
             self.iam_lag -= 1
             raise FakeApiError(400, "Service account ramen-x-y@p1.iam.gserviceaccount.com does not exist.")
+        if getattr(self, "refuse_deleted", False) and any(
+            m.startswith("deleted:") for b in policy.bindings for m in b["members"]
+        ):
+            raise FakeApiError(400, "Deleted member 'x' is not deleted.")
         self.policy = NS(version=policy.version, bindings=copy.deepcopy(list(policy.bindings)))
         return self.policy
 

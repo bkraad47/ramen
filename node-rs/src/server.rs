@@ -9,6 +9,9 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
+/// How long open streams get to flush their closing frame after the stop signal.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
 pub async fn run(
     cfg: Config,
     listener: TcpListener,
@@ -52,32 +55,46 @@ pub async fn run(
     let merged = std::mem::take(routes.axum_router_mut()).merge(crate::http::router(app.clone()));
     *routes.axum_router_mut() = merged;
     let server = Server::builder().accept_http1(true).add_routes(routes);
-    // §23.6: a graceful stop waits for open responses, and a `subscriptions/listen` stream never ends by itself —
-    // so the signal first tells every stream to send its completion result and close.
+    // §23.6: a `subscriptions/listen` stream never ends by itself, so the signal first tells every stream to send
+    // its completion result. Then the node stops for good after `STOP_GRACE`: tonic's graceful stop keeps the
+    // listening socket open but unaccepted until the last connection ends, and a load balancer that still routes
+    // to the pod then hangs new callers instead of being refused and retrying elsewhere (seen on kind, EKS and
+    // GKE during rollouts in the 1.0.0 runs).
+    let (stopping_tx, mut stopping) = tokio::sync::watch::channel(false);
     let shutdown = {
         let app = app.clone();
         async move {
             shutdown.await;
             app.subs.drain();
+            let _ = stopping_tx.send(true);
         }
     };
-    let served = match tls(&cfg) {
-        // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
-        // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.
-        Ok(Some(acceptor)) => {
-            server
-                .serve_with_incoming_shutdown(tls_incoming(listener, acceptor), shutdown)
-                .await
+    let serve = async {
+        match tls(&cfg) {
+            // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
+            // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.
+            Ok(Some(acceptor)) => {
+                server
+                    .serve_with_incoming_shutdown(tls_incoming(listener, acceptor), shutdown)
+                    .await
+            }
+            Ok(None) => {
+                server
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
+                    .await
+            }
+            Err(e) => {
+                emit("error", "tls config failed", json!({"error": e}));
+                Ok(())
+            }
         }
-        Ok(None) => {
-            server
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
-                .await
-        }
-        Err(e) => {
-            emit("error", "tls config failed", json!({"error": e}));
-            Ok(())
-        }
+    };
+    let served = tokio::select! {
+        r = serve => r,
+        _ = async {
+            let _ = stopping.wait_for(|s| *s).await;
+            tokio::time::sleep(STOP_GRACE).await;
+        } => Ok(()),
     };
     if let Err(e) = served {
         emit("error", "serve failed", json!({"error": e.to_string()}));

@@ -404,6 +404,8 @@ class GcpCloud(Cloud):
         email = f"{iam.account_id(group, zone)}@{self.project}.iam.gserviceaccount.com"
         removed = {"namespaces": [ns], "service_accounts": []}
         if email in await asyncio.to_thread(iam.list_service_accounts, f"ramen-{group}-{zone}@"):
+            # unbind before deleting: a deleted identity left in the bucket policy blocks later policy writes
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         return removed
@@ -417,6 +419,7 @@ class GcpCloud(Cloud):
             removed["namespaces"].append(ns)
         iam = self._iam()
         for email in await asyncio.to_thread(iam.list_service_accounts, prefix):
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         comp = gcp_api.Compute(self.c.compute, self.project)

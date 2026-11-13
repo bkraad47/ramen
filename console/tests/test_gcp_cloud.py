@@ -1103,3 +1103,34 @@ def test_worker_pods_are_not_evictable_by_the_cluster_autoscaler():
         if d["kind"] == "Deployment":
             ann = d["spec"]["template"]["metadata"].get("annotations") or {}
             assert ann.get("cluster-autoscaler.kubernetes.io/safe-to-evict") == "false", d["metadata"]["name"]
+
+
+def _bucket_members(fk, cloud) -> list[str]:
+    return [m for b in fk.storage.bucket(cloud.bucket).policy.bindings for m in b["members"]]
+
+
+async def test_detach_unbinds_the_zone_identity_from_the_groups_bucket(cloud, fk):
+    """1.0.0 GKE run: deleting a GSA that is still bound leaves `deleted:serviceAccount:…?uid=…` in the bucket policy,
+    and once a GSA of that name exists again GCS refuses every later policy write for every group."""
+    for g in ("demo", "other"):
+        await cloud.attach_zone(g, "a", SPEC)
+    assert any("ramen-demo-a@" in m for m in _bucket_members(fk, cloud))
+    await cloud.detach_zone("demo", "a")
+    assert not any("ramen-demo-a@" in m for m in _bucket_members(fk, cloud))
+    await cloud.detach_group("other")
+    assert _bucket_members(fk, cloud) == []
+
+
+async def test_a_deleted_member_left_in_the_bucket_policy_is_shed_on_the_next_write(cloud, fk):
+    """A policy poisoned before the fix (or by hand) must not block a new zone: the stale entry is dropped."""
+    bucket = fk.storage.bucket(cloud.bucket)
+    stale = "deleted:serviceAccount:ramen-gone-a@p1.iam.gserviceaccount.com?uid=1"
+    bucket.policy.bindings = [
+        {"role": "roles/storage.objectViewer", "members": [stale]},
+        {"role": "roles/storage.admin", "members": ["serviceAccount:console@p1.iam.gserviceaccount.com", stale]},
+    ]
+    bucket.refuse_deleted = True
+    await cloud.attach_zone("demo", "a", SPEC)
+    members = _bucket_members(fk, cloud)
+    assert stale not in members and "serviceAccount:console@p1.iam.gserviceaccount.com" in members
+    assert any("ramen-demo-a@" in m for m in members)

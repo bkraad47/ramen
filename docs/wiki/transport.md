@@ -367,7 +367,8 @@ template variable that start with what was typed, at most 100; with nothing decl
 Asking for `taskIds` without declaring the tasks extension is `-32021`. A request without an `id` is `-32600`.
 
 A stream holds no in-flight permit. A pod carries at most `RAMEN_MAX_SUBSCRIPTIONS` of them (default 64); the next
-is `429`. **A stream is per pod**: it hears about the reload of the pod it is connected to, and behind a load
+is `429`. A client that drops its connection without closing the stream frees its slot when a keep-alive write
+fails, within about 30 seconds. **A stream is per pod**: it hears about the reload of the pod it is connected to, and behind a load
 balancer that is one pod of the zone. A 2025-06-18 client keeps the rollout notice described under
 [Sessions](#sessions).
 

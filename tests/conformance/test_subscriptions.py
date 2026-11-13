@@ -165,7 +165,9 @@ def test_subscriptions_are_capped_per_pod(tmp_path):
             with m.listen({"toolsListChanged": True}) as c:
                 assert c.status == 429, c.status
             assert m.request("tools/list")["resultType"] == "complete", "ordinary calls are not affected by the cap"
-        deadline = time.monotonic() + 10
+        # a client that just closes its socket is noticed when a write fails: at the latest on the second
+        # keep-alive comment (15 s apart) — Linux reports the reset one write later than macOS does
+        deadline = time.monotonic() + 60
         while n.node.admin_metrics()["subscriptions"] and time.monotonic() < deadline:
             time.sleep(0.3)
         assert n.node.admin_metrics()["subscriptions"] == 0, "closed streams give their slots back"

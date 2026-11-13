@@ -923,3 +923,118 @@ answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11
   `--requirements 2026-07-28` and `--spec-version 2025-06-18`, each with a checked-in expected-failures baseline.
   A baseline entry needs a one-line reason in the file. Known for the legacy wire: server-initiated sampling,
   elicitation and logging, and `resources/subscribe` are not offered to 2025-06-18 clients.
+
+## 24. v1.0.0 — sleeping workers, images built on deploy, OpenTelemetry with consent (binding)
+Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" (a sleeping zone has 0 workers) and
+§13.3 "the console never builds" (it starts a build Job; it still holds no registry credential itself).
+
+### 24.1 Sleeping workers
+- Setting per group × zone: `sleep_after_secs` (0 = never, the default; otherwise ≥ 60), set by a super admin or an
+  admin of the group — `PUT /api/v1/groups/{g}/zones/{z}/workers {"sleep_after_secs": n}`, group page → Zone actions.
+  Others never see the control. Zone state: `awake` | `asleep` | `waking`, shown on the workers table.
+- **Idle** = every worker pod of the zone reports (in `Admin/Metrics`) `last_call_at` older than `sleep_after_secs`,
+  `inflight` 0, `tasks` 0 and `subscriptions` 0, and the zone was woken or deployed longer ago than that too.
+  `last_call_at` (epoch seconds, 0 = never) counts authenticated MCP calls only — health, reflection, `Admin/*` and
+  denied calls do not keep a zone awake. The console scheduler checks on its tick; `POST …/zones/{z}/sleep` and
+  `POST …/zones/{z}/wake` (same roles) do it by hand. Every transition is audited (`workers.sleep`, `workers.wake`,
+  with `trigger: idle|manual|call|deploy`).
+- **Asleep** = the zone's `worker` and `worker-canary` Deployments are at 0 replicas and an **activator** runs in
+  the zone namespace: one small pod (`Deployment/worker-activator`, the worker image started with
+  `RAMEN_ACTIVATOR=1`, labels `app: worker`, `ramen.io/role: activator`, requests 10m / 32Mi, no Python runtime
+  started). It is selected by the zone's existing `worker` Service, so every edge (GKE Gateway NEG, ALB, Envoy
+  Gateway, kind NodePort) keeps its route and its health check untouched. Real worker pods carry
+  `ramen.io/role: worker`; `Service/worker-direct` selects `app: worker, ramen.io/role: worker`.
+- Activator behaviour (node-rs): the SAME guards as a worker (`grpc::guard`: address, Origin, credential, throttle)
+  with the zone's own config — an unauthenticated call never wakes a zone. `grpc.health.v1.Health` answers SERVING.
+  `Admin/Metrics` answers `{"asleep": true, "last_call_at": …, "woken": n}`; `Admin/Reload` → `FAILED_PRECONDITION`.
+  An accepted MCP call (HTTP or gRPC): `POST {RAMEN_CONSOLE_INTERNAL_URL}/api/v1/internal/zones/{g}/{z}/wake` with
+  header `x-ramen-admin-key` (once per wake, concurrent calls share it), poll `worker-direct:8080` gRPC health until
+  SERVING, then forward the request unchanged (HTTP: method, path, headers, body, streaming the answer; gRPC:
+  `Mcp/Call` bytes and metadata) and relay the answer. Not SERVING within `RAMEN_WAKE_TIMEOUT_SECS` (default 90) →
+  HTTP 503 with `Retry-After: 10` / gRPC `UNAVAILABLE`, access-log reason `waking`. Its log lines carry
+  `activator: true`.
+- Console: **sleep** = apply the activator (replicas 1), wait Ready, scale `worker` and `worker-canary` to 0 (the
+  workers' SIGTERM drain serves what is in flight), state `asleep`. **wake** = state `waking`, scale `worker` to
+  the zone's count before it slept (≥ 1) and `worker-canary` to what it was, wait Ready, state `awake`, then scale
+  the activator to 0 — while both exist the activator forwards, so no call is refused. A deploy, a rebalance or a
+  count change on a sleeping zone wakes it first. The autoscaler (§21.7) skips a zone that is not `awake`.
+  `Cloud` gains `sleep_zone(group, zone) -> dict`, `wake_zone(group, zone, count: int, canary: int) -> dict` and
+  `zone_runtime(group, zone) -> {"workers": n, "canary": n, "activator": n}`; local adapter: no-ops that only flip
+  the state (compose has one fixed worker). `/api/v1/internal/*` is reachable in-cluster only (not routed by any
+  edge; the chart's routes list `/api/v1/internal` nowhere and the console refuses it when `X-Forwarded-For` is set).
+
+### 24.2 Worker images built on deploy
+- Per group: `build_image` (bool; default true on gcp/aws/azure when the deployment has a builder, false otherwise),
+  group page → Worker image card, group admins. When true and the checkout has a non-empty `mcp/requirements.txt`,
+  a deploy first ensures the group's image: tag `b-<group>-<sha256(base image ref + "\n" + requirements.txt)[:16]>`
+  in the cloud's own registry next to the base image — `<region>-docker.pkg.dev/<project>/ramen/worker`, 
+  `<account>.dkr.ecr.<region>.amazonaws.com/ramen/worker`, `<acr>/ramen/worker` (one repository, no per-group
+  repository to create). An `images` record with that tag and `source: "build"`, `status: "ok"` means it exists:
+  nothing is built. Otherwise the console starts `Job/ramen-build-<hash>` in `ramen-system`
+  (`serviceAccountName: ramen-builder`, image `RAMEN_BUILDER_IMAGE`, default a pinned kaniko executor) whose context
+  is a ConfigMap holding `requirements.txt` and
+
+      FROM <base worker image>
+      COPY requirements.txt /opt/ramen/requirements.txt
+      RUN /opt/venv/bin/pip install --no-cache-dir -r /opt/ramen/requirements.txt
+      ENV RAMEN_DEPS_BAKED=<sha256 of requirements.txt>
+
+  waits up to `RAMEN_BUILD_TIMEOUT_SECS` (default 900), records the image (history as §13.3) and uses it for this
+  deploy. A failed or timed-out build fails the deploy before the canary, with the last 40 log lines of the Job in
+  the deploy log; the stable track is untouched. Job and ConfigMap are deleted afterwards (TTL 600 s on the Job).
+- Precedence for the zone's image: an admin's pinned image (§13.3 `images/current` with `source: "manual"`) → the
+  built image → the base image. Runtime: when `RAMEN_DEPS_BAKED` equals the sha256 of the bucket's
+  `mcp/requirements.txt`, `deps.install` is skipped (log `deps baked`); any other value installs as before.
+- The builder identity is the deployment's, never the console's: Terraform creates `ramen-builder` (GCP: GSA with
+  `roles/artifactregistry.writer` on the `ramen` repository, workload identity for `ramen-system/ramen-builder`; AWS:
+  IRSA role with ECR push on `ramen/worker`; Azure: user-assigned identity with `AcrPush`, federated to the KSA) and
+  the chart creates the KSA and sets `RAMEN_BUILDER=1` + `RAMEN_BUILD_REGISTRY` on the console. Without it
+  `build_image` cannot be turned on (422 naming the missing builder). `Cloud` gains
+  `build_image(group, tag, dockerfile, files: dict[str, str]) -> {"image": ref, "log": str}`.
+- kind: `deploy/kind/up.sh` runs an in-cluster registry and sets the same two variables, so the path is testable.
+
+### 24.3 OpenTelemetry
+- Settings (super admin, Config page → Telemetry; `GET|PUT /api/v1/config/otel`): `enabled`, `endpoint` (OTLP/HTTP
+  base URL, e.g. `http://jaeger.ramen-system:4318`), `headers` (what Ramen sends; encrypted, write-only),
+  `client_endpoint` + `client_headers` (what connected agents are told to use; default: `endpoint`, no headers —
+  never Ramen's own `headers`). Stored in `config/otel`; not in backups' secrets-free rule exception: the two header
+  maps are stripped from backups like every secret. Workers get `RAMEN_OTEL_ENDPOINT` / `RAMEN_OTEL_HEADERS` (JSON)
+  on their next deploy.
+- Export. Node: one span per MCP call (`SERVER`, name `mcp <method>`; attributes `mcp.method`, `mcp.name`,
+  `mcp.protocol`, `ramen.group|zone|env`, `ramen.transport`, `ramen.status`, `ramen.reason`, `ramen.key_id`,
+  `ramen.guardrail.stage|engine` when a rail blocked), a child span `runtime <call>` around the sidecar round trip,
+  parent taken from the request's `traceparent` (§23.2); counters `ramen.mcp.calls` and `ramen.mcp.errors` by
+  method/name/status. Never arguments, results or credentials. OTLP/HTTP JSON (`/v1/traces`, `/v1/metrics`),
+  batched off the call path; an unreachable collector drops data and logs one warning a minute, never fails a call.
+  Console: one span per deploy job (`ramen.deploy`, attributes group/env/zones, outcome, `ramen.golden.passed|failed`,
+  `ramen.compat`, `ramen.image`). `service.name` `ramen-node` / `ramen-console`, `service.version`.
+- Telling the client. `POST /oauth/token` answers gain `telemetry: {"otlp_endpoint", "headers", "resource_attributes":
+  {"ramen.group", "ramen.zone"}}` when enabled; `server/discover` carries the same object under
+  `_meta["io.ramen/telemetry"]` for any authenticated modern caller.
+- **Consent.** Per group: `require_telemetry_consent` (group admin; only settable while telemetry is enabled).
+  Workers get `RAMEN_TELEMETRY_CONSENT=1` and `RAMEN_TELEMETRY_NOTICE` (the endpoint's host) on deploy. When on,
+  `tools/call`, `prompts/get` and `resources/read` are served only to a caller who accepted:
+  1. A console token carries `tel: true` when the person approved the OAuth consent page, which then shows the
+     telemetry notice and a required checkbox; approving without it is impossible, declining ends the flow as today.
+     Such a caller is never asked again.
+  2. Otherwise, modern era + the client declared `elicitation`: the node answers `input_required` with
+     `inputRequests: {"ramen_telemetry_consent": elicitation/create (form) message "This Ramen group records
+     telemetry about your calls (tool name, timing, outcome — never arguments or results) at <host> and asks your
+     agent to send its telemetry there. Accept to continue.", requestedSchema {accept: boolean}}` and a signed
+     `requestState` (§23.4, bound as usual). A retry with `accept: true` records the consent for that caller
+     binding (store: scope Redis → item Redis → pod memory; 30 days) and runs the call — the tool's own input
+     requests follow in later rounds. `decline`, `cancel` or `accept: false` → `-32602 telemetry consent declined`.
+  3. Modern era without `elicitation` → `-32021` (`requiredCapabilities: {"elicitation": {}}`). Legacy era →
+     `-32003 forbidden: this group requires telemetry consent; use a client that speaks MCP 2026-07-28 or sign in
+     through OAuth`.
+  Lists, `server/discover` and `completion/complete` are not gated (MRTR is not allowed on them). The console's own
+  calls (golden cases, package listing) present the worker admin key and skip the gate. Access-log reasons
+  `consent_required`, `consent_declined`; a recorded consent logs `consent: "granted"`.
+- Chart: `otel.collector: none | jaeger` (default none) adds a Jaeger all-in-one (OTLP in, query API) to
+  `ramen-system` for trying it out and for the test runs; not for production.
+
+### 24.4 Verification
+Unit tests per component; kind: a zone sleeps on idle, a call through the edge wakes it and is answered, a deploy
+builds and uses a group image, spans of a call and a deploy arrive in Jaeger, consent by prompt / by token / refused.
+Cloud (GKE, EKS, AKS): the same four, plus every sign-in path: password, API key, MCP key, person's OAuth token over
+HTTP and through the bridge, Entra with group lookup; Google Workspace against a fake unless a live client is given.

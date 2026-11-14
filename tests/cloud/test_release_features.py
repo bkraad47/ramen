@@ -15,9 +15,13 @@ seconds and is woken by a call through the real load balancer. Everything it cha
 
 1.0.0a (§26), in the same block: every gated call carries the client's telemetry report (missing → 428/-32024, stale
 → -32025, `telemetry/report`), the client events as CLIENT spans in Jaeger with user/ip/reasoning, the config push
-on `PUT /config/otel` seen by `server/discover` without a deploy, zones bound to groups (an unbound zone → 403,
-`GET /groups/{g}/zones`), and the deploy job in the store (readable after a console restart when RAMEN_KUBE_CONTEXT
-names the cluster; the cloud suites never touch kubectl otherwise)."""
+on `PUT /config/otel` seen by `server/discover` without a deploy, and the deploy job in the store (readable after a
+console restart when RAMEN_KUBE_CONTEXT names the cluster; the cloud suites never touch kubectl otherwise).
+
+1.0.0b (§27): a zone's groups are derived from its environments (no bind route; a group admin cannot attach to a zone
+not theirs), a zone created with environments is deployed by the write and serves, a region change moves the workers
+(`RAMEN_ZONE_REGION_ALT`, skipped otherwise), environments by name across groups and the delete that takes the zones
+only they used. Throwaway zones/environments carry the run's suffix and are removed."""
 
 import json
 import re
@@ -653,12 +657,12 @@ def test_saving_the_telemetry_config_pushes_the_version_to_the_zone_without_a_de
             )
 
 
-def test_an_environment_may_only_name_the_groups_zones(admin, world, suffix):
-    r = ok(admin.get("group_zones", group=GROUP)).json()
-    assert ZONE in r["zones"] and set(r) == {"zones"}, r
-    unbound = f"unb{suffix}"
-    ok(admin.create_zone(unbound), 201, 409)
-    pw, email = f"Rf-{uuid.uuid4().hex[:12]}-Aa1!", f"gadmin-{suffix}@ramen.local"
+# --- 1.0.0b: environments across groups, zones attached to environments (§27) ----------------------------------------
+BY_NAME_KEYS = {"name", "ref", "ref_differs", "groups", "zones", "last_deploy"}  # §27.2 GET /environments/by-name
+
+
+def group_admin(admin, world, suffix, tag: str) -> tuple[Console, str]:
+    pw, email = f"Rf-{uuid.uuid4().hex[:12]}-Aa1!", f"gadmin-{tag}-{suffix}@ramen.local"
     uid = ok(
         admin.http.post(
             f"{world['base']}/api/v1/users",
@@ -666,25 +670,155 @@ def test_an_environment_may_only_name_the_groups_zones(admin, world, suffix):
         ),
         201,
     ).json()["id"]
-    gadmin = Console(world["base"])
-    assert gadmin.login(email, pw).status_code in (200, 303)
+    c = Console(world["base"])
+    assert c.login(email, pw).status_code in (200, 303)
+    return c, uid
+
+
+def live_workers(admin, zone: str, timeout: float = 600) -> list[dict]:
+    return poll(
+        lambda: [
+            w
+            for w in (admin.get("workers", group=GROUP, zone=zone).json().get("live") or [])
+            if w.get("load") != "down"
+        ],
+        timeout=timeout,
+        every=10,
+        what=f"live workers in {GROUP}/{zone}",
+    )
+
+
+def finished(admin, r) -> list[dict]:
+    """The §27.3 jobs a zone write answered with, waited to their end (`ok` asserted by the caller)."""
+    assert "jobs" in r.json(), f"no `jobs` in {r.json()}"
+    return admin.wait_jobs(r.json()["jobs"], timeout=float(E.env("RAMEN_JOB_TIMEOUT") or 900))
+
+
+def test_a_zones_groups_are_derived_from_its_environments(admin, world, suffix):
+    """§27.1: no environments → no groups; `GET /groups/{g}/zones` lists the zones whose environments name the group;
+    a group admin may not attach to a zone they cannot edit (403); the §26.1 bind route is gone (404)."""
+    r = ok(admin.get("group_zones", group=GROUP)).json()
+    assert ZONE in r["zones"] and set(r) == {"zones"}, r
+    unbound, base = f"unb{suffix}", world["base"]
+    r = admin.http.post(
+        f"{base}/api/v1/zones",
+        json={
+            "name": unbound,
+            "provider": E.env("RAMEN_ZONE_PROVIDER", "local"),
+            "region": E.env("RAMEN_ZONE_REGION", "local"),
+            "groups": [GROUP],
+        },
+    )
+    assert r.status_code == 422, f"`groups` on POST /zones is gone: {r.status_code} {r.text[:200]}"
+    r = ok(admin.create_zone(unbound), 201, 409)
+    if r.status_code == 201:
+        assert r.json()["groups"] == [] and r.json()["environments"] == [] and r.json()["jobs"] == [], r.json()
+    gadmin, uid = group_admin(admin, world, suffix, "unb")
     try:
-        for who in (gadmin, admin):  # for every role: a super admin binds first
-            r = who.create_environment(GROUP, f"e{unbound}", [unbound], bind=False)
-            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        assert unbound not in ok(admin.get("group_zones", group=GROUP)).json()["zones"]
         assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404, "no worker for an unbound pair"
-        assert gadmin.put("zone_groups", {"groups": [GROUP]}, zone=unbound).status_code == 403
-        ok(admin.put("zone_groups", {"groups": [GROUP]}, zone=unbound))
-        assert unbound in ok(gadmin.get("group_zones", group=GROUP)).json()["zones"]
-        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 200, "binding created the worker record"
-        r = admin.put("zone_groups", {"groups": []}, zone=ZONE)
-        assert r.status_code == 409 and ENV in r.text and ZONE in r.text, f"{r.status_code} {r.text[:300]}"
-        ok(admin.put("zone_groups", {"groups": []}, zone=unbound))
-        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404, "unbinding detached it"
+        assert admin.http.put(f"{base}/api/v1/zones/{unbound}/groups", json={"groups": [GROUP]}).status_code == 404
+        # §27.1 D65: the zone has no groups of theirs to edit → the per-group shortcut and the zone write refuse
+        r = gadmin.create_environment(GROUP, f"e{unbound}", [unbound], wait=False)
+        assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        assert gadmin.update_zone(unbound, environments=[ENV]).status_code == 403
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404
+        r = ok(admin.update_zone(unbound, environments=[ENV]))  # super admin: attach → bound + deployed (§27.3)
+        assert r.json()["groups"] == [GROUP] and r.json()["environments"] == [ENV], r.json()
+        assert unbound in ok(gadmin.get("group_zones", group=GROUP)).json()["zones"], "viewers of the group read it"
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 200, "attaching created the worker record"
+        envs = items(ok(admin.get("environments_all", params={"group": GROUP})))
+        assert unbound in next(e for e in envs if e["name"] == ENV)["zones"], "write-through to the environment doc"
+        jobs = finished(admin, r)
+        assert jobs and all(j["kind"] == "deploy" and j["target"] == f"{GROUP}/{ENV}" for j in jobs), jobs
+        assert gadmin.update_zone(unbound, environments=[]).status_code == 200, "now the zone's groups are all theirs"
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404, "detaching removed the record"
+        assert admin.get("group_zones", group=GROUP).json()["zones"].count(unbound) == 0
+        acts = [
+            e
+            for e in items(admin.audit())
+            if e.get("action") == "zone.update" and f"zone:{unbound}" in e.get("tags", [])
+        ]
+        assert acts and any(f"env:{ENV}" in e.get("tags", []) for e in acts), acts[:2]
     finally:
         gadmin.close()
         admin.delete("user", id=uid)
         admin.delete("zone", zone=unbound)
+
+
+def test_a_zone_created_with_environments_is_deployed_and_serves(admin, world, suffix):
+    """§27.2/27.3: `POST /zones {environments}` answers the deploy jobs; they end `ok` and workers come up."""
+    zone = f"zn{suffix}"
+    try:
+        r = ok(admin.create_zone(zone, environments=[ENV]), 201)
+        body = r.json()
+        assert body["groups"] == [GROUP] and body["environments"] == [ENV] and body["jobs"], body
+        jobs = finished(admin, r)
+        assert [j["status"] for j in jobs] == ["ok"] * len(jobs), [
+            {k: j.get(k) for k in ("target", "status", "error")} for j in jobs
+        ]
+        assert live_workers(admin, zone), "the attach deployed workers without a click"
+        mine = next(e for e in ok(admin.environments_by_name()).json() if e["name"] == ENV)
+        assert zone in mine["zones"] and GROUP in mine["groups"], mine
+    finally:
+        admin.delete("zone", zone=zone)
+    assert admin.get("zone", zone=zone).status_code == 404
+    envs = items(ok(admin.get("environments_all", params={"group": GROUP})))
+    assert zone not in next(e for e in envs if e["name"] == ENV)["zones"], "the zone left the environment doc"
+
+
+def test_a_region_change_moves_the_zones_workers(admin, world, suffix):
+    """§27.2 D66: `PUT /zones/{z} {region}` detaches every pair and attaches + deploys in the new region; the zone
+    keeps its name and records. Provider cannot change (422)."""
+    alt = E.env("RAMEN_ZONE_REGION_ALT")
+    if not alt:
+        pytest.skip("RAMEN_ZONE_REGION_ALT not set (a second region of the console's cloud)")
+    zone = f"mv{suffix}"
+    try:
+        r = ok(admin.create_zone(zone, environments=[ENV]), 201)
+        assert all(j["status"] == "ok" for j in finished(admin, r))
+        assert (
+            admin.put("zone", {"provider": "aws" if r.json()["provider"] != "aws" else "gcp"}, zone=zone).status_code
+            == 422
+        )
+        r = ok(admin.update_zone(zone, region=alt))
+        assert r.json()["region"] == alt and r.json()["groups"] == [GROUP] and r.json()["jobs"], r.json()
+        assert all(j["status"] == "ok" for j in finished(admin, r))
+        assert live_workers(admin, zone), "workers in the new region"
+        assert ok(admin.get("zone", zone=zone)).json()["region"] == alt
+    finally:
+        admin.delete("zone", zone=zone)
+
+
+def test_an_environment_by_name_spans_groups_and_takes_its_lone_zones_with_it(admin, world, suffix, analyst_console):
+    """§27.1/27.2: names are console-wide (409 on a repeat, 422 without a group); `GET /environments/by-name` shape,
+    viewer-scoped; `DELETE /environments/{name}` deletes a zone only it used and leaves the others alone."""
+    name, zone = f"only{suffix}", f"oz{suffix}"
+    try:
+        r = ok(admin.create_environment_by_name(name, ref=E.env("RAMEN_DEMO_REF", "main"), groups=[GROUP]), 201)
+        assert set(r.json()) >= BY_NAME_KEYS and r.json()["groups"] == [GROUP] and r.json()["zones"] == [], r.json()
+        assert admin.create_environment_by_name(name, groups=[GROUP]).status_code == 409, "names are console-wide"
+        assert admin.create_environment_by_name(f"{name}x", groups=[]).status_code == 422, "at least one group"
+        assert admin.create_environment_by_name(f"{name}x", groups=["no-such-group"]).status_code in (403, 404, 422)
+        listing = ok(admin.environments_by_name()).json()
+        assert isinstance(listing, list) and all(set(e) >= BY_NAME_KEYS for e in listing), listing[:2]
+        mine = next(e for e in listing if e["name"] == ENV)
+        assert GROUP in mine["groups"] and ZONE in mine["zones"] and GROUP in (mine["last_deploy"] or {}), mine
+        seen = ok(analyst_console.environments_by_name()).json()
+        assert {g for e in seen for g in e["groups"]} <= {GROUP}, "viewer-scoped to the caller's groups"
+        assert admin.put("environment_by_name", {"groups": []}, name=name).status_code == 422
+        r = ok(admin.create_zone(zone, environments=[name]), 201)
+        assert r.json()["groups"] == [GROUP] and r.json()["jobs"], r.json()
+        finished(admin, r)  # a deploy of a fresh environment on a fresh zone; its verdict is the previous test's
+        assert zone in next(e for e in ok(admin.environments_by_name()).json() if e["name"] == name)["zones"]
+        assert ok(admin.delete_environment_by_name(name), 204).status_code == 204
+        assert admin.get("zone", zone=zone).status_code == 404, "a zone only this environment used goes with it"
+        assert name not in {e["name"] for e in ok(admin.environments_by_name()).json()}
+        assert name not in {e["name"] for e in items(ok(admin.get("environments_all", params={"group": GROUP})))}
+        assert ok(admin.get("zone", zone=ZONE)).json()["environments"], "the shared zone is untouched"
+    finally:
+        admin.delete("zone", zone=zone)
+        admin.delete("environment_by_name", name=name)
 
 
 def test_the_deploy_job_is_in_the_store_and_survives_a_console_restart(admin, v24):

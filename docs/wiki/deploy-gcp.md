@@ -94,15 +94,15 @@ turns `ACTIVE` a few minutes later.
 Open `https://<public_hostname>/` and sign in as `admin@ramen.local` with the password you generated. The
 certificate is publicly trusted, so there is no warning.
 
-1. **Zones and workers → Add zone**: name `a`, provider `gcp`, region `us-central1-a`. The region is the GCP zone
-   the workers pin to.
-2. **Groups → Create group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
-3. **Open the group → Add environment**: name `prod`, tick zone `a`. This creates the namespace `ramen-demo-a`,
-   its service account with Workload Identity, the Service with a network endpoint group, and a route that
-   matches the `ramen-group: demo` and `ramen-zone: a` headers.
-4. **MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next deploy, so
-   generate keys before deploying, or deploy again after.
-5. **Deploy (canary)**. The job log reads sync, canary, reload, smoke, stable.
+1. **Groups → Create group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
+2. **Environments, Zones and Workers → New environment**: name `prod`, ref `main`, tick group `demo`.
+3. **New zone** on the same page: name `a`, tick environment `prod`, location `us-central1-a` (the GCP zone the
+   workers pin to), **Add GCP zone**. This creates the namespace `ramen-demo-a`, its service account with Workload
+   Identity, the Service with a network endpoint group, a route that matches the `ramen-group: demo` and
+   `ramen-zone: a` headers, and starts the first canary deploy of `demo/prod` there (the job is on the group page;
+   its log reads sync, canary, reload, smoke, stable).
+4. **Open the group → MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next
+   deploy, so **Deploy (canary)** again after generating one.
 
 <figure markdown>
 ![The group page on GCP](../img/group.png){ .ramen-shot }

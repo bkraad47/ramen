@@ -1,6 +1,7 @@
 """httpx client for the console (CONTRACTS §4). Routes mirror console/tests/test_api.py; edit ROUTES if they move."""
 
 import os
+import re
 import time
 
 import httpx
@@ -16,13 +17,14 @@ ROUTES = {
     "user_password": "/api/v1/users/{id}/password",  # POST {password} ("me" = self)
     "groups": "/api/v1/groups",  # POST {name,repo_url,ref} → 201
     "group": "/api/v1/groups/{group}",
-    "zones": "/api/v1/zones",  # POST {name,provider,region,groups?} → 201 (super admin)
-    "zone": "/api/v1/zones/{zone}",
-    "zone_groups": "/api/v1/zones/{zone}/groups",  # PUT {groups:[...]} (super admin; §26.1)
-    "group_zones": "/api/v1/groups/{group}/zones",  # GET → {zones:[...]} (viewers of the group; §26.1)
-    "environments": "/api/v1/groups/{group}/environments",  # POST {name,ref,zones:[...]} → 201
+    "zones": "/api/v1/zones",  # POST {name,provider,region,environments} → 201 {...zone, jobs} (§27.2; groups → 422)
+    "zone": "/api/v1/zones/{zone}",  # GET | PUT {region?, environments?} → {...zone, jobs} | DELETE (§27.2)
+    "group_zones": "/api/v1/groups/{group}/zones",  # GET → {zones:[...]} (viewers of the group; §26.1, derived §27.1)
+    "environments": "/api/v1/groups/{group}/environments",  # POST {name,ref,zones:[...]} → 201 (per-group shortcut)
     "environment": "/api/v1/groups/{group}/environments/{env}",
-    "environments_all": "/api/v1/environments",  # ?group=
+    "environments_all": "/api/v1/environments",  # ?group= ; POST {name,ref?,groups} → 201 by-name object (§27.2)
+    "environments_by_name": "/api/v1/environments/by-name",  # GET → [{name,ref,ref_differs,groups,zones,last_deploy}]
+    "environment_by_name": "/api/v1/environments/{name}",  # PUT {ref?,groups?} → 200 | DELETE → 204 (§27.2)
     "deploy": "/api/v1/groups/{group}/environments/{env}/deploy",  # POST {canary,zone?} → 202 {id,status}
     "job": "/api/v1/jobs/{id}",
     "workers": "/api/v1/groups/{group}/zones/{zone}/workers",  # GET {live:[{load}],count,size}
@@ -156,29 +158,33 @@ class Console:
     def create_group(self, name, repo_url, ref="main"):
         return self.post("groups", {"name": name, "repo_url": repo_url, "ref": ref})
 
-    def create_zone(self, name, provider=None, region=None, groups=None):
+    def create_zone(self, name, provider=None, region=None, environments=None):
+        """§27.2: a zone names its environments; its groups are derived. The answer carries `jobs` (one canary deploy
+        per `<g>/<env>` pair the environments yield, §27.3)."""
         provider = provider or env("RAMEN_ZONE_PROVIDER", "local")
         region = region or env("RAMEN_ZONE_REGION", "local")
-        body = {"name": name, "provider": provider, "region": region}
-        if groups is not None:
-            body["groups"] = list(groups)
+        body = {"name": name, "provider": provider, "region": region, "environments": list(environments or [])}
         return self.post("zones", body)
 
-    def bind_zone(self, zone, group) -> httpx.Response | None:
-        """§26.1: add `group` to the zone's groups (super admin). None when it already is; the refusal when the
-        caller may not (a group admin's environment on an unbound zone is then the 403 the contract promises)."""
-        r = self.get("zone", zone=zone)
-        if r.status_code != 200:
-            return r
-        groups = list(r.json().get("groups") or [])
-        if group in groups:
-            return None
-        return self.put("zone_groups", {"groups": [*groups, group]}, zone=zone)
+    def bind_zone(self, zone, group) -> None:
+        """Gone with §27: a zone is bound to a group through the environments it names (`create_environment` with the
+        zone, `update_zone(environments=...)`). Kept as a no-op so older call sites still read."""
+        return None
 
-    def create_environment(self, group, name, zones, ref="main", bind=True):
-        if bind:  # an environment may only name the group's zones (§26.1); binding is idempotent
-            for z in zones:
-                self.bind_zone(z, group)
+    def update_zone(self, zone, region=None, environments=None):
+        """§27.2 `PUT /zones/{zone}`: `environments` replaces the set (attach + deploy / detach); `region` moves every
+        bound pair (D66). Answer `{...zone, jobs}`."""
+        body = {}
+        if region is not None:
+            body["region"] = region
+        if environments is not None:
+            body["environments"] = list(environments)
+        return self.put("zone", body, zone=zone)
+
+    def create_environment(self, group, name, zones, ref="main", wait=True):
+        """§27.2 per-group shortcut: adds `group` to environment `name` (creating it) and attaches it to `zones`
+        (the caller must be allowed to edit them). The attach starts a deploy per pair (§27.3); `wait` blocks on the
+        jobs the answer lists so a following explicit deploy is not refused as "already running"."""
         r = self.post("environments", {"name": name, "ref": ref, "zones": list(zones)}, group=group)
         # Attaching a zone to a *new* group creates that group's cloud identity (CONTRACTS §7). With RAMEN_NO_CLOUD=iam
         # (kind) there is none to create, and only the zones pre-annotated in deploy/kind/zones.yaml can be attached.
@@ -186,13 +192,46 @@ class Console:
             import pytest
 
             pytest.skip(f"no cloud IAM here: attaching a zone to a new group needs one ({r.text[:120]})")
+        if wait and r.status_code in (200, 201):
+            self.wait_jobs(jobs_of(r))
         return r
+
+    def create_environment_by_name(self, name, ref=None, groups=()):
+        """§27.2 `POST /environments {name, ref?, groups}` → 201 the by-name object (409 when the name exists)."""
+        body = {"name": name, "groups": list(groups)}
+        if ref is not None:
+            body["ref"] = ref
+        return self.post("environments_all", body)
+
+    def update_environment_by_name(self, name, ref=None, groups=None):
+        body = {}
+        if ref is not None:
+            body["ref"] = ref
+        if groups is not None:
+            body["groups"] = list(groups)
+        return self.put("environment_by_name", body, name=name)
+
+    def environments_by_name(self) -> httpx.Response:
+        return self.get("environments_by_name")
+
+    def delete_environment_by_name(self, name) -> httpx.Response:
+        """§27.2: 204; a zone only this environment used is deleted with it."""
+        return self.delete("environment_by_name", name=name)
 
     def deploy(self, group, env, canary=True, zone=None):
         body = {"canary": canary}
         if zone:
             body["zone"] = zone
-        return self.post("deploy", body, group=group, env=env)
+        r = self.post("deploy", body, group=group, env=env)
+        running = re.search(r"already running \(job ([\w-]+)\)", r.text) if r.status_code == 409 else None
+        if running:  # §27.3: an attach started a deploy of this target a moment ago; let it finish, then ours
+            self.wait_job(running.group(1))
+            r = self.post("deploy", body, group=group, env=env)
+        return r
+
+    def wait_jobs(self, ids, timeout: float | None = None) -> list[dict]:
+        """Every §27.3 attach job (`jobs` of a zone/environment write) to its end; the finished jobs in order."""
+        return [self.wait_job(i, timeout) for i in ids]
 
     def wait_job(self, job_id: str, timeout: float | None = None) -> dict:
         # RAMEN_JOB_TIMEOUT: a cluster that adds a node per deploy (GKE Autopilot under quota) needs 15+ min
@@ -236,6 +275,15 @@ class Console:
 
     def audit(self):
         return self.get("audit")
+
+
+def jobs_of(r: httpx.Response) -> list[str]:
+    """The §27.3 deploy job ids a zone/environment write answered with (`[]` when the answer has none)."""
+    try:
+        body = r.json()
+    except ValueError:
+        return []
+    return list(body.get("jobs") or []) if isinstance(body, dict) else []
 
 
 def items(r: httpx.Response) -> list:

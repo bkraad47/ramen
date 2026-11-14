@@ -234,7 +234,7 @@ def two_worker_demo(monkeypatch, tmp_path, two_worker_cloud):
     with TestClient(a) as c:
         login(c, "root@ramen.local", "rootpw")
         c.post("/api/v1/groups", json={"name": "demo"})
-        c.post("/api/v1/zones", json={"name": "zone-a", "provider": "local", "region": "local", "groups": ["demo"]})
+        c.post("/api/v1/zones", json={"name": "zone-a", "provider": "local", "region": "local"})
         c.post("/api/v1/groups/demo/environments", json={"name": "prod", "zones": ["zone-a"]})
         yield c
 

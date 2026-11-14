@@ -41,8 +41,9 @@ stack and a cloud deployment. Contract under test: `docs/CONTRACTS.md` (transpor
 | `e2e/test_tool_blocking.py` | same (runs after the demo flow) | §9: `PUT …/blocked [demo_calculator_tool]` → deploy → node hides it from `tools/list` and denies the call → unblock → deploy → restored |
 | `kind/test_v1_sleep_build_otel.py` | the kind stack (`make kind-up`; registry on `localhost:5001` or `RAMEN_KIND_REGISTRY`, Jaeger on `localhost:18086` or `RAMEN_JAEGER_URL`) | §24.4 on two zones: a deploy of a group repo with a real requirement (served from a `git daemon` pod the module creates in namespace `ramen-tests` — the only thing the suite writes to the cluster, kind contexts only) builds `b-<group>-<hash>` in the registry, pods run it and log `deps baked`, a second deploy builds nothing; node and deploy spans in Jaeger; consent by prompt / by token / refused through the edge; an open subscription or a running task keeps a zone awake; an idle zone sleeps (activator Ready, workers at 0), a call through the edge port wakes it within the wake timeout, audit `workers.sleep` / `workers.wake` with their triggers |
 | `cloud/test_auth_matrix.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL`; opt `RAMEN_BRIDGE_CMD`, `RAMEN_EXPECT_CIDR_DENIED=1`, `RAMEN_EXPECT_SSO=<name>[,<name>]`, `RAMEN_AUTH_MATRIX_OUT=<file>` | §24.4: every sign-in path, one verdict per path printed as an `auth matrix` section at the end of the run — console password, console API key (console yes, worker no), MCP key (worker over gRPC / HTTP both eras yes, console no), a person's OAuth token on both eras and through the bridge, refresh rotation, OAuth-only role, bad tokens → 401 + RFC 9728 challenge, allow-list refusal, SSO redirect (`redirect_uri`, `client_id`, scopes; the browser sign-in is a person's) |
-| `cloud/test_release_features.py` (last block) | as the file; opt `RAMEN_JAEGER_URL`, `RAMEN_OTEL_ENDPOINT` | §24 through the real edge: image built into the cloud's registry (console API only), spans in Jaeger, consent by prompt and by token, the 2025-06-18 refusal, sleep on idle and wake by a call through the load balancer |
+| `cloud/test_release_features.py` (last block) | as the file; opt `RAMEN_JAEGER_URL`, `RAMEN_OTEL_ENDPOINT`, `RAMEN_ZONE_REGION_ALT` (the §27 region move) | §27: zone groups derived from environments (no bind route, group admin 403 on a zone not theirs), a zone created with environments deployed by the write, region change, environments by name and the delete that takes their lone zones; §24 through the real edge: image built into the cloud's registry (console API only), spans in Jaeger, consent by prompt and by token, the 2025-06-18 refusal, sleep on idle and wake by a call through the load balancer |
 | `cloud/test_canary.py` | `RAMEN_CONSOLE_URL` (+`RAMEN_NODE_URL`; canary-at-0 check needs `RAMEN_GCP_PROJECT`) | §7 deploy: bad ref → job `error` + audited, main worker still serves; good ref → `ok`; `canary:false` |
+| `cloud/test_throttle.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` + `RAMEN_REDIS_URL` (a Redis the workers reach; skipped otherwise) | wiki/throttling: `PUT /groups/{g}/throttle` (audited, URL never shown) → deploy → a burst on one key is 429 over HTTP / RESOURCE_EXHAUSTED over gRPC, counted across the group's zones, `throttled` in the access log; limits restored + redeployed |
 | `cloud/test_rebalance.py` | `RAMEN_CONSOLE_URL` (+`RAMEN_GCP_PROJECT`) | POST rebalance → `{ok}` + audit; GCP: NEG backend `capacityScaler` ∈ {0.5, 1.0} |
 | `cloud/test_ip_rules.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` + `RAMEN_TRUSTED_CIDRS` (+`RAMEN_GCP_PROJECT`) | PUT cidrs → deploy → node PERMISSION_DENIED outside (health stays reachable) → restore; invalid CIDR 4xx; GCP: Cloud Armor policy `ramen-<group>` |
 | `cloud/test_logs.py` | `RAMEN_CONSOLE_URL` + `RAMEN_NODE_URL` | `/api/v1/logs` returns worker JSON lines, `tail`, `worker`, `download=1` attachment, no key values, 401 anon |
@@ -89,13 +90,33 @@ Node-configuration guards (CIDR deny, blocked names, TLS, log file, NOT_SERVING)
 Cloud: same command with `RAMEN_CONSOLE_URL=https://console.<host> RAMEN_NODE_URL=mcp.<host>:443 RAMEN_NODE_TLS=1`
 (omit `RAMEN_TLS_INSECURE` with a real cert). A node deliberately deployed with an excluding `RAMEN_ALLOWED_CIDRS` is asserted with `RAMEN_EXPECT_CIDR_DENIED=1`.
 
+## Item 7 on GCP (v1.0.0b: security, matrix, load balancing, Redis and throttling)
+Everything runs from a laptop against the GCP console and edge with env vars only; nothing needs kubectl except the
+Redis manifest (wiki/throttling.md) when the cluster has none. Common env:
+```sh
+export RAMEN_CONSOLE_URL=https://console.<host> RAMEN_NODE_URL=mcp.<host>:443 RAMEN_NODE_TLS=1 \
+  RAMEN_ADMIN_EMAIL=admin@ramen.local RAMEN_ADMIN_PASSWORD=<console password> RAMEN_ADMIN_KEY=<worker admin key> \
+  RAMEN_E2E_GROUP=demo RAMEN_E2E_ENV=dev RAMEN_E2E_ZONE=a RAMEN_ZONE_PROVIDER=gcp RAMEN_ZONE_REGION=us-central1-a \
+  RAMEN_GCP_PROJECT=<project> RAMEN_TEST_SUFFIX=$(date +%m%d%H%M)
+cd tests
+uv run pytest -rs conformance/test_security_matrix.py conformance/test_console_api.py                 # security: role × group × credential
+RAMEN_AUTH_MATRIX_OUT=../reports/auth-matrix-gcp.md uv run pytest -rs cloud/test_auth_matrix.py        # matrix: every sign-in path (+RAMEN_EXPECT_SSO=entra)
+uv run pytest -rs cloud/test_rebalance.py cloud/test_canary.py                                        # load balancing: NEG capacityScaler, canary tracks
+uv run pytest -rs cloud/test_release_features.py -k "derived or created_with_environments or region_change or by_name"  # §27 (+RAMEN_ZONE_REGION_ALT=us-central1-b)
+RAMEN_REDIS_URL=redis://redis.ramen-system.svc.cluster.local:6379 uv run pytest -rs cloud/test_throttle.py  # Redis + throttling (429 / RESOURCE_EXHAUSTED)
+cd ../console && uv run python ../scripts/load_test.py "$RAMEN_CONSOLE_URL" "$RAMEN_ADMIN_PASSWORD" "$RAMEN_NODE_URL" \
+  --group demo --zone a --max 3 --concurrency 64 --duration 300 --scheduler-interval 20            # autoscale under HTTP load, timeline + JSON
+```
+`kind/test_http_load.py` is the same autoscale proof on kind (`make kind-up`), not a cloud suite. Throttle 429s under
+load are counted, never failures (`RAMEN_MAX_INFLIGHT`, §11).
+
 ## Scripts (`../scripts`)
 - `check_versions.py [--tag vX.Y.Z] [--demo <path>]` — VERSION == Cargo.toml == pyprojects == Helm chart versions/tags == mkdocs `version_current` == Dockerfile ARG defaults == compose/.env defaults == `docs/llms.txt` == landing JSON-LD (CONTRACTS §6); 0.7.0: also `../ramen-demo-mcp/VERSION` when that checkout exists (ramen-master), skipped otherwise.
 - `check_docs_links.py` — every site URL in README.md / docs/llms.txt / docs/index.md has a page under docs/; README relative links exist. Offline.
 - `wait_ready.sh <url|host:port> [timeout] [interval] [--any]` — poll for HTTP 200, or (gRPC target) `grpc.health.v1` SERVING (`--any`: answers at all; `RAMEN_NODE_TLS=1`). grpcurl or a python with grpcio.
 - `coverage_report.py [--artifacts dir] [--allow-missing] [--no-fail]` — one markdown table, ≥90% verdict, exit 1 otherwise.
 - `gcp_test_project.sh create|delete` — throwaway `ramen-test-<yymmdd>` project (`DRY_RUN=1` prints only).
-- `cloud_smoke.sh <console_url> <admin_email> <admin_pw> <admin_key> [node_target]` — group demo → zone → env → key → deploy → Health → `tools/call` over gRPC with grpcurl (routing metadata, `RAMEN_NODE_TLS=1` through the LB), UNAUTHENTICATED and Admin gates; prints PASS/FAIL (`RAMEN_SMOKE_ZONE`, `RAMEN_ZONE_PROVIDER`, `RAMEN_ZONE_REGION`, `RAMEN_SMOKE_ADMIN=1`).
+- `cloud_smoke.sh <console_url> <admin_email> <admin_pw> <admin_key> [node_target]` — group demo → zone (`environments: []`) → env (attaches the zone, which starts the §27.3 deploy; the explicit deploy then waits for that job when told one is running) → key → deploy → Health → `tools/call` over gRPC with grpcurl (routing metadata, `RAMEN_NODE_TLS=1` through the LB), UNAUTHENTICATED and Admin gates; prints PASS/FAIL (`RAMEN_SMOKE_ZONE`, `RAMEN_ZONE_PROVIDER`, `RAMEN_ZONE_REGION`, `RAMEN_SMOKE_ADMIN=1`).
 - `gcp_cost_check.sh [project] [--expect-empty]` — lists billable resources (cluster, forwarding rules, addresses, buckets, AR, secrets, Firestore) to confirm teardown.
 
 CI: `ci.yml` runs the no-env harness + stub drift check (`tests`), the local-node guards + bridge on the freshly built binary
@@ -106,7 +127,7 @@ CI: `ci.yml` runs the no-env harness + stub drift check (`tests`), the local-nod
 ## Console routes
 CONTRACTS §4a is the binding route table. `src/ramen_tests/console.py::ROUTES` mirrors it and
 `console/tests/test_api.py` (form `POST /login` → 303 + `ramen_session` cookie; users by id; global `/api/v1/zones`;
-environments bound to zones; `POST .../environments/{env}/deploy` → 202 job polled at `/api/v1/jobs/{id}`;
+zones name their environments and derive their groups (§27: `POST /zones {environments}` → `{...zone, jobs}`, `PUT /zones/{z} {region?, environments?}`, `POST /environments {name, ref?, groups}`, `PUT|DELETE /environments/{name}`, `GET /environments/by-name`; `POST /groups/{g}/environments {zones}` attaches — no bind step, `PUT /zones/{z}/groups` is gone); `POST .../environments/{env}/deploy` → 202 job polled at `/api/v1/jobs/{id}`;
 group secrets by id, never returning `value`; `POST /api/v1/groups/{g}/mcp-keys` → `rmk_` worker key;
 `POST /api/v1/api-keys` → `rmn_` key returned once; `POST /api/v1/backups {target}` → `{id, release_version}` + `/download`; v0.2.0 additions:
 `POST .../zones/{zone}/service-account` → `{name}` (super admin), `PUT .../groups/{g}/sa-restrictions {rules}`,

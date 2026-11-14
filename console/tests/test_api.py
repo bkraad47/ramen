@@ -59,12 +59,24 @@ def demo(root):
     assert r.status_code == 201, r.text
     assert root.post("/api/v1/groups", json={"name": "other"}).status_code == 201
     for z in ("zone-a", "zone-b"):
-        zone = {"name": z, "provider": "local", "region": "local", "groups": ["demo"]}  # §26.1: bound to demo
-        assert root.post("/api/v1/zones", json=zone).status_code == 201
-    r = root.post(
-        "/api/v1/groups/demo/environments", json={"name": "prod", "ref": "main", "zones": ["zone-a", "zone-b"]}
-    )
-    assert r.status_code == 201, r.text
+        assert root.post("/api/v1/zones", json={"name": z, "provider": "local", "region": "local"}).status_code == 201
+    # §27.3: attaching deploys at once; the seed's deploy fails fast instead of cloning example.com for every test
+    cloud, real = root.app.state.cloud, root.app.state.cloud.sync_repo
+
+    async def no_sync(group, repo_url, ref, token):
+        raise RuntimeError("git failed: seeded without a repo")
+
+    cloud.sync_repo = no_sync
+    try:
+        r = root.post(
+            "/api/v1/groups/demo/environments", json={"name": "prod", "ref": "main", "zones": ["zone-a", "zone-b"]}
+        )
+        assert r.status_code == 201, r.text
+    finally:
+        cloud.sync_repo = real
+    from ramen_console import alerts
+
+    alerts.PENDING.clear()  # the seed's failed deploy is not a warning the tests should see
     return root
 
 

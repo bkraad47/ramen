@@ -25,7 +25,6 @@ def worker_doc(demo, group, zone):
 def test_deleting_a_zone_tears_down_every_groups_deployment_in_it(demo):
     calls = spy(demo)
     assert demo.put("/api/v1/groups/demo/zones/zone-b/workers", json={"count": 2, "max_count": 2}).status_code == 200
-    assert demo.put("/api/v1/zones/zone-b/groups", json={"groups": ["demo", "other"]}).status_code == 200  # §26.1
     assert demo.post("/api/v1/groups/other/environments", json={"name": "dev", "zones": ["zone-b"]}).status_code == 201
     assert worker_doc(demo, "demo", "zone-b")
     assert demo.delete("/api/v1/zones/zone-b").status_code == 200
@@ -53,6 +52,7 @@ def test_dropping_a_zone_from_an_environment_tears_it_down_unless_another_enviro
     )
     assert demo.delete("/api/v1/groups/demo/environments/qa").status_code == 200
     assert calls == [("demo", "zone-b")]  # zone-a is prod's
+    assert demo.get("/api/v1/zones/zone-b").status_code == 404  # §27.2: only qa used it, so the zone went too
 
 
 def test_local_adapter_forgets_the_zones_records(demo, tmp_path):

@@ -106,7 +106,6 @@ def test_a_deploy_refuses_a_zone_whose_region_was_blocked_later(demo, caplog):
     assert (
         demo.post("/api/v1/zones", json={"name": "west", "provider": "gcp", "region": "us-west1-b"}).status_code == 201
     )
-    demo.put("/api/v1/zones/west/groups", json={"groups": ["demo"]})
     assert demo.put("/api/v1/groups/demo/environments/prod", json={"zones": ["zone-a", "west"]}).status_code == 200
     demo.put(URL, json={"gcp": ["us-west1"]})
     with caplog.at_level(logging.WARNING, logger="ramen.deploy"):

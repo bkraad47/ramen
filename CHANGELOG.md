@@ -44,6 +44,19 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
   `ramen-console/…`) the store only references; no worker can read them; locally they stay encrypted in the store.
   Each Config section lists what is set, a secret only as *set (hidden)*; secrets are scrubbed from logs, deploy logs
   and backups (backups no longer carried provider client secrets).
+- **Environments across groups, zones attached to environments, one admin page (1.0.0b).** An environment is a
+  name shared by the groups it applies to (`POST /api/v1/environments {name, ref, groups}`, `PUT`/`DELETE
+  /api/v1/environments/{name}`, `GET /api/v1/environments/by-name`); its ref is one value for every group. A zone
+  names its environments (`POST /api/v1/zones {name, provider, region, environments}`, `PUT /api/v1/zones/{zone}
+  {region, environments}`) and its groups follow from them: every derived group × zone pair gets its worker record,
+  namespace and a canary deploy the moment it appears (the write answers `jobs`), and is torn down when it
+  disappears; a region change destroys the old workers and deploys new ones there, keeping count, size, sleep, IP
+  rules and throttle. Deleting an environment deletes the zones and workers only it used. `PUT /zones/{zone}/groups`
+  and `groups` on `POST /zones` are gone. One page, **Environments, Zones and Workers** (`/environments`; `/zones`
+  redirects), for super admins and group admins: new environment, environments, new zone, zones, workers per group
+  with the environments that put each pair there; a group admin edits what is wholly their groups'. The group page
+  keeps its Environments table (Deploy, Verbose, Delete) and loses the add-environment form. Existing zones learn
+  their environments at start.
 ### New: protocol
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
   and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,

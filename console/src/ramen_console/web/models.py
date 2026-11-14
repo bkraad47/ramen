@@ -64,11 +64,31 @@ class ZoneIn(ListFields):
     name: str
     provider: str = "local"
     region: str = ""
-    groups: list[str] = []  # §26.1: the groups the zone serves
+    environments: list[str] = []  # §27.2: the environments the zone serves; its groups are derived
+    groups: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _no_groups(self):
+        if self.groups is not None:
+            raise ValueError("groups is gone (1.0.0b): a zone names environments; its groups follow from them")
+        return self
 
 
-class ZoneGroups(ListFields):
-    groups: list[str]
+class ZoneUpdate(ListFields):
+    region: str | None = None
+    environments: list[str] | None = None
+    provider: str | None = None  # accepted only unchanged (422 otherwise)
+
+
+class EnvByNameIn(ListFields):
+    name: str
+    ref: str | None = None
+    groups: list[str] = []
+
+
+class EnvByNameUpdate(ListFields):
+    ref: str | None = None
+    groups: list[str] | None = None
 
 
 class EnvIn(ListFields):

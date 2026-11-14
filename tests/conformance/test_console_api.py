@@ -33,7 +33,7 @@ def world(admin: Console, console_url, suffix):
     ok(admin.create_zone(zone), 201, 409)
     for g in (ga, gb):
         ok(admin.create_group(g, DEMO_REPO), 201)
-        ok(admin.create_environment(g, "dev", [zone]), 201)
+        ok(admin.create_environment(g, "dev", [zone], wait=False), 201)  # §27.3: the attach deploys in the background
     viewer, gadmin = f"viewer-{suffix}@ramen.test", f"gadmin-{suffix}@ramen.test"
     uids = [
         ok(admin.create_user(viewer, PW, "viewer", [ga]), 201).json()["id"],

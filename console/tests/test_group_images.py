@@ -46,7 +46,7 @@ async def test_the_pinned_image_reaches_the_zone_spec(demo):
     assert (await svc.zone_spec("demo", "zone-a"))["image"] is None
     record(demo, f"{AR}:demo-7")
     assert (await svc.zone_spec("demo", "zone-a"))["image"] == f"{AR}:demo-7"
-    await svc.set_zone_groups("zone-a", ["demo", "other"])  # §26.1: the pair must be bound first
+    await svc.update_environment("prod", groups=["demo", "other"])  # §27.1: the pair exists once derived
     assert (await svc.zone_spec("other", "zone-a"))["image"] is None  # the pin is per group
 
 

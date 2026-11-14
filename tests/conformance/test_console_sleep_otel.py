@@ -40,7 +40,7 @@ def con():
         c.seed_group()
         a = c.admin
         assert a.create_group("other", E.DEMO_REPO).status_code in (201, 409)
-        assert a.create_environment("other", "dev", ["local"]).status_code in (201, 409)
+        assert a.create_environment("other", "dev", ["local"]).status_code in (201, 409)  # §27: dev gains a group
         c.collector = collector
         c.users = {}
         for name, role, groups in (

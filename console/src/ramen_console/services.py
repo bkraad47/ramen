@@ -118,9 +118,13 @@ class Services:
         for col in ("environments", "secrets", "workers"):
             for d in await self.store.list(col, {"group": name}):
                 await self.store.delete(col, d["id"])
-        for z in await self.store.list("zones"):  # §26.1: the zone no longer lists the group
-            if name in (z.get("groups") or []):
-                z["groups"] = [g for g in z["groups"] if g != name]
+        names = {e["name"] for e in await self.store.list("environments")}
+        for z in await self.store.list(
+            "zones"
+        ):  # §26.1 / §27.1: the zone no longer lists the group or its environments
+            if name in (z.get("groups") or []) or set(z.get("environments") or []) - names:
+                z["groups"] = [g for g in z.get("groups") or [] if g != name]
+                z["environments"] = [n for n in z.get("environments") or [] if n in names]
                 await self.store.put("zones", z["id"], z)
         await self.store.delete("groups", name)
 
@@ -226,20 +230,46 @@ class Services:
         """The blocked region a zone's `region` falls in, or None."""
         return regions.blocked_region(provider, region or "", await self.blocked_regions())
 
-    async def create_zone(self, name, provider="local", region="", groups=()) -> dict:
-        if not NAME_RE.match(name or ""):
-            raise invalid("Zone name must match ^[a-z][a-z0-9-]{0,39}$")
-        if await self.store.get("zones", name):
-            raise conflict(f"Zone {name} exists")
-        if hit := await self.region_block(provider, region):
-            raise forbidden(regions.message(hit))
-        groups = list(dict.fromkeys(groups))
-        await self._check_groups(groups)
-        doc = {"name": name, "provider": provider, "region": region, "created": now(), "groups": groups}
-        z = await self.store.put("zones", name, doc)
-        for g in groups:  # §26.1: binding creates the worker record
-            await self._bind(g, name)
-        return z
+    # --- §27: environments across groups, zones attached to environments (D64–D66) ---------------------------------
+    @staticmethod
+    def _may_edit(p: Principal | None, groups, lone="") -> None:
+        """D65: a super admin edits everything; a group admin only what is wholly their groups' — and never a zone
+        with no derived groups (`lone` names it)."""
+        if p is None or p.role == "super_admin":
+            return
+        if lone and not groups:
+            raise forbidden(f"Zone {lone} serves no group yet; only a super admin edits it")
+        if bad := sorted(g for g in set(groups) if not can(p, "group_admin", g)):
+            raise forbidden(f"Requires Group Admin on every group of it (not on {', '.join(bad)})")
+
+    @staticmethod
+    def default_worker(group, zone) -> dict:
+        doc = {"id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "max_count": 1}
+        return {**doc, "size": "s", "allowed_sizes": []}
+
+    async def group_zones(self, group) -> list[str]:
+        """The group's zones: the zones listing it (§26.1, derived since §27)."""
+        await self.get_group(group)
+        return sorted(z["id"] for z in await self.store.list("zones") if group in (z.get("groups") or []))
+
+    async def _check_groups(self, groups):
+        known = {g["id"] for g in await self.store.list("groups")}
+        if bad := [g for g in groups if g not in known]:
+            raise invalid(f"Unknown groups: {', '.join(bad)}")
+
+    async def _check_zones(self, zones):
+        known = {z["id"] for z in await self.store.list("zones")}
+        if bad := [z for z in zones if z not in known]:
+            raise invalid(f"Unknown zones: {', '.join(bad)}")
+
+    async def _check_envs(self, names):
+        known = {e["name"] for e in await self.store.list("environments")}
+        if bad := [n for n in names if n not in known]:
+            raise invalid(f"Unknown environments: {', '.join(bad)}")
+
+    async def _bind(self, group, zone) -> None:
+        if not await self.store.get("workers", f"{group}:{zone}"):
+            await self.store.put("workers", f"{group}:{zone}", self.default_worker(group, zone))
 
     async def detach_zone(self, group, zone) -> dict:
         """Tear one group's deployment in one zone down for real (0.6.0): the cloud namespace, workers and zone
@@ -249,81 +279,240 @@ class Services:
             await self.store.delete("workers", w["id"])
         return result
 
-    async def _zone_users(self, zone, except_env: str | None = None) -> set[str]:
-        """Groups with an environment (other than `except_env`) still attached to `zone`."""
+    async def env_docs(self, name) -> list[dict]:
+        return sorted((e for e in await self.store.list("environments") if e["name"] == name), key=lambda e: e["group"])
+
+    async def _env_groups(self, names) -> set[str]:
+        return {e["group"] for e in await self.store.list("environments") if e["name"] in set(names)}
+
+    async def env_zones(self, name) -> list[str]:
+        return sorted(z["id"] for z in await self.store.list("zones") if name in (z.get("environments") or []))
+
+    @staticmethod
+    def _by_name(docs: list[dict], zones: list[str]) -> dict:
+        refs = [d.get("ref") for d in docs]
         return {
-            e["group"]
-            for e in await self.store.list("environments")
-            if zone in e.get("zones", []) and e["id"] != except_env
+            "name": docs[0]["name"],
+            "ref": refs[0],
+            "ref_differs": len(set(refs)) > 1,
+            "groups": [d["group"] for d in docs],
+            "zones": zones,
+            "last_deploy": {d["group"]: d.get("last_deploy") for d in docs},
         }
 
-    async def delete_zone(self, name) -> None:
-        if not await self.store.get("zones", name):
+    async def environment(self, name) -> dict:
+        docs = await self.env_docs(name)
+        if not docs:
+            raise not_found("environment")
+        return self._by_name(docs, await self.env_zones(name))
+
+    async def environments_by_name(self, p: Principal | None = None) -> list[dict]:
+        """§27.2: one row per environment name, its groups narrowed to the ones the caller may view."""
+        zones = await self.store.list("zones")
+        by: dict[str, list[dict]] = {}
+        for e in await self.environments():
+            if p is None or can(p, "viewer", e["group"]):
+                by.setdefault(e["name"], []).append(e)
+        return [
+            self._by_name(docs, sorted(z["id"] for z in zones if n in (z.get("environments") or [])))
+            for n, docs in sorted(by.items())
+        ]
+
+    async def _sync_zone(self, z: dict) -> list[tuple[str, str, str]]:
+        """§27.1: the zone's groups are derived from its environments. A pair that appears is bound (record, attach),
+        one that disappears is detached; every environment doc's `zones` follows. Returns the (group, environment,
+        zone) triples that appeared, for the deploys of §27.3."""
+        names = z.get("environments") or []
+        groups = sorted(await self._env_groups(names))
+        before = list(z.get("groups") or [])
+        for g in before:
+            if g not in groups:
+                await self.detach_zone(g, z["id"])
+        z["groups"] = groups
+        for g in groups:
+            await self._bind(g, z["id"])
+        await self.store.put("zones", z["id"], z)
+        for g in groups:
+            if g not in before:
+                try:
+                    await self.cloud.attach_zone(g, z["id"], await self.zone_spec(g, z["id"]))
+                except Exception:
+                    z["groups"] = [x for x in z["groups"] if x != g]  # not bound: the next write tries again
+                    await self.store.put("zones", z["id"], z)
+                    await self.store.delete("workers", f"{g}:{z['id']}")
+                    raise
+        appeared = []
+        for e in await self.store.list("environments"):
+            has, want = z["id"] in e.get("zones", []), e["name"] in names
+            if want and not has:
+                e["zones"] = sorted([*e.get("zones", []), z["id"]])
+                await self.store.put("environments", e["id"], e)
+                appeared.append((e["group"], e["name"], z["id"]))
+            elif has and not want:
+                e["zones"] = [x for x in e["zones"] if x != z["id"]]
+                await self.store.put("environments", e["id"], e)
+        return appeared
+
+    async def create_zone(self, name, provider="local", region="", environments=(), p=None) -> tuple[dict, list]:
+        if not NAME_RE.match(name or ""):
+            raise invalid("Zone name must match ^[a-z][a-z0-9-]{0,39}$")
+        if await self.store.get("zones", name):
+            raise conflict(f"Zone {name} exists")
+        if hit := await self.region_block(provider, region):
+            raise forbidden(regions.message(hit))
+        environments = list(dict.fromkeys(environments))
+        await self._check_envs(environments)
+        if p is not None and p.role != "super_admin" and not environments:
+            raise forbidden("A group admin creates a zone for their environments; name at least one")
+        self._may_edit(p, await self._env_groups(environments))
+        doc = {"name": name, "provider": provider, "region": region, "created": now()}
+        z = await self.store.put("zones", name, {**doc, "environments": environments, "groups": []})
+        return z, await self._sync_zone(z)
+
+    async def update_zone(self, zone, region=None, environments=None, provider=None, p=None) -> tuple[dict, list]:
+        """§27.2: `environments` replaces the set; a `region` change moves every bound pair (D66: records kept)."""
+        z = await self.store.get("zones", zone)
+        self._may_edit(p, (z or {}).get("groups") or [], lone=zone)
+        if not z:
             raise not_found("zone")
-        groups = await self._zone_users(name)
-        groups |= {w["group"] for w in await self.store.list("workers", {"zone": name})}
+        if provider is not None and provider != z.get("provider"):
+            raise invalid("Provider cannot change; create another zone")
+        if environments is not None:
+            environments = list(dict.fromkeys(environments))
+            await self._check_envs(environments)
+        after = await self._env_groups(environments if environments is not None else z.get("environments") or [])
+        self._may_edit(p, set(z.get("groups") or []), lone=zone)
+        self._may_edit(p, after)
+        appeared: list[tuple[str, str, str]] = []
+        if region is not None and region != z.get("region", ""):
+            if hit := await self.region_block(z.get("provider", ""), region):
+                raise forbidden(regions.message(hit))
+            for g in z.get("groups") or []:
+                await self.cloud.detach_zone(g, zone)
+            z["region"] = region
+            await self.store.put("zones", zone, z)
+            for g in z.get("groups") or []:
+                await self.cloud.attach_zone(g, zone, await self.zone_spec(g, zone))
+            appeared += [(e["group"], e["name"], zone) for e in await self.environments() if zone in e.get("zones", [])]
+        if environments is not None:
+            z["environments"] = environments
+            appeared += await self._sync_zone(z)
+        return z, list(dict.fromkeys(appeared))
+
+    async def delete_zone(self, name, p=None) -> None:
+        z = await self.store.get("zones", name)
+        self._may_edit(p, (z or {}).get("groups") or [], lone=name)  # D65: a group admin learns nothing of other zones
+        if not z:
+            raise not_found("zone")
+        groups = {e["group"] for e in await self.environments() if name in e.get("zones", [])}
+        groups |= {w["group"] for w in await self.store.list("workers", {"zone": name})} | set(z.get("groups") or [])
         for g in sorted(groups):
             await self.detach_zone(g, name)
         for e in await self.store.list("environments"):
             if name in e.get("zones", []):
-                e["zones"] = [z for z in e["zones"] if z != name]
+                e["zones"] = [x for x in e["zones"] if x != name]
                 await self.store.put("environments", e["id"], e)
         await self.store.delete("zones", name)
 
-    async def _check_zones(self, zones):
-        known = {z["id"] for z in await self.store.list("zones")}
-        bad = [z for z in zones if z not in known]
-        if bad:
-            raise invalid(f"Unknown zones: {', '.join(bad)}")
+    async def _new_env_doc(self, group, name, ref=None) -> dict:
+        g = await self.get_group(group)
+        doc = {
+            "group": group,
+            "name": name,
+            "ref": ref or g.get("ref", "main"),
+            "zones": [],
+            "verbose": False,
+            "blocked": [],
+            "blocked_zones": {},
+            "created": now(),
+            "last_deploy": None,
+        }
+        return await self.store.put("environments", f"{group}:{name}", doc)
 
-    # --- §26.1: zones bound to groups (D61) -------------------------------------------------------------------
-    @staticmethod
-    def default_worker(group, zone) -> dict:
-        doc = {"id": f"{group}:{zone}", "group": group, "zone": zone, "count": 1, "max_count": 1}
-        return {**doc, "size": "s", "allowed_sizes": []}
+    async def _attach_env(self, name, zones=()) -> list[tuple[str, str, str]]:
+        """Every zone naming `name`, plus `zones`, re-derived: a new group of the environment is bound everywhere."""
+        appeared = []
+        for zn in sorted(set(await self.env_zones(name)) | set(zones)):
+            z = await self.store.get("zones", zn)
+            if name not in (z.get("environments") or []):
+                z["environments"] = [*(z.get("environments") or []), name]
+            appeared += await self._sync_zone(z)
+        return appeared
 
-    async def group_zones(self, group) -> list[str]:
-        """The group's zones: the zones listing it."""
-        await self.get_group(group)
-        return sorted(z["id"] for z in await self.store.list("zones") if group in (z.get("groups") or []))
-
-    async def _check_groups(self, groups):
-        known = {g["id"] for g in await self.store.list("groups")}
-        if bad := [g for g in groups if g not in known]:
-            raise invalid(f"Unknown groups: {', '.join(bad)}")
-
-    async def _bind(self, group, zone) -> None:
-        if not await self.store.get("workers", f"{group}:{zone}"):
-            await self.store.put("workers", f"{group}:{zone}", self.default_worker(group, zone))
-
-    async def set_zone_groups(self, zone, groups) -> dict:
-        """Replace the groups a zone serves. Every group must exist (422); a group whose environment still uses the
-        zone cannot go (409); a group that goes is detached (namespace, workers, identity, record)."""
-        z = await self.store.get("zones", zone)
-        if not z:
-            raise not_found("zone")
+    async def create_environment(self, name, groups, ref=None, p=None) -> tuple[dict, list]:
+        if not NAME_RE.match(name or ""):
+            raise invalid("Environment name must match ^[a-z][a-z0-9-]{0,39}$")
         groups = list(dict.fromkeys(groups))
+        if not groups:
+            raise invalid("An environment names at least one group")
         await self._check_groups(groups)
-        gone = [g for g in z.get("groups") or [] if g not in groups]
-        in_use = [
-            f"{e['name']} uses {zone}" for g in gone for e in await self.environments(g) if zone in e.get("zones", [])
-        ]
-        if in_use:
-            raise conflict(f"Remove the zone from the environment first: {'; '.join(in_use)}")
-        for g in gone:
-            await self.detach_zone(g, zone)
+        self._may_edit(p, groups)
+        if await self.env_docs(name):
+            raise conflict(f"Environment {name} exists; add the group with PUT /api/v1/environments/{name}")
         for g in groups:
-            await self._bind(g, zone)
-        z["groups"] = groups
-        return await self.store.put("zones", zone, z)
+            await self._new_env_doc(g, name, ref)
+        return await self.environment(name), []
 
-    async def _check_bound(self, group, zones) -> None:
-        """An environment may name only the group's zones — whoever asks (a super admin binds first)."""
-        bound = await self.group_zones(group)
-        if extra := [z for z in zones if z not in bound]:
+    async def update_environment(self, name, ref=None, groups=None, p=None) -> tuple[dict, list]:
+        docs = await self.env_docs(name)
+        if not docs:
+            raise not_found("environment")
+        current = [d["group"] for d in docs]
+        if groups is not None:
+            groups = list(dict.fromkeys(groups))
+            if not groups:
+                raise invalid("An environment names at least one group")
+            await self._check_groups(groups)
+        self._may_edit(p, set(current) | set(groups or []))
+        if ref is not None:
+            for d in docs:
+                d["ref"] = ref
+                await self.store.put("environments", d["id"], d)
+        appeared = []
+        if groups is not None:
+            for g in groups:
+                if g not in current:
+                    await self._new_env_doc(g, name, ref or docs[0].get("ref"))
+            for d in docs:
+                if d["group"] not in groups:
+                    await self.store.delete("environments", d["id"])
+            appeared = await self._attach_env(name)
+        return await self.environment(name), appeared
+
+    async def delete_environment(self, name, p=None) -> None:
+        """§27.2: every doc goes; a zone this environment alone used is deleted, a shared one only loses it."""
+        docs = await self.env_docs(name)
+        if not docs:
+            raise not_found("environment")
+        self._may_edit(p, [d["group"] for d in docs])
+        for zn in await self.env_zones(name):
+            z = await self.store.get("zones", zn)
+            if (z.get("environments") or []) == [name]:
+                await self.delete_zone(zn)
+            else:
+                z["environments"] = [n for n in z["environments"] if n != name]
+                await self._sync_zone(z)
+        for d in docs:
+            await self.store.delete("environments", d["id"])
+
+    async def _check_zone_edit(self, p: Principal | None, group, zones) -> None:
+        """The per-group routes attach an environment to zones: the caller must be allowed to edit them (D65). An
+        unbound zone keeps §26.1's wording."""
+        if p is None or p.role == "super_admin":
+            return
+        unbound = []
+        for zn in zones:
+            gs = set((await self.store.get("zones", zn) or {}).get("groups") or [])
+            if gs and all(can(p, "group_admin", g) for g in gs | {group}):
+                continue
+            if group not in gs:
+                unbound.append(zn)
+            else:
+                raise forbidden(f"Zone {zn} also serves groups you do not administer")
+        if unbound:
             raise forbidden(
-                f"Zone(s) {', '.join(extra)} are not bound to group {group}; "
-                "a super admin binds a zone to a group on the Zones page"
+                f"Zone(s) {', '.join(unbound)} are not bound to group {group}; a super admin attaches a zone to the "
+                "group's environments on the Environments, Zones and Workers page"
             )
 
     async def migrate_zone_groups(self) -> int:
@@ -346,6 +535,17 @@ class Services:
                 await self.store.put("groups", g["id"], g)
         return n
 
+    async def migrate_zone_environments(self) -> int:
+        """§27.4: a zone from before 1.0.0b gets `environments` = the names of the environment docs listing it, once;
+        `groups` is left as stored (recomputed on the next write)."""
+        envs, n = await self.store.list("environments"), 0
+        for z in await self.store.list("zones"):
+            if "environments" not in z:
+                z["environments"] = sorted({e["name"] for e in envs if z["id"] in e.get("zones", [])})
+                await self.store.put("zones", z["id"], z)
+                n += 1
+        return n
+
     async def environments(self, group=None) -> list[dict]:
         envs = await self.store.list("environments", {"group": group} if group else None)
         return sorted(envs, key=lambda e: (e["group"], e["name"]))
@@ -356,32 +556,34 @@ class Services:
             raise not_found("environment")
         return e
 
-    async def create_env(self, group, name, ref=None, zones=()) -> dict:
+    async def create_env(self, group, name, ref=None, zones=(), p=None) -> tuple[dict, list]:
+        """§27.2: the per-group shortcut adds `group` to the environment `name` (creating it when new) and attaches
+        the environment to `zones`."""
         g = await self.get_group(group)
         if not NAME_RE.match(name or ""):
             raise invalid("Environment name must match ^[a-z][a-z0-9-]{0,39}$")
         if await self.store.get("environments", f"{group}:{name}"):
             raise conflict(f"Environment {name} exists in {group}")
+        zones = list(dict.fromkeys(zones))
         await self._check_zones(zones)
-        await self._check_bound(group, zones)
-        doc = {
-            "group": group,
-            "name": name,
-            "ref": ref or g.get("ref", "main"),
-            "zones": list(zones),
-            "verbose": False,
-            "blocked": [],
-            "blocked_zones": {},
-            "created": now(),
-            "last_deploy": None,
-        }
-        await self._attach_zones(group, zones)
-        return await self.store.put("environments", f"{group}:{name}", doc)
+        await self._check_zone_edit(p, group, zones)
+        existing = await self.env_docs(name)
+        await self._new_env_doc(group, name, ref or (existing[0].get("ref") if existing else g.get("ref", "main")))
+        appeared = await self._attach_env(name, zones)
+        return await self.get_env(group, name), appeared
 
-    async def _attach_zones(self, group, zones, already=()):
-        for z in zones:
-            if z not in already:
-                await self.cloud.attach_zone(group, z, await self.zone_spec(group, z))
+    async def set_env_zones(self, group, name, zones, p=None) -> tuple[dict, list]:
+        """`zones` on the per-group routes: attach or detach this environment on those zones, for every group of it."""
+        e = await self.get_env(group, name)
+        zones = list(dict.fromkeys(zones))
+        await self._check_zones(zones)
+        await self._check_zone_edit(p, group, sorted(set(zones) ^ set(e.get("zones", []))))
+        for zn in sorted(set(e.get("zones", [])) - set(zones)):
+            z = await self.store.get("zones", zn)
+            z["environments"] = [n for n in z.get("environments") or [] if n != name]
+            await self._sync_zone(z)
+        appeared = await self._attach_env(name, zones)
+        return await self.get_env(group, name), appeared
 
     async def zone_spec(self, group, zone) -> dict:
         z = await self.store.get("zones", zone) or {}
@@ -459,18 +661,9 @@ class Services:
         e = await self.get_env(group, name)
         if fields.get("blocked") is not None:
             fields["blocked"] = clean_blocked(fields["blocked"])
-        before = list(e.get("zones", []))
-        if fields.get("zones") is not None:
-            await self._check_zones(fields["zones"])
-            await self._check_bound(group, fields["zones"])
-            await self._attach_zones(group, fields["zones"], already=before)
+        fields.pop("zones", None)  # §27.2: zones go through `set_env_zones`
         e.update({k: v for k, v in fields.items() if v is not None})
-        saved = await self.store.put("environments", e["id"], e)
-        if fields.get("zones") is not None:  # a zone no environment of the group uses any more is torn down (0.6.0)
-            for z in sorted(set(before) - set(fields["zones"])):
-                if group not in await self._zone_users(z):
-                    await self.detach_zone(group, z)
-        return saved
+        return await self.store.put("environments", e["id"], e)
 
     async def set_zone_blocked(self, group, env, zone, names) -> dict:
         """U5: `environments[].blocked_zones[zone]` adds to the environment-wide `blocked` list (§9)."""
@@ -495,12 +688,15 @@ class Services:
                 out.append(n)
         return out
 
-    async def delete_env(self, group, name) -> None:
-        e = await self.get_env(group, name)
-        await self.store.delete("environments", e["id"])
-        for z in sorted(e.get("zones", [])):  # 0.6.0: its zones are torn down unless another environment uses them
-            if group not in await self._zone_users(z):
-                await self.detach_zone(group, z)
+    async def delete_env(self, group, name, p=None) -> None:
+        """§27.2: only this group's doc goes; the last group's is the environment's own delete."""
+        await self.get_env(group, name)
+        if len(await self.env_docs(name)) == 1:
+            await self.delete_environment(name, p)
+            return
+        await self.store.delete("environments", f"{group}:{name}")
+        for zn in await self.env_zones(name):
+            await self._sync_zone(await self.store.get("zones", zn))
 
     async def rebalance(self, group, zone, user: str = "-", ip: str = "-"):
         """The load-balancer leg (the adapter), then §21.7 autoscaling: `autoscale.decide` on the zone's live metrics,

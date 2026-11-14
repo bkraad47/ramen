@@ -3,22 +3,38 @@
 | Term | What it is | Who manages it |
 |---|---|---|
 | **Group** | A team. One git repo at a ref, one bucket prefix, its secrets, keys, members and service-account rules. Deleting a group destroys its cloud resources. | Super admins create and delete; group admins run it |
-| **Environment** | The group at a git ref, deployed to a set of zones, with a verbose flag, a blocked-package list and the last deploy result. | Group admins |
-| **Zone** | Where workers run. A Kubernetes namespace `ramen-<group>-<zone>` pinned to a cloud zone, with its own service account, load-balancer route and IP rules. `local` is the compose worker. | Super admins create zones; group admins attach them to environments |
+| **Environment** | A name shared by the groups it applies to: each at the git ref, deployed to the zones attached to it, with a per-group verbose flag, blocked-package list and last deploy result. | Super admins and group admins (for their groups) |
+| **Zone** | Where workers run. A Kubernetes namespace `ramen-<group>-<zone>` pinned to a cloud zone, with its own service account, load-balancer route and IP rules. `local` is the compose worker. Names the environments it serves; its groups follow. | Super admins, and group admins for their own environments |
 | **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins |
 
 
-## Zones are bound to groups (1.0.0a)
-A zone lists the **groups** it serves. A super admin sets the list on the Zones page (the *Groups* column, **Save
-groups** per row), when creating the zone (`POST /api/v1/zones {"name": "a", "groups": ["demo"]}`) or with
-`PUT /api/v1/zones/<zone>/groups {"groups": ["demo", "analytics"]}`; every group must exist (`422`). A group's zones
-are the zones listing it: `GET /api/v1/groups/<group>/zones` → `{"zones": [...]}` (read-only). An environment, whoever
-creates it, may name only the group's zones; another is refused with `403` naming it. Binding a group creates the
-pair's worker record (count 1, size `s`); unbinding tears the group's deployment in that zone down (namespace,
-workers, zone identity, record), so a group whose environment still uses the zone cannot be unbound (`409`): remove
-the zone from the environment first. The group page shows the group's zones under each environment that uses them,
-and the rest once as *Bound, unused*. Zones from before 1.0.0a are bound to the groups whose environments used them
-(and to the groups that allowed them, where a 1.0.0 list existed).
+## Environments across groups, zones attached to environments (1.0.0b)
+*A group has many environments, an environment has many zones, a zone has workers.* An **environment** is a name
+shared by the groups it applies to: `prod` for `demo` and `analytics` is one environment with one ref, run by each
+group in the same zones. A **zone** names the environments it serves; the groups it serves follow from them. Every
+group × zone pair the derivation yields has a worker record, a namespace and workers, and is **deployed the moment
+it appears** (a new zone, a zone gaining an environment, an environment gaining a group, a region change) — one
+canary deploy job per group/environment, visible on the group page. A pair that disappears is torn down (namespace,
+workers, zone identity, record). Deleting an environment deletes the zones, with their workers, that no other
+environment uses; a shared zone only loses it.
+
+Everything is on one page, **Environments, Zones and Workers** (`/environments`), for super admins and group admins
+(`/zones` redirects there): *New environment* (name, ref, groups), *Environments* (ref, groups, Save / Delete), *New
+zone* (name, environments, location), *Zones* (location, environments, Save / Delete zone) and *Workers per group*
+(the live cell per pair, with the environments that put it there). A group admin edits what is wholly their groups':
+an environment whose groups are all theirs, a zone whose derived groups are all theirs; anything else is read-only,
+and a zone that serves no group yet is a super admin's.
+
+API: `GET /api/v1/environments/by-name` (`{name, ref, ref_differs, groups, zones, last_deploy: {group: …}}`),
+`POST /api/v1/environments {"name": "prod", "ref": "main", "groups": ["demo"]}` (`409` for a name that exists —
+add the group with `PUT`), `PUT /api/v1/environments/prod {"ref": …, "groups": […]}`, `DELETE
+/api/v1/environments/prod` (`204`); `POST /api/v1/zones {"name": "a", "provider": "gcp", "region": "us-central1-a",
+"environments": ["prod"]}` and `PUT /api/v1/zones/a {"region": …, "environments": […]}` answer the zone with
+`environments`, the derived `groups` and the `jobs` started; the provider cannot change (`422`). A group's zones
+are still `GET /api/v1/groups/<group>/zones`; the per-group `POST`/`PUT /api/v1/groups/<group>/environments…` keep
+working as a shortcut (`zones` there attaches or detaches the environment on those zones), and `DELETE` there
+removes only that group's doc. Per-group state — verbose, blocked packages, tool access, the last deploy — stays
+per group on the group page. Zones from before 1.0.0b learn their environments at the first start.
 
 ## Zones and regions
 
@@ -29,14 +45,15 @@ Azure](deploy-azure.md#prerequisites)). The cluster is regional; a zone is one
 location inside it. Two zones in two locations is what makes a group highly available: a client that fails on
 `ramen-zone: a` retries with `ramen-zone: b` and reaches a different set of pods behind the same hostname.
 
-**Zones and workers → Add zone** creates the record. Nothing runs until a group attaches the zone to an
-environment and deploys. Since 0.7.5 the form offers only the cloud this console runs on (`RAMEN_CLOUD`), with
-that cloud's zones grouped by region. The page lists every zone with its groups, then one row per bound group × zone with the live
-workers, their load, and for super admins and group admins the **max workers** and the last autoscale decision.
+**Environments, Zones and Workers → New zone** creates the record with the environments it serves, and deploys each
+derived group's code there at once. Since 0.7.5 the form offers only the cloud this console runs on (`RAMEN_CLOUD`),
+with that cloud's zones grouped by region. The page lists every zone with its environments and derived groups, then
+one row per group × zone with the live workers, their load, and for super admins and group admins the **max workers**
+and the last autoscale decision.
 
 <figure markdown>
-![The zones page](../img/zones.png){ .ramen-shot }
-<figcaption>Zones and workers on a seeded local console: each zone's groups, live workers per bound pair, the max, the last decision.</figcaption>
+![The Environments, Zones and Workers page](../img/environments.png){ .ramen-shot }
+<figcaption>Environments, Zones and Workers on a seeded local console: environments with their groups, zones with their environments, live workers per pair.</figcaption>
 </figure>
 
 A zone that is deleted, or dropped from the last environment that used it, is torn down for real: the namespace,
@@ -54,7 +71,7 @@ console runs on (since 0.7.5 only that one; a save keeps the lists of the others
 - `GET|PUT /api/v1/config/regions` with `{"gcp": [...], "aws": [...], "azure": [...]}`. A GCP zone `us-west1-a`
   belongs to `us-west1`, an AWS availability zone `eu-west-1a` to `eu-west-1`.
 
-On the zones page the location is a dropdown of the provider's zones grouped by region, minus the blocked ones;
+On the Environments, Zones and Workers page the location is a dropdown of the provider's zones grouped by region, minus the blocked ones;
 `local` zones keep a free-text location.
 
 ## Creating a group
@@ -68,10 +85,10 @@ zone serves, service-account permissions, MCP keys, the worker image and restric
 
 ## Environments
 
-**Add environment** on the group page: a name, a ref and the zones, picked from a checkbox list of the zones
-[bound to the group](#zones-are-bound-to-groups-100a). Which zones a group may run in is a super admin's decision,
-made on the Zones page; group admins pick among them. `dev` can follow `main` while `prod` sits on a tag. Rolling
-back is deploying the older ref.
+**New environment** on [Environments, Zones and
+Workers](#environments-across-groups-zones-attached-to-environments-100b): a name, a ref and the groups it applies
+to; zones are attached to it from the same page. `dev` can follow `main` while `prod` sits on a tag. Rolling back is
+deploying the older ref.
 
 The **Environments** table on the group page is the one place for a group's zones: under each environment, one row
 per zone with the zone (and its namespace on GKE), the live workers (refreshed as you watch), the size, the sleep
@@ -124,7 +141,7 @@ passed. To deploy from a pipeline, see [Deploy from GitHub Actions](deploy-githu
 
 Since 0.7.5 Ramen scales the workers itself, between **1** and a **max** per zone that super admins and group
 admins set under the zone's **Zone actions** on the group page (*Count (min 1)*, *Max (autoscale up to)*, **Scale workers**) or
-on the Zones page. There is no HPA any more. How it decides, the cooldowns and the load tests are on
+on the Environments, Zones and Workers page. There is no HPA any more. How it decides, the cooldowns and the load tests are on
 [Autoscaling](autoscaling.md). Super admins set the **size** (`s` 250m CPU and 512Mi, `m` 500m and 1Gi, `l` 1 CPU and 2Gi)
 and the sizes a zone allows.
 

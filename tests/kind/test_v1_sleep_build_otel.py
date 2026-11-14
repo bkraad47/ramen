@@ -612,13 +612,19 @@ def test_saving_the_telemetry_config_pushes_the_version_to_every_zone_without_a_
         wait_for(lambda: told_version(zone_targets, zone, v1["key"], group) == before, 300, f"discover names {before}")
 
 
-# --- §26.1 zones bound to groups, §26.2 the job in the store ----------------------------------------------------------
-def test_an_environment_may_only_name_the_groups_zones(admin, v1, console_url, group, env_name):
+# --- §27 zones attached through their environments (groups derived), §26.2 the job in the store ----------------------
+def test_a_zones_groups_are_derived_from_its_environments(admin, v1, console_url, group, env_name):
     r = admin.get("group_zones", group=group)
     assert r.status_code == 200 and set(r.json()) == {"zones"} and set(r.json()["zones"]) >= set(v1["zones"]), r.text
     assert admin.put("group_zones", {"zones": []}, group=group).status_code in (404, 405), "PUT on it is gone"
     unbound = f"unb{secrets.token_hex(2)}"
-    assert admin.create_zone(unbound, provider="gcp", region="kind-a").status_code == 201
+    r = admin.http.post(
+        "/api/v1/zones", json={"name": unbound, "provider": "gcp", "region": "kind-a", "groups": [group]}
+    )
+    assert r.status_code == 422, f"`groups` on POST /zones is gone (§27.2): {r.status_code} {r.text[:200]}"
+    r = admin.create_zone(unbound, provider="gcp", region="kind-a")
+    assert r.status_code == 201 and r.json()["groups"] == [] and r.json()["environments"] == [], r.text
+    assert admin.http.put(f"/api/v1/zones/{unbound}/groups", json={"groups": [group]}).status_code == 404
     pw = secrets.token_hex(8) + "Aa1!"
     email = f"gadmin-{secrets.token_hex(3)}@ramen.test"
     r = admin.http.post(
@@ -630,33 +636,31 @@ def test_an_environment_may_only_name_the_groups_zones(admin, v1, console_url, g
     gadmin = type(admin)(console_url)
     assert gadmin.login(email, pw).status_code in (200, 303)
     try:
-        for who in (gadmin, admin):  # for every role: a super admin binds first
-            r = who.create_environment(group, f"e{unbound}", [unbound], bind=False)
-            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
-            r = who.put("environment", {"zones": [*v1["zones"], unbound]}, group=group, env=env_name)
-            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        # §27.1 D65: a zone with none of their groups is not theirs to edit — by any route that would attach to it
+        r = gadmin.create_environment(group, f"e{unbound}", [unbound], wait=False)
+        assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        r = gadmin.put("environment", {"zones": [*v1["zones"], unbound]}, group=group, env=env_name)
+        assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        assert gadmin.update_zone(unbound, environments=[env_name]).status_code == 403
         assert admin.get("workers", group=group, zone=unbound).status_code == 404, "no worker for an unbound pair"
-        assert gadmin.put("zone_groups", {"groups": [group]}, zone=unbound).status_code == 403
-        assert admin.put("zone_groups", {"groups": ["no-such-group"]}, zone=unbound).status_code == 422
-        assert admin.put("zone_groups", {"groups": [group]}, zone=unbound).status_code == 200
-        assert unbound in admin.get("group_zones", group=group).json()["zones"]
-        assert admin.get("workers", group=group, zone=unbound).status_code == 200, "binding created the worker record"
-        assert gadmin.get("group_zones", group=group).status_code == 200, "viewers of the group read it"
-        r = admin.put("zone_groups", {"groups": []}, zone=v1["zones"][0])
-        assert r.status_code == 409 and env_name in r.text and v1["zones"][0] in r.text, (
-            f"{r.status_code} {r.text[:300]}"
-        )
-        r = admin.put("zone_groups", {"groups": []}, zone=unbound)
+        assert admin.update_zone(unbound, environments=["no-such-env"]).status_code == 422
+        r = admin.update_zone(unbound, environments=[env_name])  # attach: bound + deployed (§27.3)
         if r.status_code == 502 and E.no_cloud("iam") and "credential" in r.text.lower():
-            pytest.skip(f"no cloud IAM here: detaching a zone from a group needs one ({r.text[:120]})")
-        assert r.status_code == 200, f"{r.status_code} {r.text[:300]}"
-        assert admin.get("workers", group=group, zone=unbound).status_code == 404, "unbinding detached it"
+            pytest.skip(f"no cloud IAM here: attaching a zone to a group needs one ({r.text[:120]})")
+        assert r.status_code == 200 and r.json()["groups"] == [group] and "jobs" in r.json(), r.text
+        assert unbound in admin.get("group_zones", group=group).json()["zones"]
+        assert admin.get("workers", group=group, zone=unbound).status_code == 200, "attaching created the worker record"
+        assert gadmin.get("group_zones", group=group).status_code == 200, "viewers of the group read it"
+        jobs = admin.wait_jobs(r.json()["jobs"], timeout=900)
+        assert jobs and all(j["kind"] == "deploy" and j["target"] == f"{group}/{env_name}" for j in jobs), jobs
+        assert gadmin.update_zone(unbound, environments=[]).status_code == 200, "now its groups are all theirs"
+        assert admin.get("workers", group=group, zone=unbound).status_code == 404, "detaching removed the record"
         acts = [
             e
             for e in audit_entries(admin)
-            if e.get("action") == "zone.groups" and f"zone:{unbound}" in e.get("tags", [])
+            if e.get("action") == "zone.update" and f"zone:{unbound}" in e.get("tags", [])
         ]
-        assert acts and any(f"group:{group}" in e.get("tags", []) for e in acts), acts[:2]
+        assert acts and any(f"env:{env_name}" in e.get("tags", []) for e in acts), acts[:2]
     finally:
         gadmin.close()
         admin.delete("user", id=uid)

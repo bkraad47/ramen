@@ -1147,3 +1147,79 @@ Asked for by the user (D60–D63, 2026-11-14). Supersedes §25.
   as today (§24.3).
 - Chart: `otel.collector: jaeger` is the default for the test deploys (`cloud2.sh`); the Config page's Telemetry
   section lists the Jaeger UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).
+
+## 27. v1.0.0b — environments across groups, zones attached to environments, one admin page (binding)
+Asked for by the user (`instructions/v1.0.0b.md`, 2026-11-14): *a group has many environments, an environment has
+many zones, a zone has workers*; an environment applies to the groups it names, a zone to the environments it names.
+Supersedes §26.1's binding by group: a zone's groups are now **derived** — the union of the groups of its environments.
+Agent-settled details are marked D64–D66 (the user can overrule).
+
+### 27.1 Model
+- **Environment** = a name shared across groups. Storage stays `environments/<group>:<name>` (every per-group state —
+  `blocked`, `blocked_zones`, `tool_access`, `verbose`, `last_deploy`, `zones` — lives there, unchanged); the
+  environment the user sees is the set of docs with that `name` (D64). Its `ref` is one value: a change writes every
+  doc; on migration docs that differ keep theirs and the page shows the first with a "differs per group" note.
+  Names are unique console-wide: `POST` of a name that exists → 409 (add the group with `PUT` instead). An
+  environment names at least one group (422 otherwise). Only groups the caller administers may be named (403).
+- **Zone** = `{name, provider, region, environments: [names], groups: [derived], created}`. `groups` is kept in the
+  doc (so §26.1 readers — `GET /groups/{g}/zones`, worker records, the group page — work unchanged) and is
+  recomputed on every zone or environment write. Each environment doc's `zones` is kept in sync with the zones
+  naming it (write-through), so deploys, secrets scoping, keys and the group page keep working.
+- **Worker record** `workers/<g>:<z>` exists for every pair the derivation yields (as §26.1): a pair that appears is
+  bound (record created, `cloud.attach_zone`, then a deploy, 27.3); a pair that disappears is detached (namespace,
+  workers, identity, record).
+- **Who may edit (D65).** Super admins: everything. A group admin may create an environment for groups they
+  administer, edit/delete an environment whose groups are all theirs, create a zone whose environments are all
+  theirs, and edit/delete a zone whose groups (derived) are all theirs. Everything else 403. Viewers and MCP users
+  get 403 on the page and on every write; the reads in 27.2 stay viewer-scoped as before.
+
+### 27.2 API (`/api/v1`)
+- `GET /environments` unchanged (per-group docs, csv/json). New `GET /environments/by-name` →
+  `[{name, ref, ref_differs, groups: [...], zones: [...], last_deploy: {"<g>": {...}}}]`, viewer-scoped to the
+  caller's groups.
+- `POST /environments {name, ref?, groups: [..]}` → 201, the by-name object. Creates `<g>:<name>` for every group
+  (ref defaults to each group's `ref`); zones `[]`.
+- `PUT /environments/{name} {ref?, groups?}` → 200. `ref` rewrites every doc. `groups` replaces the set: a new group
+  gets a doc (same ref, the environment's zones → attach + deploy per zone); a removed group loses its doc and is
+  detached from every zone no other environment of that group uses (today's §26.1 rule).
+- `DELETE /environments/{name}` → 204. Removes every doc; a zone whose only environment it was is **deleted** (the
+  zone record too — the user's rule: "deleting an environment deletes the zones and workers related to it that are
+  not related to other environments"); a zone other environments still use is only detached for the groups that
+  lost it.
+- `POST /zones {name, provider, region, environments: [..]}` (`groups` is gone → 422 if sent) → 201
+  `{...zone, "jobs": [ids]}`: every environment must exist (422); region checked against the Config block list
+  (403); each derived pair is bound and **deployed** (one canary deploy job per `<g>/<env>` scoped to the zone, the
+  §26.2 job; `jobs` lists them; a pair that cannot be deployed records the error on the job, the zone stays).
+- `PUT /zones/{zone} {region?, environments?}` → 200 `{...zone, "jobs": [ids]}`. `environments` replaces the set
+  (bind + deploy the pairs that appear, detach the pairs that disappear). `region` change: every bound pair is
+  detached (old workers destroyed) and attached + deployed in the new region (D66: the zone keeps its name and
+  worker records — count, size, sleep, IP rules, throttle, service-account grants are re-applied by the attach).
+  Provider cannot change (422). Audited `zone.update` with `region:` / `env:` tags.
+- `PUT /zones/{zone}/groups` is gone (404). `DELETE /zones/{zone}` as today (detaches every pair, removes the zone
+  from every environment doc), under 27.1's edit rule.
+- `POST /groups/{g}/environments {name, ref?, zones?}` stays as the per-group shortcut: it adds `g` to the
+  environment `name` (creating it when new) and, when `zones` are given, attaches the environment to those zones —
+  so the caller must be allowed to edit those zones (27.1), the old "zone not bound" 403 keeps its wording for an
+  unbound zone the caller may not edit. `PUT /groups/{g}/environments/{env}` keeps `ref`/`verbose`/`blocked`; its
+  `zones` field is accepted with the same meaning (attach/detach this environment on those zones) for the harness.
+  `DELETE /groups/{g}/environments/{env}` removes only that group's doc (= `PUT /environments/{name}` without `g`).
+
+### 27.3 Deploy on bind
+A pair that appears (new zone, zone gains an environment, environment gains a group, region change) is deployed at
+once: canary deploy of `<g>/<env>` scoped to that zone, a job per pair, started from the write (background), so the
+worker runs the group's code without a click. A running deploy of the same target → the write still succeeds, the
+pair's job is skipped with `error: "a deploy is already running"`. The group page's Deploy button stays for re-deploys.
+
+### 27.4 Pages
+- `/environments` is **Environments, Zones and Workers** (nav entry replaces both old ones; `/zones` → 301 there);
+  `require("group_admin")`. Sections in order: **New environment** (name, ref, groups checkbox dropdown of the
+  admin's groups); **Environments** table (name, ref input, groups dropdown, zones, last deploy per group, Save /
+  Delete with confirm); **New zone** (name, environments dropdown, location = the console cloud's regions not
+  blocked, as the old Zones page; local: free text); **Zones** table (name, provider, location select, environments
+  dropdown, derived groups, Save / Delete zone); **Workers per group** (group, zone, environments, namespace, live
+  cell every 15 s) — the old card plus the environments column. Rows the caller may not edit are read-only.
+- Group page: the "Add environment" form and its zone picker go; the Environments table keeps every row and action
+  (Deploy, Verbose, Delete = this group's doc) and links to the new page; "Bound, unused" stays.
+- Migration at start (once, idempotent): every zone gets `environments` = the names of the environment docs listing
+  it; `groups` is left as stored (a superset is harmless — recomputed on the next write). `zones.png` is replaced by
+  `environments.png` of the new page in `shots.json`.

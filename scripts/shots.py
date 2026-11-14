@@ -42,13 +42,16 @@ PAGES = {
     "audit.png": ("/audit", "Audit: newest 100, search and outcome filter", False),
     "backups.png": ("/backups", "Backups: preview, restore, restore and prune", False),
     "users.png": ("/users", "Users, permission requests and the password rule", False),
-    "environments.png": ("/environments", "Environments with the last deploy flattened", False),
+    "environments.png": (
+        "/environments",
+        "Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair",
+        True,
+    ),
     "config.png": (
         "/config",
         "Config: the public address (base URI), authentication, the permission catalogue, service-account rules",
         True,
     ),
-    "zones.png": ("/zones", "Zones: this cloud's zones with their groups, the workers per bound pair", True),
     # 0.7.5: the parts of a page the identity, roles and autoscaling docs point at
     "config-roles.png": (
         "/config",
@@ -63,7 +66,7 @@ PAGES = {
     "group-autoscale.png": (
         "/groups/demo",
         "Group page: a zone's actions (count, max to autoscale up to, the last decision) under its environment",
-        "h2:text-is('Environments') + form + .card",
+        "h2:text-is('Environments') + .card",
     ),
     "group-signin.png": (  # a one-zone group: two zones double every box
         "/groups/analytics",
@@ -140,13 +143,12 @@ def seed(client, repo: str | None = None) -> dict:
     repo = repo or "https://github.com/bkraad47/ramen-demo-mcp-group"
     client.post("/api/v1/groups", json={"name": "demo", "repo_url": repo, "ref": "main"}, headers=h())
     client.post("/api/v1/groups", json={"name": "analytics", "repo_url": repo, "ref": "main"}, headers=h())
-    # §26.1: a zone lists the groups it serves; environments pick from the zones bound to their group
-    for zone, region, groups in (("a", "us-central1-a", ["demo", "analytics"]), ("b", "us-central1-b", ["demo"])):
-        zone_doc = {"name": zone, "provider": "gcp", "region": region, "groups": groups}
+    # §27: an environment names its groups; a zone names its environments and is deployed for every derived pair
+    client.post("/api/v1/environments", json={"name": "prod", "ref": "main", "groups": ["demo"]}, headers=h())
+    client.post("/api/v1/environments", json={"name": "dev", "ref": "main", "groups": ["analytics"]}, headers=h())
+    for zone, region, envs in (("a", "us-central1-a", ["prod", "dev"]), ("b", "us-central1-b", ["prod"])):
+        zone_doc = {"name": zone, "provider": "gcp", "region": region, "environments": envs}
         client.post("/api/v1/zones", json=zone_doc, headers=h())
-    envs = "/api/v1/groups/{}/environments"
-    client.post(envs.format("demo"), json={"name": "prod", "ref": "main", "zones": ["a", "b"]}, headers=h())
-    client.post(envs.format("analytics"), json={"name": "dev", "ref": "main", "zones": ["a"]}, headers=h())
     for email, role, groups in (
         ("ada@example.com", "group_admin", ["demo"]),
         ("grace@example.com", "viewer", ["demo", "analytics"]),

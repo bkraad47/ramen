@@ -255,8 +255,9 @@ def test_role_matrix(demo):
         # workers and zones: scaled / removed by group admins (their group) and super admins only
         ("PUT", "/api/v1/groups/demo/zones/zone-a/workers", 200, 200, 403, 403),
         ("PUT", "/api/v1/groups/other/zones/zone-a/workers", 404, 403, 403, 403),  # §26.1: not bound → 404
-        ("DELETE", "/api/v1/zones/zone-b", None, 403, 403, 403),
-        ("GET", "/zones", 200, 200, 200, 403),
+        ("DELETE", "/api/v1/zones/zone-b", None, 200, 403, 403),  # D65: wholly demo's
+        ("GET", "/zones", 301, 301, 301, 301),  # §27.4: one page
+        ("GET", "/environments", 200, 200, 403, 403),
     ]
     clients = {"super_admin": demo}
     for role, email in (("group_admin", "ga@x"), ("viewer", "v@x"), ("mcp_user", "m@x")):

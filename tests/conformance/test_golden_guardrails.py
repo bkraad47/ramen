@@ -71,7 +71,9 @@ def world(tmp_path_factory):
         a = con.admin
         assert a.create_zone(ZONE, provider="local", region="local").status_code in (201, 409)
         assert a.create_group(GROUP, str(repo)).status_code == 201
-        assert a.create_environment(GROUP, ENV, [ZONE]).status_code == 201
+        assert (
+            a.create_environment(GROUP, ENV, [ZONE], wait=False).status_code == 201
+        )  # the deploy below is the one watched
         r = a.post("mcp_keys", {"name": "canary"}, group=GROUP)
         assert r.status_code == 201, r.text
         yield con, node, repo

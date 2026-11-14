@@ -73,10 +73,7 @@ def demo(root):
         == 201
     )
     assert (
-        root.post(
-            "/api/v1/zones", json={"name": "a", "provider": "gcp", "region": "us-central1-a", "groups": ["demo"]}
-        ).status_code
-        == 201
+        root.post("/api/v1/zones", json={"name": "a", "provider": "gcp", "region": "us-central1-a"}).status_code == 201
     )
     r = root.post("/api/v1/groups/demo/environments", json={"name": "prod", "zones": ["a"]})
     assert r.status_code == 201, r.text
@@ -87,10 +84,7 @@ def test_env_attach_creates_namespace(demo, fk):
     dep = fk.k8s.objs[("Deployment", "ramen-demo-a", "worker")]
     assert dep["spec"]["template"]["spec"]["nodeSelector"] == {"topology.kubernetes.io/zone": "us-central1-a"}
     assert (
-        demo.post(
-            "/api/v1/zones", json={"name": "b", "provider": "gcp", "region": "us-central1-b", "groups": ["demo"]}
-        ).status_code
-        == 201
+        demo.post("/api/v1/zones", json={"name": "b", "provider": "gcp", "region": "us-central1-b"}).status_code == 201
     )
     assert demo.put("/api/v1/groups/demo/environments/prod", json={"zones": ["a", "b"]}).status_code == 200
     assert ("Namespace", None, "ramen-demo-b") in fk.k8s.objs
@@ -254,7 +248,10 @@ def test_cloud_error_is_502(demo, fk):
         raise RuntimeError("apiserver unreachable")
 
     fk.k8s._create = boom
-    r = demo.post("/api/v1/groups/demo/environments", json={"name": "dev", "zones": ["a"]})
+    zone = {"name": "c", "provider": "gcp", "region": "us-central1-c", "environments": ["prod"]}  # a new pair attaches
+    r = demo.post("/api/v1/zones", json=zone)
     assert r.status_code == 502 and "apiserver" in r.text
+    assert demo.get("/api/v1/zones/c").json()["groups"] == []  # §27.1: the failed pair is not recorded as bound
+    assert demo.get("/api/v1/groups/demo/zones/c/workers").status_code == 404
     r = demo.get("/api/v1/logs?group=demo&zone=a")
     assert r.status_code == 200 and r.text == ""

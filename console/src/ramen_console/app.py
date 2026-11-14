@@ -72,6 +72,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         await providers.refresh(app.state, force=True)  # D50: identity providers from env + the store doc
         await app.state.accounts.migrate_memberships()  # 0.5.95 (D41) and 0.7.5 (§21.3) membership shapes
         await app.state.services.migrate_zone_groups()  # §26.1: zones list the groups that used them
+        await app.state.services.migrate_zone_environments()  # §27.4: zones name the environments that use them
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),

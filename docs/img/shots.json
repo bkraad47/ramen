@@ -1,5 +1,5 @@
 {
-  "captured_from": "live GCP console, project ramen-test-261004, 2026-10-04 (live captures replace the seeded set)",
+  "captured_from": "seeded local console, 2026-11-14 (1.0.0b: the page set changed, so the seeded captures replace the 2026-10-04 live GCP set)",
   "screenshots": {
     "api-keys.png": {
       "captured_for": "1.0.0",
@@ -35,7 +35,7 @@
     },
     "environments.png": {
       "captured_for": "1.0.0",
-      "page": "Environments with the last deploy flattened"
+      "page": "Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair"
     },
     "group-autoscale.png": {
       "captured_for": "1.0.0",
@@ -76,10 +76,6 @@
     "users.png": {
       "captured_for": "1.0.0",
       "page": "Users, permission requests and the password rule"
-    },
-    "zones.png": {
-      "captured_for": "1.0.0",
-      "page": "Zones and workers: this cloud's zones with their groups, the workers per bound pair"
     }
   },
   "ui_contract": "1.0.0"

@@ -145,9 +145,8 @@ def test_super_admin_adds_and_removes_service_account_rules_from_the_page(demo):
 def test_environments_flattens_the_last_deploy_and_sizes_its_actions(demo):
     assert demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": True}).status_code == 202
     page = demo.get("/environments").text
-    assert "Last deploy" in page and "When" in page
+    assert "Last deploy" in page and 'href="/groups/demo"' in page
     assert '<code>{"job"' not in page and "&#34;job&#34;" not in page  # never a JSON blob
-    assert "act" in cell_of(page, "Open group")
 
 
 # --- W7 users: delete to the right of save, and it says what it deletes ---------------------------------------------

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.responses import PlainTextResponse
 
 from .. import deploy as dep
@@ -7,12 +7,13 @@ from ..audit import note, write_audit
 from ..baseuri import prefix
 from ..errors import conflict, invalid, not_found
 from ..rbac import Principal, can, require
+from ..util import now
 from . import models as m
-from .helpers import accounts, respond, svc, tabular
+from .helpers import accounts, is_hx, respond, svc, tabular
 
 r = APIRouter(prefix="/api/v1")
 viewer, viewer_g = require("viewer"), require("viewer", "group")
-admin_g, super_ = require("group_admin", "group"), require("super_admin")
+admin, admin_g, super_ = require("group_admin"), require("group_admin", "group"), require("super_admin")
 
 
 @r.get("/me")
@@ -127,25 +128,100 @@ async def get_zone(request: Request, zone: str, p: Principal = Depends(viewer)):
     return respond(request, z)
 
 
+def _ip(request: Request) -> str:
+    from ..audit import client_ip
+
+    return client_ip(request)
+
+
+async def _deploy_pairs(request: Request, bg: BackgroundTasks, p: Principal, pairs) -> list[str]:
+    """§27.3: a pair that appeared is deployed at once — one canary job per `<g>/<env>` over the zones that appeared.
+    A running deploy of the same target skips the pair's job with the error on it."""
+    s, jobs, ip = svc(request), request.app.state.jobs, _ip(request)
+    by: dict[tuple[str, str], list[str]] = {}
+    for g, env, z in pairs:
+        by.setdefault((g, env), []).append(z)
+
+    async def audit(action, target, ok, tags):
+        await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)
+
+    ids = []
+    for (g, env), zones in by.items():
+        target = f"{g}/{env}"
+        running = [j for j in await jobs.recent(target) if j["target"] == target and j["status"] == "running"]
+        job = await jobs.create("deploy", target)
+        if running:
+            job.update(status="error", error="a deploy is already running", finished=now())
+            await jobs.save(job)
+        else:
+            await audit("deploy.start", target, True, [f"group:{g}", "canary:True", "trigger:bind", *zones])
+            bg.add_task(dep.run_deploy, s, job, g, env, zones, True, audit, False, p.name, ip)
+        ids.append(job["id"])
+    return ids
+
+
+def _no_content(request: Request) -> Response:
+    return respond(request, {"ok": True}) if is_hx(request) else Response(status_code=204)
+
+
 @r.post("/zones", status_code=201)
-async def create_zone(request: Request, body: m.ZoneIn, p: Principal = Depends(super_)):
-    note(request, "zone.create", body.name, [f"zone:{body.name}"] + [f"group:{g}" for g in body.groups])
-    s = svc(request)
-    return respond(request, await s.create_zone(body.name, body.provider, body.region, body.groups), 201)
+async def create_zone(request: Request, body: m.ZoneIn, bg: BackgroundTasks, p: Principal = Depends(admin)):
+    """§27.2: a zone names its environments; every derived (group, zone) pair is bound and deployed."""
+    note(request, "zone.create", body.name, [f"zone:{body.name}"] + [f"env:{e}" for e in body.environments])
+    z, pairs = await svc(request).create_zone(body.name, body.provider, body.region, body.environments, p)
+    return respond(request, {**z, "jobs": await _deploy_pairs(request, bg, p, pairs)}, 201)
 
 
-@r.put("/zones/{zone}/groups")
-async def set_zone_groups(request: Request, zone: str, body: m.ZoneGroups, p: Principal = Depends(super_)):
-    """§26.1: the groups a zone serves. Binding creates the pair's worker record; unbinding detaches the zone."""
-    note(request, "zone.groups", zone, [f"zone:{zone}"] + [f"group:{g}" for g in body.groups])
-    return respond(request, await svc(request).set_zone_groups(zone, body.groups))
+@r.put("/zones/{zone}")
+async def update_zone(
+    request: Request, zone: str, body: m.ZoneUpdate, bg: BackgroundTasks, p: Principal = Depends(admin)
+):
+    """§27.2: `environments` replaces the set (bind + deploy / detach); `region` moves every pair (D66)."""
+    before = await svc(request).store.get("zones", zone) or {}
+    tags = [f"zone:{zone}"]
+    if body.region is not None and body.region != before.get("region"):
+        tags.append(f"region:{body.region}")
+    if body.environments is not None:  # a tag per environment that appears or goes
+        tags += [f"env:{e}" for e in sorted(set(body.environments) ^ set(before.get("environments") or []))]
+    note(request, "zone.update", zone, tags)
+    z, pairs = await svc(request).update_zone(zone, body.region, body.environments, body.provider, p)
+    return respond(request, {**z, "jobs": await _deploy_pairs(request, bg, p, pairs)})
 
 
 @r.delete("/zones/{zone}")
-async def delete_zone(request: Request, zone: str, p: Principal = Depends(super_)):
+async def delete_zone(request: Request, zone: str, p: Principal = Depends(admin)):
     note(request, "zone.delete", zone, [f"zone:{zone}"])
-    await svc(request).delete_zone(zone)
+    await svc(request).delete_zone(zone, p)
     return respond(request, {"ok": True})
+
+
+@r.get("/environments/by-name")
+async def environments_by_name(request: Request, p: Principal = Depends(viewer)):
+    return await svc(request).environments_by_name(p)
+
+
+@r.post("/environments", status_code=201)
+async def create_environment(request: Request, body: m.EnvByNameIn, p: Principal = Depends(admin)):
+    """§27.2: one environment name across groups; a doc per group, zones none yet."""
+    note(request, "environment.create", body.name, [f"group:{g}" for g in body.groups])
+    obj, _ = await svc(request).create_environment(body.name, body.groups, body.ref, p)
+    return respond(request, obj, 201)
+
+
+@r.put("/environments/{name}")
+async def update_environment(
+    request: Request, name: str, body: m.EnvByNameUpdate, bg: BackgroundTasks, p: Principal = Depends(admin)
+):
+    note(request, "environment.update", name, [f"group:{g}" for g in body.groups or []])
+    obj, pairs = await svc(request).update_environment(name, body.ref, body.groups, p)
+    return respond(request, {**obj, "jobs": await _deploy_pairs(request, bg, p, pairs)})
+
+
+@r.delete("/environments/{name}", status_code=204)
+async def delete_environment(request: Request, name: str, p: Principal = Depends(admin)):
+    note(request, "environment.delete", name, [f"env:{name}"])
+    await svc(request).delete_environment(name, p)
+    return _no_content(request)
 
 
 @r.get("/environments")
@@ -157,9 +233,10 @@ async def environments(
 
 
 @r.post("/groups/{group}/environments", status_code=201)
-async def create_env(request: Request, group: str, body: m.EnvIn, p: Principal = Depends(admin_g)):
+async def create_env(request: Request, group: str, body: m.EnvIn, bg: BackgroundTasks, p: Principal = Depends(admin_g)):
     note(request, "environment.create", f"{group}/{body.name}", [f"group:{group}"])
-    return respond(request, await svc(request).create_env(group, body.name, body.ref, body.zones), 201)
+    doc, pairs = await svc(request).create_env(group, body.name, body.ref, body.zones, p)
+    return respond(request, {**doc, "jobs": await _deploy_pairs(request, bg, p, pairs)}, 201)
 
 
 @r.get("/groups/{group}/environments/{env}")
@@ -168,9 +245,16 @@ async def get_environment(request: Request, group: str, env: str, p: Principal =
 
 
 @r.put("/groups/{group}/environments/{env}")
-async def update_env(request: Request, group: str, env: str, body: m.EnvUpdate, p: Principal = Depends(admin_g)):
+async def update_env(
+    request: Request, group: str, env: str, body: m.EnvUpdate, bg: BackgroundTasks, p: Principal = Depends(admin_g)
+):
     note(request, "environment.update", f"{group}/{env}", [f"group:{group}"])
-    return respond(request, await svc(request).update_env(group, env, **body.model_dump()))
+    s, ids = svc(request), []
+    if body.zones is not None:  # §27.2: attach or detach this environment on those zones
+        _, pairs = await s.set_env_zones(group, env, body.zones, p)
+        ids = await _deploy_pairs(request, bg, p, pairs)
+    doc = await s.update_env(group, env, **body.model_dump(exclude={"zones"}))
+    return respond(request, {**doc, "jobs": ids})
 
 
 @r.post("/groups/{group}/environments/{env}/verbose")
@@ -219,7 +303,7 @@ async def set_zone_blocked(
 @r.delete("/groups/{group}/environments/{env}")
 async def delete_env(request: Request, group: str, env: str, p: Principal = Depends(admin_g)):
     note(request, "environment.delete", f"{group}/{env}", [f"group:{group}"])
-    await svc(request).delete_env(group, env)
+    await svc(request).delete_env(group, env, p)
     return respond(request, {"ok": True})
 
 
@@ -239,9 +323,7 @@ async def deploy(
     tags = [f"group:{group}", f"canary:{body.canary}"] + ([f"breaking:{body.breaking}"] if body.breaking else [])
     note(request, "deploy.start", target, tags)
     job = await request.app.state.jobs.create("deploy", target)
-    from ..audit import client_ip
-
-    ip = client_ip(request)
+    ip = _ip(request)
 
     async def audit(action, target, ok, tags):
         await write_audit(s.store, user=p.name, ip=ip, action=action, target=target, ok=ok, tags=tags)

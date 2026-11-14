@@ -16,9 +16,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <button class="act">Save limits</button></form>{% endif %}</div>
 
 <h2>Environments</h2>
-{% if can_admin %}<form class="inline" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/environments" hx-ext="json" hx-swap="none">
-<label>Name<input name="name" required></label><label>Ref<input name="ref" placeholder="{{ group.ref }}"></label>{% set zone_opts = [] %}{% for z in zones %}{% set _ = zone_opts.append((z.id, z.id)) %}{% endfor %}{{ multi('zones', zone_opts, [], 'env-zones', 'Zones', 'Pick zones') }}<button>Add environment</button></form>{% endif %}
-<div class="card"><p class="muted">Each environment with its zones: a zone row shows the live workers, the size, the sleep state, the IP allow-list and the service account; <b>Zone actions</b> under it scales, sleeps, sets IP rules and throttles, rebalances and opens the logs. A super admin binds zones to this group on the Zones page; environments pick from those.</p>
+<div class="card"><p class="muted">Each environment with its zones: a zone row shows the live workers, the size, the sleep state, the IP allow-list and the service account; <b>Zone actions</b> under it scales, sleeps, sets IP rules and throttles, rebalances and opens the logs. Environments are created, given their groups and attached to zones on <a href="{{ base }}/environments">Environments, Zones and Workers</a>; a zone attached there is bound and deployed for this group at once.</p>
 <table class="env-table"><tr><th>Environment / zone</th><th>Ref / workers</th><th>Verbose / size</th><th>Last deploy / sleep</th><th>IP allow-list</th><th>Service account</th><th></th></tr>
 {% for e in envs %}<tr class="env-row"><td><b>{{ e.name }}</b></td><td>{{ e.ref }}</td>
 <td>{% if can_admin %}<div class="row-actions"><button class="act ghost" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/environments/{{ e.name }}/verbose" hx-ext="json" hx-vals='{"verbose": {{ 'false' if e.verbose else 'true' }}}' hx-swap="none">{{ 'Verbose: off' if e.verbose else 'Verbose: on' }}</button></div>{% else %}{{ 'On' if e.verbose else 'Off' }}{% endif %}</td>
@@ -42,7 +40,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 <a class="btn ghost act" href="{{ base }}/logs?group={{ group.id }}&zone={{ zid }}">View logs</a></div></td></tr>
 </table></div></details></td></tr>{% endif %}{% endif %}{% else %}<tr class="zone-row"><td colspan="7" class="muted">No zones attached to this environment.</td></tr>{% endfor %}
 {% else %}<tr><td colspan="7" class="muted">No environments</td></tr>{% endfor %}</table>
-{% if unused_zones %}<p class="muted">Bound, unused: {% for z in unused_zones %}<code>{{ z }}</code>{{ ', ' if not loop.last }}{% endfor %} — bound to this group, used by no environment.</p>{% endif %}</div>
+{% if unused_zones %}<p class="muted">Bound, unused: {% for z in unused_zones %}<code>{{ z }}</code>{{ ', ' if not loop.last }}{% endfor %} — bound to this group, used by no environment of it.</p>{% endif %}</div>
 
 <h2>Deploy jobs</h2><div id="jobs">{% for job in jobs %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">No jobs yet</p>{% endif %}</div>
 

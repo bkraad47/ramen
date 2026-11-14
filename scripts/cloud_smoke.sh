@@ -35,14 +35,16 @@ b64() { python3 -c 'import sys,base64; print(base64.b64encode(sys.stdin.read().e
 unb64() { python3 -c 'import sys,json,base64; d=json.load(sys.stdin); print(base64.b64decode(d.get("body","")).decode())' 2>/dev/null; }
 
 STEP="login"; code=$(C -o /dev/null -w '%{http_code}' -X POST "$CONSOLE/login" --data-urlencode "email=$EMAIL" --data-urlencode "password=$PASS"); [ "$code" = 303 ] || [ "$code" = 200 ] || fail "HTTP $code"
-STEP="zone $ZONE";  api POST /zones "{\"name\":\"$ZONE\",\"provider\":\"$PROVIDER\",\"region\":\"$REGION\"}" >/dev/null
+STEP="zone $ZONE";  api POST /zones "{\"name\":\"$ZONE\",\"provider\":\"$PROVIDER\",\"region\":\"$REGION\",\"environments\":[]}" >/dev/null
 STEP="group $GROUP"; api POST /groups "{\"name\":\"$GROUP\",\"repo_url\":\"$REPO\",\"ref\":\"main\"}" >/dev/null
-# CONTRACTS §26.1: an environment may only name zones bound to its group; bind (keeping the zone's other groups)
-STEP="bind $ZONE to $GROUP"; GROUPS_JSON=$(api GET "/zones/$ZONE" | python3 -c 'import sys,json; g=json.load(sys.stdin).get("groups") or []; g+=[x for x in [sys.argv[1]] if x not in g]; print(json.dumps({"groups": g}))' "$GROUP") || fail "zone $ZONE unreadable"
-api PUT "/zones/$ZONE/groups" "$GROUPS_JSON" | jget '["groups"]' >/dev/null || fail "PUT /zones/$ZONE/groups"
+# CONTRACTS §27.2: the per-group environment route attaches the environment to the zone (the zone's groups are derived,
+# no bind step); the attach starts a canary deploy of the pair (§27.3), so the explicit deploy below may be told one
+# is already running — then that job is the one to wait for.
 STEP="env $ENVN";   api POST "/groups/$GROUP/environments" "{\"name\":\"$ENVN\",\"ref\":\"main\",\"zones\":[\"$ZONE\"]}" >/dev/null
 STEP="mcp key";     R=$(api POST "/groups/$GROUP/mcp-keys" "{\"name\":\"smoke-$(date +%s)\"}"); KEY=$(echo "$R" | jget '["key"]'); [ -n "$KEY" ] || fail "no key: ${R:0:200}"
-STEP="deploy";      JOB=$(api POST "/groups/$GROUP/environments/$ENVN/deploy" '{"canary":true}' | jget '["id"]'); [ -n "$JOB" ] || fail "no job id"
+STEP="deploy";      R=$(api POST "/groups/$GROUP/environments/$ENVN/deploy" '{"canary":true}')
+JOB=$(echo "$R" | jget '["id"]') || JOB=$(echo "$R" | python3 -c 'import sys,re; m=re.search(r"already running \(job ([\w-]+)\)", sys.stdin.read()); print(m.group(1) if m else "")')
+[ -n "$JOB" ] || fail "no job id: ${R:0:200}"
 deadline=$(( $(date +%s) + TIMEOUT )); S=running
 while [ "$S" = running ]; do  # a non-JSON answer (LB blip) is not a verdict: poll again
   [ "$(date +%s)" -lt "$deadline" ] || fail "job $JOB still ${S:-unanswered} after ${TIMEOUT}s: ${J:0:200}"

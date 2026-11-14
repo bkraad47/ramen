@@ -130,9 +130,9 @@ Every form, with the pages you will see:
 |---|---|
 | ![identity providers](docs/img/config-identity.png) | ![roles](docs/img/config-roles.png) |
 
-| Zone actions: count, max, last autoscale decision | Zones and workers with the max per group |
+| Zone actions: count, max, last autoscale decision | Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair |
 |---|---|
-| ![autoscale](docs/img/group-autoscale.png) | ![zones](docs/img/zones.png) |
+| ![autoscale](docs/img/group-autoscale.png) | ![environments, zones and workers](docs/img/environments.png) |
 
 ## Transport and security, in short
 

@@ -154,24 +154,45 @@ async def mcp_signin(request: Request, group: str, envs: list[dict]) -> dict:
 
 
 @r.get("/environments")
-async def environments(request: Request, p: Principal = Depends(viewer)):
+async def environments(request: Request, p: Principal = Depends(admin)):
+    """§27.4: Environments, Zones and Workers — for super admins and group admins; a row the caller may not edit
+    (D65: a group not theirs is in it) is read-only."""
     s = svc(request)
-    envs = [e for e in await s.environments() if can(p, "viewer", e["group"])]
-    return render(request, "environments.html", envs=envs, groups=await s.visible_groups(p), zones=await s.zones())
-
-
-@r.get("/zones")
-async def zones(request: Request, p: Principal = Depends(viewer)):
-    s = svc(request)
+    mine = {g["id"] for g in await s.visible_groups(p) if can(p, "group_admin", g["id"])}
+    docs = await s.environments()
+    full = {}
+    for e in docs:
+        full.setdefault(e["name"], set()).add(e["group"])
+    envs = await s.environments_by_name(p)
+    zones = [z for z in await s.zones() if p.role == "super_admin" or mine & set(z.get("groups") or [])]
+    has_doc = {(e["group"], e["name"]) for e in docs}
     blocked = await s.blocked_regions()
     return render(
         request,
-        "zones.html",
-        zones=await s.zones(),
-        groups=await s.visible_groups(p),
+        "environments.html",
+        envs=envs,
+        env_ok={n: all(g in mine for g in gs) for n, gs in full.items()},
+        env_opts=[n for n in sorted(full) if all(g in mine for g in full[n])],
+        groups=sorted(mine),
+        zones=zones,
+        zone_ok={z["id"]: all(g in mine for g in z.get("groups") or []) for z in zones},
+        pair_envs={
+            (g, z["id"]): [n for n in z.get("environments") or [] if (g, n) in has_doc]
+            for z in zones
+            for g in z.get("groups") or []
+        },
         blocked=blocked,
         region_zones={prov: regions.zones(prov, blocked[prov]) for prov in regions.PROVIDERS},
     )
+
+
+@r.get("/zones")
+async def zones(request: Request):
+    from fastapi.responses import RedirectResponse
+
+    from ..baseuri import link
+
+    return RedirectResponse(link(request, "/environments"), 301)  # §27.4: one page since 1.0.0b
 
 
 @r.get("/secrets")

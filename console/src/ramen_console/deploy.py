@@ -205,7 +205,7 @@ async def run_deploy(
     job: dict,
     group: str,
     env_name: str,
-    zone: str | None,
+    zone: str | list[str] | None,
     canary: bool,
     audit,
     breaking: bool = False,
@@ -216,7 +216,7 @@ async def run_deploy(
     try:
         g = await svc.get_group(group)
         env = await svc.get_env(group, env_name)
-        zones = [zone] if zone else env.get("zones", [])
+        zones = list(zone) if isinstance(zone, list) else ([zone] if zone else env.get("zones", []))  # §27.3: a bind
         results = {}
         _, token, _ = await svc.secrets_for(group, env_name, None)
         token = await github_app.resolve_token(svc.store, g) or await svc.secrets_backend.resolve(

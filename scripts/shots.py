@@ -44,7 +44,7 @@ PAGES = {
     "users.png": ("/users", "Users, permission requests and the password rule", False),
     "environments.png": (
         "/environments",
-        "Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair",
+        "Environments, Zones and Workers: environments and groups, zones and environments, workers per pair",
         True,
     ),
     "config.png": (

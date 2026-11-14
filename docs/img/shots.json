@@ -35,7 +35,7 @@
     },
     "environments.png": {
       "captured_for": "1.0.0",
-      "page": "Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair"
+      "page": "Environments, Zones and Workers: environments and groups, zones and environments, workers per pair"
     },
     "group-autoscale.png": {
       "captured_for": "1.0.0",

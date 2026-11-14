@@ -35,6 +35,10 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
   own, tagged with the caller's IP, user, group, zone and worker. The bridge does this for its host: it holds the
   config encrypted in memory, records every call, offers `ramen_report`, and signs in again when the config changed.
   With the chart's Jaeger on, the Config page names its UI (`RAMEN_OTEL_UI_URL`).
+- **Sleep waits for the activator to be routable.** A sleep scaled the workers down as soon as the activator was
+  Ready; for a few seconds kube-proxy still sent calls to the terminating workers, which answered and never asked for a
+  wake, so the zone stayed asleep under traffic (seen on kind). The console now waits until the activator is a ready
+  address of `Service/worker` (the zone role may read `endpoints`; an older binding skips the wait with a warning).
 - **The console's own secrets live in the cloud's secret manager.** SMTP password, GitHub App key, identity-provider
   client secrets, telemetry headers, repo tokens and Redis URLs are each a secret of their own (`ramenc-…`,
   `ramen-console/…`) the store only references; no worker can read them; locally they stay encrypted in the store.

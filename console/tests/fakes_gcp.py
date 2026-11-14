@@ -26,6 +26,10 @@ class FakeK8s:
         self.job_polls = 0
         self.pod_logs: dict[tuple, list[str]] = {}
         self.unready: set[str] = set()  # Deployment names that never get ready (while `ready` stays True)
+        # §24.1 P1: Endpoints reads that still leave the activator out (kube-proxy lag), and a zone role that cannot
+        # read Endpoints at all (pre-1.0.0a RoleBinding → 403)
+        self.endpoint_lag = 0
+        self.endpoints_forbidden = False
 
     # generic helpers ---------------------------------------------------
     def _key(self, kind, body, ns=None):
@@ -110,7 +114,8 @@ class FakeK8s:
             if any(labels.get(k) != v for k, v in want.items()) or any(labels.get(k) == v for k, v in unwanted.items()):
                 continue
             for i in range(d["spec"].get("replicas", 1)):
-                ip = f"10.{1 if labels.get('ramen.io/track') == 'canary' else 2}.0.{i + 1}"
+                canary, act = labels.get("ramen.io/track") == "canary", labels.get("ramen.io/role") == "activator"
+                ip = f"10.{1 if canary else 3 if act else 2}.0.{i + 1}"
                 out.append(
                     {
                         "metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
@@ -321,6 +326,27 @@ class _Core:
 
     def list_namespaced_pod(self, ns, label_selector=""):
         return {"items": self.s.pods(ns, label_selector)}
+
+    def read_namespaced_endpoints(self, name, ns):
+        """Ready addresses of the Service's selector: pods of ready Deployments, the activator's only once the
+        `endpoint_lag` reads are spent."""
+        self.s.calls.append(("endpoints", ns, name))
+        if self.s.endpoints_forbidden:
+            raise FakeApiError(403, "Forbidden")
+        svc = self.s.objs.get(("Service", ns, name))
+        if svc is None:
+            raise FakeApiError(404, "NotFound")
+        selector = ",".join(f"{k}={v}" for k, v in (svc["spec"].get("selector") or {}).items())
+        if self.s.endpoint_lag > 0:
+            self.s.endpoint_lag -= 1
+            selector += ",ramen.io/role!=activator"
+        pods = [
+            p
+            for p in self.s.pods(ns, selector)
+            if self.s.ready and p["metadata"]["name"].rsplit("-", 1)[0] not in self.s.unready
+        ]
+        addresses = [{"ip": p["status"]["podIP"], "targetRef": {"name": p["metadata"]["name"]}} for p in pods]
+        return {"metadata": {"name": name, "namespace": ns}, "subsets": [{"addresses": addresses}] if pods else []}
 
 
 class _Apps:

@@ -957,8 +957,11 @@ Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" 
   timeout; the wake goes on, so the retry finds the zone awake) →
   HTTP 503 with `Retry-After: 10` / gRPC `UNAVAILABLE`, access-log reason `waking`. Its log lines carry
   `activator: true`.
-- Console: **sleep** = apply the activator (replicas 1), wait Ready, scale `worker` and `worker-canary` to 0 (the
-  workers' SIGTERM drain serves what is in flight), state `asleep`. **wake** = state `waking`, scale `worker` to
+- Console: **sleep** = apply the activator (replicas 1), wait Ready **and listed as a ready address in the Endpoints
+  of `Service/worker`** (1.0.0a: until then kube-proxy still routes to the terminating-but-serving workers, and a
+  draining worker never asks for a wake; a zone role that cannot read Endpoints skips the wait with a warning; not
+  listed within the wait → 502), scale `worker` and `worker-canary` to 0 (the workers' SIGTERM drain serves what is in
+  flight), state `asleep`. **wake** = state `waking`, scale `worker` to
   the zone's count before it slept (≥ 1) and `worker-canary` to what it was, wait Ready, state `awake`, then scale
   the activator to 0 — while both exist the activator forwards, so no call is refused. A deploy, a rebalance or a
   count change on a sleeping zone wakes it first. The autoscaler (§21.7) skips a zone that is not `awake`.

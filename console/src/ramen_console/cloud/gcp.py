@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import logging
 import os
 import shlex
 import time
@@ -375,6 +376,17 @@ class GcpCloud(Cloud):
         selector = ((self.kube.read("Service", ns, "worker") or {}).get("spec") or {}).get("selector") or {}
         self.kube.apply(activator(worker, selector))  # replicas 1; an activator left at 0 by a wake is patched back
         self.kube.wait_ready(ns, ACTIVATOR)
+        # P1 (1.0.0a): Ready is not enough — until the activator is listed behind Service/worker, kube-proxy routes
+        # to the terminating-but-serving workers, and a draining worker never asks for the wake.
+        try:
+            listed = self.kube.wait_endpoint(ns, "worker", f"app=worker,{ROLE}=activator")
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 403:
+                raise
+            logging.getLogger("ramen.cloud").warning("%s: cannot read Endpoints (zone role predates 1.0.0a)", ns)
+            listed = True
+        if not listed:
+            raise ApiError(502, f"Deployment {ACTIVATOR} is Ready but not in the Endpoints of Service/worker in {ns}")
         return {"workers": self._replicas(ns, "worker")[0], "canary": self._replicas(ns, "worker-canary")[0]}
 
     def _sleep_finish(self, ns) -> None:

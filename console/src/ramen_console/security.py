@@ -230,7 +230,18 @@ class ScrubbedLog(list):
 
 class _ScrubSecrets(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg, record.args = scrub(record.getMessage()), None
+        # `args` stay in place: uvicorn's access formatter unpacks them (dropping them printed a TypeError stack
+        # on every access line); each string argument and the template are scrubbed on their own.
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        elif isinstance(record.args, dict):
+            record.args = {k: scrub(v) if isinstance(v, str) else v for k, v in record.args.items()}
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        else:
+            record.msg, record.args = scrub(record.getMessage()), None
         if record.exc_info and not record.exc_text:
             record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))
         return True

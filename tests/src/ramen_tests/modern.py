@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from .mcp_client import CLIENT_INFO, UNSET, HttpNode, JsonRpcError, Node, sse_events
+from .mcp_client import CLIENT_INFO, UNSET, HttpNode, JsonRpcError, Node, sse_events, with_report
 
 MODERN = "2026-07-28"
 LEGACY = ["2025-06-18", "2025-03-26", "2024-11-05"]
@@ -78,19 +78,25 @@ class Reply:
 
 
 class Modern:
-    def __init__(self, node: Node | HttpNode, capabilities: dict | None = None, key=UNSET):
+    def __init__(self, node: Node | HttpNode, capabilities: dict | None = None, key=UNSET, telemetry=UNSET):
+        """`telemetry`: the config version every gated call reports (§26.3; "" = whatever the worker was told,
+        None = no report); defaults to the node's."""
         self.node, self.capabilities, self.key = node, capabilities, key
+        self.telemetry = node.telemetry if telemetry is UNSET else telemetry
         self.transport = node.transport
 
     def with_caps(self, capabilities: dict | None) -> Modern:
-        return Modern(self.node, capabilities, self.key)
+        return Modern(self.node, capabilities, self.key, self.telemetry)
 
     def with_key(self, key: str) -> Modern:
-        return Modern(self.node, self.capabilities, key)
+        return Modern(self.node, self.capabilities, key, self.telemetry)
+
+    def with_telemetry(self, version: str | None) -> Modern:
+        return Modern(self.node, self.capabilities, self.key, version)
 
     def body(self, method, params=None, *, capabilities=UNSET, meta_extra=None, rid=UNSET, version=MODERN) -> dict:
         caps = self.capabilities if capabilities is UNSET else capabilities
-        p = dict(params or {})
+        p = dict(with_report(method, params or {}, self.telemetry))
         p["_meta"] = {**meta(caps, version), **(meta_extra or {}), **p.get("_meta", {})}
         return {"jsonrpc": "2.0", "id": next(_ids) if rid is UNSET else rid, "method": method, "params": p}
 

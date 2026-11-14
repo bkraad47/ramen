@@ -17,10 +17,11 @@ import time
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests.fakes import Collector
 from ramen_tests.localconsole import SESSION_SECRET
 from ramen_tests.localnode import LocalNode
-from ramen_tests.mcp_client import JsonRpcError, text_of
-from ramen_tests.modern import ALL_INPUT, Modern, assert_envelope
+from ramen_tests.mcp_client import TELEMETRY_META, JsonRpcError, telemetry_event, telemetry_report, text_of
+from ramen_tests.modern import ALL_INPUT, Modern, assert_envelope, strip_envelope
 from ramen_tests.tokens import user_token
 
 pytestmark = pytest.mark.conformance
@@ -74,13 +75,14 @@ def transport(request) -> str:
 
 @pytest.fixture
 def m(node, transport) -> Modern:
-    """A modern client that declares every input method, with a key nobody has consented with."""
-    return Modern(node.for_transport(transport), ALL_INPUT, key=next(_pool))
+    """A modern client that declares every input method, with a key nobody has consented with. Every gated call
+    carries a §26.3 report (this node was told no version, so any is accepted; the report itself is required)."""
+    return Modern(node.for_transport(transport), ALL_INPUT, key=next(_pool), telemetry="")
 
 
 def person(node, transport, sub: str | None = None, **claims) -> Modern:
     token, _ = user_token(SESSION_SECRET, ISSUER, 600, sub=sub or "u-" + secrets.token_hex(4), **claims)
-    return Modern(node.for_transport(transport), ALL_INPUT, key=token)
+    return Modern(node.for_transport(transport), ALL_INPUT, key=token, telemetry="")
 
 
 def asked(result: dict) -> dict:
@@ -185,9 +187,9 @@ def test_the_consent_is_remembered_for_that_key(m, node):
     consent(m)
     assert text_of(m.call("plain_tool", {"text": "again"})) == "again", "not asked twice"
     for other in TRANSPORTS:  # the record is the caller's, not the connection's
-        again = Modern(node.for_transport(other), ALL_INPUT, key=m.key)
+        again = Modern(node.for_transport(other), ALL_INPUT, key=m.key, telemetry="")
         assert text_of(again.call("plain_tool", {"text": other})) == other
-    bare = Modern(m.node, {}, key=m.key)  # and no capability is needed once it is on record
+    bare = Modern(m.node, {}, key=m.key, telemetry="")  # and no capability is needed once it is on record
     assert text_of(bare.call("plain_tool", {"text": "bare"})) == "bare"
 
 
@@ -209,6 +211,7 @@ def test_a_legacy_call_with_a_consented_key_is_served(m, node, transport):
     """The consent belongs to the caller: given once through a modern client, an older client of the same key runs."""
     consent(m)
     c = node.for_transport(transport, key=m.key)
+    c.telemetry = ""  # §26.3: a 2025-06-18 body that carries the report is served like a modern one
     c.initialize()
     assert text_of(c.call_tool("plain_tool", {"text": "old client"})) == "old client"
 
@@ -291,11 +294,12 @@ def test_a_token_with_tel_true_is_never_prompted(node, transport):
     p = person(node, transport, tel=True)
     assert text_of(p.call("plain_tool", {"text": "signed in"})) == "signed in"
     assert p.request("resources/read", {"uri": "ramen://bowl/miso/recipe"})["contents"]
-    no_caps = Modern(p.node, {}, key=p.key)
+    no_caps = Modern(p.node, {}, key=p.key, telemetry="")
     assert text_of(no_caps.call("plain_tool", {"text": "no caps"})) == "no caps", (
         "nothing to elicit: no capability needed"
     )
     legacy = node.for_transport(transport, key=p.key)
+    legacy.telemetry = ""
     legacy.initialize()
     assert text_of(legacy.call_tool("plain_tool", {"text": "legacy"})) == "legacy", "the token is the consent"
 
@@ -416,7 +420,7 @@ def test_an_expired_consent_state_is_rejected():
 # --- access log -------------------------------------------------------------------------------------------------------
 def test_the_access_log_names_each_outcome(node):
     key = next(_pool)
-    m = Modern(node.http, ALL_INPUT, key=key)
+    m = Modern(node.http, ALL_INPUT, key=key, telemetry="")
     first = asked(m.call("plain_tool", {"text": "log-1"}))
     refuse = {CONSENT: {"action": "decline"}}
     m.call_raw("plain_tool", {"text": "log-1"}, inputResponses=refuse, requestState=first["requestState"])
@@ -440,3 +444,141 @@ def test_a_group_without_the_setting_never_asks():
         c.initialize()
         assert text_of(c.call_tool("plain_tool", {"text": "free"})) == "free"
         assert Modern(n.http).discover()["_meta"].get("io.ramen/telemetry") == CLIENT, "telemetry on, consent off"
+
+
+# --- §26.3 the report on every call, against a worker that was told a version --------------------------------------
+VERSION = "a1b2c3d4e5f6"
+
+
+@pytest.fixture(scope="module")
+def versioned():
+    """A node that requires consent and knows the config version, exporting to a collector; one key, consented."""
+    with Collector() as collector:
+        told = json.dumps({**CLIENT, "version": VERSION, "required": True})  # what the console writes (§26.3)
+        env = {
+            **ENV,
+            "RAMEN_TELEMETRY_VERSION": VERSION,
+            "RAMEN_OTEL_ENDPOINT": collector.url,
+            "RAMEN_OTEL_CLIENT": told,
+        }
+        with LocalNode(bucket=E.FIXTURES / "mrtr_group", key=KEYS[1], admin_key=ADMIN, env=env) as n:
+            n.wait_serving()
+            m = Modern(n.http, ALL_INPUT, telemetry=VERSION)
+            assert text_of(consent(m)) == "hi"
+            yield n, collector
+
+
+def test_a_gated_call_without_a_report_is_32024_naming_the_version(versioned):
+    n, _ = versioned
+    for transport in TRANSPORTS:
+        m = Modern(n.for_transport(transport), ALL_INPUT, telemetry=None)
+        r = m.call_raw("plain_tool", {"text": "hi"})
+        assert (r.code, r.error["message"]) == (-32024, "telemetry report required"), (transport, r.message)
+        assert r.error["data"] == {"version": VERSION} and r.status in (None, 428), (transport, r.status)
+        assert r.result is None, "nothing was dispatched"
+        assert m.request("tools/list")["tools"], "lists are not gated"
+        assert m.discover()["_meta"][TELEMETRY_META]["version"] == VERSION, "discover names the version"
+    time.sleep(0.3)
+    assert lines(n, "telemetry_required"), "the refusal is logged with its reason"
+
+
+def test_a_stale_version_is_32025_and_nothing_is_forwarded(versioned):
+    n, collector = versioned
+    for transport in TRANSPORTS:
+        m = Modern(n.for_transport(transport), ALL_INPUT, telemetry="000000000000")
+        r = m.call_raw("plain_tool", {"text": "hi"})
+        assert (r.code, r.error["message"]) == (-32025, "telemetry config changed: sign in again"), r.message
+        assert r.error["data"] == {"version": VERSION} and r.status in (None, 428), r.status
+        events = [telemetry_event(kind="llm", name="stale-model", reasoning="should never be exported")]
+        r = m.send(
+            m.body(
+                "tools/call",
+                {
+                    "name": "plain_tool",
+                    "arguments": {"text": "x"},
+                    "_meta": {TELEMETRY_META: telemetry_report("000000000000", events)},
+                },
+            )
+        )
+        assert r.code == -32025
+    time.sleep(1.5)  # past an export batch
+    assert "stale-model" not in collector.raw(), "a stale report was forwarded"
+    assert lines(n, "telemetry_stale")
+
+
+def test_a_legacy_body_with_the_report_is_served_and_without_it_refused(versioned):
+    n, _ = versioned
+    for transport in TRANSPORTS:
+        c = n.for_transport(transport)
+        c.initialize()
+        with pytest.raises(JsonRpcError) as e:
+            c.call_tool("plain_tool", {"text": "old"})
+        assert e.value.code == -32003 and "requires telemetry; use a client that reports it" in e.value.message
+        c.telemetry = VERSION
+        assert text_of(c.call_tool("plain_tool", {"text": "old"})) == "old", transport
+        c.telemetry = "000000000000"
+        with pytest.raises(JsonRpcError) as e:
+            c.call_tool("plain_tool", {"text": "old"})
+        assert e.value.code == -32025, "a stale version on a legacy body is -32025 too"
+
+
+def test_a_malformed_report_is_32602(versioned):
+    n, _ = versioned
+    m = Modern(n.http, ALL_INPUT, telemetry=None)
+    bad = {
+        "not an object": "x",
+        "version": {"seq": 1, "events": []},
+        "seq": {"version": VERSION, "events": []},
+        "events": {"version": VERSION, "seq": 1},
+        "events[0].kind": {"version": VERSION, "seq": 1, "events": [telemetry_event(kind="weird")]},
+        "more than 200 events": {"version": VERSION, "seq": 1, "events": [telemetry_event()] * 201},
+    }
+    for what, report in bad.items():
+        r = m.call_raw("plain_tool", {"text": "hi"}, _meta={TELEMETRY_META: report})
+        assert r.code == -32602 and r.error["message"] == f"invalid telemetry report: {what}", (what, r.message)
+
+
+def test_the_events_become_client_spans_under_the_call(versioned):
+    n, collector = versioned
+    events = [
+        telemetry_event(kind="llm", name="test-model", ms=42, ok=True, reasoning="the user asked for hi"),
+        telemetry_event(kind="tool", name="local_grep", ms=7, ok=False),
+    ]
+    m = Modern(n.http, ALL_INPUT, telemetry=None)
+    done = m.call("plain_tool", {"text": "hi"}, _meta={TELEMETRY_META: telemetry_report(VERSION, events, seq=9)})
+    assert text_of(done) == "hi"
+    clients = collector.wait_spans(lambda s: s["name"].startswith("client "), n=2)
+    by_name = {s["name"]: s for s in clients}
+    assert set(by_name) >= {"client llm test-model", "client tool local_grep"}, sorted(by_name)
+    llm = by_name["client llm test-model"]
+    server = collector.wait_spans(lambda s: s["spanId"] == llm["parentSpanId"])[0]  # under the call's own span
+    assert server["name"] == "mcp tools/call" and server["attrs"].get("mcp.name") == "plain_tool", server["name"]
+    assert llm["traceId"] == server["traceId"]
+    assert llm.get("kind") in (3, "SPAN_KIND_CLIENT"), llm.get("kind")
+    a = llm["attrs"]
+    assert a["ramen.reasoning"] == "the user asked for hi" and a["ramen.event.kind"] == "llm", a
+    assert str(a["ramen.event.seq"]) == "9" and a["ramen.group"] == "demo" and a["ramen.zone"] == "local", a
+    assert a.get("ramen.client.ip") and a.get("ramen.user") and a.get("ramen.worker") and a.get("ramen.transport"), a
+    assert int(llm["endTimeUnixNano"]) - int(llm["startTimeUnixNano"]) == 42_000_000, "duration = ms"
+    assert by_name["client tool local_grep"].get("status", {}).get("code") in (2, "STATUS_CODE_ERROR"), "ok: false"
+    assert "the user asked for hi" not in n.log.read_text(), "reasoning never reaches the access log"
+    points = collector.wait_points(
+        "ramen.client.events", lambda p: p["attrs"].get("ramen.event.kind") == "llm", timeout=75
+    )
+    assert points and points[-1]["value"] >= 1
+
+
+def test_telemetry_report_between_calls(versioned):
+    n, collector = versioned
+    for transport in TRANSPORTS:
+        m = Modern(n.for_transport(transport), ALL_INPUT)
+        events = [telemetry_event(kind="other", name=f"between-{transport}", ms=1)]
+        got = m.request("telemetry/report", telemetry_report(VERSION, events))
+        assert strip_envelope(got) == {"accepted": 1, "version": VERSION}, got
+        r = m.raw("telemetry/report", telemetry_report("000000000000", events))
+        assert r.code == -32025, r.message
+        assert n.for_transport(transport).outcome(m.body("telemetry/report", telemetry_report(VERSION)), key=None) == (
+            "UNAUTHENTICATED"
+        )
+    collector.wait_spans(lambda s: s["name"] == "client other between-http")
+    collector.wait_spans(lambda s: s["name"] == "client other between-grpc")

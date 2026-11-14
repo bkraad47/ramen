@@ -228,6 +228,40 @@ async def test_sleep_waits_for_the_activator_before_touching_the_workers(zone):
     assert replicas(k8s)["worker"] == 2
 
 
+async def test_sleep_waits_for_the_activator_in_the_services_endpoints(zone):
+    """P1 (1.0.0a): Ready is not enough — until kube-proxy lists the activator behind Service/worker, a call goes to a
+    terminating-but-serving worker, which never asks for the wake. The workers scale down only after it is listed."""
+    _, cloud, k8s = zone
+    await cloud.attach_zone("demo", "a", SPEC)
+    k8s.endpoint_lag = 3
+    k8s.calls.clear()
+    await cloud.sleep_zone("demo", "a")
+    assert replicas(k8s)["worker"] == 0 and k8s.endpoint_lag == 0
+    reads = [i for i, c in enumerate(k8s.calls) if c[0] == "endpoints"]
+    scaled = k8s.calls.index(("patch", "Deployment", NS, "worker"))
+    assert len(reads) >= 4 and reads[-1] < scaled
+
+
+async def test_sleep_fails_when_the_activator_never_reaches_the_endpoints(zone):
+    _, cloud, k8s = zone
+    await cloud.attach_zone("demo", "a", SPEC)
+    k8s.endpoint_lag = 10**6
+    with pytest.raises(ApiError) as e:
+        await cloud.sleep_zone("demo", "a")
+    assert "worker-activator" in e.value.detail and "Endpoints" in e.value.detail
+    assert replicas(k8s)["worker"] == 2
+
+
+async def test_sleep_still_works_when_the_zone_role_cannot_read_endpoints(zone, caplog):
+    """A console whose zone RoleBinding predates 1.0.0a: the wait is skipped with a warning, not refused."""
+    _, cloud, k8s = zone
+    await cloud.attach_zone("demo", "a", SPEC)
+    k8s.endpoints_forbidden = True
+    await cloud.sleep_zone("demo", "a")
+    assert replicas(k8s)["worker"] == 0
+    assert any("cannot read Endpoints" in r.getMessage() for r in caplog.records)
+
+
 async def test_sleep_and_wake_refuse_a_zone_that_is_not_deployed(zone):
     _, cloud, _ = zone
     for call in (cloud.sleep_zone("demo", "a"), cloud.wake_zone("demo", "a", 1, 0)):

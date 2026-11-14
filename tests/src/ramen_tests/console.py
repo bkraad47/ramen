@@ -15,8 +15,10 @@ ROUTES = {
     "user_password": "/api/v1/users/{id}/password",  # POST {password} ("me" = self)
     "groups": "/api/v1/groups",  # POST {name,repo_url,ref} → 201
     "group": "/api/v1/groups/{group}",
-    "zones": "/api/v1/zones",  # POST {name,provider,region} → 201 (super admin)
+    "zones": "/api/v1/zones",  # POST {name,provider,region,groups?} → 201 (super admin)
     "zone": "/api/v1/zones/{zone}",
+    "zone_groups": "/api/v1/zones/{zone}/groups",  # PUT {groups:[...]} (super admin; §26.1)
+    "group_zones": "/api/v1/groups/{group}/zones",  # GET → {zones:[...]} (viewers of the group; §26.1)
     "environments": "/api/v1/groups/{group}/environments",  # POST {name,ref,zones:[...]} → 201
     "environment": "/api/v1/groups/{group}/environments/{env}",
     "environments_all": "/api/v1/environments",  # ?group=
@@ -153,12 +155,29 @@ class Console:
     def create_group(self, name, repo_url, ref="main"):
         return self.post("groups", {"name": name, "repo_url": repo_url, "ref": ref})
 
-    def create_zone(self, name, provider=None, region=None):
+    def create_zone(self, name, provider=None, region=None, groups=None):
         provider = provider or env("RAMEN_ZONE_PROVIDER", "local")
         region = region or env("RAMEN_ZONE_REGION", "local")
-        return self.post("zones", {"name": name, "provider": provider, "region": region})
+        body = {"name": name, "provider": provider, "region": region}
+        if groups is not None:
+            body["groups"] = list(groups)
+        return self.post("zones", body)
 
-    def create_environment(self, group, name, zones, ref="main"):
+    def bind_zone(self, zone, group) -> httpx.Response | None:
+        """§26.1: add `group` to the zone's groups (super admin). None when it already is; the refusal when the
+        caller may not (a group admin's environment on an unbound zone is then the 403 the contract promises)."""
+        r = self.get("zone", zone=zone)
+        if r.status_code != 200:
+            return r
+        groups = list(r.json().get("groups") or [])
+        if group in groups:
+            return None
+        return self.put("zone_groups", {"groups": [*groups, group]}, zone=zone)
+
+    def create_environment(self, group, name, zones, ref="main", bind=True):
+        if bind:  # an environment may only name the group's zones (§26.1); binding is idempotent
+            for z in zones:
+                self.bind_zone(z, group)
         r = self.post("environments", {"name": name, "ref": ref, "zones": list(zones)}, group=group)
         # Attaching a zone to a *new* group creates that group's cloud identity (CONTRACTS §7). With RAMEN_NO_CLOUD=iam
         # (kind) there is none to create, and only the zones pre-annotated in deploy/kind/zones.yaml can be attached.

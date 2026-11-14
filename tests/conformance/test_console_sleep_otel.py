@@ -352,6 +352,8 @@ def test_the_token_answer_carries_telemetry_when_enabled(otel_on):
         "otlp_endpoint": "https://otel.example:4318",
         "headers": {"x-team": CLIENT_HEADER},
         "resource_attributes": {"ramen.group": "demo", "ramen.zone": "local"},
+        "version": con.admin.get("config_otel").json()["telemetry_version"],  # §26.3
+        "required": False,
     }, tok.get("telemetry")
     assert OWN_HEADER not in json.dumps(tok), "never Ramen's own headers"
     again = con.refresh(tok["refresh_token"], cid)
@@ -526,7 +528,7 @@ def test_a_node_serves_the_tel_token_without_asking_and_asks_the_one_without(ote
     with LocalNode(bucket=E.FIXTURES / "mrtr_group", env=env) as n:
         n.wait_serving()
         for transport in ("grpc", "http"):
-            accepted = Modern(n.for_transport(transport), {}, key=with_tel)
+            accepted = Modern(n.for_transport(transport), {}, key=with_tel, telemetry="")  # §26.3: reports too
             assert text_of(accepted.call("plain_tool", {"text": "tel"})) == "tel", "tel: true is never prompted"
             asked = Modern(n.for_transport(transport), ALL_INPUT, key=without).call("plain_tool", {"text": "x"})
             assert asked["resultType"] == "input_required", asked
@@ -632,6 +634,39 @@ def test_after_a_deploy_the_worker_asks_for_consent_when_the_group_requires_it(w
     con.admin.wait_job(con.admin.deploy("demo", "dev").json()["id"], timeout=300)
     done = Modern(node.http, {}, key=key).call("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
     assert done["resultType"] == "complete", "the requirement is lifted by the next deploy"
+
+
+def test_saving_the_telemetry_config_pushes_the_version_to_the_worker_without_a_deploy(wired):
+    """§26.3: `telemetry_version` is public; a save pushes the new config to every deployed zone (`pushed`) and the
+    worker tells it on `server/discover` without a deploy; the token answer carries `version` and `required`."""
+    con, node, _, key = wired
+    m = Modern(node.http, ALL_INPUT, key=key)
+    r = con.admin.put("config_otel", {"enabled": True, "endpoint": "http://otel.example:4318", "client_headers": {}})
+    assert r.status_code == 200 and r.json()["pushed"] == {"demo/local": "ok"}, r.text
+    before = con.admin.get("config_otel").json()
+    v0 = before["telemetry_version"]
+    assert len(v0) == 12 and int(v0, 16) >= 0, v0
+    deadline = time.monotonic() + 30
+    while m.discover()["_meta"].get("io.ramen/telemetry", {}).get("version") != v0:
+        assert time.monotonic() < deadline, "the worker was not told the version (telemetry may have been off)"
+        time.sleep(0.5)
+    r = con.admin.put(
+        "config_otel", {"enabled": True, "endpoint": before["endpoint"], "client_headers": {"x-push": "1"}}
+    )
+    assert r.status_code == 200, r.text
+    after = r.json()
+    assert after["telemetry_version"] != v0 and after["pushed"] == {"demo/local": "ok"}, after
+    deadline = time.monotonic() + 30
+    while m.discover()["_meta"]["io.ramen/telemetry"]["version"] != after["telemetry_version"]:
+        assert time.monotonic() < deadline, "the worker was not told the new version"
+        time.sleep(0.5)
+    told = con.mint(con.register_client())["telemetry"]
+    assert told["version"] == after["telemetry_version"] and told["required"] is False, told
+    rows = audit(con, "telemetry.push")
+    mine = [e for e in rows if f"version:{after['telemetry_version']}" in e.get("tags", [])]
+    assert mine and mine[0].get("ok") is True and "demo/local:ok" in mine[0]["tags"], rows[:2]
+    back = con.admin.put("config_otel", {"enabled": True, "endpoint": before["endpoint"], "client_headers": {}})
+    assert back.json()["telemetry_version"] == v0, back.text
 
 
 def test_a_deploy_without_telemetry_hands_the_workers_nothing(otel_off):

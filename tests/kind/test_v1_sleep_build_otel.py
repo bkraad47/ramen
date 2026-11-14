@@ -27,8 +27,9 @@ import pytest
 
 from ramen_tests import env as E
 from ramen_tests import kube
+from ramen_tests import telemetry_checks as T
 from ramen_tests.localconsole import REDIRECT, pkce
-from ramen_tests.mcp_client import HttpNode, JsonRpcError, Node, text_of
+from ramen_tests.mcp_client import TELEMETRY_META, HttpNode, JsonRpcError, Node, text_of
 from ramen_tests.modern import ALL_INPUT, WITH_TASKS, Modern
 from ramen_tests.tokens import claims_of
 
@@ -58,6 +59,7 @@ REQUIREMENTS = "# the kind build proof: one small pure-Python package\nsix==1.17
 OTLP = "http://jaeger.ramen-system:4318"
 CONSENT = "ramen_telemetry_consent"
 ACCEPT = {CONSENT: {"action": "accept", "content": {"accept": True}}}
+TELEMETRY = {"version": None}  # §26.3: the config version every gated call reports, set once telemetry is on
 SLEEP_AFTER = 60
 WAKE_TIMEOUT = 90  # RAMEN_WAKE_TIMEOUT_SECS default (§24.1)
 PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
@@ -180,7 +182,8 @@ def v1(admin, stack, kube_ready, group, env_name, tmp_path_factory):
     before_group = admin.get("group", group=group).json()
     before_sched = admin.get("config_scheduler").json()
     serve_repo(tmp_path_factory.mktemp("gitrepo"))
-    put_ok(admin, "config_otel", {"enabled": True, "endpoint": OTLP})
+    otel = put_ok(admin, "config_otel", {"enabled": True, "endpoint": OTLP})
+    TELEMETRY["version"] = otel["telemetry_version"]
     put_ok(admin, "group", {"repo_url": REPO_URL, "ref": "main"}, group=group)
     put_ok(admin, "group", {"build_image": True}, group=group)
     r = admin.http.put(  # base_url and the csrf hook are the client's own
@@ -227,17 +230,18 @@ def edge(zone_targets, zone: str) -> str:
 
 
 def http_node(zone_targets, zone, key, group, timeout: float = 30) -> HttpNode:
-    return HttpNode(E.node_http_url(edge(zone_targets, zone)), key, group=group, zone=zone, timeout=timeout)
+    h = HttpNode(E.node_http_url(edge(zone_targets, zone)), key, group=group, zone=zone, timeout=timeout)
+    h.telemetry = TELEMETRY["version"]  # §26.3: every gated call reports
+    return h
 
 
-def call(m: Modern, tool: str, arguments: dict | None = None, **kw) -> dict:
-    """`tools/call`, accepting the telemetry notice when a pod that has not seen this key's consent asks for it (the
-    kind stack has no scope Redis: a consent is remembered per pod)."""
-    arguments = arguments or {}
-    first = m.call(tool, arguments, **kw)
-    if first.get("resultType") == "input_required" and CONSENT in first.get("inputRequests", {}):
-        return m.call(tool, arguments, inputResponses=ACCEPT, requestState=first["requestState"], **kw)
-    return first
+def grpc_node(zone_targets, zone, key, group, **kw) -> Node:
+    n = Node(edge(zone_targets, zone), key, group=group, zone=zone, **kw)
+    n.telemetry = TELEMETRY["version"]
+    return n
+
+
+call = T.consenting  # `tools/call`, accepting the telemetry notice when the answering pod has no record of the caller
 
 
 def worker_pods(ns: str) -> list[dict]:
@@ -284,13 +288,18 @@ def audited(admin, action: str, zone: str, trigger: str, since: float) -> list[d
 # --- §24.2 an image built on deploy -----------------------------------------------------------------------------------
 def test_the_deploy_built_the_groups_image_and_recorded_it(admin, v1, group):
     log = "\n".join(v1["job"].get("log", []))
-    assert "image: building b-" in log and "image: built " in log, log[-1500:]
-    new = [i for i in built(admin, group) if i["id"] not in {x["id"] for x in v1["images_before"]}]
-    ok = [i for i in new if i.get("status") == "ok"]
-    assert len(ok) == 1, f"one build for this deploy (both zones share it): {new}"
-    image = ok[0]
     base, registry = console_env("RAMEN_IMAGE_WORKER"), console_env("RAMEN_BUILD_REGISTRY")
     want = hashlib.sha256(base.encode() + b"\n" + REQUIREMENTS.encode()).hexdigest()[:16]
+    known = [i for i in v1["images_before"] if i["tag"] == f"b-{group}-{want}" and i.get("status") == "ok"]
+    if known:  # the module ran on this cluster before: the same requirements mean nothing is built, and the log says so
+        assert "already built" in log and "image: building" not in log, log[-1500:]
+        image = known[0]
+    else:
+        assert "image: building b-" in log and "image: built " in log, log[-1500:]
+        new = [i for i in built(admin, group) if i["id"] not in {x["id"] for x in v1["images_before"]}]
+        ok = [i for i in new if i.get("status") == "ok"]
+        assert len(ok) == 1, f"one build for this deploy (both zones share it): {new}"
+        image = ok[0]
     assert image["tag"] == f"b-{group}-{want}", "tag = b-<group>-<sha256(base image ref + \\n + requirements.txt)[:16]>"
     assert image["ref"] == f"{registry}/worker:{image['tag']}", (image["ref"], registry)
     v1["image"] = image
@@ -430,7 +439,7 @@ def test_consent_by_prompt_works_through_the_edge(v1, zone_targets, group, trans
     if transport == "http":
         client = http_node(zone_targets, zone, fresh_key, group)
     else:
-        client = Node(edge(zone_targets, zone), fresh_key, group=group, zone=zone)
+        client = grpc_node(zone_targets, zone, fresh_key, group)
     with client:
         m = Modern(client, ALL_INPUT)
         first = m.call("plain_tool", {"text": f"consent-{transport}"})
@@ -521,6 +530,162 @@ def test_consent_by_token_is_never_prompted(v1, admin, console_url, zone_targets
         assert text_of(Modern(h, {}).call("plain_tool", {"text": "signed in"})) == "signed in"
         h.initialize()
         assert text_of(h.call_tool("plain_tool", {"text": "legacy"})) == "legacy"
+
+
+# --- §26.3 the report on every call, through the edge ----------------------------------------------------------------
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_gated_call_needs_the_current_report(v1, zone_targets, group, transport):
+    zone = v1["zones"][0]
+    client = (
+        http_node(zone_targets, zone, v1["key"], group)
+        if transport == "http"
+        else grpc_node(zone_targets, zone, v1["key"], group)
+    )
+    with client:
+        m = Modern(client, ALL_INPUT)
+        T.check_gate(m, TELEMETRY["version"], "plain_tool", {"text": "gate"})
+        T.check_report_method(m, TELEMETRY["version"])
+
+
+def test_a_legacy_body_carrying_the_report_is_served(v1, zone_targets, group):
+    """The bridge in front of a 2025-06-18 host: the report is what matters, not the era."""
+    with http_node(zone_targets, v1["zones"][0], v1["key"], group) as h:
+        call(Modern(h, ALL_INPUT), "plain_tool", {"text": "consented"})
+        h.initialize()
+        assert text_of(h.call_tool("plain_tool", {"text": "legacy"})) == "legacy"
+        h.telemetry = None
+        with pytest.raises(JsonRpcError) as e:
+            h.call_tool("plain_tool", {"text": "legacy"})
+        assert e.value.code == -32003 and "requires telemetry; use a client that reports it" in e.value.message
+
+
+def test_the_client_events_are_client_spans_in_jaeger(v1, jaeger, zone_targets, group):
+    zone, reasoning = v1["zones"][0], "the user asked for the version of six"
+    with http_node(zone_targets, zone, v1["key"], group) as h:
+        trace_id, _ = T.call_with_events(
+            Modern(h, ALL_INPUT), "plain_tool", {"text": "spans"}, TELEMETRY["version"], reasoning
+        )
+    found = T.jaeger_trace(jaeger, trace_id)
+    T.check_client_spans(found, group, zone, reasoning)
+    assert "spans" not in json.dumps([s["tags"] for s in found["spans"]]), "an argument in a span"
+
+
+def told_version(zone_targets, zone, key, group) -> str | None:
+    """What `server/discover` names as the telemetry version, on a fresh connection each time: a NodePort pins a
+    keep-alive connection to one pod, and the old pod answers while it drains (20 s) after the push."""
+    try:
+        with http_node(zone_targets, zone, key, group, timeout=10) as h:
+            told = Modern(h).discover()["_meta"].get(TELEMETRY_META) or {}
+            return told.get("version") if isinstance(told, dict) else None
+    except Exception:  # noqa: BLE001 - the pod may be mid-restart
+        return None
+
+
+def test_saving_the_telemetry_config_pushes_the_version_to_every_zone_without_a_deploy(admin, v1, zone_targets, group):
+    before = TELEMETRY["version"]
+    zone = v1["zones"][0]
+    r = admin.put("config_otel", {"enabled": True, "endpoint": OTLP, "client_headers": {"x-ramen-kind": "push"}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    after = body["telemetry_version"]
+    assert after != before and body["pushed"] == {f"{group}/{z}": "ok" for z in v1["zones"]}, body
+    rows = [e for e in audit_entries(admin) if e.get("action") == "telemetry.push"]
+    assert rows and rows[0].get("ok") is True and f"version:{after}" in rows[0].get("tags", []), rows[:1]
+    try:
+        for z in v1["zones"]:  # on Kubernetes the push rewrites the Secret and rolls the stable track
+            kube.kubectl(
+                "-n", kube.ns_name(group, z), "rollout", "status", "deployment/worker", "--timeout=300s", timeout=320
+            )
+        wait_for(lambda: told_version(zone_targets, zone, v1["key"], group) == after, 300, f"discover names {after}")
+        with http_node(zone_targets, zone, v1["key"], group) as h:
+            m = Modern(h, ALL_INPUT)
+            r = T.gated_without_report(m, "plain_tool", {"text": "old"}, before)
+            assert r.code == -32025 and r.error["data"] == {"version": after}, r.message
+            assert text_of(T.gated_without_report(m, "plain_tool", {"text": "new"}, after).result) == "new"
+    finally:
+        r = admin.put("config_otel", {"enabled": True, "endpoint": OTLP, "client_headers": {}})
+        assert r.status_code == 200 and r.json()["telemetry_version"] == before, r.text
+        for z in v1["zones"]:
+            kube.kubectl(
+                "-n", kube.ns_name(group, z), "rollout", "status", "deployment/worker", "--timeout=300s", timeout=320
+            )
+        wait_for(lambda: told_version(zone_targets, zone, v1["key"], group) == before, 300, f"discover names {before}")
+
+
+# --- §26.1 zones bound to groups, §26.2 the job in the store ----------------------------------------------------------
+def test_an_environment_may_only_name_the_groups_zones(admin, v1, console_url, group, env_name):
+    r = admin.get("group_zones", group=group)
+    assert r.status_code == 200 and set(r.json()) == {"zones"} and set(r.json()["zones"]) >= set(v1["zones"]), r.text
+    assert admin.put("group_zones", {"zones": []}, group=group).status_code in (404, 405), "PUT on it is gone"
+    unbound = f"unb{secrets.token_hex(2)}"
+    assert admin.create_zone(unbound, provider="gcp", region="kind-a").status_code == 201
+    pw = secrets.token_hex(8) + "Aa1!"
+    email = f"gadmin-{secrets.token_hex(3)}@ramen.test"
+    r = admin.http.post(
+        f"{console_url.rstrip('/')}/api/v1/users",
+        json={"email": email, "password": pw, "memberships": {group: "group_admin"}},
+    )
+    assert r.status_code == 201, r.text
+    uid = r.json()["id"]
+    gadmin = type(admin)(console_url)
+    assert gadmin.login(email, pw).status_code in (200, 303)
+    try:
+        for who in (gadmin, admin):  # for every role: a super admin binds first
+            r = who.create_environment(group, f"e{unbound}", [unbound], bind=False)
+            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+            r = who.put("environment", {"zones": [*v1["zones"], unbound]}, group=group, env=env_name)
+            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        assert admin.get("workers", group=group, zone=unbound).status_code == 404, "no worker for an unbound pair"
+        assert gadmin.put("zone_groups", {"groups": [group]}, zone=unbound).status_code == 403
+        assert admin.put("zone_groups", {"groups": ["no-such-group"]}, zone=unbound).status_code == 422
+        assert admin.put("zone_groups", {"groups": [group]}, zone=unbound).status_code == 200
+        assert unbound in admin.get("group_zones", group=group).json()["zones"]
+        assert admin.get("workers", group=group, zone=unbound).status_code == 200, "binding created the worker record"
+        assert gadmin.get("group_zones", group=group).status_code == 200, "viewers of the group read it"
+        r = admin.put("zone_groups", {"groups": []}, zone=v1["zones"][0])
+        assert r.status_code == 409 and env_name in r.text and v1["zones"][0] in r.text, (
+            f"{r.status_code} {r.text[:300]}"
+        )
+        r = admin.put("zone_groups", {"groups": []}, zone=unbound)
+        if r.status_code == 502 and E.no_cloud("iam") and "credential" in r.text.lower():
+            pytest.skip(f"no cloud IAM here: detaching a zone from a group needs one ({r.text[:120]})")
+        assert r.status_code == 200, f"{r.status_code} {r.text[:300]}"
+        assert admin.get("workers", group=group, zone=unbound).status_code == 404, "unbinding detached it"
+        acts = [
+            e
+            for e in audit_entries(admin)
+            if e.get("action") == "zone.groups" and f"zone:{unbound}" in e.get("tags", [])
+        ]
+        assert acts and any(f"group:{group}" in e.get("tags", []) for e in acts), acts[:2]
+    finally:
+        gadmin.close()
+        admin.delete("user", id=uid)
+        admin.delete("zone", zone=unbound)
+
+
+def test_the_deploy_job_is_in_the_store(admin, v1, group, env_name):
+    job = admin.get("job", id=v1["job"]["id"])
+    assert job.status_code == 200, job.text
+    j = job.json()
+    assert j["id"] == v1["job"]["id"] and j["kind"] == "deploy" and j["status"] == "ok", j
+    assert j["target"] == f"{group}/{env_name}" and j["started"] and j["finished"] and j["log"], sorted(j)
+
+
+def test_the_deploy_job_survives_a_console_restart(admin, v1):
+    """kind only: the console pod is restarted and the job read again. The kind chart runs `RAMEN_STORE=memory`
+    (deploy/kind/values.yaml), in which case nothing survives a restart and this skips with the reason."""
+    env = {
+        e["name"]: e.get("value")
+        for e in kube.deployment("ramen-system", "console")["spec"]["template"]["spec"]["containers"][0].get("env", [])
+    }
+    if env.get("RAMEN_STORE", "memory") == "memory":
+        pytest.skip("the kind console runs RAMEN_STORE=memory: no store survives a pod restart (§26.2 needs one)")
+    kube.write("-n", "ramen-system", "rollout", "restart", "deployment/console")
+    kube.write("-n", "ramen-system", "rollout", "status", "deployment/console", "--timeout=300s", timeout=320)
+    r = wait_for(
+        lambda: (x := admin.get("job", id=v1["job"]["id"])).status_code == 200 and x, 120, "the job after the restart"
+    )
+    assert r.json()["status"] == "ok" and r.json()["log"]
 
 
 # --- second deploy: consent off, nothing built ------------------------------------------------------------------------
@@ -664,7 +829,7 @@ def test_sleep_by_hand_and_wake_by_a_grpc_call(admin, sleepy, zone_targets, grou
     wait_for(lambda: not worker_pods(ns), 120, "the worker pods are gone")
     assert audited(admin, "workers.sleep", zone, "manual", began)
     t0 = time.monotonic()
-    with Node(edge(zone_targets, zone), sleepy["key"], group=group, zone=zone, timeout=WAKE_TIMEOUT + 30) as n:
+    with grpc_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as n:
         try:
             result = Modern(n).call("plain_tool", {"text": "grpc morning"}, timeout=WAKE_TIMEOUT + 30)
         except grpc.RpcError as e:

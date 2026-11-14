@@ -168,3 +168,22 @@ def test_a_known_secret_never_reaches_a_log_line_or_a_deploy_log(vault_app, capl
         assert log == ["cloning https://***@github.com/o/r and ***"]
         assert scrub("redis://default:pw@host:6379/0") == "redis://***@host:6379/0"
     assert SENTINEL not in caplog.text and "smtp said ***" in caplog.text
+
+
+def test_scrubbing_keeps_the_args_uvicorns_access_formatter_unpacks(vault_app):
+    """The access formatter does `(addr, method, path, version, status) = record.args`: the filter scrubs the
+    strings in place instead of collapsing them (which printed a TypeError stack on every access line on kind)."""
+    from ramen_console.security import _ScrubSecrets, remember_secret
+
+    remember_secret(SENTINEL)
+    args = ("10.0.0.1:1", "GET", f"/login?token={SENTINEL}", "1.1", 200)
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d', args, None)
+    assert _ScrubSecrets().filter(rec)
+    assert len(rec.args) == 5 and rec.args[4] == 200 and SENTINEL not in rec.getMessage()
+    assert rec.getMessage() == '10.0.0.1:1 - "GET /login?token=*** HTTP/1.1" 200'
+    plain = logging.LogRecord("x", logging.INFO, "", 0, "pw is " + SENTINEL, (), None)
+    _ScrubSecrets().filter(plain)
+    assert plain.getMessage() == "pw is ***"
+    named = logging.LogRecord("x", logging.INFO, "", 0, "pw %(pw)s", ({"pw": SENTINEL},), None)
+    _ScrubSecrets().filter(named)
+    assert named.getMessage() == "pw ***"

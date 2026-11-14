@@ -11,7 +11,13 @@ The bridge checks need RAMEN_BRIDGE_CMD (or `ramen-mcp-bridge` on PATH). Run aft
 registry (asserted through the console), spans in the in-cluster Jaeger when `RAMEN_JAEGER_URL` points at its query
 API (skipped otherwise; `RAMEN_OTEL_ENDPOINT` overrides the OTLP endpoint set on the console), consent by prompt with a
 group key and by token with the analyst, the refusal for a 2025-06-18 client, and a zone that sleeps after 60 idle
-seconds and is woken by a call through the real load balancer. Everything it changes is put back."""
+seconds and is woken by a call through the real load balancer. Everything it changes is put back.
+
+1.0.0a (§26), in the same block: every gated call carries the client's telemetry report (missing → 428/-32024, stale
+→ -32025, `telemetry/report`), the client events as CLIENT spans in Jaeger with user/ip/reasoning, the config push
+on `PUT /config/otel` seen by `server/discover` without a deploy, zones bound to groups (an unbound zone → 403,
+`GET /groups/{g}/zones`), and the deploy job in the store (readable after a console restart when RAMEN_KUBE_CONTEXT
+names the cluster; the cloud suites never touch kubectl otherwise)."""
 
 import json
 import re
@@ -24,9 +30,19 @@ import httpx
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests import telemetry_checks as T
 from ramen_tests.console import Console, items
 from ramen_tests.localconsole import REDIRECT, pkce
-from ramen_tests.mcp_client import HttpNode, JsonRpcError, Node, bridge_command, bridge_session, sdk_text, text_of
+from ramen_tests.mcp_client import (
+    TELEMETRY_META,
+    HttpNode,
+    JsonRpcError,
+    Node,
+    bridge_command,
+    bridge_session,
+    sdk_text,
+    text_of,
+)
 from ramen_tests.modern import ALL_INPUT, MODERN, SUB_ID, TASKS, WITH_TASKS, Modern, assert_envelope
 from ramen_tests.tokens import claims_of
 
@@ -358,12 +374,10 @@ CLOUD_IMAGE = re.compile(
 )
 
 
-def consenting(m: Modern, tool: str, arguments: dict | None = None, **kw) -> dict:
-    """`tools/call`, accepting the telemetry notice when the pod that answers has no record of this caller yet."""
-    first = m.call(tool, arguments or {}, **kw)
-    if first.get("resultType") == "input_required" and CONSENT in first.get("inputRequests", {}):
-        return m.call(tool, arguments or {}, inputResponses=ACCEPT, requestState=first["requestState"], **kw)
-    return first
+TEL = {"version": None}  # §26.3: the config version every gated call reports, set by `v24`
+consenting = (
+    T.consenting
+)  # `tools/call`, accepting the telemetry notice when the answering pod has no record of the caller
 
 
 def image_records(admin) -> list[dict]:
@@ -392,7 +406,9 @@ def zone_state(admin) -> str:
 
 
 def edge_client(key: str, timeout: float = 30) -> HttpNode:
-    return HttpNode.from_env(key, group=GROUP, zone=ZONE, timeout=timeout)
+    h = HttpNode.from_env(key, group=GROUP, zone=ZONE, timeout=timeout)
+    h.telemetry = TEL["version"]  # §26.3: every gated call reports
+    return h
 
 
 @pytest.fixture(scope="module")
@@ -402,6 +418,7 @@ def v24(admin, world, suffix):
     otel_before = ok(admin.get("config_otel")).json()
     if not otel_before.get("enabled"):
         ok(admin.put("config_otel", {"enabled": True, "endpoint": otel_before.get("endpoint") or OTLP_ENDPOINT}))
+    TEL["version"] = ok(admin.get("config_otel")).json()["telemetry_version"]
     r = admin.put("group", {"build_image": True}, group=GROUP)
     assert r.status_code == 200, f"build_image cannot be turned on here: {r.status_code} {r.text[:300]}"
     ok(admin.put("group", {"require_telemetry_consent": True}, group=GROUP))
@@ -558,6 +575,142 @@ def test_a_2025_06_18_client_with_a_key_is_refused_with_the_way_out(v24):
             "forbidden: this group requires telemetry consent; use a client that speaks MCP 2026-07-28 or sign in "
             "through OAuth"
         )
+
+
+# --- 1.0.0a: the report on every call, zones bound to groups, the job in the store (§26) -----------------------------
+def test_a_gated_call_needs_the_current_report_through_the_edge(v24):
+    with edge_client(v24["keys"]["sleep"]) as h:
+        m = Modern(h, ALL_INPUT)
+        T.check_gate(m, TEL["version"], CALC, {"var1": 1, "var2": 2, "func": "add"})
+        T.check_report_method(m, TEL["version"])
+    with Node.from_env(v24["keys"]["sleep"], group=GROUP, zone=ZONE) as n:  # the same gate on gRPC through the edge
+        n.telemetry = TEL["version"]
+        r = T.gated_without_report(Modern(n, ALL_INPUT), CALC, {"var1": 1, "var2": 2, "func": "add"}, None)
+        assert r.code == -32024 and r.error["data"] == {"version": TEL["version"]}, r.message
+
+
+def test_a_legacy_body_carrying_the_report_is_served(v24):
+    """What the bridge does in front of a 2025-06-18 host: the report is what matters, not the era."""
+    with edge_client(v24["keys"]["sleep"]) as h:
+        consenting(Modern(h, ALL_INPUT), CALC, {"var1": 1, "var2": 1, "func": "add"})
+        h.initialize()
+        assert float(text_of(h.call_tool(CALC, {"var1": 2, "var2": 3, "func": "add"}))) == 5
+        h.telemetry = None
+        with pytest.raises(JsonRpcError) as e:
+            h.call_tool(CALC, {"var1": 2, "var2": 3, "func": "add"})
+        assert e.value.code == -32003 and "requires telemetry; use a client that reports it" in e.value.message
+
+
+def test_the_client_events_are_client_spans_with_the_person_in_jaeger(v24, world, analyst_console):
+    jaeger = E.env("RAMEN_JAEGER_URL")
+    if not jaeger:
+        pytest.skip("RAMEN_JAEGER_URL not set (port-forward svc/jaeger 16686 in ramen-system)")
+    tokens = mint_as(analyst_console, world["client_id"], f"mcp:{GROUP}:{ZONE}", form={"telemetry_consent": "1"})
+    assert tokens["telemetry"]["version"] == TEL["version"] and tokens["telemetry"]["required"] is True, tokens[
+        "telemetry"
+    ]
+    reasoning = "the user asked for two plus two"
+    with edge_client(tokens["access_token"]) as h:
+        trace_id, _ = T.call_with_events(
+            Modern(h, {}), CALC, {"var1": 2, "var2": 2, "func": "add"}, TEL["version"], reasoning
+        )
+    found = T.jaeger_trace(jaeger, trace_id)
+    T.check_client_spans(found, GROUP, ZONE, reasoning, user=world["analyst"])
+    assert tokens["access_token"] not in json.dumps(found)
+
+
+def test_saving_the_telemetry_config_pushes_the_version_to_the_zone_without_a_deploy(admin, v24):
+    before, otel = TEL["version"], v24["otel"]
+    body = {"enabled": True, "endpoint": otel["endpoint"], "client_endpoint": otel.get("client_endpoint") or ""}
+    r = ok(admin.put("config_otel", {**body, "client_headers": {"x-ramen-test": "push"}})).json()
+    after = r["telemetry_version"]
+    assert after != before and r["pushed"].get(f"{GROUP}/{ZONE}") == "ok", r
+    try:
+        with edge_client(v24["keys"]["sleep"], timeout=60) as h:
+            m = Modern(h, ALL_INPUT)
+            # the push rolls the zone's stable track; through the edge the old pods answer until they are gone
+            poll(
+                lambda: m.discover()["_meta"][TELEMETRY_META]["version"] == after,
+                timeout=600,
+                every=10,
+                what="discover names the pushed version",
+            )
+            reply = T.gated_without_report(m, CALC, {"var1": 1, "var2": 1, "func": "add"}, before)
+            assert reply.code == -32025 and reply.error["data"] == {"version": after}, reply.message
+            assert (
+                float(text_of(T.gated_without_report(m, CALC, {"var1": 1, "var2": 1, "func": "add"}, after).result))
+                == 2
+            )
+    finally:
+        r = ok(admin.put("config_otel", {**body, "client_headers": {}})).json()
+        assert r["telemetry_version"] == before, r
+        with edge_client(v24["keys"]["sleep"], timeout=60) as h:
+            poll(
+                lambda: Modern(h).discover()["_meta"][TELEMETRY_META]["version"] == before,
+                timeout=600,
+                every=10,
+                what="the first version again",
+            )
+
+
+def test_an_environment_may_only_name_the_groups_zones(admin, world, suffix):
+    r = ok(admin.get("group_zones", group=GROUP)).json()
+    assert ZONE in r["zones"] and set(r) == {"zones"}, r
+    unbound = f"unb{suffix}"
+    ok(admin.create_zone(unbound), 201, 409)
+    pw, email = f"Rf-{uuid.uuid4().hex[:12]}-Aa1!", f"gadmin-{suffix}@ramen.local"
+    uid = ok(
+        admin.http.post(
+            f"{world['base']}/api/v1/users",
+            json={"email": email, "password": pw, "memberships": {GROUP: "group_admin"}},
+        ),
+        201,
+    ).json()["id"]
+    gadmin = Console(world["base"])
+    assert gadmin.login(email, pw).status_code in (200, 303)
+    try:
+        for who in (gadmin, admin):  # for every role: a super admin binds first
+            r = who.create_environment(GROUP, f"e{unbound}", [unbound], bind=False)
+            assert r.status_code == 403 and unbound in r.text, f"{r.status_code} {r.text[:300]}"
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404, "no worker for an unbound pair"
+        assert gadmin.put("zone_groups", {"groups": [GROUP]}, zone=unbound).status_code == 403
+        ok(admin.put("zone_groups", {"groups": [GROUP]}, zone=unbound))
+        assert unbound in ok(gadmin.get("group_zones", group=GROUP)).json()["zones"]
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 200, "binding created the worker record"
+        r = admin.put("zone_groups", {"groups": []}, zone=ZONE)
+        assert r.status_code == 409 and ENV in r.text and ZONE in r.text, f"{r.status_code} {r.text[:300]}"
+        ok(admin.put("zone_groups", {"groups": []}, zone=unbound))
+        assert admin.get("workers", group=GROUP, zone=unbound).status_code == 404, "unbinding detached it"
+    finally:
+        gadmin.close()
+        admin.delete("user", id=uid)
+        admin.delete("zone", zone=unbound)
+
+
+def test_the_deploy_job_is_in_the_store_and_survives_a_console_restart(admin, v24):
+    j = ok(admin.get("job", id=v24["job"]["id"])).json()
+    assert j["kind"] == "deploy" and j["target"] == f"{GROUP}/{ENV}" and j["status"] == "ok", j
+    assert j["started"] and j["finished"] and j["log"], sorted(j)
+    ctx = E.env("RAMEN_KUBE_CONTEXT")
+    if not ctx:
+        pytest.skip("RAMEN_KUBE_CONTEXT not set: the console pod is not restarted from here")
+    import subprocess
+
+    for args in (
+        ["rollout", "restart", "deployment/console"],
+        ["rollout", "status", "deployment/console", "--timeout=300s"],
+    ):
+        r = subprocess.run(
+            ["kubectl", "--context", ctx, "-n", "ramen-system", *args], capture_output=True, text=True, timeout=320
+        )  # noqa: S603, S607
+        assert r.returncode == 0, r.stderr[:300]
+    r = poll(
+        lambda: (x := admin.get("job", id=v24["job"]["id"])).status_code == 200 and x,
+        timeout=300,
+        every=5,
+        what="the job after the restart",
+    )
+    assert r.json()["status"] == "ok" and r.json()["log"]
 
 
 def test_the_zone_sleeps_on_idle_and_a_call_through_the_load_balancer_wakes_it(admin, v24):

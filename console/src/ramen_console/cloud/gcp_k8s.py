@@ -735,6 +735,27 @@ class Kube:
                 )
             time.sleep(self.poll)
 
+    def wait_endpoint(self, ns, service, selector, timeout=None) -> bool:
+        """True once a ready address of `Service/<service>` belongs to a pod matching `selector`, False on timeout.
+        §24.1: kube-proxy keeps routing to terminating-but-serving workers until the activator is in the Service's
+        endpoints, so a sleep that scales the workers to 0 before that sends calls to a draining worker, and
+        nothing asks for the wake (1.0.0a P1). A console whose zone role cannot read Endpoints raises (403)."""
+        deadline = time.monotonic() + (timeout or self.wait_secs)
+        while True:
+            ips = {(p.get("status") or {}).get("podIP") for p in self.pods(ns, selector)} - {None}
+            try:
+                ep = self.c.to_dict(self.c.core.read_namespaced_endpoints(service, ns)) or {}
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 404:
+                    raise
+                ep = {}
+            listed = {a.get("ip") for s in ep.get("subsets") or [] for a in s.get("addresses") or []}
+            if ips and ips & listed:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self.poll)
+
     def _stuck_pods(self, ns, name) -> str:
         """Why the rollout is stuck, from the pods themselves: a Pending pod's scheduler message, a waiting
         container's reason. The replica counts alone said "1/1 ready" while the new pod sat Unschedulable."""

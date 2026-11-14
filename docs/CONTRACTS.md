@@ -1037,8 +1037,9 @@ Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" 
   Lists, `server/discover` and `completion/complete` are not gated (MRTR is not allowed on them). The console's own
   calls (golden cases, package listing) present the worker admin key and skip the gate. Access-log reasons
   `consent_required`, `consent_declined`; a recorded consent logs `consent: "granted"`.
-- Chart: `otel.collector: none | jaeger` (default none) adds a Jaeger all-in-one (OTLP in, query API) to
-  `ramen-system` for trying it out and for the test runs; not for production.
+- Chart: `otel.collector: none | jaeger | phoenix` (default none) adds a Jaeger all-in-one (OTLP in, query API) or
+  Arize Phoenix (OTLP/HTTP + UI on 6006, OTLP/gRPC 4317) to `ramen-system` for trying it out and for the test runs;
+  not for production.
 
 ### 24.4 Verification
 Unit tests per component; kind: a zone sleeps on idle, a call through the edge wakes it and is answered, a deploy
@@ -1145,8 +1146,8 @@ Asked for by the user (D60–D63, 2026-11-14). Supersedes §25.
   since the last one; `-32025` → it signs in again (refresh grant, else the interactive flow) and retries once;
   `-32024` from a server it has no config for → it signs in, then retries. Not consenting at sign-in ends the flow
   as today (§24.3).
-- Chart: `otel.collector: jaeger` is the default for the test deploys (`cloud2.sh`); the Config page's Telemetry
-  section lists the Jaeger UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).
+- Chart: `otel.collector: jaeger` or `phoenix` is set for the test deploys (`cloud2.sh`); the Config page's
+  Telemetry section lists the trace UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).
 
 ## 27. v1.0.0b — environments across groups, zones attached to environments, one admin page (binding)
 Asked for by the user (`instructions/v1.0.0b.md`, 2026-11-14): *a group has many environments, an environment has

@@ -1,0 +1,46 @@
+{{- if eq (.Values.otel.collector | default "none") "phoenix" }}
+# §24.3: Arize Phoenix for trying telemetry out and for the test runs — SQLite on an emptyDir, no authentication.
+# OTLP/HTTP and the UI share port 6006 (POST /v1/traces), OTLP/gRPC is 4317. Not for production: point
+# Config → Telemetry at your own collector there. Deliberately no Ingress/HTTPRoute.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phoenix
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532 }
+      containers:
+        - name: phoenix
+          image: {{ .Values.otel.phoenix.image | quote }}
+          env:
+            - { name: PHOENIX_PORT, value: "6006" }
+            - { name: PHOENIX_GRPC_PORT, value: "4317" }
+            - { name: PHOENIX_WORKING_DIR, value: /data }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          ports:
+            - { name: http, containerPort: 6006 }
+            - { name: otlp-grpc, containerPort: 4317 }
+          readinessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }
+          resources: {{- toYaml .Values.otel.phoenix.resources | nindent 12 }}
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phoenix
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: http, port: 6006, targetPort: http }
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+{{- end }}

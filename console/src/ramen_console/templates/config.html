@@ -73,7 +73,7 @@
 <tr><th>Client endpoint</th><td>{% if otel.client_endpoint %}<code>{{ otel.client_endpoint }}</code>{% else %}<span class="muted">same as the endpoint</span>{% endif %}</td></tr>
 <tr><th>Headers agents send</th><td><span class="badge {{ 'ok' if otel.client_headers_set else '' }}">{{ 'set (hidden)' if otel.client_headers_set else 'not set' }}</span>{% if otel.client_headers_set %} <span class="muted">{{ otel.client_header_names|join(', ') }}</span>{% endif %}</td></tr>
 <tr><th>Config version</th><td><code>{{ otel.telemetry_version }}</code> <span class="muted">what clients report with (MCP 2026-07-28 <code>_meta["io.ramen/telemetry"]</code>); saving pushes the new config to every deployed zone, and a client on an older version signs in again.</span></td></tr>
-{% if otel_ui_url %}<tr><th>Jaeger UI</th><td><a href="{{ otel_ui_url }}">{{ otel_ui_url }}</a> <span class="muted">the chart's collector (<code>otel.collector: jaeger</code>)</span></td></tr>{% endif %}
+{% if otel_ui_url %}<tr><th>Trace UI</th><td><a href="{{ otel_ui_url }}">{{ otel_ui_url }}</a> <span class="muted">the chart's collector (<code>otel.collector</code>: Jaeger or Phoenix), reachable through a port-forward</span></td></tr>{% endif %}
 </table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-swap="none">
 <label>Endpoint (OTLP/HTTP base URL)<input name="endpoint" value="{{ otel.endpoint }}" placeholder="http://jaeger.ramen-system:4318"></label>

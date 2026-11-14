@@ -80,11 +80,15 @@ builder:
   image: ""                  # RAMEN_BUILDER_IMAGE; default: the console's pinned kaniko executor
   serviceAccount: ramen-builder   # the name the console's Jobs use; keep it
 
-# §24.3 OpenTelemetry. `jaeger` adds a Jaeger all-in-one (OTLP HTTP 4318 in, query API/UI 16686) to this namespace:
-# in-memory, no auth, no route from any edge — for trying telemetry out and for the test runs, NOT for production.
-# Point Config → Telemetry at http://jaeger.<namespace>:4318.
+# §24.3 OpenTelemetry. `jaeger` adds a Jaeger all-in-one (OTLP HTTP 4318 in, query API/UI 16686) to this namespace;
+# `phoenix` adds Arize Phoenix (OTLP HTTP and UI on 6006, OTLP gRPC 4317; SQLite on an emptyDir). Both: no auth, no
+# route from any edge — for trying telemetry out and for the test runs, NOT for production.
+# Point Config → Telemetry at http://jaeger.<namespace>:4318 or http://phoenix.<namespace>:6006.
 otel:
-  collector: none            # none | jaeger
+  collector: none            # none | jaeger | phoenix
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
     resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 512Mi } }
+  phoenix:
+    image: arizephoenix/phoenix:version-21.1.0-nonroot
+    resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 1Gi } }

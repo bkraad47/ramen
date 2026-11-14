@@ -32,7 +32,7 @@ def test_the_public_config_and_the_page_show_the_version_and_the_jaeger_ui(demo,
         | {"client_headers": ON["client_headers"]}
     )
     page = demo.get("/config").text
-    assert f"<code>{cfg['telemetry_version']}</code>" in page and "Jaeger UI" not in page
+    assert f"<code>{cfg['telemetry_version']}</code>" in page and "Trace UI" not in page
     monkeypatch.setenv("RAMEN_OTEL_UI_URL", "http://jaeger.example:16686")
     page = demo.get("/config").text
     assert 'href="http://jaeger.example:16686"' in page

@@ -343,5 +343,5 @@ async def config(request: Request, p: Principal = Depends(super_)):
         oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
         drift={"warn_pct": await drift.threshold(store)},
         otel=otel.public_config(await otel.get_config(store)),
-        otel_ui_url=os.environ.get("RAMEN_OTEL_UI_URL", "").strip(),  # §26.3: the chart's Jaeger UI
+        otel_ui_url=os.environ.get("RAMEN_OTEL_UI_URL", "").strip(),  # §26.3: the chart's trace UI (Jaeger or Phoenix)
     )

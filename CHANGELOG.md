@@ -57,6 +57,9 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
   with the environments that put each pair there; a group admin edits what is wholly their groups'. The group page
   keeps its Environments table (Deploy, Verbose, Delete) and loses the add-environment form. Existing zones learn
   their environments at start.
+- **Arize Phoenix as the chart's collector.** `otel.collector: phoenix` runs Phoenix next to the console (OTLP/HTTP and
+  UI on 6006, OTLP/gRPC 4317, SQLite on an emptyDir) as an alternative to `jaeger`; the Config page's Telemetry row
+  reads "Trace UI" and names whichever runs. Both are for trying telemetry out, not for production.
 - **Group page without sideways scroll.** Cards no longer scroll horizontally: long image refs, schemas, worker ids
   and button rows wrap. Deploy jobs lists the last five; every deploy stays in Audit and the zones' Logs.
 ### New: protocol

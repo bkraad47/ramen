@@ -40,6 +40,6 @@ spec:
   ports:
     - { name: otlp-http, port: 4318, targetPort: otlp-http }
     - { name: query, port: 16686, targetPort: query }
-{{- else if ne (.Values.otel.collector | default "none") "none" }}
-{{- fail "otel.collector must be none or jaeger" }}
+{{- else if not (has (.Values.otel.collector | default "none") (list "none" "phoenix")) }}
+{{- fail "otel.collector must be none, jaeger or phoenix" }}
 {{- end }}

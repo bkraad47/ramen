@@ -200,26 +200,29 @@ A person's acceptance on the consent page is not in this store: it is in the tok
 `consent_declined` on a refusal by the caller. The call on which an acceptance was recorded carries
 `consent: "granted"`.
 
-## Trying it out: the chart's Jaeger
+## Trying it out: the chart's Jaeger or Phoenix
 
 ```sh
-helm upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set otel.collector=jaeger
+helm upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set otel.collector=jaeger    # or phoenix
 ```
 
-adds a Jaeger all-in-one (`Deployment` and `Service` `jaeger`: OTLP/HTTP on 4318, the query API and UI on 16686)
-to the console's namespace. Point **Config → Telemetry** at `http://jaeger.ramen-system:4318`, deploy a group, and
-look at the UI through a port-forward:
+`jaeger` adds a Jaeger all-in-one (`Deployment` and `Service` `jaeger`: OTLP/HTTP on 4318, the query API and UI
+on 16686); `phoenix` adds [Arize Phoenix](https://github.com/Arize-ai/phoenix) (`Deployment` and `Service`
+`phoenix`: OTLP/HTTP and the UI on 6006, OTLP/gRPC on 4317, SQLite on an emptyDir), whose UI reads LLM and tool
+spans as traces, sessions and token costs. Point **Config → Telemetry** at `http://jaeger.ramen-system:4318` or
+`http://phoenix.ramen-system:6006`, deploy a group, and look at the UI through a port-forward:
 
 ```sh
-kubectl -n ramen-system port-forward svc/jaeger 16686
+kubectl -n ramen-system port-forward svc/jaeger 16686     # http://localhost:16686
+kubectl -n ramen-system port-forward svc/phoenix 6006     # http://localhost:6006
 ```
 
-With the collector on, the chart hands the console `RAMEN_OTEL_UI_URL` and the Config page's Telemetry section
-names the Jaeger UI address (reachable through the port-forward only).
+With a collector on, the chart hands the console `RAMEN_OTEL_UI_URL` and the Config page's Telemetry section
+names the trace UI address (reachable through the port-forward only).
 
-It keeps traces in memory, has no authentication and no route from any load balancer. **It is for trying
-telemetry out and for the test runs, not for production**: there, point the settings at your own collector. The
-default is `otel.collector: none`.
+Neither has authentication or a route from any load balancer; Jaeger keeps traces in memory, Phoenix in a SQLite
+file that goes with the pod. **They are for trying telemetry out and for the test runs, not for production**:
+there, point the settings at your own collector. The default is `otel.collector: none`.
 
 ## Settings a worker receives
 

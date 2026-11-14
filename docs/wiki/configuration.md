@@ -127,7 +127,7 @@ console.secrets.RAMEN_POSTGRES_DSN=postgresql://...`. `RAMEN_FERNET_KEY` wraps e
 | `RAMEN_PUBLIC_URL` | console, handed to workers | The address people and clients use, and the OAuth issuer the workers trust. The base URI on the Config page wins over it. Without either, OAuth is off for the workers. |
 | `RAMEN_STORE`, `RAMEN_POSTGRES_DSN` | console | The state store. |
 | `RAMEN_JOB_STALE_SECS` | console | 1.0.0a: deploy jobs live in the store; a job still `running` this many seconds (default 1800) after its last change is shown as `lost (console restarted)` and no longer blocks a deploy of that environment. The last 50 jobs per environment are kept. |
-| `RAMEN_OTEL_UI_URL` | console | 1.0.0a: the address of the chart's Jaeger UI, shown on the Config page's Telemetry section. The chart sets it when `otel.collector` is `jaeger`. |
+| `RAMEN_OTEL_UI_URL` | console | 1.0.0a: the address of the chart's trace UI (Jaeger or Phoenix), shown on the Config page's Telemetry section. The chart sets it when `otel.collector` is `jaeger`. |
 | `RAMEN_CLOUD` | console | The cloud adapter: `local`, `gcp`, `aws` or `azure`. Also decides which cloud's zones and regions the Zones and Config pages offer. |
 | `RAMEN_SECRETS_BACKEND` | console | Where secret values live: `store`, `gcp`, `aws` or `azure` (Key Vault, `RAMEN_AZURE_KEY_VAULT`). |
 | `RAMEN_AZURE_SUBSCRIPTION_ID`, `RAMEN_AZURE_RESOURCE_GROUP`, `RAMEN_AZURE_LOCATION` (default `eastus`), `RAMEN_AZURE_STORAGE_ACCOUNT`, `RAMEN_AZURE_CONTAINER` (default `groups`), `RAMEN_AZURE_TABLE` (default `ramen`), `RAMEN_AZURE_KEY_VAULT`, `RAMEN_AZURE_OIDC_ISSUER` | console, Azure | The install the Azure adapter manages, the AKS OIDC issuer the zone identities trust. Set by the chart from `terraform output helm_set`. |

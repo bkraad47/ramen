@@ -16,7 +16,7 @@ from ramen_tests.mcp_client import HttpNode, Node
 from .conftest import ENV, GROUP, ZONE, ok, poll
 
 pytestmark = pytest.mark.cloud
-LIMIT = 10  # per token per minute: the deploy's own smoke runs tools/list on every pod with the group key (3+ a minute)
+LIMIT = 50  # per token per minute, above what one deploy spends with the group key (smoke, golden cases, packages)
 CALL = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -52,11 +52,13 @@ def throttled(admin, world, node_grpc, suffix):
             f"/api/v1/groups/{GROUP}/throttle", json={"redis_url": redis_url, "ip_per_min": 0, "token_per_min": LIMIT}
         )
     )
+    # a key reaches the workers with a deploy (§8): every key the tests burst with is made before the redeploy
+    keys = {tag: fresh_key(admin, suffix, tag) for tag in ("http", "grpc", "zones", "log", "after")}
     redeploy(admin)
-    yield {"redis_url": redis_url}
+    yield {"redis_url": redis_url, "keys": keys}
     ok(admin.http.put(f"/api/v1/groups/{GROUP}/throttle", json=limits))  # the URL stays: write-only, kept as it was
     redeploy(admin)
-    assert 429 not in burst_http(fresh_key(admin, suffix, "after")), "the limit is gone after the redeploy"
+    assert 429 not in burst_http(keys["after"]), "the limit is gone after the redeploy"
 
 
 def test_the_throttle_is_audited_and_never_shows_the_url(admin, throttled):
@@ -68,13 +70,13 @@ def test_the_throttle_is_audited_and_never_shows_the_url(admin, throttled):
 
 
 def test_a_burst_on_one_key_is_throttled_over_http(admin, throttled, suffix):
-    codes = burst_http(fresh_key(admin, suffix, "http"))
+    codes = burst_http(throttled["keys"]["http"])
     assert codes.count(200) <= LIMIT and 429 in codes, codes
     assert all(c in (200, 429) for c in codes), codes
 
 
 def test_the_same_limit_answers_resource_exhausted_over_grpc(admin, throttled, suffix):
-    key = fresh_key(admin, suffix, "grpc")
+    key = throttled["keys"]["grpc"]
     with Node.from_env(key, group=GROUP, zone=ZONE) as n:
         codes = [n.status(CALL) for _ in range(LIMIT + 4)]
     assert codes.count(grpc.StatusCode.OK) <= LIMIT and grpc.StatusCode.RESOURCE_EXHAUSTED in codes, codes
@@ -86,14 +88,14 @@ def test_the_throttle_counts_across_the_groups_zones(admin, throttled, suffix):
     others = [z for z in next(e for e in envs if e["name"] == ENV)["zones"] if z != ZONE]
     if not others:
         pytest.skip(f"{GROUP}/{ENV} has one zone; attach another to prove the shared counter")
-    key = fresh_key(admin, suffix, "zones")
+    key = throttled["keys"]["zones"]
     assert 429 in burst_http(key)
     with HttpNode.from_env(key, group=GROUP, zone=others[0]) as h:
         assert h.status(CALL) == 429, f"zone {others[0]} does not share the counter"
 
 
 def test_the_access_log_names_the_reason(admin, throttled, suffix):
-    key = fresh_key(admin, suffix, "log")
+    key = throttled["keys"]["log"]
     assert 429 in burst_http(key)
     r = poll(
         lambda: (

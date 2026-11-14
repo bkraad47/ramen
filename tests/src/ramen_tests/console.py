@@ -1,5 +1,6 @@
 """httpx client for the console (CONTRACTS §4). Routes mirror console/tests/test_api.py; edit ROUTES if they move."""
 
+import os
 import time
 
 import httpx
@@ -193,7 +194,9 @@ class Console:
             body["zone"] = zone
         return self.post("deploy", body, group=group, env=env)
 
-    def wait_job(self, job_id: str, timeout: float = 300) -> dict:
+    def wait_job(self, job_id: str, timeout: float | None = None) -> dict:
+        # RAMEN_JOB_TIMEOUT: a cluster that adds a node per deploy (GKE Autopilot under quota) needs 15+ min
+        timeout = float(os.environ.get("RAMEN_JOB_TIMEOUT", 300)) if timeout is None else timeout
         deadline = time.monotonic() + timeout
         job, bad = {}, 0
         while time.monotonic() < deadline:

@@ -57,6 +57,8 @@ Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol
   with the environments that put each pair there; a group admin edits what is wholly their groups'. The group page
   keeps its Environments table (Deploy, Verbose, Delete) and loses the add-environment form. Existing zones learn
   their environments at start.
+- **Group page without sideways scroll.** Cards no longer scroll horizontally: long image refs, schemas, worker ids
+  and button rows wrap. Deploy jobs lists the last five; every deploy stays in Audit and the zones' Logs.
 ### New: protocol
 - **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
   and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,

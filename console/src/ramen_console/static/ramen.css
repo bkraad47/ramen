@@ -12,10 +12,9 @@ nav.side a.logout,.logout{display:block;margin:10px 0 6px;padding:6px 0;color:va
 nav.side a.logout:hover{background:transparent;color:var(--red);text-decoration:underline}
 .version{color:var(--muted);font-size:11px}
 main{flex:1;padding:24px 32px;max-width:1300px}h1{margin:0 0 16px;font-size:24px}h1 span{color:var(--coral)}h2{font-size:17px;margin:24px 0 8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;overflow-x:auto}
-/* a checkbox dropdown must escape its card; the card otherwise scrolls wide tables (0.6.0) */
-.card:has(details.multi[open]),td:has(details.multi[open]),.user-actions:has(details.multi[open]){overflow:visible}
-table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}
+/* 1.0.0b: a card never scrolls sideways — long cells (image refs, schemas, worker ids) wrap instead */
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;overflow:visible}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}td{overflow-wrap:anywhere}th{color:var(--muted);font-weight:600;font-size:12px}
 .dl{float:right;font-size:12px;color:var(--muted)}.dl a{margin-left:8px}
 form.inline{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:3px}
 input,select,textarea{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;min-width:140px}
@@ -63,7 +62,7 @@ details.multi>.options{position:absolute;z-index:5;top:100%;left:0;min-width:180
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--ink)}.badge.ok{background:#dff3e6;color:#1f6b40}.badge.error{background:#fbe0e0;color:#8f1f1f}.badge.running{background:#fde9df;color:#a4451f}
 .once{background:#fff6e5;border:1px solid #f2c48d;padding:10px;border-radius:8px;margin:8px 0;word-break:break-all}
 #toast{position:fixed;right:20px;bottom:20px;background:var(--red);color:#fff;padding:12px 16px;border-radius:10px;display:none;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.2)}#toast.ok{background:var(--green)}
-pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px}
+pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .login{margin:auto;width:360px}.login img{width:96px;height:96px;display:block;margin:0 auto 12px;border-radius:18px}.err{color:var(--red);margin:8px 0}.ok{color:#1f6b40;margin:8px 0}
 code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--line)}.muted{color:var(--muted);font-size:13px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:var(--grey)}.dot.low{background:var(--blue)}.dot.even{background:var(--green)}.dot.high{background:var(--red)}pre.log{max-height:280px;overflow:auto;font-size:12px}
@@ -139,7 +138,7 @@ details.multi>summary::after{content:none}
 /* 1.0.0 UI pass, round 2 (group and config pages): one button system.
    - every button sizes to its label (never a fixed width that clips it), at least 140px, one height per context;
    - inside a table cell everything is compact: inputs, selects, dropdowns and buttons 32px, 13px text;
-   - action cells keep their buttons on one line, links styled as buttons centre their text like buttons. */
+   - action cells wrap their buttons rather than widen the table (1.0.0b), links styled as buttons centre their text. */
 .act{width:auto;flex:0 0 auto;min-width:150px;padding:0 16px}
 form.inline button,form.inline .btn,.row-actions button,.row-actions .btn,.act,td button,td .btn{min-width:140px;padding-left:16px;padding-right:16px}
 button,.btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;line-height:1.2}
@@ -147,14 +146,12 @@ td{--ctl-h:32px}
 td input:not([type=checkbox]):not([type=radio]):not([type=hidden]),td select,td details.multi>summary{font-size:13px}
 td button,td .btn,td .act{height:var(--ctl-h);font-size:13px;white-space:nowrap}
 td button.sm,td .btn.sm{min-width:110px}
-td .row-actions,.zone-actions .row-actions{flex-wrap:nowrap}
 .zone-actions td:last-child .row-actions,.zone-actions td:last-child{text-align:right;justify-content:flex-end}
 th{white-space:nowrap}
 .row-actions.toggles{margin:8px 0}.row-actions.toggles form.inline{margin:0}
 table.formtable td input,table.formtable td select,table.formtable td details.multi{max-width:480px}
 form.inline button.sm,form.inline .btn.sm{min-width:110px;font-size:13px}
-td code{white-space:nowrap}
 td table.formtable input[type=number]{width:120px}
 .zone-actions td[colspan]{text-align:left}
-.env-table .zone-row td:nth-child(2){min-width:400px}
+.env-table .zone-row td:nth-child(2){min-width:240px}
 .env-table .zone-row table.formtable td{--ctl-h:30px}.env-table .zone-row table.formtable input[type=number]{width:80px}.env-table .zone-row table.formtable .act{min-width:110px}

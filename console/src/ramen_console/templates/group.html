@@ -42,7 +42,8 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 {% else %}<tr><td colspan="7" class="muted">No environments</td></tr>{% endfor %}</table>
 {% if unused_zones %}<p class="muted">Bound, unused: {% for z in unused_zones %}<code>{{ z }}</code>{{ ', ' if not loop.last }}{% endfor %} — bound to this group, used by no environment of it.</p>{% endif %}</div>
 
-<h2>Deploy jobs</h2><div id="jobs">{% for job in jobs %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">No jobs yet</p>{% endif %}</div>
+<h2>Deploy jobs</h2><p class="muted">The last 5 jobs of this group. Every deploy is kept in {% if p.role == 'super_admin' %}<a href="{{ base }}/audit">Audit</a> and {% endif %}the zones' <a href="{{ base }}/logs?group={{ group.id }}">Logs</a>.</p>
+<div id="jobs">{% for job in jobs[:5] %}{% include "partials/job.html" %}{% endfor %}{% if not jobs %}<p class="muted">No jobs yet</p>{% endif %}</div>
 
 <h2>Drift</h2>
 <div class="card"><p class="muted">Per zone, the share of each tool's recent calls that repeat an identical call (same key, tool and arguments) within a minute — a model looping on a tool. A tool at or over the threshold set on the Config page is shown in red and logged as a warning. Read from the zone's last 500 log lines; nothing rolls back on its own.</p>

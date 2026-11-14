@@ -590,8 +590,14 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
         await cloud.attach_zone("demo", "a", SPEC)
 
 
-def test_factory_and_env(monkeypatch):
+def test_factory_and_env(monkeypatch, tmp_path):
+    # `_iam().boundary()` builds a real boto3 client: keep the developer's ~/.aws (an `aws login` session needs
+    # botocore[crt] to even resolve credentials) out of the test.
     for k, v in {
+        "AWS_CONFIG_FILE": str(tmp_path / "none"),
+        "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "none"),
+        "AWS_ACCESS_KEY_ID": "testing",
+        "AWS_SECRET_ACCESS_KEY": "testing",
         "RAMEN_CLOUD": "aws",
         "RAMEN_AWS_REGION": "eu-west-1",
         "RAMEN_GROUPS_BUCKET": "bkt",

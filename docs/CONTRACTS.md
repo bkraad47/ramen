@@ -1192,8 +1192,10 @@ Agent-settled details are marked D64–D66 (the user can overrule).
   §26.2 job; `jobs` lists them; a pair that cannot be deployed records the error on the job, the zone stays).
 - `PUT /zones/{zone} {region?, environments?}` → 200 `{...zone, "jobs": [ids]}`. `environments` replaces the set
   (bind + deploy the pairs that appear, detach the pairs that disappear). `region` change: every bound pair is
-  detached (old workers destroyed) and attached + deployed in the new region (D66: the zone keeps its name and
-  worker records — count, size, sleep, IP rules, throttle, service-account grants are re-applied by the attach).
+  re-attached in place with the new location (the Deployments' node selector) and deployed, so the rollout destroys
+  the old workers and starts new ones there (D66: the zone keeps its name, namespace and worker records — count,
+  size, sleep, IP rules, throttle, service-account grants; the namespace is never deleted — on GKE a deleted one
+  sits Terminating on the NEG finalizer and a re-create is refused).
   Provider cannot change (422). Audited `zone.update` with `region:` / `env:` tags.
 - `PUT /zones/{zone}/groups` is gone (404). `DELETE /zones/{zone}` as today (detaches every pair, removes the zone
   from every environment doc), under 27.1's edit rule.

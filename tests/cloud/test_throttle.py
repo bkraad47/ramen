@@ -16,7 +16,7 @@ from ramen_tests.mcp_client import HttpNode, Node
 from .conftest import ENV, GROUP, ZONE, ok, poll
 
 pytestmark = pytest.mark.cloud
-LIMIT = 3  # per token per minute: the deploy's own smoke test may spend one of the window
+LIMIT = 10  # per token per minute: the deploy's own smoke runs tools/list on every pod with the group key (3+ a minute)
 CALL = {
     "jsonrpc": "2.0",
     "id": 1,

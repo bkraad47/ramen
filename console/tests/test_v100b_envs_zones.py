@@ -137,14 +137,14 @@ def test_a_zone_that_gains_or_loses_an_environment_binds_or_detaches(demo):  # n
     assert any(a["target"] == "zone-b" and "env:prod" in a["tags"] and "zone:zone-b" in a["tags"] for a in rows)
 
 
-def test_a_region_change_detaches_and_attaches_every_pair_keeping_the_records(demo):  # noqa: F811
+def test_a_region_change_reapplies_every_pair_in_place_keeping_the_records(demo):  # noqa: F811
     demo.put("/api/v1/groups/demo/zones/zone-a/workers", json={"count": 2, "max_count": 3})
     detached, attached = spy(demo, "detach_zone"), spy(demo, "attach_zone")
     assert demo.put(f"{ZONES}/zone-a", json={"provider": "gcp"}).status_code == 422
     assert demo.put(f"{ZONES}/zone-a", json={"region": "local", "provider": "local"}).json()["jobs"] == []  # unchanged
     r = demo.put(f"{ZONES}/zone-a", json={"region": "elsewhere"})
     assert r.status_code == 200 and r.json()["region"] == "elsewhere" and len(r.json()["jobs"]) == 1
-    assert detached == [("demo", "zone-a")] and attached == [("demo", "zone-a")]
+    assert detached == [] and attached == [("demo", "zone-a")]  # D66: no namespace delete, the rollout moves the pods
     w = worker(demo, "demo", "zone-a")
     assert w["count"] == 2 and w["max_count"] == 3  # D66
     assert jobs_of(demo, r.json()["jobs"])[0]["target"] == "demo/prod"

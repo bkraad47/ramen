@@ -387,8 +387,8 @@ class Services:
         if region is not None and region != z.get("region", ""):
             if hit := await self.region_block(z.get("provider", ""), region):
                 raise forbidden(regions.message(hit))
-            for g in z.get("groups") or []:
-                await self.cloud.detach_zone(g, zone)
+            # D66: re-apply in place, never detach — a deleted namespace sits Terminating on GKE (NEG finalizer) and
+            # the re-create answers 403; the new nodeSelector plus the deploy roll the old workers out
             z["region"] = region
             await self.store.put("zones", zone, z)
             for g in z.get("groups") or []:

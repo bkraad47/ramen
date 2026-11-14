@@ -20,6 +20,8 @@ spec:
         - name: phoenix
           image: {{ .Values.otel.phoenix.image | quote }}
           env:
+            # Phoenix switches auth on by itself when it binds a non-loopback address; off here, like Jaeger — no edge reaches it
+            - { name: PHOENIX_ENABLE_AUTH, value: "false" }
             - { name: PHOENIX_PORT, value: "6006" }
             - { name: PHOENIX_GRPC_PORT, value: "4317" }
             - { name: PHOENIX_WORKING_DIR, value: /data }

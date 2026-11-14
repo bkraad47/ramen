@@ -37,6 +37,8 @@ def test_phoenix_is_a_collector_choice_with_otlp_and_ui_on_one_port():
     c = dep["spec"]["template"]["spec"]["containers"][0]
     assert c["image"].startswith("arizephoenix/phoenix:")
     assert {p["containerPort"] for p in c["ports"]} >= {6006, 4317}
+    env = {e["name"]: e["value"] for e in c["env"]}
+    assert env["PHOENIX_ENABLE_AUTH"] == "false"  # a non-loopback bind would switch auth on and 401 every OTLP post
     assert dep["spec"]["template"]["spec"]["securityContext"]["runAsNonRoot"] is True
     svc = next(d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "phoenix")
     assert {p["port"] for p in svc["spec"]["ports"]} == {6006, 4317}

@@ -77,6 +77,7 @@ def test_manifests_shape():
         "Deployment",
         "Ingress",
         "Ingress",
+        "Service",  # §24.1 worker-direct
     ]
     assert docs[2]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"].endswith("role/ramen/ramen-demo-a")
     assert docs[1]["spec"]["ingress"][0]["from"][1]["ipBlock"]["cidr"] == "10.0.0.0/16"
@@ -122,7 +123,7 @@ def test_http_paths_get_their_own_http1_target_groups():
     `GET /.well-known/oauth-protected-resource`, so Streamable HTTP clients and OAuth discovery never reached a
     worker. The HTTP paths get a second Ingress (same ALB group, header conditions and weighted split) whose target
     groups speak HTTP/1.1; gRPC keeps its own."""
-    grpc, http = manifests("demo", "a", SPEC, "img", "s3://b/demo", stable=70, canary=30)[-2:]
+    grpc, http = manifests("demo", "a", SPEC, "img", "s3://b/demo", stable=70, canary=30)[-3:-1]  # last: worker-direct
     paths = lambda ing: [p["path"] for p in ing["spec"]["rules"][0]["http"]["paths"]]  # noqa: E731
     assert grpc["metadata"]["name"] == "worker" and http["metadata"]["name"] == "worker-http"
     assert "/mcp" not in paths(grpc) and "/ramen.v1.Mcp" in paths(grpc)
@@ -589,8 +590,14 @@ async def test_helm_template_path(cloud, fk, tmp_path, monkeypatch):
         await cloud.attach_zone("demo", "a", SPEC)
 
 
-def test_factory_and_env(monkeypatch):
+def test_factory_and_env(monkeypatch, tmp_path):
+    # `_iam().boundary()` builds a real boto3 client: keep the developer's ~/.aws (an `aws login` session needs
+    # botocore[crt] to even resolve credentials) out of the test.
     for k, v in {
+        "AWS_CONFIG_FILE": str(tmp_path / "none"),
+        "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "none"),
+        "AWS_ACCESS_KEY_ID": "testing",
+        "AWS_SECRET_ACCESS_KEY": "testing",
         "RAMEN_CLOUD": "aws",
         "RAMEN_AWS_REGION": "eu-west-1",
         "RAMEN_GROUPS_BUCKET": "bkt",

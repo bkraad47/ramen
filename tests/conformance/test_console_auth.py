@@ -31,7 +31,7 @@ def world(admin: Console, console_url, suffix):
     zone, g = f"az{suffix}", f"ag{suffix}"
     ok(admin.create_zone(zone), 201, 409)
     ok(admin.create_group(g, DEMO_REPO), 201)
-    ok(admin.create_environment(g, "dev", [zone]), 201)
+    ok(admin.create_environment(g, "dev", [zone], wait=False), 201)  # §27.3: the attach deploys in the background
     gadmin = f"agadmin-{suffix}@ramen.test"
     uid = ok(admin.create_user(gadmin, PW, "group_admin", [g]), 201).json()["id"]
     c = Console(console_url)

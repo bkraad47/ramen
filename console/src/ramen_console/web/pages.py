@@ -2,7 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, regions, toolaccess
+from .. import alerts, baseuri, compat, drift, github_app, imagebuild, oauth_server, otel, regions, toolaccess
 from .. import deploy as dep
 from .. import mail as mail_mod
 from .. import scheduler as scheduler_mod
@@ -37,6 +37,23 @@ async def dashboard_grid(request: Request, p: Principal = Depends(viewer)):
     return render(request, "partials/dashboard.html", data=await dep.dashboard(s, await s.visible_groups(p)))
 
 
+def protocol_stats(live: list[dict]) -> dict:
+    """§23.1: what the zone's workers report in `Admin/Metrics` since 1.0.0, summed over the zone — calls per protocol
+    version (newest first), open subscription streams, live tasks. None for a key no worker reports (0.8 workers)."""
+    calls, counts = None, {"subscriptions": None, "tasks": None}
+    for x in live:
+        m = x.get("metrics") or {}
+        if isinstance(m.get("calls_by_protocol"), dict):
+            calls = calls or {}
+            for v, n in m["calls_by_protocol"].items():
+                if isinstance(n, int):
+                    calls[str(v)] = calls.get(str(v), 0) + n
+        for k in counts:
+            if isinstance(m.get(k), int):
+                counts[k] = (counts[k] or 0) + m[k]
+    return {"calls_by_protocol": None if calls is None else sorted(calls.items(), reverse=True), **counts}
+
+
 @r.get("/ui/groups/{group}/zones/{zone}/workers")
 async def workers_partial(request: Request, group: str, zone: str, p: Principal = Depends(require("viewer", "group"))):
     s = svc(request)
@@ -56,6 +73,7 @@ async def workers_partial(request: Request, group: str, zone: str, p: Principal 
     # B4: every worker of a zone must serve the same manifest (C2 `manifest_hash`; absent on pre-0.7.0 workers)
     hashes = {x.get("metrics", {}).get("manifest_hash") for x in w["live"]} - {None, ""}
     w["manifest_mismatch"] = len(hashes) > 1
+    w["protocol"] = protocol_stats(w["live"])
     group_admin = can(p, "group_admin", group)  # §21.7: only they see and set the max; others see the count
     return render(request, "partials/workers.html", w=w, group=group, zone=zone, can_scale=group_admin)
 
@@ -70,7 +88,7 @@ async def drift_partial(request: Request, group: str, zone: str, p: Principal = 
 
 @r.get("/ui/jobs/{jid}")
 async def job_partial(request: Request, jid: str, p: Principal = Depends(viewer)):
-    return render(request, "partials/job.html", job=request.app.state.jobs.get(jid))
+    return render(request, "partials/job.html", job=await request.app.state.jobs.get(jid))
 
 
 @r.get("/groups")
@@ -82,22 +100,31 @@ async def groups(request: Request, p: Principal = Depends(viewer)):
 async def group_detail(request: Request, group: str, p: Principal = Depends(require("viewer", "group"))):
     s = svc(request)
     g = await s.get_group(group)
-    zones = await s.zones()
+    bound = await s.group_zones(group)  # §26.1: the group sees and uses the zones bound to it
+    zones = [z for z in await s.zones() if z["id"] in bound]
     workers = {z["id"]: await s.worker_config(group, z["id"]) for z in zones}
     envs = await s.environments(group)
+    used = {z for e in envs for z in e.get("zones") or []}
     return render(
         request,
         "group.html",
         group=g,
+        zone_by={z["id"]: z for z in zones},
+        unused_zones=[z for z in bound if z not in used],
         envs=envs,
         kinds=toolaccess.kinds(),
-        tool_rows={e["name"]: toolaccess.rows(e) for e in envs},  # C10: last deploy's tools + restricted names
+        tool_rows={e["name"]: toolaccess.rows(e) for e in envs},
+        is_task=compat.is_task,  # §23.5 / §23.2: the `task` and `headers` badges of "Packages per zone"
+        header_params=compat.header_params,  # C10: last deploy's tools + restricted names
         known_tools={e["name"]: toolaccess.known_tools(e) for e in envs},
         zones=zones,
         workers=workers,
         mcp_keys=await s.secrets(group, kind="mcp_key"),
         images=await s.images(group),
-        jobs=request.app.state.jobs.recent(f"{group}/"),
+        builds=await s.builds_images(g),  # §24.2
+        builder=await imagebuild.builder_available(s.cloud),
+        otel=otel.public_config(await otel.get_config(s.store)),  # §24.3
+        jobs=await request.app.state.jobs.recent(f"{group}/"),
         can_admin=can(p, "group_admin", group),
         permissions=perm.table(),
         requests=[
@@ -127,24 +154,45 @@ async def mcp_signin(request: Request, group: str, envs: list[dict]) -> dict:
 
 
 @r.get("/environments")
-async def environments(request: Request, p: Principal = Depends(viewer)):
+async def environments(request: Request, p: Principal = Depends(admin)):
+    """§27.4: Environments, Zones and Workers — for super admins and group admins; a row the caller may not edit
+    (D65: a group not theirs is in it) is read-only."""
     s = svc(request)
-    envs = [e for e in await s.environments() if can(p, "viewer", e["group"])]
-    return render(request, "environments.html", envs=envs, groups=await s.visible_groups(p), zones=await s.zones())
-
-
-@r.get("/zones")
-async def zones(request: Request, p: Principal = Depends(viewer)):
-    s = svc(request)
+    mine = {g["id"] for g in await s.visible_groups(p) if can(p, "group_admin", g["id"])}
+    docs = await s.environments()
+    full = {}
+    for e in docs:
+        full.setdefault(e["name"], set()).add(e["group"])
+    envs = await s.environments_by_name(p)
+    zones = [z for z in await s.zones() if p.role == "super_admin" or mine & set(z.get("groups") or [])]
+    has_doc = {(e["group"], e["name"]) for e in docs}
     blocked = await s.blocked_regions()
     return render(
         request,
-        "zones.html",
-        zones=await s.zones(),
-        groups=await s.visible_groups(p),
+        "environments.html",
+        envs=envs,
+        env_ok={n: all(g in mine for g in gs) for n, gs in full.items()},
+        env_opts=[n for n in sorted(full) if all(g in mine for g in full[n])],
+        groups=sorted(mine),
+        zones=zones,
+        zone_ok={z["id"]: all(g in mine for g in z.get("groups") or []) for z in zones},
+        pair_envs={
+            (g, z["id"]): [n for n in z.get("environments") or [] if (g, n) in has_doc]
+            for z in zones
+            for g in z.get("groups") or []
+        },
         blocked=blocked,
         region_zones={prov: regions.zones(prov, blocked[prov]) for prov in regions.PROVIDERS},
     )
+
+
+@r.get("/zones")
+async def zones(request: Request):
+    from fastapi.responses import RedirectResponse
+
+    from ..baseuri import link
+
+    return RedirectResponse(link(request, "/environments"), 301)  # §27.4: one page since 1.0.0b
 
 
 @r.get("/secrets")
@@ -294,4 +342,6 @@ async def config(request: Request, p: Principal = Depends(super_)):
         regions_note=regions.NOTE,
         oauth_ttl={"access": oauth_server.access_ttl(), "refresh": oauth_server.refresh_ttl()},
         drift={"warn_pct": await drift.threshold(store)},
+        otel=otel.public_config(await otel.get_config(store)),
+        otel_ui_url=os.environ.get("RAMEN_OTEL_UI_URL", "").strip(),  # §26.3: the chart's trace UI (Jaeger or Phoenix)
     )

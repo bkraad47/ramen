@@ -52,6 +52,7 @@ def test_dropping_a_zone_from_an_environment_tears_it_down_unless_another_enviro
     )
     assert demo.delete("/api/v1/groups/demo/environments/qa").status_code == 200
     assert calls == [("demo", "zone-b")]  # zone-a is prod's
+    assert demo.get("/api/v1/zones/zone-b").status_code == 404  # §27.2: only qa used it, so the zone went too
 
 
 def test_local_adapter_forgets_the_zones_records(demo, tmp_path):

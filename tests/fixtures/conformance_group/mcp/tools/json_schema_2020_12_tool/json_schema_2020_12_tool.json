@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "json_schema_2020_12_tool",
+  "description": "Answer with a plain text. Ramen derives inputSchema from its flat proto input, so the 2020-12 keywords the official json-schema-2020-12 scenario looks for cannot be declared.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

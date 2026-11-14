@@ -9,6 +9,21 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
+/// How long the node keeps serving after SIGTERM before it stops (`RAMEN_STOP_DRAIN_SECS`; default 20 in a pod,
+/// 0 elsewhere). A pod that is told to stop is still in the load balancer's target list for a while — longest on
+/// GKE's container-native NEGs — and callers routed to it must be served, not refused. Up to 0.8.0 this happened
+/// by accident: the node is PID 1 in its container and installed no SIGTERM handler, so the kernel ignored the
+/// signal and the pod served until the kubelet's kill at the end of the grace period (30 s).
+pub fn stop_drain(configured: Option<&str>, in_kubernetes: bool) -> std::time::Duration {
+    let secs = configured
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(if in_kubernetes { 20 } else { 0 });
+    std::time::Duration::from_secs(secs.min(300))
+}
+
+/// How long open streams get to flush their closing frame after the stop signal.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
 pub async fn run(
     cfg: Config,
     listener: TcpListener,
@@ -19,6 +34,13 @@ pub async fn run(
         "ramen-node start",
         json!({"version": env!("CARGO_PKG_VERSION"), "addr": listener.local_addr().ok(), "bucket": cfg.bucket, "group": cfg.group, "zone": cfg.zone, "keys": cfg.mcp_keys.len(), "tls": cfg.tls.is_some()}),
     );
+    if cfg.activator {
+        emit(
+            "info",
+            "activator mode: no runtime; calls wake the zone and are forwarded",
+            json!({"activator": true, "upstream": cfg.activator_upstream, "wake_timeout_secs": cfg.wake_timeout_secs}),
+        );
+    }
     {
         // v0.5.5: `FILE` (log.rs) is process-global; cargo test runs tests on parallel threads, so this
         // ordinary startup side effect can redirect it mid-way through an unrelated test that briefly needs
@@ -32,19 +54,22 @@ pub async fn run(
         crate::log::set_file(cfg.log_file.clone());
     }
     let app = grpc::app(cfg.clone()).await;
-    app.sidecar.start_reaper();
-    // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.
-    if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
-        if let Err(e) = app.load().await {
-            emit("warn", "initial load failed", json!({"error": e.message}));
-            retry_initial_load(app.clone(), cfg.load_retry_secs);
+    // §24.1: an activator never starts a runtime — no reaper, no load (and `Admin/Reload` is refused)
+    if app.activator.is_none() {
+        app.sidecar.start_reaper();
+        // A bucket URI means the runtime fills the dir itself on load (§7), so try even when mcp/ is missing.
+        if cfg.bucket.join("mcp").is_dir() || cfg.bucket_uri.is_some() {
+            if let Err(e) = app.load().await {
+                emit("warn", "initial load failed", json!({"error": e.message}));
+                retry_initial_load(app.clone(), cfg.load_retry_secs);
+            }
+        } else {
+            emit(
+                "warn",
+                "bucket has no mcp/ yet; waiting for Admin/Reload",
+                json!({"bucket": cfg.bucket}),
+            );
         }
-    } else {
-        emit(
-            "warn",
-            "bucket has no mcp/ yet; waiting for Admin/Reload",
-            json!({"bucket": cfg.bucket}),
-        );
     }
     // §16.1: the HTTP handler joins the gRPC services on the same router; HTTP/1.1 must be accepted because
     // Streamable HTTP clients speak it (gRPC stays h2/h2c).
@@ -52,28 +77,55 @@ pub async fn run(
     let merged = std::mem::take(routes.axum_router_mut()).merge(crate::http::router(app.clone()));
     *routes.axum_router_mut() = merged;
     let server = Server::builder().accept_http1(true).add_routes(routes);
-    let served = match tls(&cfg) {
-        // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
-        // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.
-        Ok(Some(acceptor)) => {
-            server
-                .serve_with_incoming_shutdown(tls_incoming(listener, acceptor), shutdown)
-                .await
+    // §23.6: a `subscriptions/listen` stream never ends by itself, so the signal first tells every stream to send
+    // its completion result. Then the node stops for good after `STOP_GRACE`: tonic's graceful stop keeps the
+    // listening socket open but unaccepted until the last connection ends, and a load balancer that still routes
+    // to the pod then hangs new callers instead of being refused and retrying elsewhere (seen on kind, EKS and
+    // GKE during rollouts in the 1.0.0 runs).
+    let (stopping_tx, mut stopping) = tokio::sync::watch::channel(false);
+    let shutdown = {
+        let app = app.clone();
+        async move {
+            shutdown.await;
+            app.subs.drain();
+            let _ = stopping_tx.send(true);
         }
-        Ok(None) => {
-            server
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
-                .await
+    };
+    let serve = async {
+        match tls(&cfg) {
+            // TLS is terminated here, not by tonic: its acceptor offers only `h2` on ALPN, and an HTTP/1.1 client
+            // (every Streamable HTTP client) is then refused at the handshake. Found by CI's TLS case after 0.5.0.
+            Ok(Some(acceptor)) => {
+                server
+                    .serve_with_incoming_shutdown(tls_incoming(listener, acceptor), shutdown)
+                    .await
+            }
+            Ok(None) => {
+                server
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
+                    .await
+            }
+            Err(e) => {
+                emit("error", "tls config failed", json!({"error": e}));
+                Ok(())
+            }
         }
-        Err(e) => {
-            emit("error", "tls config failed", json!({"error": e}));
-            Ok(())
-        }
+    };
+    let served = tokio::select! {
+        r = serve => r,
+        _ = async {
+            let _ = stopping.wait_for(|s| *s).await;
+            tokio::time::sleep(STOP_GRACE).await;
+        } => Ok(()),
     };
     if let Err(e) = served {
         emit("error", "serve failed", json!({"error": e.to_string()}));
     }
     app.sidecar.kill("shutdown").await;
+    // §24.3: what the last calls produced still goes out — after the listener stopped, and for a second at most
+    if app.otel.enabled() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), app.otel.flush()).await;
+    }
     app
 }
 
@@ -180,6 +232,18 @@ fn tls_incoming(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pod_drains_by_default_and_a_laptop_does_not() {
+        use super::stop_drain;
+        use std::time::Duration;
+        assert_eq!(stop_drain(None, true), Duration::from_secs(20));
+        assert_eq!(stop_drain(None, false), Duration::ZERO);
+        assert_eq!(stop_drain(Some("5"), false), Duration::from_secs(5));
+        assert_eq!(stop_drain(Some("0"), true), Duration::ZERO);
+        assert_eq!(stop_drain(Some("nonsense"), true), Duration::from_secs(20));
+        assert_eq!(stop_drain(Some("9999"), true), Duration::from_secs(300));
+    }
+
     use super::*;
     use std::collections::HashMap;
 
@@ -258,5 +322,44 @@ mod tests {
         );
         let app = run(c, listener, async {}).await;
         assert!(!app.sidecar.alive().await);
+    }
+
+    /// §24.1: an activator is SERVING from the start, with a bucket that would make a worker load — and never
+    /// starts a runtime, at startup or on shutdown.
+    #[tokio::test]
+    async fn an_activator_serves_health_at_once_and_starts_no_runtime() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let c = cfg(&[
+            ("RAMEN_ACTIVATOR", "1"),
+            ("RAMEN_ACTIVATOR_UPSTREAM", "127.0.0.1:1"),
+            ("RAMEN_BUCKET_URI", "gs://b/g"),
+            ("RAMEN_PYTHON", "/nonexistent/python"),
+        ]);
+        let server = tokio::spawn(run(c, listener, async move {
+            let _ = rx.await;
+        }));
+        let ch = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let st = tonic_health::pb::health_client::HealthClient::new(ch)
+            .check(tonic_health::pb::HealthCheckRequest {
+                service: String::new(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .status;
+        assert_eq!(
+            st,
+            tonic_health::pb::health_check_response::ServingStatus::Serving as i32
+        );
+        tx.send(()).unwrap();
+        let app = server.await.unwrap();
+        assert!(app.activator.is_some());
+        assert!(!app.sidecar.alive().await && app.sidecar.loaded().await.is_none());
     }
 }

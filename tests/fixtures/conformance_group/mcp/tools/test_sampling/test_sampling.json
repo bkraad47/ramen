@@ -1,0 +1,15 @@
+{
+  "type": "tool",
+  "name": "test_sampling",
+  "description": "Ask the client's model to answer `prompt` and return its reply. Uses an MRTR input request: Ramen never sends a server-initiated sampling request, so on the 2025-06-18 wire the official tools-call-sampling scenario is a baseline entry.",
+  "callable": "run",
+  "input": {
+    "prompt": {
+      "type": "string",
+      "description": "what to ask the client's model"
+    }
+  },
+  "error": {
+    "type": "string"
+  }
+}

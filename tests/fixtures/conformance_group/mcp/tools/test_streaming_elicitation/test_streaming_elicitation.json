@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_streaming_elicitation",
+  "description": "Ask the user to confirm through an input_required result, never through a request on the response stream.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

@@ -18,8 +18,8 @@ def cell_of(page: str, needle: str) -> str:
 def test_api_key_groups_are_a_dropdown_that_still_takes_several_groups(demo):
     page = demo.get("/api-keys").text
     assert '<select name="groups" multiple' not in page and "multiple size=" not in page
-    assert 'id="group-pick"' in page and "Add" in page
-    assert 'name="groups"' in page  # the chips post as repeated fields
+    assert 'id="key-groups"' in page  # 1.0.0: the checkbox dropdown, as on every other multi-value field
+    assert 'name="groups"' in page  # the ticked boxes post as repeated fields
 
     r = demo.post("/api/v1/api-keys", json={"name": "two-groups", "groups": ["demo", "other"]})
     assert r.status_code == 201 and sorted(r.json()["groups"]) == ["demo", "other"]
@@ -145,9 +145,8 @@ def test_super_admin_adds_and_removes_service_account_rules_from_the_page(demo):
 def test_environments_flattens_the_last_deploy_and_sizes_its_actions(demo):
     assert demo.post("/api/v1/groups/demo/environments/prod/deploy", json={"canary": True}).status_code == 202
     page = demo.get("/environments").text
-    assert "Last deploy" in page and "When" in page
+    assert "Last deploy" in page and 'href="/groups/demo"' in page
     assert '<code>{"job"' not in page and "&#34;job&#34;" not in page  # never a JSON blob
-    assert "act" in cell_of(page, "Open group")
 
 
 # --- W7 users: delete to the right of save, and it says what it deletes ---------------------------------------------

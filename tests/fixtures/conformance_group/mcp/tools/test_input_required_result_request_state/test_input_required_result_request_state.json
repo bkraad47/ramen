@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_request_state",
+  "description": "Ask for a confirmation and carry state across the round trip; completes only when the state comes back.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

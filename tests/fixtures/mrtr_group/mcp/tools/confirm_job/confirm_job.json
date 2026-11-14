@@ -1,0 +1,13 @@
+{
+  "type": "tool",
+  "name": "confirm_job",
+  "description": "As a task: ask the user to confirm deleting `item`, then answer 'deleted <item>' or 'kept <item>'. Guarded pre and post.",
+  "callable": "run",
+  "input": {
+    "item": {
+      "type": "string",
+      "description": "what to delete"
+    }
+  },
+  "task": true
+}

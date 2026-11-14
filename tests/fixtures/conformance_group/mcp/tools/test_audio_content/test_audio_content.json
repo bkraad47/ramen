@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_audio_content",
+  "description": "Return one audio/wav content block (official suite: tools-call-audio).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

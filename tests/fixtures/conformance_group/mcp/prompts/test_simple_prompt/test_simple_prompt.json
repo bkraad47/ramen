@@ -1,0 +1,7 @@
+{
+  "type": "prompt",
+  "name": "test_simple_prompt",
+  "description": "A fixed one-message prompt.",
+  "callable": "build",
+  "input": {}
+}

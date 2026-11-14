@@ -27,6 +27,21 @@ const DEPLOY_KEYS: &[&str] = &[
     "RAMEN_THROTTLE_ITEM_TOKEN",
     "RAMEN_THROTTLE_SCOPE_IP",
     "RAMEN_THROTTLE_SCOPE_TOKEN",
+    // §23 (1.0.0): tunables of the 2026-07-28 surface. `RAMEN_MRTR_TTL_SECS` is not here for the reason
+    // `RAMEN_SESSION_TTL_SECS` is not: a group must not stretch the life of a signed token.
+    "RAMEN_LIST_TTL_MS",
+    "RAMEN_TASK_TTL_SECS",
+    "RAMEN_MAX_TASKS",
+    "RAMEN_MAX_SUBSCRIPTIONS",
+    // §24.3 (1.0.0): where the node exports, whether callers must consent, and what `server/discover` tells them.
+    // The activator keys (`RAMEN_ACTIVATOR*`, `RAMEN_CONSOLE_INTERNAL_URL`, `RAMEN_WAKE_TIMEOUT_SECS`) are the
+    // deployment's, never a group's.
+    "RAMEN_OTEL_ENDPOINT",
+    "RAMEN_OTEL_HEADERS",
+    "RAMEN_OTEL_CLIENT",
+    "RAMEN_TELEMETRY_CONSENT",
+    "RAMEN_TELEMETRY_NOTICE",
+    "RAMEN_TELEMETRY_VERSION",
 ];
 
 /// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
@@ -124,6 +139,55 @@ pub struct Config {
     pub throttle_item_token: u64,
     pub throttle_scope_ip: u64,
     pub throttle_scope_token: u64,
+    /// §23.1: `ttlMs` on modern list / discover results (`RAMEN_LIST_TTL_MS`, default 60000).
+    pub list_ttl_ms: u64,
+    /// §23.4: lifetime of a signed `requestState` (`RAMEN_MRTR_TTL_SECS`, default 600).
+    pub mrtr_ttl_secs: u64,
+    /// §23.5: a task's `ttlMs` / 1000 (`RAMEN_TASK_TTL_SECS`, default 3600).
+    pub task_ttl_secs: u64,
+    /// §23.5: tasks running on this pod at once (`RAMEN_MAX_TASKS`, default 4); beyond it a task call is 429.
+    pub max_tasks: usize,
+    /// §23.6: open `subscriptions/listen` streams per pod (`RAMEN_MAX_SUBSCRIPTIONS`, default 64), then 429.
+    pub max_subscriptions: usize,
+    /// §24.1: this process is a zone's activator (`RAMEN_ACTIVATOR=1`): guards, wake, forward — never a runtime.
+    /// Startup-fixed.
+    pub activator: bool,
+    /// §24.1: the console's in-cluster base URL (`RAMEN_CONSOLE_INTERNAL_URL`) the activator posts the wake to.
+    pub console_internal_url: Option<String>,
+    /// §24.1: where the zone's real workers answer (`RAMEN_ACTIVATOR_UPSTREAM`, default `worker-direct:8080`;
+    /// `host:port` or `http://host:port`, h2c).
+    pub activator_upstream: String,
+    /// §24.1: how long a call waits for the zone to wake (`RAMEN_WAKE_TIMEOUT_SECS`, default 25: under the
+    /// default backend timeout of every edge — GKE 30 s, ALB 60 s — so the caller gets our 503, not the edge's 504).
+    pub wake_timeout_secs: u64,
+    /// §24.3: OTLP/HTTP base URL (`RAMEN_OTEL_ENDPOINT`); unset = nothing is exported.
+    pub otel_endpoint: Option<String>,
+    /// §24.3: headers sent to the collector (`RAMEN_OTEL_HEADERS`, a JSON object of strings). Secret.
+    pub otel_headers: Vec<(String, String)>,
+    /// §24.3: what `server/discover` hands a caller under `_meta["io.ramen/telemetry"]` (`RAMEN_OTEL_CLIENT`, a
+    /// JSON object written by the deploy); unset = no entry.
+    pub otel_client: Option<serde_json::Value>,
+    /// §24.3: `tools/call`, `prompts/get` and `resources/read` need the caller's consent (`RAMEN_TELEMETRY_CONSENT`).
+    pub telemetry_consent: bool,
+    /// §24.3: where the telemetry goes, as the consent prompt names it (`RAMEN_TELEMETRY_NOTICE`).
+    pub telemetry_notice: String,
+    /// §26.3: the console's telemetry config version a report must name (`RAMEN_TELEMETRY_VERSION`, else the
+    /// `version` key of `RAMEN_OTEL_CLIENT`); empty = not told yet, any version is taken.
+    pub telemetry_version: String,
+}
+
+/// `RAMEN_OTEL_HEADERS`: a JSON object of header name → string value.
+pub fn parse_otel_headers(text: &str) -> Result<Vec<(String, String)>, String> {
+    let bad = || "RAMEN_OTEL_HEADERS must be a JSON object of header → string".to_string();
+    let m: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(text).map_err(|_| bad())?; // the parse error could quote a header value: not echoed
+    if m.iter().any(|(k, v)| {
+        http::HeaderName::from_bytes(k.as_bytes()).is_err()
+            || http::HeaderValue::from_str(v).is_err()
+    }) {
+        return Err(bad());
+    }
+    Ok(m.into_iter().collect())
 }
 
 impl Config {
@@ -265,6 +329,45 @@ impl Config {
             throttle_item_token: num("RAMEN_THROTTLE_ITEM_TOKEN", 0)?,
             throttle_scope_ip: num("RAMEN_THROTTLE_SCOPE_IP", 0)?,
             throttle_scope_token: num("RAMEN_THROTTLE_SCOPE_TOKEN", 0)?,
+            list_ttl_ms: num("RAMEN_LIST_TTL_MS", 60_000)?,
+            mrtr_ttl_secs: num("RAMEN_MRTR_TTL_SECS", 600)?.max(1),
+            task_ttl_secs: num("RAMEN_TASK_TTL_SECS", 3600)?.max(1),
+            max_tasks: num("RAMEN_MAX_TASKS", 4)? as usize,
+            max_subscriptions: num("RAMEN_MAX_SUBSCRIPTIONS", 64)? as usize,
+            activator: matches!(get("RAMEN_ACTIVATOR").as_deref(), Some("1" | "true")),
+            console_internal_url: get("RAMEN_CONSOLE_INTERNAL_URL")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            activator_upstream: get("RAMEN_ACTIVATOR_UPSTREAM")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "worker-direct:8080".into()),
+            wake_timeout_secs: num("RAMEN_WAKE_TIMEOUT_SECS", 25)?.max(1),
+            otel_endpoint: get("RAMEN_OTEL_ENDPOINT")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            otel_headers: get("RAMEN_OTEL_HEADERS")
+                .map_or(Ok(Vec::new()), |t| parse_otel_headers(&t))?,
+            otel_client: match get("RAMEN_OTEL_CLIENT") {
+                None => None,
+                Some(t) => Some(
+                    serde_json::from_str::<serde_json::Value>(&t)
+                        .ok()
+                        .filter(serde_json::Value::is_object)
+                        .ok_or("RAMEN_OTEL_CLIENT must be a JSON object")?,
+                ),
+            },
+            telemetry_consent: matches!(
+                get("RAMEN_TELEMETRY_CONSENT").as_deref(),
+                Some("1" | "true")
+            ),
+            telemetry_notice: get("RAMEN_TELEMETRY_NOTICE").unwrap_or_default(),
+            telemetry_version: get("RAMEN_TELEMETRY_VERSION")
+                .or_else(|| {
+                    get("RAMEN_OTEL_CLIENT")
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| v["version"].as_str().map(String::from))
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -544,6 +647,58 @@ mod tests {
         let _ = Config::load();
     }
 
+    /// §23 (1.0.0): the five keys of the 2026-07-28 surface, their defaults, and which a group may set.
+    #[test]
+    fn modern_keys_have_contract_defaults() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert_eq!(
+            (
+                c.list_ttl_ms,
+                c.mrtr_ttl_secs,
+                c.task_ttl_secs,
+                c.max_tasks,
+                c.max_subscriptions
+            ),
+            (60_000, 600, 3600, 4, 64)
+        );
+        let m: HashMap<_, _> = [
+            ("RAMEN_LIST_TTL_MS", "0"),
+            ("RAMEN_MRTR_TTL_SECS", "0"),
+            ("RAMEN_TASK_TTL_SECS", "5"),
+            ("RAMEN_MAX_TASKS", "0"),
+            ("RAMEN_MAX_SUBSCRIPTIONS", "2"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let c = Config::from_map(&m).unwrap();
+        assert_eq!(
+            (
+                c.list_ttl_ms,
+                c.mrtr_ttl_secs,
+                c.task_ttl_secs,
+                c.max_tasks,
+                c.max_subscriptions
+            ),
+            (0, 1, 5, 0, 2)
+        );
+        for k in [
+            "RAMEN_LIST_TTL_MS",
+            "RAMEN_TASK_TTL_SECS",
+            "RAMEN_MAX_TASKS",
+            "RAMEN_MAX_SUBSCRIPTIONS",
+        ] {
+            assert!(DEPLOY_KEYS.contains(&k), "{k}");
+        }
+        assert!(!DEPLOY_KEYS.contains(&"RAMEN_MRTR_TTL_SECS"));
+        let m: HashMap<_, _> = [("RAMEN_MAX_TASKS".to_string(), "lots".to_string())].into();
+        assert!(
+            Config::from_map(&m)
+                .unwrap_err()
+                .contains("RAMEN_MAX_TASKS")
+        );
+    }
+
     #[test]
     fn bad_values() {
         let m: HashMap<_, _> = [("RAMEN_NODE_PORT".to_string(), "x".to_string())].into();
@@ -567,5 +722,103 @@ mod tests {
                 .unwrap_err()
                 .contains("RAMEN_TRUST_PROXY_HOPS")
         );
+    }
+
+    /// §24 (1.0.0): activator, OpenTelemetry and consent keys.
+    #[test]
+    fn sleep_and_telemetry_keys_parse() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert!(!c.activator && c.console_internal_url.is_none() && c.otel_endpoint.is_none());
+        assert_eq!(
+            (c.activator_upstream.as_str(), c.wake_timeout_secs),
+            ("worker-direct:8080", 25)
+        );
+        assert!(c.otel_headers.is_empty() && c.otel_client.is_none() && !c.telemetry_consent);
+        let m: HashMap<_, _> = [
+            ("RAMEN_ACTIVATOR", "1"),
+            (
+                "RAMEN_CONSOLE_INTERNAL_URL",
+                "http://console.ramen-system:8000/",
+            ),
+            ("RAMEN_ACTIVATOR_UPSTREAM", "http://w:9/"),
+            ("RAMEN_WAKE_TIMEOUT_SECS", "0"),
+            ("RAMEN_OTEL_ENDPOINT", "http://jaeger:4318/"),
+            (
+                "RAMEN_OTEL_HEADERS",
+                r#"{"x-api-key": "abc", "authorization": "Bearer t"}"#,
+            ),
+            (
+                "RAMEN_OTEL_CLIENT",
+                r#"{"otlp_endpoint": "http://jaeger:4318", "headers": {}}"#,
+            ),
+            ("RAMEN_TELEMETRY_CONSENT", "1"),
+            ("RAMEN_TELEMETRY_NOTICE", "jaeger"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let c = Config::from_map(&m).unwrap();
+        assert!(c.activator && c.telemetry_consent);
+        assert_eq!(
+            c.console_internal_url.as_deref(),
+            Some("http://console.ramen-system:8000")
+        );
+        assert_eq!(
+            (c.activator_upstream.as_str(), c.wake_timeout_secs),
+            ("http://w:9", 1)
+        );
+        assert_eq!(c.otel_endpoint.as_deref(), Some("http://jaeger:4318"));
+        assert_eq!(
+            c.otel_headers,
+            vec![
+                ("authorization".to_string(), "Bearer t".to_string()),
+                ("x-api-key".to_string(), "abc".to_string())
+            ]
+        );
+        assert_eq!(
+            c.otel_client.unwrap()["otlp_endpoint"],
+            "http://jaeger:4318"
+        );
+        assert_eq!(c.telemetry_notice, "jaeger");
+        // §26.3: the version the console named, else the one inside the client object, else none
+        assert_eq!(c.telemetry_version, "");
+        let mut m2 = m.clone();
+        m2.insert(
+            "RAMEN_OTEL_CLIENT".into(),
+            r#"{"otlp_endpoint": "x", "version": "abc123"}"#.into(),
+        );
+        assert_eq!(Config::from_map(&m2).unwrap().telemetry_version, "abc123");
+        m2.insert("RAMEN_TELEMETRY_VERSION".into(), "def456".into());
+        assert_eq!(Config::from_map(&m2).unwrap().telemetry_version, "def456");
+        // a bad value is refused without being quoted back
+        for (k, v) in [
+            ("RAMEN_OTEL_HEADERS", r#"{"x": 1}"#),
+            ("RAMEN_OTEL_HEADERS", r#"{"bad name": "s3cr3t"}"#),
+            ("RAMEN_OTEL_HEADERS", "s3cr3t"),
+            ("RAMEN_OTEL_CLIENT", "[1]"),
+        ] {
+            let m: HashMap<_, _> = [(k.to_string(), v.to_string())].into();
+            let e = Config::from_map(&m).unwrap_err();
+            assert!(e.contains(k) && !e.contains("s3cr3t"), "{e}");
+        }
+        // a group's deploy file may carry the telemetry settings, never the activator's
+        for k in [
+            "RAMEN_OTEL_ENDPOINT",
+            "RAMEN_OTEL_HEADERS",
+            "RAMEN_OTEL_CLIENT",
+            "RAMEN_TELEMETRY_CONSENT",
+            "RAMEN_TELEMETRY_NOTICE",
+            "RAMEN_TELEMETRY_VERSION",
+        ] {
+            assert!(DEPLOY_KEYS.contains(&k), "{k}");
+        }
+        for k in [
+            "RAMEN_ACTIVATOR",
+            "RAMEN_CONSOLE_INTERNAL_URL",
+            "RAMEN_ACTIVATOR_UPSTREAM",
+            "RAMEN_WAKE_TIMEOUT_SECS",
+        ] {
+            assert!(!DEPLOY_KEYS.contains(&k), "{k}");
+        }
     }
 }

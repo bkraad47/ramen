@@ -774,3 +774,455 @@ Source: `reports/security-concurrency-v0.8.0.md` (private workspace). Each item 
 - 22.8 Known and documented, not changed: `Store.transaction()` is a per-process lock, so the console runs as one
   replica (chart default `console.replicas: 1`); a guardrail hook that overruns its timeout leaves its thread running
   after the fail-closed answer.
+
+## 23. v1.0.0 — MCP 2026-07-28: stateless core, standard headers, MRTR, tasks (binding)
+Spec revision 2026-07-28 (SEPs 2575, 2567, 2243, 2322, 2549, 2577; tasks extension `io.modelcontextprotocol/tasks`).
+The node is **dual-era**: 2025-06-18 clients are served exactly as in 0.8.0 (§16, §20); nothing below changes a legacy
+answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11-05"]`.
+
+### 23.1 Era selection and the modern envelope
+- A message is **modern** when the HTTP header `MCP-Protocol-Version` is not a legacy version, or the body has
+  `params._meta["io.modelcontextprotocol/protocolVersion"]`. Everything else is legacy (a bare request with neither
+  included). On gRPC (`Mcp/Call`) only the body decides, and the header rules of §23.2 do not apply.
+- Order on `POST /mcp`: Accept/Content-Type → address → Origin → credential (§16.1, unchanged) → body → era → modern
+  checks → throttle/inflight → dispatch. Modern checks, in this order, each answered as a JSON-RPC error carrying the
+  request `id`:
+  1. `_meta` missing, or without `protocolVersion` or `clientCapabilities` (an object) → `-32602`, HTTP 400.
+     `clientInfo` is optional.
+  2. header `MCP-Protocol-Version` missing or ≠ the body version → `-32020`, HTTP 400.
+  3. version ≠ `MODERN` → `-32022`, HTTP 400, `data: {"supported": [MODERN, ...LEGACY], "requested": "<v>"}`.
+  4. standard headers (§23.2) → `-32020`, HTTP 400.
+  5. `initialize`, `ping`, `logging/setLevel`, `resources/subscribe`, `resources/unsubscribe` and any unknown method →
+     `-32601`, HTTP 404. `notifications/*` → 202, ignored.
+- HTTP status of a modern JSON-RPC error: 400 for `-32020/-32021/-32022` and the `_meta` `-32602`; 404 for `-32601`;
+  200 for every other JSON-RPC error. Transport denials keep §16.1 (401/403/413/429/503).
+- Modern requests ignore `Mcp-Session-Id` and never get one. `GET /mcp` stays 405; `DELETE /mcp` stays legacy-only.
+- Every modern result carries `resultType` (`complete` | `input_required` | `task`) and
+  `_meta["io.modelcontextprotocol/serverInfo"] = {"name": "ramen-node", "version": <node version>}` (merged into an
+  existing `_meta`). `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` and
+  `server/discover` add `ttlMs` (`RAMEN_LIST_TTL_MS`, default 60000; `resources/read` always 0) and
+  `cacheScope: "private"` (lists vary by caller).
+- Modern error codes — nothing from `-32000..-32019`: unknown, blocked or hidden tool → `-32602 Unknown tool: <name>`;
+  listable but not callable → `-32602 forbidden: <name> is not callable for <kind>`; unknown/blocked prompt → `-32602`;
+  resource not found or blocked → `-32602 Resource not found`, `data: {"uri": ...}`; runtime not loaded → `-32603`.
+  Access-log reasons (`blocked_name`, `tool_hidden`, `tool_denied`) are unchanged.
+- `server/discover` → `{"resultType": "complete", "supportedVersions": [MODERN, ...LEGACY], "capabilities": {"tools":
+  {"listChanged": true}, "prompts": {"listChanged": true}, "resources": {"listChanged": true}, "completions": {},
+  "extensions": {"io.modelcontextprotocol/tasks": {}}}, "ttlMs", "cacheScope"}`; `extensions` only when a loaded tool
+  has `task: true`. No `logging`, no `resources.subscribe`. Legacy `initialize` is unchanged except that it accepts a
+  requested `2025-11-25` by answering `2025-06-18` (as it already does for any version).
+- `completion/complete` (both eras): values = the `enum` entries of the named prompt argument / template variable that
+  start with `argument.value` (max 100), else `[]`; `{"completion": {"values": [...], "total": n, "hasMore": false}}`.
+- Access log: every `mcp` line gains `protocol` (the version served). `Admin/Metrics` gains
+  `calls_by_protocol: {"<version>": n}`; `subscriptions` (open streams) and `tasks` (live) counts.
+
+### 23.2 Standard headers (HTTP, modern only)
+- `Mcp-Method` is required and must equal `method`. `Mcp-Name` is required on `tools/call`, `prompts/get` (=
+  `params.name`), `resources/read` (= `params.uri`) and `tasks/get|update|cancel` (= `params.taskId`). A value of the
+  form `=?base64?<b64>?=` is decoded (UTF-8) before comparing. Missing, mismatching or undecodable → `-32020`.
+- `Mcp-Param-<Name>`: a tool parameter declares `"header": "<Name>"` in its proto `input` entry (types `string`,
+  `integer`, `boolean` and `enum` only; `<Name>` an RFC 9110 token, case-insensitively unique per tool — otherwise the
+  package fails to load). The MCP `inputSchema` property then carries `"x-mcp-header": "<Name>"`. On `tools/call`: the
+  argument present and non-null in the body ⇒ the header is required and must match (integers numerically, booleans
+  `true`/`false`, base64 sentinel decoded); argument absent or null ⇒ header not expected; unknown `Mcp-Param-*` ignored.
+- The body stays authoritative; a mismatch is refused and logged with reason `header_mismatch`, never guessed.
+- `traceparent`, `tracestate`, `baggage` (HTTP header, else the `_meta` key) are copied onto the access-log line as
+  `trace: {"traceparent": ..., ...}` when `traceparent` matches the W3C shape; never forwarded to tools.
+- CORS (§16.1) allows and exposes the new header names. Compatibility gate (§19): adding, removing or renaming a
+  parameter's `header` is a breaking change unless `breaking: true`.
+
+### 23.3 Group contract additions (runtime-py; all optional, 0.8 packages load unchanged with the same manifest hash)
+`from ramen_runtime import ...` inside tool/resource/prompt code:
+- Content: `text(s)`, `image(data: bytes, mime)`, `audio(data: bytes, mime)`, `resource(uri, text=None | blob=None,
+  mime="text/plain")`. A tool may return one block, a list of blocks, or (as before) any JSON value. Blocks go into
+  `content` as given; no `structuredContent` for a block result.
+- Resources: the callable may return `bytes` (→ `blob`, base64). A `uri` containing `{var}` is a template: listed by
+  `resources/templates/list` as `uriTemplate` (not by `resources/list`), matched on read (`{var}` = one path segment),
+  variables passed to the callable as keyword strings and declared in `input`.
+- Prompts: `"callable": "<fn>"` (in `<name>.py`) instead of `"skill"`: returns a string, a block, or a list of
+  `{"role", "content"}` messages / blocks (role `user`). Arguments as keywords.
+- `InputRequired(requests: dict[str, dict], state=None)` — raise it from a tool or callable prompt. Builders:
+  `elicit(message, schema)` (form), `elicit_url(message, url)`, `sample(messages | text, max_tokens=100, **params)`,
+  `list_roots()`. On the retry `input_responses()` returns the client's answers (dict, `{}` on the first call),
+  `request_state()` the verified `state` (or `None`), `client_capabilities()` the declared capabilities.
+  A form-mode schema with a property named like a credential (`password|passwd|secret|token|api[_-]?key|credential|
+  card|cvv|ssn`, case-insensitive) is refused: the call answers `isError` `input request refused: <key>.<field> looks
+  like a secret; use elicit_url` — so a golden case catches it at the canary.
+- `MissingCapability(required: dict)` — raise when the tool cannot run for this client → `-32021`.
+- `progress(progress, total=None, message=None)` — no-op unless the request carried `_meta.progressToken`.
+- Tool proto `"task": true` — see §23.5.
+
+### 23.4 MRTR (multi round-trip requests)
+- Sidecar protocol (§2): `runtime.call_tool` / `runtime.get_prompt` params gain `inputResponses` (object, optional),
+  `state` (any JSON, optional — already verified by the node), `client: {"capabilities": {...}}`, `progress: bool`.
+  The result is the 0.8 shape, or `{"resultType": "input_required", "inputRequests": {...}, "state": <json>?}`, or
+  `{"resultType": "missing_capability", "requiredCapabilities": {...}}`. While a call runs the runtime may write
+  `{"jsonrpc": "2.0", "method": "runtime.progress", "params": {"id": <call id>, "progress", "total"?, "message"?}}`.
+- Node, modern era: `input_required` → result `{"resultType": "input_required", "inputRequests", "requestState"?}`;
+  `requestState` only when the tool gave `state`. An input request whose method the client did not declare
+  (`elicitation/create` → `elicitation`, with `mode: "url"` → `elicitation.url`; `sampling/createMessage` → `sampling`;
+  `roots/list` → `roots`), and `missing_capability`, → `-32021` with `data.requiredCapabilities` (HTTP 400).
+- `requestState = b64url(payload) "." b64url(HMAC-SHA256(key, payload))`, key derived from the group session secret
+  (label `mrtr`), `payload = {"v": 1, "s": state, "b": caller binding (§16.2), "g": group, "z": zone, "m": method,
+  "n": name, "a": args digest (C12), "e": expiry}`; TTL `RAMEN_MRTR_TTL_SECS` (default 600). A presented state that is
+  malformed, fails the MAC, is expired, or was issued for another caller, group, zone, method, name or arguments →
+  `-32602 requestState integrity check failed` (log reason `state_invalid`). Not single-use.
+- `inputResponses` must be an object of objects when present → else `-32602`. Unknown keys are the tool's to ignore.
+- Guardrails (§21.2): **pre runs on every round** — the first call and each retry; on a retry the engine sees the
+  arguments plus `"$inputResponses": {...}` — and before the tool body runs again. **Post runs on the final
+  (`complete`) result only.** A blocked round is the usual `isError` result with `_meta.ramen.guardrail`.
+- Legacy era: an `input_required` outcome becomes `isError` `this tool needs more input (<keys>); it can only ask a
+  client that speaks MCP 2026-07-28` (prompts: `-32602` with the same text). `missing_capability` → the same style.
+- `progress`: when the request has `_meta.progressToken` and `Accept` includes `text/event-stream` (either era), the
+  POST is answered as SSE: one `notifications/progress` (`progressToken`, `progress`, `total`?, `message`?) per runtime
+  line, then the response. Otherwise progress lines are dropped.
+- Golden cases (§19): a case may carry `respond: {<key>: <response>}`; the console then calls in the modern era
+  declaring elicitation (form + url), sampling and roots, and on `input_required` retries once with those responses
+  and the `requestState`; `expect` applies to the final result. `expect: {input_required: [<keys>]}` asserts the
+  first round instead.
+
+### 23.5 Tasks (`io.modelcontextprotocol/tasks`, modern only)
+- A tool with `"task": true` called by a client that declared the extension on that request returns
+  `{"resultType": "task", "taskId", "status": "working", "createdAt", "lastUpdatedAt", "ttlMs", "pollIntervalMs"}`;
+  any other caller (legacy, or no declaration) gets the synchronous call as before (bounded by the call timeout).
+- `tasks/get {taskId}` → the task fields + `inputRequests` (`input_required`) | `result` (`completed`, the tool result
+  incl. `isError`) | `error` (`failed`); `tasks/update {taskId, inputResponses}` and `tasks/cancel {taskId}` →
+  `{"resultType": "complete"}`. Called without the extension declared → `-32021`. Unknown, expired, or another
+  caller's task → `-32602 Unknown task` (a task is bound to the caller binding of §16.2 and to group + zone).
+- `taskId`: 128 random bits, hex. `ttlMs` = `RAMEN_TASK_TTL_SECS` (default 3600) × 1000; `pollIntervalMs` 2000;
+  at most `RAMEN_MAX_TASKS` (default 4) running per pod — beyond it the call is refused like inflight (429).
+- Runtime: `runtime.task_start {taskId, name, arguments, client}` returns at once and runs the tool on a thread;
+  `runtime.task_poll {taskId}` → `{"status", "result"?, "error"?, "inputRequests"?}`; `runtime.task_update {taskId,
+  inputResponses}` (the tool body runs again with them); `runtime.task_cancel {taskId}` (cooperative: the result is
+  discarded). Guardrails: pre before the start and before every re-run, post on the final result; a block completes
+  the task with the `isError` result.
+- Node: the owning pod polls the runtime (500 ms) and writes the record to the task store: the scope Redis
+  (`RAMEN_REDIS_SCOPE_URL`), else the item Redis, else process memory (single pod; documented). Any pod of the zone
+  answers `tasks/get` from the store; `update`/`cancel` reaching another pod are queued in the store for the owner.
+  **In a pod without a Redis store no tasks are handed out**: a zone normally runs two pods (stable and
+  canary) and a poll would reach the wrong one, so `task: true` tools answer synchronously and the extension is not
+  advertised (`RAMEN_TASKS=1|0` forces either way).
+  A `working` task whose owner stopped heart-beating (30 s) is `failed` (`-32603 worker lost`). The sidecar is not
+  idle-killed while a task runs. Access log: `tasks/*` lines carry `name` = the tool and `task` = the id.
+
+### 23.6 Subscriptions (`subscriptions/listen`, HTTP, modern only)
+- A POST answered as `text/event-stream` (`X-Accel-Buffering: no`): first the ack
+  `notifications/subscriptions/acknowledged` with `params._meta["io.modelcontextprotocol/subscriptionId"]` = the
+  request id and `params.notifications` = the honoured subset of `toolsListChanged`, `promptsListChanged`,
+  `resourcesListChanged` (+ `taskIds` when the extension is declared — asking for `taskIds` without declaring it is
+  `-32021`, as the extension requires; `resourceSubscriptions` is never honoured);
+  then, after each load whose manifest hash differs, one `notifications/{tools,prompts,resources}/list_changed` per
+  requested kind, each tagged with the subscription id; `notifications/tasks` for watched tasks; an SSE comment every
+  15 s. On shutdown/drain the node sends `{"id", "result": {"resultType": "complete", "_meta": {subscriptionId}}}`.
+- A stream holds no inflight permit; at most `RAMEN_MAX_SUBSCRIPTIONS` (default 64) per pod, then 429. It is
+  per-pod: a stream learns of the reload of the pod it is connected to. Over gRPC the method is `-32601`.
+- Supersedes the "no push channel" note of §20 for modern clients; the legacy SSE answer of C11 is unchanged.
+
+### 23.7 Verification
+- Golden regression: every 0.8 tool/resource/prompt of the fixture and demo groups answers byte-identically (minus
+  `ms`) on the legacy era, and identically plus the modern envelope on the modern era, on both transports.
+- Official suite (`@modelcontextprotocol/conformance@alpha`, pinned version) against a node serving
+  `tests/fixtures/conformance_group` through a local proxy that adds the credential (the suite cannot send one):
+  `--requirements 2026-07-28` and `--spec-version 2025-06-18`, each with a checked-in expected-failures baseline.
+  A baseline entry needs a one-line reason in the file. Known for the legacy wire: server-initiated sampling,
+  elicitation and logging, and `resources/subscribe` are not offered to 2025-06-18 clients.
+
+## 24. v1.0.0 — sleeping workers, images built on deploy, OpenTelemetry with consent (binding)
+Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" (a sleeping zone has 0 workers) and
+§13.3 "the console never builds" (it starts a build Job; it still holds no registry credential itself).
+
+### 24.1 Sleeping workers
+- Setting per group × zone: `sleep_after_secs` (0 = never, the default; otherwise ≥ 60), set by a super admin or an
+  admin of the group — `PUT /api/v1/groups/{g}/zones/{z}/workers {"sleep_after_secs": n}`, group page → Zone actions.
+  Others never see the control. Zone state: `awake` | `asleep` | `waking`, shown on the workers table.
+- **Idle** = every worker pod of the zone reports (in `Admin/Metrics`) `last_call_at` older than `sleep_after_secs`,
+  `inflight` 0, `tasks` 0 and `subscriptions` 0, and the zone was woken or deployed longer ago than that too.
+  `last_call_at` (epoch seconds, 0 = never) counts authenticated MCP calls only — health, reflection, `Admin/*` and
+  denied calls do not keep a zone awake. The console scheduler checks on its tick; `POST …/zones/{z}/sleep` and
+  `POST …/zones/{z}/wake` (same roles) do it by hand. Every transition is audited (`workers.sleep`, `workers.wake`,
+  with `trigger: idle|manual|call|deploy`).
+- **Asleep** = the zone's `worker` and `worker-canary` Deployments are at 0 replicas and an **activator** runs in
+  the zone namespace: one small pod (`Deployment/worker-activator`, the worker image started with
+  `RAMEN_ACTIVATOR=1`, labels `app: worker`, `ramen.io/role: activator`, requests 10m / 32Mi, no Python runtime
+  started). It is selected by the zone's existing `worker` Service, so every edge (GKE Gateway NEG, ALB, Envoy
+  Gateway, kind NodePort) keeps its route and its health check untouched. Real worker pods carry
+  `ramen.io/role: worker`; `Service/worker-direct` selects `app: worker, ramen.io/role: worker`.
+- Activator behaviour (node-rs): the SAME guards as a worker (`grpc::guard`: address, Origin, credential, throttle)
+  with the zone's own config — an unauthenticated call never wakes a zone. `grpc.health.v1.Health` answers SERVING.
+  `Admin/Metrics` answers `{"asleep": true, "last_call_at": …, "woken": n}`; `Admin/Reload` → `FAILED_PRECONDITION`.
+  An accepted MCP call (HTTP or gRPC): `POST {RAMEN_CONSOLE_INTERNAL_URL}/api/v1/internal/zones/{g}/{z}/wake` with
+  header `x-ramen-admin-key` (once per wake, concurrent calls share it), poll `worker-direct:8080` gRPC health until
+  SERVING, then forward the request unchanged (HTTP: method, path, headers, body, streaming the answer; gRPC:
+  `Mcp/Call` bytes and metadata) and relay the answer. Not SERVING within `RAMEN_WAKE_TIMEOUT_SECS` (default 25, under every edge's default backend
+  timeout; the wake goes on, so the retry finds the zone awake) →
+  HTTP 503 with `Retry-After: 10` / gRPC `UNAVAILABLE`, access-log reason `waking`. Its log lines carry
+  `activator: true`.
+- Console: **sleep** = apply the activator (replicas 1), wait Ready **and listed as a ready address in the Endpoints
+  of `Service/worker`** (1.0.0a: until then kube-proxy still routes to the terminating-but-serving workers, and a
+  draining worker never asks for a wake; a zone role that cannot read Endpoints skips the wait with a warning; not
+  listed within the wait → 502), scale `worker` and `worker-canary` to 0 (the workers' SIGTERM drain serves what is in
+  flight), state `asleep`. **wake** = state `waking`, scale `worker` to
+  the zone's count before it slept (≥ 1) and `worker-canary` to what it was, wait Ready, state `awake`, then scale
+  the activator to 0 — while both exist the activator forwards, so no call is refused. A deploy, a rebalance or a
+  count change on a sleeping zone wakes it first. The autoscaler (§21.7) skips a zone that is not `awake`.
+  `Cloud` gains `sleep_zone(group, zone) -> dict`, `wake_zone(group, zone, count: int, canary: int) -> dict` and
+  `zone_runtime(group, zone) -> {"workers": n, "canary": n, "activator": n}`; local adapter: no-ops that only flip
+  the state (compose has one fixed worker). `/api/v1/internal/*` is reachable in-cluster only (not routed by any
+  edge; the chart's routes list `/api/v1/internal` nowhere and the console refuses it when `X-Forwarded-For` is set).
+
+### 24.2 Worker images built on deploy
+- Per group: `build_image` (bool; default true on gcp/aws/azure when the deployment has a builder, false otherwise),
+  group page → Worker image card, group admins. When true and the checkout has a non-empty `mcp/requirements.txt`,
+  a deploy first ensures the group's image (a file of comments and blank lines counts as empty): tag `b-<group>-<sha256(base image ref + "\n" + requirements.txt)[:16]>`
+  in the cloud's own registry next to the base image — `<region>-docker.pkg.dev/<project>/ramen/worker`, 
+  `<account>.dkr.ecr.<region>.amazonaws.com/ramen/worker`, `<acr>/ramen/worker` (one repository, no per-group
+  repository to create). An `images` record with that tag and `source: "build"`, `status: "ok"` means it exists:
+  nothing is built. Otherwise the console starts `Job/ramen-build-<hash>` in `ramen-system`
+  (`serviceAccountName: ramen-builder`, image `RAMEN_BUILDER_IMAGE`, default a pinned kaniko executor) whose context
+  is a ConfigMap holding `requirements.txt` and
+
+      FROM <base worker image>
+      COPY requirements.txt /opt/ramen/requirements.txt
+      RUN /opt/venv/bin/pip install --no-cache-dir -r /opt/ramen/requirements.txt
+      ENV RAMEN_DEPS_BAKED=<sha256 of requirements.txt>
+
+  waits up to `RAMEN_BUILD_TIMEOUT_SECS` (default 900), records the image (history as §13.3) and uses it for this
+  deploy. A failed or timed-out build fails the deploy before the canary, with the last 40 log lines of the Job in
+  the deploy log; the stable track is untouched. Job and ConfigMap are deleted afterwards (TTL 600 s on the Job).
+- Precedence for the zone's image: an admin's pinned image (§13.3 `images/current` with `source: "manual"`) → the
+  built image → the base image. Runtime: when `RAMEN_DEPS_BAKED` equals the sha256 of the bucket's
+  `mcp/requirements.txt`, `deps.install` is skipped (log `deps baked`); any other value installs as before.
+- The builder identity is the deployment's, never the console's: Terraform creates `ramen-builder` (GCP: GSA with
+  `roles/artifactregistry.writer` on the `ramen` repository, workload identity for `ramen-system/ramen-builder`; AWS:
+  IRSA role with ECR push on `ramen/worker`; Azure: user-assigned identity with `AcrPush`, federated to the KSA) and
+  the chart creates the KSA and sets `RAMEN_BUILDER=1` + `RAMEN_BUILD_REGISTRY` on the console. Without it
+  `build_image` cannot be turned on (422 naming the missing builder). `Cloud` gains
+  `build_image(group, tag, dockerfile, files: dict[str, str]) -> {"image": ref, "log": str}`.
+- kind: `deploy/kind/up.sh` runs an in-cluster registry and sets the same two variables, so the path is testable.
+
+### 24.3 OpenTelemetry
+- Settings (super admin, Config page → Telemetry; `GET|PUT /api/v1/config/otel`): `enabled`, `endpoint` (OTLP/HTTP
+  base URL, e.g. `http://jaeger.ramen-system:4318`), `headers` (what Ramen sends; encrypted, write-only),
+  `client_endpoint` + `client_headers` (what connected agents are told to use; default: `endpoint`, no headers —
+  never Ramen's own `headers`). Stored in `config/otel`; not in backups' secrets-free rule exception: the two header
+  maps are stripped from backups like every secret. Workers get `RAMEN_OTEL_ENDPOINT` / `RAMEN_OTEL_HEADERS` (JSON)
+  on their next deploy.
+- Export. Node: one span per MCP call (`SERVER`, name `mcp <method>`; attributes `mcp.method`, `mcp.name`,
+  `mcp.protocol`, `ramen.group|zone|env`, `ramen.transport`, `ramen.status`, `ramen.reason`, `ramen.key_id`,
+  `ramen.guardrail.stage|engine` when a rail blocked), a child span `runtime <call>` around the sidecar round trip,
+  parent taken from the request's `traceparent` (§23.2); counters `ramen.mcp.calls` and `ramen.mcp.errors` by
+  method/name/status. Never arguments, results or credentials. OTLP/HTTP JSON (`/v1/traces`, `/v1/metrics`),
+  batched off the call path; an unreachable collector drops data and logs one warning a minute, never fails a call.
+  Console: one span per deploy job (`ramen.deploy`, attributes group/env/zones, outcome, `ramen.golden.passed|failed`,
+  `ramen.compat`, `ramen.image`). `service.name` `ramen-node` / `ramen-console`, `service.version`.
+- Telling the client. `POST /oauth/token` answers gain `telemetry: {"otlp_endpoint", "headers", "resource_attributes":
+  {"ramen.group", "ramen.zone"}}` when enabled; `server/discover` carries the same object under
+  `_meta["io.ramen/telemetry"]` for any authenticated modern caller.
+- **Consent.** Per group: `require_telemetry_consent` (group admin; only settable while telemetry is enabled).
+  Workers get `RAMEN_TELEMETRY_CONSENT=1` and `RAMEN_TELEMETRY_NOTICE` (the endpoint's host) on deploy. When on,
+  `tools/call`, `prompts/get` and `resources/read` are served only to a caller who accepted:
+  1. A console token carries `tel: true` when the person approved the OAuth consent page, which then shows the
+     telemetry notice and a required checkbox; approving without it is impossible, declining ends the flow as today.
+     Such a caller is never asked again.
+  2. Otherwise, modern era + the client declared `elicitation`: the node answers `input_required` with
+     `inputRequests: {"ramen_telemetry_consent": elicitation/create (form) message "This Ramen group records
+     telemetry about your calls (tool name, timing, outcome — never arguments or results) at <host> and asks your
+     agent to send its telemetry there. Accept to continue.", requestedSchema {accept: boolean}}` and a signed
+     `requestState` (§23.4, bound as usual). A retry with `accept: true` records the consent for that caller
+     binding (store: scope Redis → item Redis → pod memory; 30 days) and runs the call — the tool's own input
+     requests follow in later rounds. `decline`, `cancel` or `accept: false` → `-32602 telemetry consent declined`.
+  3. Modern era without `elicitation` → `-32021` (`requiredCapabilities: {"elicitation": {}}`). Legacy era →
+     `-32003 forbidden: this group requires telemetry consent; use a client that speaks MCP 2026-07-28 or sign in
+     through OAuth`.
+  Lists, `server/discover` and `completion/complete` are not gated (MRTR is not allowed on them). The console's own
+  calls (golden cases, package listing) present the worker admin key and skip the gate. Access-log reasons
+  `consent_required`, `consent_declined`; a recorded consent logs `consent: "granted"`.
+- Chart: `otel.collector: none | jaeger | phoenix` (default none) adds a Jaeger all-in-one (OTLP in, query API) or
+  Arize Phoenix (OTLP/HTTP + UI on 6006, OTLP/gRPC 4317) to `ramen-system` for trying it out and for the test runs;
+  not for production.
+
+### 24.4 Verification
+Unit tests per component; kind: a zone sleeps on idle, a call through the edge wakes it and is answered, a deploy
+builds and uses a group image, spans of a call and a deploy arrive in Jaeger, consent by prompt / by token / refused.
+Cloud (GKE, EKS, AKS): the same four, plus every sign-in path: password, API key, MCP key, person's OAuth token over
+HTTP and through the bridge, Entra with group lookup; Google Workspace against a fake unless a live client is given.
+
+### 24.5 The console's own secrets
+On a cloud (`RAMEN_SECRETS_BACKEND` ≠ `store`) every reversible secret the console stores (`storage/encrypted.py`
+SENSITIVE minus hashes and group secrets, plus a provider's `client_secret`) is written to the cloud's secret manager
+as its own secret and the doc keeps `vault:<ref>`; a changed value is a new secret, the old one deleted; refs are
+cached. Names: GCP/Azure `ramenc-…`, AWS `ramen-console/…` — outside every worker grant and boundary. Plaintext
+values found at start are moved. Locally nothing changes (Fernet in the store). The Config page lists each section's
+settings; a secret shows only as set/not set. Every secret read or written is scrubbed (`***`) from every log handler,
+deploy job logs and backups; `scheme://user:pass@` is scrubbed always. Backups keep no nested provider secret and a
+restore merges per entry so the live one survives.
+
+## 25. v1.0.0 — the zones a group may use (superseded by §26.1 in v1.0.0a: zones are bound to groups, `allowed_zones` is gone)
+Asked for by the user on the live GKE console: a group must not reach every zone.
+- `groups[].allowed_zones: list[str]` — the zones the group's environments may use. `GET /api/v1/groups/{g}/zones` →
+  `{"allowed": [...]}` (viewers of the group); `PUT` the same body (super admin only; every zone must exist, 422
+  otherwise; a zone an environment of the group still uses cannot be removed, 409 naming the environment and zone).
+  Audited `group.zones` with a `zone:<z>` tag per zone.
+- A group admin's `POST …/environments` or `PUT …/environments/{env}` naming a zone outside the list → 403 naming the
+  zones. A super admin's environment adds the zones it names to the list (the super admin is the one who decides).
+- New groups start with `[]`. At startup a group without the field gets the zones its environments use, once; a list
+  a super admin set (even empty) is never widened.
+- Group page: the zone tables, zone actions and the environment zone picker show only allowed zones; a super admin
+  edits the list in the "Zones and workers" card, everyone else sees it read-only.
+
+## 26. v1.0.0a — zones bound to groups, persisted deploy jobs, telemetry through Ramen (binding)
+Asked for by the user (D60–D63, 2026-11-14). Supersedes §25.
+
+### 26.1 Zones bound to groups
+- `zones[].groups: list[str]` — the groups a zone serves. Super admin only: `POST /api/v1/zones` takes `groups`
+  (default `[]`), `PUT /api/v1/zones/{zone}/groups {"groups": [...]}` replaces the list (every group must exist, 422;
+  a group whose environment still uses the zone cannot be removed, 409 naming environment and zone). Audited
+  `zone.groups` with a `group:<g>` tag per group.
+- A group's zones are the zones listing it: `GET /api/v1/groups/{g}/zones` → `{"zones": [...]}` (read-only, viewers of
+  the group); `PUT` on it is gone (404). `groups[].allowed_zones` is gone; at startup a zone gets the groups whose
+  `allowed_zones` named it or whose environments use it, once (`zones[].groups` present → left alone).
+- An environment (`POST`/`PUT …/environments`) may name only the group's zones — 403 naming the zones, for every role
+  (a super admin binds the zone to the group first). A worker record (`workers/<g>:<z>`) exists only for a bound
+  pair: binding creates it (defaults as today), unbinding detaches the zone for that group (namespace, workers, zone
+  identity, record) after the 409 check; `worker_config(g, z)` for an unbound pair → 404.
+- Zones page: the zone table gains a `Groups` column with a checkbox dropdown + "Save groups" per row (super admin);
+  "Workers per group" lists bound pairs only. Group page: the "Zones and workers" and "Zone actions" cards are gone;
+  one **Environments** table (environment, ref, verbose, last deploy, actions) with, under each environment row, one
+  row per zone of it: zone (namespace), workers (live cell), size, sleep state, IP allow-list, service account, and
+  the zone's actions (scale, sleep, IP rules, throttle, service account, rebalance, logs) in a `details` disclosure
+  — every zone action keeps its route. The group's zones not used by any environment are listed once below the table
+  ("Bound, unused: …"). The environment zone picker offers the group's zones.
+
+### 26.2 Deploy jobs persisted
+- `jobs` collection: `{id, kind, target, status, started, finished, result, error, log: [...]}`, written at creation
+  and at every log line / end (the log is scrubbed, §24.5). `GET /api/v1/jobs/{id}` and the group page read the store,
+  so a job is visible after a console restart and from every replica. A job still `running` after
+  `RAMEN_JOB_STALE_SECS` (default 1800) without a change is shown and answered as `error: "lost (console restarted)"`.
+  Kept: the last 50 per target (older deleted at creation). Backups do not include jobs.
+
+### 26.3 Telemetry through Ramen
+- **Config version.** `telemetry_version` = first 12 hex of sha256 over the canonical JSON of
+  `{enabled, endpoint, client_endpoint, client_headers}` of `config/otel`. `GET /api/v1/config/otel` (public form) and
+  the Config page show it. The token answer's `telemetry` object (§24.3) gains `version` and `required` (the group's
+  consent switch); `server/discover`'s `_meta["io.ramen/telemetry"]` likewise. Workers get it in `RAMEN_OTEL_CLIENT`
+  (`version` key) and in `RAMEN_TELEMETRY_VERSION`.
+- **Push on update.** Saving `config/otel` rewrites every deployed zone's worker config (the same `cfg` the deploy
+  writes) and sends `Admin/Reload` to each zone's workers, so the new endpoint/headers/version are live without a
+  deploy; the reload's outcome per zone is in the `PUT` answer (`pushed: {"<g>/<z>": "ok" | "<error>"}`) and audited
+  `telemetry.push`. A worker that cannot be reached keeps the old config until its next deploy.
+  On Kubernetes the worker pods read the deploy Secret as env, so the push rewrites the Secret, reloads every pod and
+  rolling-restarts the stable track (a 20 s drain per pod, §24 — calls are not dropped); locally the env files are
+  rewritten and the workers reloaded.
+- **Report on every call.** When the group requires telemetry (`RAMEN_TELEMETRY_CONSENT=1`), a gated call
+  (`tools/call`, `prompts/get`, `resources/read`) from anyone but the console must carry
+  `params._meta["io.ramen/telemetry"]`:
+  `{"version": "<telemetry_version>", "seq": <int, +1 per report>, "events": [{"ts": "<RFC 3339>", "kind":
+  "mcp" | "llm" | "tool" | "other", "name": "<method or model or tool>", "ms": <int>, "ok": <bool>, "reasoning":
+  "<text, optional, ≤ 4 KiB kept>"}, …]}` — everything the client did since its last report (its MCP calls to any
+  server, its model calls with the reasoning, its other tool calls); `events: []` is a valid report. The same object is
+  accepted on `telemetry/report` (modern, authenticated; answer `{"accepted": <n>, "version": "<current>"}`) for
+  reporting between calls. Limits: ≤ 200 events and ≤ 64 KiB per report (`-32602` beyond).
+  - Missing on a gated call → `-32024 telemetry report required` (HTTP 428), `data: {"version": "<current>"}`;
+    a 2025-06-18 client without the report → `-32003 forbidden: this group requires telemetry; use a client that
+    reports it (MCP 2026-07-28 or the Ramen bridge)`. A 2025-06-18 body that carries the report (the bridge in front
+    of a legacy host) is accepted and forwarded like a modern one — the report is what matters, not the era; a
+    stale version on a legacy body → `-32025` too (HTTP 200 on the legacy era, §23.1). Access-log reason
+    `telemetry_required`.
+  - `version` ≠ the worker's → `-32025 telemetry config changed: sign in again` (HTTP 428), `data: {"version":
+    "<current>"}`; reason `telemetry_stale`. Nothing of the stale report is forwarded.
+  - The gate runs after the consent gate (§24.3) and before the runtime; a call refused here is not dispatched.
+  - A worker not yet told a version (`RAMEN_TELEMETRY_VERSION` empty, a deploy from before this console) accepts
+    any version; a malformed report (shape, limits) is `-32602 invalid telemetry report: <what>` with no reason.
+- **Forwarding.** Each event becomes a span (kind `CLIENT`, name `client <kind> <name>`, start `ts`, duration `ms`,
+  error `!ok`) under the call's own span (§24.3), attributes `ramen.client.ip`, `ramen.user` (the token's subject /
+  email, else the key id), `ramen.key_id`, `ramen.group`, `ramen.zone`, `ramen.env`, `ramen.worker` (the pod's
+  hostname), `ramen.event.kind`, `ramen.event.seq`, `ramen.reasoning` (the text, ≤ 4 KiB), `ramen.transport`;
+  counter `ramen.client.events` by kind/ok. Reasoning and events never reach the access log or the console; they go
+  to the collector only. A collector that is down drops them (one warning a minute, §24.3) — the call still runs.
+- **Client side (the bridge).** At sign-in the bridge keeps the token answer's `telemetry` object encrypted in memory
+  (a per-process random key, never on disk); it records every call it forwards and offers the host a tool
+  `ramen_report(kind, name, ms, ok, reasoning)` (listed with instructions that the model must report its model and
+  non-MCP tool calls with its reasoning before the next Ramen call); every gated call it forwards carries the report
+  since the last one; `-32025` → it signs in again (refresh grant, else the interactive flow) and retries once;
+  `-32024` from a server it has no config for → it signs in, then retries. Not consenting at sign-in ends the flow
+  as today (§24.3).
+- Chart: `otel.collector: jaeger` or `phoenix` is set for the test deploys (`cloud2.sh`); the Config page's
+  Telemetry section lists the trace UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).
+
+## 27. v1.0.0b — environments across groups, zones attached to environments, one admin page (binding)
+Asked for by the user (`instructions/v1.0.0b.md`, 2026-11-14): *a group has many environments, an environment has
+many zones, a zone has workers*; an environment applies to the groups it names, a zone to the environments it names.
+Supersedes §26.1's binding by group: a zone's groups are now **derived** — the union of the groups of its environments.
+Agent-settled details are marked D64–D66 (the user can overrule).
+
+### 27.1 Model
+- **Environment** = a name shared across groups. Storage stays `environments/<group>:<name>` (every per-group state —
+  `blocked`, `blocked_zones`, `tool_access`, `verbose`, `last_deploy`, `zones` — lives there, unchanged); the
+  environment the user sees is the set of docs with that `name` (D64). Its `ref` is one value: a change writes every
+  doc; on migration docs that differ keep theirs and the page shows the first with a "differs per group" note.
+  Names are unique console-wide: `POST` of a name that exists → 409 (add the group with `PUT` instead). An
+  environment names at least one group (422 otherwise). Only groups the caller administers may be named (403).
+- **Zone** = `{name, provider, region, environments: [names], groups: [derived], created}`. `groups` is kept in the
+  doc (so §26.1 readers — `GET /groups/{g}/zones`, worker records, the group page — work unchanged) and is
+  recomputed on every zone or environment write. Each environment doc's `zones` is kept in sync with the zones
+  naming it (write-through), so deploys, secrets scoping, keys and the group page keep working.
+- **Worker record** `workers/<g>:<z>` exists for every pair the derivation yields (as §26.1): a pair that appears is
+  bound (record created, `cloud.attach_zone`, then a deploy, 27.3); a pair that disappears is detached (namespace,
+  workers, identity, record).
+- **Who may edit (D65).** Super admins: everything. A group admin may create an environment for groups they
+  administer, edit/delete an environment whose groups are all theirs, create a zone whose environments are all
+  theirs, and edit/delete a zone whose groups (derived) are all theirs. Everything else 403. Viewers and MCP users
+  get 403 on the page and on every write; the reads in 27.2 stay viewer-scoped as before.
+
+### 27.2 API (`/api/v1`)
+- `GET /environments` unchanged (per-group docs, csv/json). New `GET /environments/by-name` →
+  `[{name, ref, ref_differs, groups: [...], zones: [...], last_deploy: {"<g>": {...}}}]`, viewer-scoped to the
+  caller's groups.
+- `POST /environments {name, ref?, groups: [..]}` → 201, the by-name object. Creates `<g>:<name>` for every group
+  (ref defaults to each group's `ref`); zones `[]`.
+- `PUT /environments/{name} {ref?, groups?}` → 200. `ref` rewrites every doc. `groups` replaces the set: a new group
+  gets a doc (same ref, the environment's zones → attach + deploy per zone); a removed group loses its doc and is
+  detached from every zone no other environment of that group uses (today's §26.1 rule).
+- `DELETE /environments/{name}` → 204. Removes every doc; a zone whose only environment it was is **deleted** (the
+  zone record too — the user's rule: "deleting an environment deletes the zones and workers related to it that are
+  not related to other environments"); a zone other environments still use is only detached for the groups that
+  lost it.
+- `POST /zones {name, provider, region, environments: [..]}` (`groups` is gone → 422 if sent) → 201
+  `{...zone, "jobs": [ids]}`: every environment must exist (422); region checked against the Config block list
+  (403); each derived pair is bound and **deployed** (one canary deploy job per `<g>/<env>` scoped to the zone, the
+  §26.2 job; `jobs` lists them; a pair that cannot be deployed records the error on the job, the zone stays).
+- `PUT /zones/{zone} {region?, environments?}` → 200 `{...zone, "jobs": [ids]}`. `environments` replaces the set
+  (bind + deploy the pairs that appear, detach the pairs that disappear). `region` change: every bound pair is
+  re-attached in place with the new location (the Deployments' node selector) and deployed, so the rollout destroys
+  the old workers and starts new ones there (D66: the zone keeps its name, namespace and worker records — count,
+  size, sleep, IP rules, throttle, service-account grants; the namespace is never deleted — on GKE a deleted one
+  sits Terminating on the NEG finalizer and a re-create is refused).
+  Provider cannot change (422). Audited `zone.update` with `region:` / `env:` tags.
+- `PUT /zones/{zone}/groups` is gone (404). `DELETE /zones/{zone}` as today (detaches every pair, removes the zone
+  from every environment doc), under 27.1's edit rule.
+- `POST /groups/{g}/environments {name, ref?, zones?}` stays as the per-group shortcut: it adds `g` to the
+  environment `name` (creating it when new) and, when `zones` are given, attaches the environment to those zones —
+  so the caller must be allowed to edit those zones (27.1), the old "zone not bound" 403 keeps its wording for an
+  unbound zone the caller may not edit. `PUT /groups/{g}/environments/{env}` keeps `ref`/`verbose`/`blocked`; its
+  `zones` field is accepted with the same meaning (attach/detach this environment on those zones) for the harness.
+  `DELETE /groups/{g}/environments/{env}` removes only that group's doc (= `PUT /environments/{name}` without `g`).
+
+### 27.3 Deploy on bind
+A pair that appears (new zone, zone gains an environment, environment gains a group, region change) is deployed at
+once: canary deploy of `<g>/<env>` scoped to that zone, a job per pair, started from the write (background), so the
+worker runs the group's code without a click. A running deploy of the same target → the write still succeeds, the
+pair's job is skipped with `error: "a deploy is already running"`. The group page's Deploy button stays for re-deploys.
+
+### 27.4 Pages
+- `/environments` is **Environments, Zones and Workers** (nav entry replaces both old ones; `/zones` → 301 there);
+  `require("group_admin")`. Sections in order: **New environment** (name, ref, groups checkbox dropdown of the
+  admin's groups); **Environments** table (name, ref input, groups dropdown, zones, last deploy per group, Save /
+  Delete with confirm); **New zone** (name, environments dropdown, location = the console cloud's regions not
+  blocked, as the old Zones page; local: free text); **Zones** table (name, provider, location select, environments
+  dropdown, derived groups, Save / Delete zone); **Workers per group** (group, zone, environments, namespace, live
+  cell every 15 s) — the old card plus the environments column. Rows the caller may not edit are read-only.
+- Group page: the "Add environment" form and its zone picker go; the Environments table keeps every row and action
+  (Deploy, Verbose, Delete = this group's doc) and links to the new page; "Bound, unused" stays.
+- Migration at start (once, idempotent): every zone gets `environments` = the names of the environment docs listing
+  it; `groups` is left as stored (a superset is harmless — recomputed on the next write). `zones.png` is replaced by
+  `environments.png` of the new page in `shots.json`.

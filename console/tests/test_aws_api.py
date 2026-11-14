@@ -72,7 +72,8 @@ def demo(root):
         root.post("/api/v1/groups", json={"name": "demo", "repo_url": "https://example.com/demo.git"}).status_code
         == 201
     )
-    assert root.post("/api/v1/zones", json={"name": "a", "provider": "aws", "region": "us-east-1a"}).status_code == 201
+    zone = {"name": "a", "provider": "aws", "region": "us-east-1a"}
+    assert root.post("/api/v1/zones", json=zone).status_code == 201
     r = root.post("/api/v1/groups/demo/environments", json={"name": "prod", "zones": ["a"]})
     assert r.status_code == 201, r.text
     return root

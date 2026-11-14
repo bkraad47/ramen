@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_embedded_resource",
+  "description": "Return one embedded text resource block (official suite: tools-call-embedded-resource).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

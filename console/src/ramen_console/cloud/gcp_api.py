@@ -333,11 +333,38 @@ class Iam:
         return changed
 
     # resource-level bindings (SEC-08): the console holds no project-level setIamPolicy -------------------------
+    @staticmethod
+    def _shed_deleted(policy: dict) -> bool:
+        """Drop `deleted:` members (a principal deleted while still bound). GCS refuses a policy write that carries
+        one once a principal of that name exists again, for every group that shares the bucket."""
+        before = sum(len(b["members"]) for b in policy.get("bindings", []))
+        for b in policy.get("bindings", []):
+            b["members"] = [m for m in b["members"] if not m.startswith("deleted:")]
+        policy["bindings"] = [b for b in policy.get("bindings", []) if b["members"]]
+        return before != sum(len(b["members"]) for b in policy["bindings"])
+
+    def purge_bucket_member(self, storage, bucket_name, email) -> bool:
+        """Remove the identity from every binding of the bucket, before the identity itself is deleted."""
+        bucket = storage.bucket(bucket_name)
+        pol = bucket.get_iam_policy(requested_policy_version=3)
+        doc = {"bindings": [dict(b) for b in pol.bindings]}
+        member = f"serviceAccount:{email}"
+        had = any(member in b["members"] for b in doc["bindings"])
+        for b in doc["bindings"]:
+            b["members"] = [m for m in b["members"] if m != member]
+        shed = self._shed_deleted(doc)  # also sheds emptied bindings
+        if had or shed:
+            pol.version = 3
+            pol.bindings = doc["bindings"]
+            bucket.set_iam_policy(pol)
+        return had
+
     def grant_bucket_roles(self, storage, bucket_name, email, bindings: list[tuple[str, dict | None]]) -> list[str]:
         """Bind roles on the groups bucket itself (conditions keep them to the group's prefix)."""
         bucket = storage.bucket(bucket_name)
         pol = bucket.get_iam_policy(requested_policy_version=3)
         doc = {"bindings": [dict(b) for b in pol.bindings]}
+        self._shed_deleted(doc)
         if [role for role, cond in bindings if self._add(doc, role, f"serviceAccount:{email}", cond)]:
             pol.version = 3
             pol.bindings = doc["bindings"]
@@ -357,6 +384,7 @@ class Iam:
         bucket = storage.bucket(bucket_name)
         pol = bucket.get_iam_policy(requested_policy_version=3)
         doc = {"bindings": [dict(b) for b in pol.bindings]}
+        self._shed_deleted(doc)
         changed = self._remove(doc, set(roles), f"serviceAccount:{email}")
         if changed:
             pol.version = 3

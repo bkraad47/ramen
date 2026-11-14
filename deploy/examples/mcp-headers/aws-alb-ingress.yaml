@@ -1,0 +1,32 @@
+# AWS ALB (AWS Load Balancer Controller): forward `tools/call slow_report` of group demo, zone a, to `worker-reports`.
+# One listener rule: the two Ramen routing headers plus Mcp-Method and Mcp-Name, ordered ahead of the chart's rule.
+# EXAMPLE, not applied to a live cluster. `worker-reports` is yours to create; `group.name` must be your ALB group.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: worker-slow-report
+  namespace: ramen-demo-a
+  annotations:
+    alb.ingress.kubernetes.io/group.name: ramen        # the chart's aws.albGroup
+    alb.ingress.kubernetes.io/group.order: "5"         # before the chart's worker rule (order 10)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/backend-protocol-version: HTTP1
+    # path + four header conditions: an ALB rule has a small fixed budget of condition values; check it before adding more
+    alb.ingress.kubernetes.io/conditions.slow-report: >-
+      [{"field":"http-header","httpHeaderConfig":{"httpHeaderName":"ramen-group","values":["demo"]}},
+       {"field":"http-header","httpHeaderConfig":{"httpHeaderName":"ramen-zone","values":["a"]}},
+       {"field":"http-header","httpHeaderConfig":{"httpHeaderName":"Mcp-Method","values":["tools/call"]}},
+       {"field":"http-header","httpHeaderConfig":{"httpHeaderName":"Mcp-Name","values":["slow_report"]}}]
+    alb.ingress.kubernetes.io/actions.slow-report: >-
+      {"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"worker-reports","servicePort":"8080","weight":100}]}}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend: { service: { name: slow-report, port: { name: use-annotation } } }

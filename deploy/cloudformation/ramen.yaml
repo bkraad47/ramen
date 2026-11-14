@@ -251,7 +251,9 @@ Resources:
               - Effect: Allow
                 Action: [secretsmanager:CreateSecret, secretsmanager:PutSecretValue, secretsmanager:GetSecretValue, secretsmanager:DescribeSecret,
                          secretsmanager:DeleteSecret, secretsmanager:RestoreSecret, secretsmanager:TagResource, secretsmanager:UpdateSecret]
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen-console/*"
               - Effect: Allow
                 Action: secretsmanager:ListSecrets
                 Resource: "*"
@@ -300,6 +302,33 @@ Resources:
               - Effect: Allow
                 Action: [logs:StartQuery, logs:GetQueryResults, logs:StopQuery, logs:DescribeLogGroups]
                 Resource: "*"
+      Tags: [{ Key: app, Value: ramen }]
+
+  # --- image builder (KSA ramen-system/ramen-builder, CONTRACTS §24.2): pull + push on ramen/worker only ---
+  BuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-builder
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:ramen-system:ramen-builder", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      Policies:
+        - PolicyName: ramen-builder
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ecr:GetAuthorizationToken]
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
+                         ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload, ecr:PutImage]
+                Resource: !GetAtt EcrWorker.Arn
       Tags: [{ Key: app, Value: ramen }]
 
   # --- AWS Load Balancer Controller (KSA kube-system/aws-load-balancer-controller); policy vendored from v2.13.0 ---
@@ -603,6 +632,9 @@ Outputs:
     Value: !GetAtt EcrWorker.RepositoryUri
   ConsoleRoleArn:
     Value: !GetAtt ConsoleRole.Arn
+  BuilderRoleArn:
+    Value: !GetAtt BuilderRole.Arn
+    Description: "helm --set builder.roleArn=<this> (CONTRACTS §24.2)"
   AlbControllerRoleArn:
     Value: !GetAtt AlbControllerRole.Arn
   FluentBitRoleArn:

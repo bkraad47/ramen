@@ -33,6 +33,41 @@ UNSET = object()
 MAX_MESSAGE = 4 * 1024 * 1024
 CLIENT_INFO = {"name": "ramen-tests", "version": "0.4.0"}
 _ids = itertools.count(1)
+_seq = itertools.count(1)
+TELEMETRY_META = "io.ramen/telemetry"  # §26.3: the client's report, on every gated call
+GATED = ("tools/call", "prompts/get", "resources/read")
+
+
+def telemetry_event(kind="llm", name="test-model", ms=12, ok=True, reasoning=None, ts=None) -> dict:
+    from datetime import UTC, datetime
+
+    e = {
+        "ts": ts or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "kind": kind,
+        "name": name,
+        "ms": ms,
+        "ok": ok,
+    }
+    if reasoning is not None:
+        e["reasoning"] = reasoning
+    return e
+
+
+def telemetry_report(version: str = "", events: list | None = None, seq: int | None = None) -> dict:
+    """What goes in `params._meta["io.ramen/telemetry"]` (or on `telemetry/report`): `version` = the
+    `telemetry_version` of `GET /api/v1/config/otel` ("" when the worker was told none)."""
+    return {"version": version, "seq": next(_seq) if seq is None else seq, "events": list(events or [])}
+
+
+def with_report(method: str, params: dict | None, version: str | None) -> dict | None:
+    """`params` with a report added for a gated method when `version` is not None and none is there yet."""
+    if version is None or method not in GATED or params is None:
+        return params
+    meta = dict(params.get("_meta") or {})
+    if TELEMETRY_META in meta:
+        return params
+    meta[TELEMETRY_META] = telemetry_report(version)
+    return {**params, "_meta": meta}
 
 
 class JsonRpcError(Exception):
@@ -95,6 +130,7 @@ class Node:
     ):
         self.target, self.key, self.admin_key, self.timeout, self.tls = target, key, admin_key, timeout, tls
         self.group, self.zone = group, zone
+        self.telemetry: str | None = None  # a version → every gated request carries a §26.3 report
         self._ca = Path(ca).read_bytes() if isinstance(ca, str) else ca
         self._channel: grpc.Channel | None = None
 
@@ -169,7 +205,7 @@ class Node:
         """JSON-RPC request → `result`. Raises JsonRpcError for an error object, grpc.RpcError for transport errors."""
         rid = next(_ids)
         body = {"jsonrpc": "2.0", "id": rid, "method": method}
-        if params is not None:
+        if (params := with_report(method, params, self.telemetry)) is not None:
             body["params"] = params
         out = json.loads(self.call_raw(body, key, timeout=timeout) or b"null")
         assert isinstance(out, dict) and out.get("jsonrpc") == "2.0" and out.get("id") == rid, out
@@ -310,6 +346,7 @@ class HttpNode:
         timeout: float = 30,
     ):
         self.url, self.key, self.group, self.zone, self.timeout = url, key, group, zone, timeout
+        self.telemetry: str | None = None  # a version → every gated request carries a §26.3 report
         self.session_id: str | None = None
         self.protocol_version: str | None = None
         self.notifications: list[dict] = []  # server notifications carried on SSE answers (C11), in order
@@ -317,6 +354,7 @@ class HttpNode:
         v: bool | str = E.tls_verify() if verify is None else verify
         if isinstance(ca, (str, bytes)):
             v = ca if isinstance(ca, str) else _ca_file(ca)
+        self.verify = v
         self._client = httpx.Client(timeout=timeout, verify=v)
 
     @classmethod
@@ -381,7 +419,7 @@ class HttpNode:
     def request(self, method: str, params: dict | None = None, key=UNSET, timeout: float | None = None) -> dict:
         rid = next(_ids)
         body = {"jsonrpc": "2.0", "id": rid, "method": method}
-        if params is not None:
+        if (params := with_report(method, params, self.telemetry)) is not None:
             body["params"] = params
         r = self.post(body, key, timeout=timeout)
         if r.status_code >= 300:

@@ -4,6 +4,7 @@ output "account" { value = local.account }
 output "ecr_console" { value = aws_ecr_repository.images["console"].repository_url }
 output "ecr_worker" { value = aws_ecr_repository.images["worker"].repository_url }
 output "console_role_arn" { value = aws_iam_role.console.arn }
+output "builder_role_arn" { value = aws_iam_role.builder.arn }              # helm: --set builder.roleArn=<this> (§24.2)
 output "worker_boundary_arn" { value = aws_iam_policy.worker_boundary.arn } # RAMEN_AWS_PERMISSIONS_BOUNDARY (console default matches)
 output "groups_bucket" { value = aws_s3_bucket.groups.bucket }
 output "dynamodb_table" { value = aws_dynamodb_table.state.name }

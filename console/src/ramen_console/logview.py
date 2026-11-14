@@ -25,6 +25,7 @@ def _entry(i: int, raw: str, names: dict[str, str]) -> dict:
             "method": None,
             "name": None,
             "status": "",
+            "protocol": None,
             "outcome": "unknown",
             "body": raw,
             "selected": False,
@@ -42,6 +43,7 @@ def _entry(i: int, raw: str, names: dict[str, str]) -> dict:
         "name": doc.get("name"),
         "args": doc.get("args"),  # C12: sha256[:12] of a tools/call's arguments (0.7.2 workers); drift reads it
         "status": status,
+        "protocol": doc.get("protocol"),  # §23.1: the MCP version the call was served in (1.0.0 workers)
         "outcome": ("success" if status == "ok" else "failure") if call else "unknown",
         "body": json.dumps(doc, indent=2),
         "selected": False,

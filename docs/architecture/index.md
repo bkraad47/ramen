@@ -1,4 +1,12 @@
-# Architecture (current: v0.8.0; the product is 0.7.5)
+# Architecture (current: v1.0.0)
+
+**Since 1.0.0.** The components below are as in 0.8.0. Three pieces were added and are described on their own pages
+rather than drawn here: an activator pod that answers for a zone sleeping at 0 workers and wakes it on the first
+authenticated call ([Sleeping workers](../wiki/sleeping-workers.md)); a build Job that turns a group's
+`requirements.txt` into its own worker image on deploy ([Worker images](../wiki/worker-images.md)); and
+OpenTelemetry export from the nodes and the console, with per-group caller consent
+([Telemetry](../wiki/telemetry.md)). The two protocol versions a worker serves are on the
+[Transport page](../wiki/transport.md#two-protocol-versions-on-one-endpoint).
 
 Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
 

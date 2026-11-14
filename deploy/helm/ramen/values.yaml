@@ -29,7 +29,7 @@ azure:                       # provider=azure only (terraform -chdir=deploy/terr
 image:
   repository: ""             # default: <region>-docker.pkg.dev/<project>/ramen/console (gcp), <account>.dkr.ecr.<region>.amazonaws.com/ramen/console (aws) or <acr>/ramen/console (azure);
                              # any reference works on both clouds, e.g. the public docker.io/bkraad47/ramen-console (or ghcr.io/bkraad47/...) — no `make push` needed
-  tag: 0.8.0
+  tag: 1.0.0
   pullPolicy: Always          # version tags are re-pushed during development
 
 serviceAccount:
@@ -66,3 +66,29 @@ gateway:                     # GKE Gateway API (gcp only; aws uses the ALB Ingre
   routesLabel: ramen.io/routes         # namespaces labelled <routesLabel>=true may attach HTTPRoutes (worker namespaces; label ramen-system too)
 rbac:
   create: true                         # ClusterRole ramen-console (namespaces, networkpolicies, routes, rolebindings) + unbound ramen-console-zone bound per zone namespace by the console (SEC-09)
+
+# §24.2 worker images built on deploy. The console starts Job/ramen-build-<hash> in this namespace; the Job runs as
+# ServiceAccount `ramen-builder`, whose cloud identity (made by Terraform, never the console's) may push to the
+# deployment's `worker` repository. The console itself holds no registry credential.
+builder:
+  enabled: null              # null = on when the provider's identity below is given; true/false forces it
+  gsa: ""                    # gcp: terraform output builder_gsa (ramen-builder@<project>.iam.gserviceaccount.com)
+  roleArn: ""                # aws: terraform output builder_role_arn
+  clientId: ""               # azure: terraform output builder_client_id
+  registry: ""               # RAMEN_BUILD_REGISTRY; default: the repository prefix that holds `worker` —
+                             # <region>-docker.pkg.dev/<project>/ramen | <account>.dkr.ecr.<region>.amazonaws.com/ramen | <acr>/ramen
+  image: ""                  # RAMEN_BUILDER_IMAGE; default: the console's pinned kaniko executor
+  serviceAccount: ramen-builder   # the name the console's Jobs use; keep it
+
+# §24.3 OpenTelemetry. `jaeger` adds a Jaeger all-in-one (OTLP HTTP 4318 in, query API/UI 16686) to this namespace;
+# `phoenix` adds Arize Phoenix (OTLP HTTP and UI on 6006, OTLP gRPC 4317; SQLite on an emptyDir). Both: no auth, no
+# route from any edge — for trying telemetry out and for the test runs, NOT for production.
+# Point Config → Telemetry at http://jaeger.<namespace>:4318 or http://phoenix.<namespace>:6006.
+otel:
+  collector: none            # none | jaeger | phoenix
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 512Mi } }
+  phoenix:
+    image: arizephoenix/phoenix:version-21.1.0-nonroot
+    resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 1Gi } }

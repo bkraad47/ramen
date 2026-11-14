@@ -159,7 +159,7 @@ class LocalConsole:
         a = self.admin
         assert a.create_zone(zone, provider="local", region="local").status_code in (201, 409)
         assert a.create_group(group, E.DEMO_REPO).status_code in (201, 409)
-        assert a.create_environment(group, env, [zone]).status_code in (201, 409)
+        assert a.create_environment(group, env, [zone]).status_code in (201, 409)  # §27.3: the attach deploy is awaited
 
     # --- OAuth 2.1 (§16.3) -------------------------------------------------------------------------------------
     def register_client(self, name: str = "ramen-tests", redirect_uris: list[str] | None = None) -> str:

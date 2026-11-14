@@ -57,8 +57,11 @@ def credentials(tls) -> grpc.ChannelCredentials | None:
 
 
 class Client:
-    def __init__(self, tls=None, deadline: float = DEADLINE, resolve=None):
+    def __init__(self, tls=None, deadline: float = DEADLINE, resolve=None, admin_key: str | None = None):
         self.tls, self.deadline, self.resolve = tls, deadline, resolve
+        # §24.3: the console's own `Mcp/Call`s (golden cases) present the worker admin key next to the group key, so a
+        # group that requires telemetry consent does not ask the console for it. `Services` sets it from the adapter.
+        self.admin_key = admin_key
 
     def channel(self, target: str, tls=None) -> grpc.aio.Channel:
         target = self.resolve(target) if self.resolve else target
@@ -76,9 +79,11 @@ class Client:
             except grpc.aio.AioRpcError as e:
                 raise GrpcError(e.code(), e.details() or "", target) from None
 
-    async def call(self, target, key, group, zone, jsonrpc: dict, tls=None, deadline=None) -> dict:
+    async def call(self, target, key, group, zone, jsonrpc: dict, tls=None, deadline=None, admin_key=None) -> dict:
         """One JSON-RPC message in, its response out ({} for a notification)."""
         md = [("authorization", f"Bearer {key}"), ("ramen-group", group), ("ramen-zone", zone)]
+        if admin := admin_key or self.admin_key:
+            md.append(("x-ramen-admin-key", admin))
         req = mcp_pb2.JsonRpc(body=json.dumps(jsonrpc).encode())
         r = await self._unary(target, tls, deadline, mcp_pb2_grpc.McpStub, "Call", req, md)
         return json.loads(r.body) if r.body else {}

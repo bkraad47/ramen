@@ -1,0 +1,12 @@
+{
+  "type": "tool",
+  "name": "ask_confirm",
+  "description": "Ask the user to confirm deleting `item` (form elicitation, key `confirm`), carrying state; answers 'deleted <item>' or 'kept <item>'. Guarded pre and post.",
+  "callable": "run",
+  "input": {
+    "item": {
+      "type": "string",
+      "description": "what to delete"
+    }
+  }
+}

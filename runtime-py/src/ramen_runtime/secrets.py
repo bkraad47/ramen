@@ -42,3 +42,14 @@ def redact(text: str, values: list[str]) -> str:
         if v:
             text = text.replace(v, "***")
     return text
+
+
+def redact_deep(value, values: list[str]):
+    """`value` with every string (keys included) redacted, recursively."""
+    if isinstance(value, str):
+        return redact(value, values)
+    if isinstance(value, dict):
+        return {redact_deep(k, values): redact_deep(v, values) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_deep(v, values) for v in value]
+    return value

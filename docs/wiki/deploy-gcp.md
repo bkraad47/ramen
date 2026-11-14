@@ -2,7 +2,7 @@
 
 A regional GKE Autopilot cluster, Firestore, a bucket, Secret Manager and a global HTTPS load balancer with a
 Google-managed certificate on a free `sslip.io` hostname. About 25 minutes, most of it waiting for GKE and the
-load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down the same day ([the record](transport.md#what-is-verified-and-what-is-not)).
+load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down afterwards ([the record](transport.md#what-is-verified-and-what-is-not)).
 
 Cost while it runs: the Autopilot pods (around $0.05 an hour for the console and two small workers, plus the
 control-plane fee after the free tier), the load balancer forwarding rule (around $0.025 an hour), a static IP
@@ -36,8 +36,9 @@ cd ../../..
 ```
 
 Terraform creates the cluster, Firestore, the Artifact Registry repo, the groups bucket, a static IP, the
-certificate map, and the console's service account with the access described below. It takes about ten minutes.
-The outputs you need later are `public_hostname`, `certificate_map` and `artifact_repo`.
+certificate map, the console's service account with the access described below, and the `ramen-builder` service
+account that [image builds](worker-images.md) push with. It takes about ten minutes.
+The outputs you need later are `public_hostname`, `certificate_map`, `artifact_repo` and `builder_gsa`.
 
 ## 3. Images
 
@@ -67,11 +68,13 @@ and push it with `crane`.
 gcloud container clusters get-credentials ramen --region $REGION
 HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
 CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
+BUILDER=$(terraform -chdir=deploy/terraform/gcp output -raw builder_gsa)
 kubectl create ns ramen-system
 kubectl label ns ramen-system ramen.io/routes=true      # the Gateway admits routes from labelled namespaces only
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   --set project=$PROJECT,region=$REGION \
   --set gateway.certificateMap=$CERTMAP \
+  --set builder.gsa=$BUILDER \
   --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
@@ -81,7 +84,9 @@ curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":
 ```
 
 Keep the three generated values in a password manager. `RAMEN_PUBLIC_URL` is the address people use and the OAuth
-issuer the workers trust. The Gateway reports `PROGRAMMED` after about five minutes and the managed certificate
+issuer the workers trust. `builder.gsa` is what lets a deploy build a group's worker image from its
+`requirements.txt` ([Worker images](worker-images.md)); leave it out and no image is ever built, workers install
+requirements when they load. The Gateway reports `PROGRAMMED` after about five minutes and the managed certificate
 turns `ACTIVE` a few minutes later.
 
 ## 5. The first zone, group and deploy
@@ -89,15 +94,15 @@ turns `ACTIVE` a few minutes later.
 Open `https://<public_hostname>/` and sign in as `admin@ramen.local` with the password you generated. The
 certificate is publicly trusted, so there is no warning.
 
-1. **Zones and workers → Add zone**: name `a`, provider `gcp`, region `us-central1-a`. The region is the GCP zone
-   the workers pin to.
-2. **Groups → Create group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
-3. **Open the group → Add environment**: name `prod`, tick zone `a`. This creates the namespace `ramen-demo-a`,
-   its service account with Workload Identity, the Service with a network endpoint group, and a route that
-   matches the `ramen-group: demo` and `ramen-zone: a` headers.
-4. **MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next deploy, so
-   generate keys before deploying, or deploy again after.
-5. **Deploy (canary)**. The job log reads sync, canary, reload, smoke, stable.
+1. **Groups → Create group**: name `demo`, repo `https://github.com/bkraad47/ramen-demo-mcp-group`, ref `main`.
+2. **Environments, Zones and Workers → New environment**: name `prod`, ref `main`, tick group `demo`.
+3. **New zone** on the same page: name `a`, tick environment `prod`, location `us-central1-a` (the GCP zone the
+   workers pin to), **Add GCP zone**. This creates the namespace `ramen-demo-a`, its service account with Workload
+   Identity, the Service with a network endpoint group, a route that matches the `ramen-group: demo` and
+   `ramen-zone: a` headers, and starts the first canary deploy of `demo/prod` there (the job is on the group page;
+   its log reads sync, canary, reload, smoke, stable).
+4. **Open the group → MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next
+   deploy, so **Deploy (canary)** again after generating one.
 
 <figure markdown>
 ![The group page on GCP](../img/group.png){ .ramen-shot }
@@ -175,6 +180,10 @@ file first. `scripts/gcp_cost_check.sh` lists anything billable that is left.
 - A dropped zone's namespace can sit in `Terminating` for ten minutes or more while the Gateway controller
   garbage-collects its backend service. If it never clears, find it with
   `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete it by hand.
+- Deleting a cluster while group namespaces are still terminating can leave that cluster's network endpoint groups
+  behind. A new cluster in the same project then cannot use the same names: the worker backend never becomes
+  healthy, and the `ServiceNetworkEndpointGroup` reports `conflicting description`. Wait for the namespaces to go
+  before deleting the cluster, or delete the leftover groups (`gcloud compute network-endpoint-groups list`).
 - Gateway-managed backend services report "not ready" for minutes after a rollout. Rebalance and IP rules answer
   `applied: false` with a note and retry in the background.
 - A client that omits the two headers gets a `404` from the Gateway, not a worker error.

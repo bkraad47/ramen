@@ -4,6 +4,12 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ramen
+# §24.2: lets the nodes' containerd read per-registry settings from certs.d, where up.sh points
+# `kind-registry:5000` at plain http (kind's documented local-registry pattern)
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
   - role: control-plane
     extraPortMappings:                  # NodePort → host (deploy/kind/nodeports.yaml); kube-proxy routes to any node
@@ -13,6 +19,7 @@ nodes:
       - { containerPort: 30083, hostPort: 18083, protocol: TCP }   # fake GCS (bucket inspection from the host)
       - { containerPort: 30084, hostPort: 18084, protocol: TCP }   # zone a, stable track only (autoscale load)
       - { containerPort: 30085, hostPort: 18085, protocol: TCP }   # zone b, stable track only (autoscale load)
+      - { containerPort: 30086, hostPort: 18086, protocol: TCP }   # Jaeger query API (§24.3 telemetry proofs)
   - role: worker
     labels: { topology.kubernetes.io/zone: kind-a }
   - role: worker

@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_elicitation",
+  "description": "Ask for the user's name under the key user_name, then greet them. Completes without requestState when the answer is already present.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

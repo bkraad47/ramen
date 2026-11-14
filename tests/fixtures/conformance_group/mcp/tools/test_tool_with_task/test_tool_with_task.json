@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "test_tool_with_task",
+  "description": "Ask for the user's name first (input_required), then run as a task whose result names them.",
+  "callable": "run",
+  "input": {},
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

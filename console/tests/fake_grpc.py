@@ -79,6 +79,8 @@ class _Mcp(mcp_pb2_grpc.McpServicer):
             result = self.w.tool_results.get(
                 params.get("name"), {"content": [{"type": "text", "text": json.dumps(params.get("arguments") or {})}]}
             )
+            if callable(result):  # §23.4: a tool whose answer depends on the round (MRTR)
+                result = result(params)
         else:
             result = {"ok": True}
         return mcp_pb2.JsonRpc(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())

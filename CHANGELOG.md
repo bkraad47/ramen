@@ -3,6 +3,239 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+## [1.0.0] — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
+2026-11-14. A worker now speaks MCP **2026-07-28** next to 2025-06-18, on the same `POST /mcp` and the same
+`ramen.v1.Mcp/Call`. Each request is served in the version it names; nothing has to be switched on.
+Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol-versions-on-one-endpoint),
+[Multi round-trip requests](https://bkraad47.github.io/ramen/wiki/mrtr/), [Tasks](https://bkraad47.github.io/ramen/wiki/tasks/),
+[The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/#new-in-10-what-a-package-can-do),
+[Sleeping workers](https://bkraad47.github.io/ramen/wiki/sleeping-workers/),
+[Worker images](https://bkraad47.github.io/ramen/wiki/worker-images/),
+[Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/).
+
+
+- **Zones are bound to groups.** A zone lists the groups it serves (Zones page, *Groups* column; `POST /api/v1/zones`
+  takes `groups`, `PUT /api/v1/zones/{zone}/groups`); a group's zones are the zones listing it
+  (`GET /api/v1/groups/{g}/zones` → `{"zones": [...]}`). An environment may name only the group's zones, whoever
+  creates it; binding creates the pair's worker record, unbinding tears the group's deployment in the zone down
+  (refused while an environment uses it). The group page is one **Environments** table: under each environment, a
+  row per zone with the live workers, size, sleep state, IP allow-list and service account, and the zone's actions in
+  a disclosure; the "Zones and workers" and "Zone actions" cards are gone. Existing zones are bound to the groups
+  whose environments used them.
+- **Deploy jobs are kept in the store** (`jobs`, the last 50 per environment): a job and its log are there after a
+  console restart and on every replica. A job still `running` after `RAMEN_JOB_STALE_SECS` (1800) without a change
+  reads as `lost (console restarted)`. Backups leave jobs out.
+- **Telemetry through Ramen.** The telemetry settings have a `telemetry_version` (Config page, `GET /api/v1/config/otel`,
+  every token answer's `telemetry` object, which also says whether the group `required`s reports; workers get
+  `RAMEN_TELEMETRY_VERSION`). Saving the settings pushes the new worker config to every deployed zone and reloads its
+  workers (`pushed` in the answer, audited `telemetry.push`), no deploy needed. When a group requires telemetry, a
+  worker serves `tools/call`, `prompts/get` and `resources/read` only with the client's report in
+  `_meta["io.ramen/telemetry"]` (its calls since the last one, MCP or not, with the model's reasoning) at the current
+  version — missing → `-32024`, stale → `-32025: sign in again` — and forwards each event as a span under the call's
+  own, tagged with the caller's IP, user, group, zone and worker. The bridge does this for its host: it holds the
+  config encrypted in memory, records every call, offers `ramen_report`, and signs in again when the config changed.
+  With the chart's Jaeger on, the Config page names its UI (`RAMEN_OTEL_UI_URL`).
+- **Sleep waits for the activator to be routable.** A sleep scaled the workers down as soon as the activator was
+  Ready; for a few seconds kube-proxy still sent calls to the terminating workers, which answered and never asked for a
+  wake, so the zone stayed asleep under traffic (seen on kind). The console now waits until the activator is a ready
+  address of `Service/worker` (the zone role may read `endpoints`; an older binding skips the wait with a warning).
+- **The console's own secrets live in the cloud's secret manager.** SMTP password, GitHub App key, identity-provider
+  client secrets, telemetry headers, repo tokens and Redis URLs are each a secret of their own (`ramenc-…`,
+  `ramen-console/…`) the store only references; no worker can read them; locally they stay encrypted in the store.
+  Each Config section lists what is set, a secret only as *set (hidden)*; secrets are scrubbed from logs, deploy logs
+  and backups (backups no longer carried provider client secrets).
+- **Environments across groups, zones attached to environments, one admin page (1.0.0b).** An environment is a
+  name shared by the groups it applies to (`POST /api/v1/environments {name, ref, groups}`, `PUT`/`DELETE
+  /api/v1/environments/{name}`, `GET /api/v1/environments/by-name`); its ref is one value for every group. A zone
+  names its environments (`POST /api/v1/zones {name, provider, region, environments}`, `PUT /api/v1/zones/{zone}
+  {region, environments}`) and its groups follow from them: every derived group × zone pair gets its worker record,
+  namespace and a canary deploy the moment it appears (the write answers `jobs`), and is torn down when it
+  disappears; a region change destroys the old workers and deploys new ones there, keeping count, size, sleep, IP
+  rules and throttle. Deleting an environment deletes the zones and workers only it used. `PUT /zones/{zone}/groups`
+  and `groups` on `POST /zones` are gone. One page, **Environments, Zones and Workers** (`/environments`; `/zones`
+  redirects), for super admins and group admins: new environment, environments, new zone, zones, workers per group
+  with the environments that put each pair there; a group admin edits what is wholly their groups'. The group page
+  keeps its Environments table (Deploy, Verbose, Delete) and loses the add-environment form. Existing zones learn
+  their environments at start.
+- **Arize Phoenix as the chart's collector.** `otel.collector: phoenix` runs Phoenix next to the console (OTLP/HTTP and
+  UI on 6006, OTLP/gRPC 4317, SQLite on an emptyDir) as an alternative to `jaeger`; the Config page's Telemetry row
+  reads "Trace UI" and names whichever runs. Both are for trying telemetry out, not for production.
+- **Group page without sideways scroll.** Cards no longer scroll horizontally: long image refs, schemas, worker ids
+  and button rows wrap. Deploy jobs lists the last five; every deploy stays in Audit and the zones' Logs.
+### New: protocol
+- **Stateless requests.** A 2026-07-28 request carries its version and the client's capabilities in `params._meta`
+  and needs no `initialize` and no session. Every result says what it is (`resultType`: `complete`,
+  `input_required` or `task`) and who answered (`_meta["io.modelcontextprotocol/serverInfo"]`); list results,
+  `resources/read` and `server/discover` carry `ttlMs` and `cacheScope: "private"`.
+- **`server/discover`** answers the supported versions and capabilities in one call.
+- **Standard headers** on HTTP: `Mcp-Method` and `Mcp-Name` are required and must agree with the body; a tool
+  parameter can be mirrored as `Mcp-Param-<Name>`. A header that disagrees with the body is refused (`-32020`), never
+  used. W3C trace context (`traceparent`, `tracestate`, `baggage`) is copied onto the access-log line.
+- **Multi round-trip requests.** A tool or a callable prompt can ask the client for input (a form, a URL to visit,
+  a model sample, the client's roots) and be called again with the answers. No session: what must survive between
+  the two calls travels as a signed `requestState`.
+- **Tasks** (`io.modelcontextprotocol/tasks`). A tool marked `"task": true` answers a client that declared the
+  extension with a task id at once; `tasks/get`, `tasks/update` and `tasks/cancel` follow it.
+- **`subscriptions/listen`** (HTTP): one event stream that announces `tools`, `prompts` and `resources`
+  `list_changed` after a deploy changes the manifest, and status changes of watched tasks.
+- **Progress.** `progress()` in a tool reaches a client that sent a `progressToken` and accepts
+  `text/event-stream`, as `notifications/progress` ahead of the response.
+- **`completion/complete`** suggests the declared `enum` values of a prompt argument or a template variable.
+- New error codes on 2026-07-28 only: `-32020` header mismatch, `-32021` missing client capability, `-32022`
+  unsupported protocol version. Codes `-32000` to `-32019` are not sent to a 2026-07-28 client.
+
+### New: group contract (all optional; a 0.8 repo loads unchanged, with the same manifest hash)
+- Content blocks from a tool: `text()`, `image()`, `audio()`, `resource()` from `ramen_runtime`.
+- A resource callable may return `bytes` (served as a base64 `blob`); a `uri` with `{var}` is a resource template.
+- A prompt can be a Python `callable` instead of a `skill` file.
+- `InputRequired` with `elicit()`, `elicit_url()`, `sample()`, `list_roots()`; `input_responses()`,
+  `request_state()`, `client_capabilities()`; `MissingCapability`; `progress()`.
+- `"header": "<Name>"` on a tool parameter; `"task": true` on a tool.
+- A form (`elicit`) that asks for a field named like a credential is refused; use `elicit_url`.
+- Golden cases: `respond: {<key>: <answer>}` answers a tool's input request, and
+  `expect: {input_required: [<keys>]}` asserts that it asks.
+
+### New: console
+- The Logs page shows the protocol version each call was served in; the live-workers cell of a zone (group page
+  and Zones page) shows calls by protocol version, open subscriptions and live tasks.
+- The group page marks tools that run as tasks (`task`) and tools with header-mirrored parameters (`headers`).
+- The compatibility gate treats adding, removing or renaming a parameter's `header` as a breaking change.
+- Golden cases with `respond` or `expect: {input_required: …}` are called as a 2026-07-28 client.
+
+### New: operations
+- **Sleeping workers.** A super admin or a group admin can let a zone sleep after a set idle time (`sleep_after_secs`
+  per group × zone, 0 = never, the default). An idle zone's workers are scaled to 0 and one small activator pod
+  (10m CPU / 32Mi requested, no Python runtime) answers behind the same Service and load-balancer route. It applies
+  the zone's guards, so only an authenticated call wakes the zone; that call is held up to
+  `RAMEN_WAKE_TIMEOUT_SECS` (default 25 s) and then forwarded, or answered `503` with `Retry-After: 10` while the
+  wake goes on. Running tasks and open `subscriptions/listen` streams keep a zone awake; the console's own calls do
+  not. Sleep and wake by hand from the group page or the API; every transition is audited (`workers.sleep`,
+  `workers.wake`, with a `trigger`).
+- **Worker images built on deploy.** With a builder configured, a deploy of a group whose repo has a non-empty
+  `mcp/requirements.txt` first builds `worker:b-<group>-<hash>` in the deployment's own registry (a kaniko Job
+  running as the `ramen-builder` identity that Terraform creates; the console holds no registry credential) and
+  runs the zones on it. The runtime sees the requirements are baked in and skips `pip install` (`deps baked`). The
+  same requirements and base image build nothing; a failed build fails the deploy before the canary. A pinned
+  image still wins. Per group: `build_image`, on the Worker image card.
+- **OpenTelemetry.** A super admin sets a collector on the Config page (`/api/v1/config/otel`). Each node then
+  exports one span per MCP call (`mcp <method>`, joined to the caller's `traceparent`), a child span around the
+  runtime round trip, and the counters `ramen.mcp.calls` and `ramen.mcp.errors`; the console exports one span per
+  deploy (`ramen.deploy`). Tool names, timing and outcome only: never arguments, results or credentials. A
+  collector that is down drops data and never fails a call. Connected agents are told where to send their own
+  telemetry, in the OAuth token answer (`telemetry`) and on `server/discover` (`_meta["io.ramen/telemetry"]`).
+- **Telemetry consent.** A group can require it (`require_telemetry_consent`): `tools/call`, `prompts/get` and
+  `resources/read` are then served only to a caller who accepted — a person by a required checkbox on the OAuth
+  consent page, a 2026-07-28 client with `elicitation` by a one-time prompt (remembered 30 days). Others are
+  refused: `-32021` (2026-07-28 without `elicitation`), `-32003` (2025-06-18).
+- Helm: `builder.*` (the builder identity and registry) and `otel.collector: jaeger` (a Jaeger all-in-one for
+  trying telemetry out, not for production). Terraform on all three clouds creates the `ramen-builder` identity and
+  outputs it (`builder_gsa`, `builder_role_arn`, `builder_client_id`).
+
+### New: tests
+- A golden regression: every tool, resource and prompt of the fixture and demo groups, recorded from 0.8.0, is
+  compared with what 1.0.0 answers a 2025-06-18 client, on both transports.
+- The official `@modelcontextprotocol/conformance` suite (pinned at 0.2.0-alpha.12) runs in CI against a real worker,
+  once per protocol version, each with a checked-in list of expected failures and a reason per entry
+  (`tests/conformance_suite/`). The exceptions are listed on the
+  [Transport page](https://bkraad47.github.io/ramen/wiki/transport/#the-official-conformance-suite).
+- New conformance modules for the stateless core, standard headers, multi round-trip requests and their
+  guardrails, tasks, subscriptions and the bridge.
+- Conformance modules for the activator, the idle metrics, the export, telemetry consent, baked dependencies and
+  the console's side of all three (`test_activator.py`, `test_idle_metrics.py`, `test_otel.py`,
+  `test_telemetry_consent.py`, `test_deps_baked.py`, `test_console_sleep_otel.py`), and cluster proofs in
+  `tests/kind/test_v1_sleep_build_otel.py`.
+
+### Fixed during the cloud run
+Found on GKE, EKS and AKS on 2026-11-13 and 14, each fixed with a test. What the run covered and its results:
+[Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
+- **GCP: a deleted zone identity poisoned the groups bucket policy.** See "What changes for existing users" below.
+  **Also affects 0.8.0.**
+- **A worker whose Redis is unreachable never started.** The dial is now bounded at 5 s and the worker starts
+  without it (no throttle and no shared task store until the pod restarts). **Also affects 0.8.0.**
+- **Calls were dropped during rollouts** once the new SIGTERM handler stopped the worker at once. It now drains for
+  `RAMEN_STOP_DRAIN_SECS` first (see below).
+- **Tasks without Redis**: a zone runs two pods (stable and canary), and a poll could reach the one that did not
+  hold the task. A pod without a shared store now hands out no tasks.
+- **The activator forwarded to draining workers without asking for the wake**, and trusted an earlier wake when the
+  pod outlived it. It now always asks, and asks again after 5 s.
+- **A public console answered the activator's in-cluster wake call `403`** (the HTTPS-only rule), so a call never
+  woke a sleeping zone on any cloud. Internal routes are exempt when no edge forwarded the request.
+- **Chart: the environment block for sleeping, builds and telemetry overrode the provider's backend selectors**, so
+  a console on AWS or Azure came up as GCP.
+- **The build Job requested 2Gi of memory** and could not be scheduled on small nodes (EKS, AKS). It now requests
+  250m CPU and 768Mi, with a 2Gi limit.
+- Also: the kind cluster's containerd is configured for the local registry; the wake hold went from 90 s to 25 s,
+  under every edge's own timeout; a `requirements.txt` of comments only builds nothing; a traces-only collector
+  (Jaeger) is no longer warned about every minute.
+
+### What changes for existing users
+A 2025-06-18 client is answered as in 0.8.0, with two additions and nothing removed:
+- `resources/templates/list` now answers (an empty list for a group without templates). In 0.8.0 it was `-32601`.
+- A `tools/call` or `prompts/get` that carries `_meta.progressToken` **and** accepts `text/event-stream` is
+  answered as an event stream: the tool's progress notifications, if it reports any, then the response.
+
+For operators and tool authors:
+- **Redis URLs are no longer visible to tool code.** `RAMEN_REDIS_ITEM_URL` and `RAMEN_REDIS_SCOPE_URL` are
+  removed from the runtime's environment (task records now live in that Redis).
+- **A worker now handles SIGTERM**: it keeps serving for `RAMEN_STOP_DRAIN_SECS` (20 s in a pod) while the load
+  balancer takes the pod out of rotation, then ends open `subscriptions/listen` streams with a final result and
+  stops. Up to 0.8.0 the worker ignored SIGTERM and served until the kubelet killed it at the end of the grace period.
+- **GCP: deleting a zone or a group unbinds its service account from the groups bucket first.** A deleted account
+  left in the bucket policy made Google refuse every later policy write on that bucket (so no group could attach
+  a zone) once an account of the same name existed again; a stale entry is now also dropped on the next write.
+  This affects 0.8.0 too.
+- **A worker starts when its Redis is unreachable.** It used to wait on the connection and never start; the dial
+  is now bounded at 5 s, and the worker runs without the throttle and the shared task store until the pod
+  restarts. This affects 0.8.0 too.
+- **A prompt whose argument already declared `enum`** now lists it in `prompts/list`, so that group's manifest
+  hash changes once on its first 1.0 deploy.
+- **A zone can now have 0 workers**, but only where an admin turned sleeping on for it; the default is off and
+  such a zone keeps at least 1 as before.
+- **A deploy may build an image first.** In a `gcp`, `aws` or `azure` deployment whose Helm release was given the
+  builder identity (`builder.gsa`, `builder.roleArn`, `builder.clientId`), building is on by default for every
+  group: the first deploy of a group with a non-empty `mcp/requirements.txt` takes a build longer, and a build
+  that fails stops the deploy. Without the identity nothing is built and nothing changes. Turn it off per group on
+  the Worker image card.
+- **The worker-settings API answer no longer includes the zone's Redis URL** (`redis_item_url`).
+- **Telemetry and consent are off until configured.** Nothing is exported and nobody is asked until a super admin
+  enables telemetry and a group admin requires consent.
+- Guardrails: `pre` runs on every round of a multi round-trip call, and sees the client's answers as
+  `$inputResponses`; `post` runs on the final result only.
+
+### Specification coverage
+MCP specification revision 2026-07-28: SEPs 2575, 2567, 2243, 2322, 2549 and 2577, and the tasks extension
+`io.modelcontextprotocol/tasks`.
+
+### Known limits
+- A task tool cannot also be a multi round-trip call before the task starts: a client that declared the tasks
+  extension gets the task at once, and the tool's input request arrives through the task (`tasks/get`,
+  `tasks/update`).
+- There is no task-*required* tool: a client that did not declare the extension gets the synchronous call.
+- A resource callable cannot raise `InputRequired`.
+- Task notifications on a `subscriptions/listen` stream come only from the pod that runs the task.
+- Tasks need the group's Redis in a cluster: a pod without one hands out no tasks and its `task: true` tools
+  answer synchronously (a zone runs two pods, and a poll would reach the wrong one).
+- `tasks/cancel` discards the result; it cannot stop a tool body that is already running.
+- A tool cannot trigger `list_changed`; only a deploy that changes the manifest does.
+- A 2025-06-18 client is not offered server-initiated sampling, elicitation or logging, nor
+  `resources/subscribe`.
+- A `subscriptions/listen` stream hears about the pod it is connected to. gRPC has no subscriptions and no
+  progress.
+- Sleeping: the first call to a sleeping zone is answered `503` with `Retry-After: 10` when the wake takes longer
+  than the 25 s hold (a node that has to be added, a slow image pull); the retry is served. A sleeping zone needs
+  the session secret the console writes on deploy. On GKE Autopilot, where a cold wake can take longer than the
+  hold, the first call to a sleeping zone may get that `503` instead of being held. On GKE Autopilot the saving is smaller than the activator's
+  requests suggest, because Autopilot bills a per-pod minimum.
+- Telemetry consent is remembered per pod when the group has no Redis: another pod asks again.
+- Images are built with kaniko only. The local compose stack cannot build images.
+- On GKE a call can meet a `503` from the load balancer for a moment after a rollout. One check of the cloud run
+  failed this way on the first call after a deploy and passed on a re-run minutes later.
+- Not run for this release: a sign-in that maps a looked-up Google group to a role (the Cloud Identity lookup ran
+  live with a consumer Google account; the mapping is tested against a fake, and a Workspace-domain account was
+  never tried); the kind module for sleeping, builds and telemetry after the last activator fix; export to an
+  `https://` collector; a worker skipping its throttle for a call its activator forwarded. No test looks at the
+  consent store on Redis itself.
+
 ## [0.8.0] — verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets
 - **Verified live on GKE, EKS and AKS** on the fixed build (2026-10-17): the smoke on each, the release suite now kept as
   `tests/cloud/test_release_features.py` with `tests/e2e` and the remote conformance modules (63 / 63 / 64 passed, 0

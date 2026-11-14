@@ -311,9 +311,12 @@ def test_golden_cases_for_a_tool_the_key_may_not_call_are_skipped(demo, ws, tmp_
 
 def test_a_second_deploy_of_the_same_target_is_refused_while_one_runs(demo):
     """0.8.0 SC5: two deploys of one environment would drive the same canary Deployment and race `last_deploy`."""
+    import asyncio
+
     jobs = demo.app.state.jobs
-    running = jobs.create("deploy", "demo/prod")
+    running = asyncio.run(jobs.create("deploy", "demo/prod"))
     r = demo.post(DEPLOY, json={"canary": True})
     assert r.status_code == 409 and running["id"] in r.text, r.text
     running["status"] = "ok"
+    asyncio.run(jobs.save(running))  # §26.2: the store is what the next request reads
     assert demo.post(DEPLOY, json={"canary": True}).status_code == 202

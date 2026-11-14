@@ -16,6 +16,7 @@ docker pull bkraad47/ramen-worker:latest bkraad47/ramen-console:latest
 
 | Ramen | Bridge on PyPI | Demo repo | Notes |
 |---|---|---|---|
+| 1.0.0 | 0.3.0 | `v1.0.0` tag: `confirm_delete_note` (asks before it deletes), `slow_report` (`"task": true`), golden cases with `respond` | MCP spec 2026-07-28 next to 2025-06-18 on the same endpoint: stateless requests, standard headers, multi round-trip requests, tasks, `subscriptions/listen`; 2025-06-18 clients answered as in 0.8.0; the group contract only gains optional additions. [What changes for existing users](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) |
 | 0.8.0 | 0.3.0 | `v0.8.0` tag (same tools and rails as `v0.7.5`) | the security review's fixes (`repo_url` validation, no repo-shipped deploy file, loopback redirect check, one autoscale decision per zone, no concurrent deploys, trusted-hop audit ip); the compose stack pulls the published images; worker, Glama and MCPB images pin bridge 0.3.0; no static secrets; verified again on GKE, EKS and AKS |
 | 0.7.5 | 0.2.2 in the worker image; 0.3.0 documented, on PyPI since 2026-10-17 | `v0.7.5` tag: `mcp/guardrails.yaml`, NeMo rails, `word_count` | guardrails in the runtime, identity-provider group lookup, custom roles, AKS, autoscaling by Ramen, salted hashes |
 | 0.7.0 to 0.7.2 | 0.2.2 | `v0.7.0` to `v0.7.2` tags: `mcp/tests.yaml`, `output` schemas, richer descriptions | gates, golden cases, output schemas (0.7.0); per-tool access, rollout notice, drift (0.7.2) |
@@ -30,7 +31,7 @@ docker pull bkraad47/ramen-worker:latest bkraad47/ramen-console:latest
 | 0.5.6 and earlier | in `ramen/runtime-py` | `main` | |
 
 The bridge speaks `ramen.v1.Mcp/Call`, unchanged since 0.3.1, so any bridge works against any worker from 0.3.1
-on. `--oauth` needs a console from 0.5.95. The demo repo follows the group repo contract, unchanged since 0.1.0
+on. It forwards each message as it is, so a 2026-07-28 client behind it is served as 2026-07-28 by a 1.0 worker. `--oauth` needs a console from 0.5.95. The demo repo follows the group repo contract, unchanged since 0.1.0
 except for additions.
 
 ## Where a release is published
@@ -51,7 +52,8 @@ beyond GitHub (`github.actor == 'bkraad47'`); forks and other pushers stop after
 ## How a release is made (since 0.7.0)
 
 1. Work on branch `v<version>` (ramen, and the demo repo when it changes); test locally.
-2. Open a pull request to `main`; CI runs lint, versions, Python, Rust, conformance on Linux and Windows, kind.
+2. Open a pull request to `main`; CI runs lint, versions, Python, Rust, conformance on Linux and Windows, the
+   official MCP conformance suite for both protocol versions (1.0), kind.
 3. Merge when green. The merge runs `ci` again and `pages` (the docs site).
 4. Tag `main` with `v<version>` (the demo repo too). The tag runs `release`, which publishes everything in the table.
 Nothing goes to `main` without a pull request.

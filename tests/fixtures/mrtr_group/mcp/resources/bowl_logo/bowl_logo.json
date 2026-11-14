@@ -1,0 +1,9 @@
+{
+  "type": "resource",
+  "name": "bowl_logo",
+  "description": "A binary resource: eight bytes served as a base64 blob.",
+  "callable": "read",
+  "input": {},
+  "uri": "ramen://bowl/logo",
+  "mime_type": "application/octet-stream"
+}

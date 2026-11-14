@@ -3,8 +3,8 @@
 <link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}"><script src="{{ base }}/static/htmx.js?v={{ version }}"></script></head>
 <body>
 <nav class="side"><img src="{{ base }}/static/logo-mark.png" alt="Project Ramen">
-{% if p.role != 'mcp_user' %}{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments', 'environments'), ('/zones', 'Zones and workers', 'zones'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
-{% if (p.role == 'super_admin') or (key not in ['api_keys', 'backups', 'config', 'audit'] and (key != 'secrets' or p.role == 'group_admin')) %}<a href="{{ u(href) }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endfor %}{% endif %}
+{% if p.role != 'mcp_user' %}{% for href, name, key in [('/', 'Dashboard', 'dashboard'), ('/groups', 'Groups', 'groups'), ('/environments', 'Environments, Zones and Workers', 'environments'), ('/secrets', 'Secrets', 'secrets'), ('/users', 'Users', 'users'), ('/api-keys', 'API keys', 'api_keys'), ('/logs', 'Logs', 'logs'), ('/audit', 'Audit', 'audit'), ('/backups', 'Backups', 'backups'), ('/config', 'Config', 'config')] %}
+{% if (p.role == 'super_admin') or (key not in ['api_keys', 'backups', 'config', 'audit'] and (key not in ['secrets', 'environments'] or p.role == 'group_admin')) %}<a href="{{ u(href) }}" class="{{ 'active' if page == key else '' }}">{{ name }}</a>{% endif %}{% endfor %}{% endif %}
 <div class="who">
 <div class="identity"><span class="email" title="{{ p.name }}">{{ p.name }}</span><span class="role {{ p.role|replace('_', '-') }}">{{ role_label(p.role) }}</span></div>
 <a href="{{ base }}/logout" class="logout">Log out</a>

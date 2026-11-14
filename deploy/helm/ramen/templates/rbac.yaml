@@ -64,6 +64,6 @@ rules:
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch, create, patch, update, delete]
   - apiGroups: [""]
-    resources: [pods, pods/log]
+    resources: [pods, pods/log, endpoints]
     verbs: [get, list, watch]
 {{- end }}

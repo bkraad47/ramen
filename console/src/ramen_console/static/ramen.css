@@ -12,16 +12,17 @@ nav.side a.logout,.logout{display:block;margin:10px 0 6px;padding:6px 0;color:va
 nav.side a.logout:hover{background:transparent;color:var(--red);text-decoration:underline}
 .version{color:var(--muted);font-size:11px}
 main{flex:1;padding:24px 32px;max-width:1300px}h1{margin:0 0 16px;font-size:24px}h1 span{color:var(--coral)}h2{font-size:17px;margin:24px 0 8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;overflow-x:auto}
-/* a checkbox dropdown must escape its card; the card otherwise scrolls wide tables (0.6.0) */
-.card:has(details.multi[open]),td:has(details.multi[open]),.user-actions:has(details.multi[open]){overflow:visible}
-table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}
+/* 1.0.0b: a card never scrolls sideways — long cells (image refs, schemas, worker ids) wrap instead */
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;overflow:visible}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}td{overflow-wrap:anywhere}th{color:var(--muted);font-weight:600;font-size:12px}
 .dl{float:right;font-size:12px;color:var(--muted)}.dl a{margin-left:8px}
 form.inline{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:3px}
 input,select,textarea{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;min-width:140px}
 select[multiple]{min-height:70px;min-width:160px}
 button,.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer;text-decoration:none;text-align:center}button.ghost,.btn.ghost{background:#fff;color:var(--coral);border:1px solid var(--coral)}button.danger{background:var(--red)}button.sm,.btn.sm{padding:4px 9px;font-size:12px}
 .zone-table>tr>th.zone-name,.zone-table>tbody>tr>th.zone-name{width:6em;font-size:14px;color:inherit;vertical-align:top;padding-top:14px}
+.env-table .zone-row td{background:#faf7f2;font-size:13px}.env-table .zone-row .zone-name{font-weight:600;font-size:14px}.env-table .zone-tools-row td{padding:4px 10px 10px 28px}
+details.zone-tools>summary{cursor:pointer;font-size:12px;color:var(--coral);font-weight:600}details.zone-tools[open]>summary{margin-bottom:6px}
 .zone-actions table{margin:0}
 .zone-actions tr:last-child th,.zone-actions tr:last-child td{border-bottom:0}
 .zone-actions th{font-weight:normal;white-space:nowrap;width:8em;vertical-align:middle}
@@ -61,7 +62,7 @@ details.multi>.options{position:absolute;z-index:5;top:100%;left:0;min-width:180
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--ink)}.badge.ok{background:#dff3e6;color:#1f6b40}.badge.error{background:#fbe0e0;color:#8f1f1f}.badge.running{background:#fde9df;color:#a4451f}
 .once{background:#fff6e5;border:1px solid #f2c48d;padding:10px;border-radius:8px;margin:8px 0;word-break:break-all}
 #toast{position:fixed;right:20px;bottom:20px;background:var(--red);color:#fff;padding:12px 16px;border-radius:10px;display:none;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,.2)}#toast.ok{background:var(--green)}
-pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px}
+pre{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;max-height:520px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .login{margin:auto;width:360px}.login img{width:96px;height:96px;display:block;margin:0 auto 12px;border-radius:18px}.err{color:var(--red);margin:8px 0}.ok{color:#1f6b40;margin:8px 0}
 code{background:#fff;padding:1px 4px;border-radius:4px;border:1px solid var(--line)}.muted{color:var(--muted);font-size:13px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;background:var(--grey)}.dot.low{background:var(--blue)}.dot.even{background:var(--green)}.dot.high{background:var(--red)}pre.log{max-height:280px;overflow:auto;font-size:12px}
@@ -114,3 +115,43 @@ table.formtable td .act{width:180px}
 .signin-guide .codebox{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .signin-guide .codebox-label{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);padding:6px 10px;border-bottom:1px solid var(--line)}
 .signin-guide .codebox pre{margin:0;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-radius:0}
+/* 1.0.0 UI pass (the user's screenshots): one control height on every form row, selects drawn like inputs, buttons that
+   never wrap, cards without a gap above their first line, short explainers folded into <details class="help">. */
+:root{--ctl-h:38px}
+.zone-actions,.settings{--ctl-h:30px}
+input:not([type=checkbox]):not([type=radio]):not([type=hidden]),select{height:var(--ctl-h);box-sizing:border-box}
+select{-webkit-appearance:none;appearance:none;background-color:#fff;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+select[multiple]{height:auto;background-image:none;padding-right:9px}
+form.inline button,form.inline .btn,.row-actions button,.row-actions .btn,.act{height:var(--ctl-h);box-sizing:border-box;white-space:nowrap;padding-top:0;padding-bottom:0}
+form.inline button:not(.act):not(.sm),form.inline .btn:not(.act){font-size:14px}
+details.multi>summary{height:var(--ctl-h);box-sizing:border-box;display:flex;align-items:center;border-radius:8px}
+.card>:first-child{margin-top:0}
+input.wide{width:360px}
+table.kv{margin:0 0 4px}table.kv th{width:10em;text-align:left;font-weight:500;color:var(--muted);white-space:nowrap;vertical-align:middle}
+table.kv td{vertical-align:middle}table.kv td>*{vertical-align:middle}table.kv form.inline{display:inline-flex;margin:0 0 0 8px}
+details.help{margin:6px 0 10px}details.help>summary{cursor:pointer;color:var(--muted);font-size:13px}details.help ol,details.help ul{margin:6px 0;padding-left:20px}
+details.help p{margin:6px 0}
+#audit-scroll td:first-child,#audit-scroll td:nth-child(3),.ts{white-space:nowrap}
+.act{font-size:14px}.zone-actions .act,.settings .act,.zone-actions button,.settings button{font-size:12px}
+details.multi>summary{padding-right:28px;background-color:#fff;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+details.multi>summary::after{content:none}
+/* 1.0.0 UI pass, round 2 (group and config pages): one button system.
+   - every button sizes to its label (never a fixed width that clips it), at least 140px, one height per context;
+   - inside a table cell everything is compact: inputs, selects, dropdowns and buttons 32px, 13px text;
+   - action cells wrap their buttons rather than widen the table (1.0.0b), links styled as buttons centre their text. */
+.act{width:auto;flex:0 0 auto;min-width:150px;padding:0 16px}
+form.inline button,form.inline .btn,.row-actions button,.row-actions .btn,.act,td button,td .btn{min-width:140px;padding-left:16px;padding-right:16px}
+button,.btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;line-height:1.2}
+td{--ctl-h:32px}
+td input:not([type=checkbox]):not([type=radio]):not([type=hidden]),td select,td details.multi>summary{font-size:13px}
+td button,td .btn,td .act{height:var(--ctl-h);font-size:13px;white-space:nowrap}
+td button.sm,td .btn.sm{min-width:110px}
+.zone-actions td:last-child .row-actions,.zone-actions td:last-child{text-align:right;justify-content:flex-end}
+th{white-space:nowrap}
+.row-actions.toggles{margin:8px 0}.row-actions.toggles form.inline{margin:0}
+table.formtable td input,table.formtable td select,table.formtable td details.multi{max-width:480px}
+form.inline button.sm,form.inline .btn.sm{min-width:110px;font-size:13px}
+td table.formtable input[type=number]{width:120px}
+.zone-actions td[colspan]{text-align:left}
+.env-table .zone-row td:nth-child(2){min-width:240px}
+.env-table .zone-row table.formtable td{--ctl-h:30px}.env-table .zone-row table.formtable input[type=number]{width:80px}.env-table .zone-row table.formtable .act{min-width:110px}

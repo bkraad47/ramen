@@ -2,9 +2,10 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, rbac, regions, roles, scheduler
+from .. import alerts, baseuri, drift, github_app, oauth_server, otel, rbac, regions, roles, scheduler
+from .. import deploy as dep
 from .. import mail as mail_mod
-from ..audit import note
+from ..audit import client_ip, note, write_audit
 from ..auth import providers
 from ..config import apply_config
 from ..errors import forbidden, invalid
@@ -603,6 +604,35 @@ async def set_scheduler_config(request: Request, body: m.SchedulerConfig, p: Pri
     doc = await scheduler.set_config(svc(request).store, **body.model_dump())
     note(request, "config.scheduler", "scheduler", [f"{k}:{v}" for k, v in doc.items()])
     return respond(request, doc)
+
+
+@r.get("/config/otel")
+async def get_otel_config(request: Request, p: Principal = Depends(super_)):
+    return otel.public_config(await otel.get_config(svc(request).store))
+
+
+@r.put("/config/otel")
+async def set_otel_config(request: Request, body: m.OtelConfig, p: Principal = Depends(super_)):
+    """§24.3: where Ramen exports telemetry and what connected agents are told. Header values are write-only."""
+    note(request, "config.otel", "otel", [f"enabled:{body.enabled}"] if body.enabled is not None else [])
+    s = svc(request)
+    doc = otel.public_config(await otel.set_config(s.store, **body.model_dump()))
+    note(request, "config.otel", "otel", [f"enabled:{doc['enabled']}", f"endpoint:{doc['endpoint'] or '-'}"])
+    # §26.3: every deployed zone gets the new config and a reload now, not on its next deploy
+    pushed = await dep.push_config(s)
+    if pushed:
+        tags = [f"{k}:{'ok' if v == 'ok' else 'error'}" for k, v in pushed.items()]
+        tags += [f"error:{k} {v}"[:200] for k, v in pushed.items() if v != "ok"]
+        await write_audit(
+            s.store,
+            user=p.name,
+            ip=client_ip(request),
+            action="telemetry.push",
+            target="otel",
+            ok=all(v == "ok" for v in pushed.values()),
+            tags=[f"version:{doc['telemetry_version']}", *tags],
+        )
+    return respond(request, {**doc, "pushed": pushed})
 
 
 @r.get("/config/smtp")

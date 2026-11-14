@@ -59,6 +59,10 @@ class GcpClients:
         return self._cached("apps", lambda: self._kube().AppsV1Api())
 
     @property
+    def batch(self):
+        return self._cached("batch", lambda: self._kube().BatchV1Api())
+
+    @property
     def autoscaling(self):
         return self._cached("hpa", lambda: self._kube().AutoscalingV2Api())
 

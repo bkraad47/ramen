@@ -81,3 +81,21 @@ def world(admin, demo_repo, node_opt):
     if node_opt:
         poll(lambda: node_opt.health_code() == S.OK and node_opt.health() == "SERVING", timeout=180, what="SERVING")
     return {"group": GROUP, "env": ENV, "zone": ZONE}
+
+
+# -- the auth matrix's record (test_auth_matrix.py): one line per sign-in path in the run's own output ---------------
+AUTH_MATRIX: list[tuple[str, str, str]] = []  # (path, PASS | FAIL | SKIP, detail)
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not AUTH_MATRIX:
+        return
+    terminalreporter.section("auth matrix (CONTRACTS §24.4: every sign-in path)")
+    width = max(len(path) for path, _, _ in AUTH_MATRIX)
+    for path, verdict, detail in AUTH_MATRIX:
+        terminalreporter.write_line(f"{verdict:<4}  {path:<{width}}  {detail}".rstrip())
+    out = E.env("RAMEN_AUTH_MATRIX_OUT")
+    if out:
+        with open(out, "w") as f:
+            f.write("| path | result | detail |\n|---|---|---|\n")
+            f.writelines(f"| {p} | {v} | {d} |\n" for p, v, d in AUTH_MATRIX)

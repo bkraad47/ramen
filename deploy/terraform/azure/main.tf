@@ -158,3 +158,25 @@ resource "azurerm_role_assignment" "console" {
   role_definition_name = each.value
   principal_id         = azurerm_user_assigned_identity.console.principal_id
 }
+
+# §24.2: the identity worker-image builds run as (Job pods of KSA ramen-system/ramen-builder, started by the console):
+# AcrPush (push + pull) on the registry, nothing else. The console's own identity gets no registry role.
+resource "azurerm_user_assigned_identity" "builder" {
+  name                = "ramen-builder"
+  resource_group_name = azurerm_resource_group.ramen.name
+  location            = azurerm_resource_group.ramen.location
+}
+
+resource "azurerm_federated_identity_credential" "builder" {
+  name      = "ramen-builder"
+  parent_id = azurerm_user_assigned_identity.builder.id
+  audience  = ["api://AzureADTokenExchange"]
+  issuer    = azurerm_kubernetes_cluster.ramen.oidc_issuer_url
+  subject   = "system:serviceaccount:ramen-system:ramen-builder"
+}
+
+resource "azurerm_role_assignment" "builder_acr_push" {
+  scope                = azurerm_container_registry.ramen.id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.builder.principal_id
+}

@@ -2,7 +2,8 @@
 
 Since 0.5.0 a worker speaks two transports on one port, through one set of guards ([contract §16](../CONTRACTS.md)):
 
-- **Streamable HTTP** — the front door. `POST /mcp` carries one JSON-RPC 2.0 message (MCP spec 2025-06-18); the
+- **Streamable HTTP** — the front door. `POST /mcp` carries one JSON-RPC 2.0 message (MCP spec 2026-07-28;
+  2025-06-18 still accepted, see [two protocol versions](#two-protocol-versions-on-one-endpoint)); the
   credential is `Authorization: Bearer`, an `rmk_` key or a console-issued OAuth token. A URL and a header, so
   phones, browsers and hosted agent platforms connect without installing anything.
 - **gRPC** — `ramen.v1.Mcp/Call`, one message as `bytes body` ([§11](../CONTRACTS.md),
@@ -221,16 +222,241 @@ including other groups' paths. It cannot read those objects — only see that th
 gRPC status codes describe the edge, JSON-RPC errors describe your code. A bad key is `UNAUTHENTICATED`, a blocked
 source range is `PERMISSION_DENIED`, an oversized message is `OUT_OF_RANGE`, too many in-flight calls is
 `RESOURCE_EXHAUSTED`; a blocked or unknown tool is JSON-RPC `-32601` and an exception in your tool is
-`isError: true`. A client can always tell "the edge rejected me" from "the tool said no".
+`isError: true`. A client can always tell "the edge rejected me" from "the tool said no". Those JSON-RPC codes are
+the 2025-06-18 ones; a 2026-07-28 client gets the [codes of its own version](#errors-on-2026-07-28).
 
 The in-flight semaphore is sized when the pod starts and `Admin/Reload` does not resize it: a deploy may set
 `RAMEN_MAX_INFLIGHT`, but the new value takes effect only when the pod restarts.
+
+## Two protocol versions on one endpoint
+
+Since 1.0 a worker serves MCP **2026-07-28** and **2025-06-18** side by side, on the same `POST /mcp` and the same
+`Mcp/Call`. There is no switch: each request is served in the version it names, through the same guards.
+
+**Which version a request gets.** A request is 2026-07-28 when either is true:
+
+- its `MCP-Protocol-Version` HTTP header is anything other than `2025-06-18`, `2025-03-26` or `2024-11-05`;
+- its body has `params._meta["io.modelcontextprotocol/protocolVersion"]`.
+
+Everything else, including a request with neither, is served as 2025-06-18, as in 0.8. On gRPC there is no header
+to read, so the body alone decides.
+
+### A 2026-07-28 request
+
+No `initialize`, no session. Every request carries what the handshake used to establish:
+
+```sh
+curl -s https://<edge>/mcp \
+  -H 'Authorization: Bearer <rmk_ key>' -H 'ramen-group: demo' -H 'ramen-zone: a' \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: demo_calculator_tool' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"demo_calculator_tool","arguments":{"var1":40,"var2":2,"func":"add"},
+        "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                 "io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+`_meta` must carry the version and `clientCapabilities` (an object, `{}` is fine);
+`io.modelcontextprotocol/clientInfo` is optional. `Mcp-Session-Id` is ignored and never returned. The methods are
+`server/discover`, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`,
+`prompts/list`, `prompts/get`, `completion/complete`, `tasks/get`, `tasks/update`, `tasks/cancel` and, on HTTP,
+`subscriptions/listen`. A `notifications/*` message is accepted (`202`) and ignored.
+
+Every result carries `resultType` (`complete`, `input_required` or `task`) and
+`_meta["io.modelcontextprotocol/serverInfo"]` (`{"name": "ramen-node", "version": …}`). The list methods and
+`server/discover` add `ttlMs` (`RAMEN_LIST_TTL_MS`, default 60000) and `cacheScope: "private"`, because a list
+depends on who asks; `resources/read` carries `ttlMs: 0`.
+
+### Errors on 2026-07-28
+
+The node checks a 2026-07-28 request in this order, after the credential and before the throttle. Each failure is a
+JSON-RPC error with the request's `id`:
+
+| Check | Error | HTTP |
+|---|---|---|
+| `_meta` missing, or without `protocolVersion` or an object `clientCapabilities` | `-32602` | 400 |
+| `MCP-Protocol-Version` header missing, or different from the version in `_meta` (HTTP only) | `-32020` | 400 |
+| The version is not `2026-07-28` | `-32022`, `data: {"supported": [...], "requested": "<v>"}` | 400 |
+| `Mcp-Method`, `Mcp-Name` or an `Mcp-Param-*` header missing, undecodable or different from the body (HTTP only) | `-32020` | 400 |
+| `initialize`, `ping`, `logging/setLevel`, `resources/subscribe`, `resources/unsubscribe`, or any unknown method | `-32601` | 404 |
+
+After those, in the call itself:
+
+| Situation | Error | HTTP |
+|---|---|---|
+| Unknown, blocked or hidden tool | `-32602 Unknown tool: <name>` | 200 |
+| A tool the caller may list but not call | `-32602 forbidden: <name> is not callable for <kind>` | 200 |
+| Unknown or blocked prompt | `-32602 Unknown prompt: <name>` | 200 |
+| Resource not found or blocked | `-32602 Resource not found`, `data: {"uri": …}` | 200 |
+| The tool needs a client capability that this request did not declare | `-32021`, `data: {"requiredCapabilities": …}` | 400 |
+| A `requestState` that fails its check ([multi round-trip requests](mrtr.md)) | `-32602 requestState integrity check failed` | 200 |
+| Unknown, expired or someone else's task ([tasks](tasks.md)) | `-32602 Unknown task` | 200 |
+| The runtime has not loaded | `-32603` | 200 |
+
+No code from `-32000` to `-32019` is sent to a 2026-07-28 client. The transport denials are unchanged on both
+versions: `401`, `403`, `413`, `429`, `503`. An exception in a tool is still a result with `isError: true`, not an
+error. The access-log reasons (`blocked_name`, `tool_hidden`, `tool_denied`) are the same on both versions, and
+two are new: `header_mismatch` and `state_invalid`.
+
+### Standard headers
+
+On HTTP a 2026-07-28 request repeats what it is in headers, so a load balancer can route or limit without reading
+the body:
+
+- `Mcp-Method` is required and must equal the JSON-RPC `method`.
+- `Mcp-Name` is required on `tools/call` and `prompts/get` (the `name`), `resources/read` (the `uri`) and
+  `tasks/get`, `tasks/update`, `tasks/cancel` (the `taskId`).
+- `Mcp-Param-<Name>` mirrors a tool argument whose parameter declares `"header": "<Name>"`
+  ([The MCP repo](mcp-repo.md#a-parameter-mirrored-in-a-header)). When the argument is present and not null the
+  header is required and must match: strings exactly, integers by value, booleans as `true` or `false`. When the
+  argument is absent or null no header is expected. An `Mcp-Param-*` header the tool does not declare is ignored.
+- A value that cannot travel in a header is sent as `=?base64?<base64 of the UTF-8 text>?=`; the node decodes it
+  before comparing.
+
+**The body is what runs.** A header that disagrees with it is refused with `-32020` and logged with reason
+`header_mismatch`; the node never acts on the header instead. `Mcp-Param-*` is compared only for a tool the caller
+may see, so a mismatch cannot reveal a hidden tool.
+
+`traceparent`, `tracestate` and `baggage`, from the HTTP header or else from the same key in `_meta`, are copied
+onto the call's access-log line as `trace` when `traceparent` has the W3C shape. They are not passed to tool code.
+
+A browser preflight (`OPTIONS /mcp`) allows `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, the three trace
+headers and each `Mcp-Param-*` header it asks for; responses expose `Mcp-Method` and `Mcp-Name`.
+
+Example edge rules that route or limit on these headers, and what such a rule cannot do, are in
+[`deploy/examples/mcp-headers/`](https://github.com/bkraad47/ramen/tree/main/deploy/examples/mcp-headers). They are
+examples and have not been applied to a live cluster.
+
+### `server/discover`
+
+One call that replaces the handshake's answer:
+
+```json
+{"resultType": "complete",
+ "supportedVersions": ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"],
+ "capabilities": {"tools": {"listChanged": true}, "prompts": {"listChanged": true},
+                  "resources": {"listChanged": true}, "completions": {},
+                  "extensions": {"io.modelcontextprotocol/tasks": {}}},
+ "ttlMs": 60000, "cacheScope": "private",
+ "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "ramen-node", "version": "1.0.0"}}}
+```
+
+`extensions` is present only when a loaded tool has `"task": true`. There is no `logging` capability and no
+`resources.subscribe`.
+
+`completion/complete` (both versions) returns the declared `enum` values of the named prompt argument or resource
+template variable that start with what was typed, at most 100; with nothing declared, an empty list.
+
+### Subscriptions
+
+`subscriptions/listen` is a `POST /mcp` whose answer is an event stream (`text/event-stream`, with
+`X-Accel-Buffering: no`). It is how a 2026-07-28 client hears about a deploy:
+
+1. The first event is `notifications/subscriptions/acknowledged`. Its `params.notifications` names what the node
+   will send, out of what was asked: `toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, and
+   `taskIds` when the client declared the tasks extension. `resourceSubscriptions` is never honoured. Every event
+   on the stream carries `params._meta["io.modelcontextprotocol/subscriptionId"]`, which is the request's `id`.
+2. After each load that changes the manifest hash: one `notifications/tools/list_changed`,
+   `notifications/prompts/list_changed` and `notifications/resources/list_changed`, for each kind that was asked
+   for. A reload of the same manifest sends nothing.
+3. `notifications/tasks` when a watched task changes ([tasks](tasks.md)).
+4. A comment line every 15 seconds keeps the connection open.
+5. When the worker stops (SIGTERM), each stream gets a final `{"id": …, "result": {"resultType": "complete", …}}`
+   and ends.
+
+Asking for `taskIds` without declaring the tasks extension is `-32021`. A request without an `id` is `-32600`.
+
+A stream holds no in-flight permit. A pod carries at most `RAMEN_MAX_SUBSCRIPTIONS` of them (default 64); the next
+is `429`. A client that drops its connection without closing the stream frees its slot when a keep-alive write
+fails, within about 30 seconds. **A stream is per pod**: it hears about the reload of the pod it is connected to, and behind a load
+balancer that is one pod of the zone. A 2025-06-18 client keeps the rollout notice described under
+[Sessions](#sessions).
+
+### Progress
+
+A `tools/call` or `prompts/get` that carries `_meta.progressToken` and whose `Accept` includes
+`text/event-stream` is answered as an event stream: one `notifications/progress` per `progress()` call in the tool
+([The MCP repo](mcp-repo.md#progress)), then the response. Without the token, or without `text/event-stream` in
+`Accept`, progress is dropped and the answer is plain JSON. This works on both protocol versions.
+
+### What gRPC does differently
+
+`ramen.v1.Mcp/Call` serves both versions too, with these differences, all because there is one message in and one
+message out and no HTTP headers:
+
+- **The body alone selects the version.** There is no `MCP-Protocol-Version` check.
+- **No standard-header checks.** `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*` do not exist on gRPC.
+- **No `subscriptions/listen`**: it answers `-32601`.
+- **No progress**: `progress()` calls are dropped.
+
+Everything else is the same code: the `_meta` check, the error codes, multi round-trip requests and tasks. The
+stdio bridge forwards each message unchanged, so a 2026-07-28 client behind it is served as 2026-07-28.
 
 ## What is verified, and what is not
 
 This section is the single record; [How it works](../how-it-works.md), the [threat model](../threat-model.md) and
 the home page point here.
 
+- **1.0.0, verified locally** on real node and runtime processes (the cloud run is the next entry). What the
+  local harness covers:
+    - `tests/conformance/test_golden_regression.py`: every tool, resource and prompt of the fixture groups and the
+      demo repo, recorded from a 0.8.0 node, answers a 2025-06-18 client the same in 1.0.0, and a 2026-07-28 client
+      the same plus the new envelope.
+    - `test_stateless_core.py`, `test_standard_headers.py`: version selection, the `_meta` checks and their order,
+      the error table above, `server/discover`, the header rules, trace context, CORS.
+    - `test_mrtr.py`, `test_mrtr_guardrails.py`: input requests, the signed state (tampered, expired, another
+      caller, tool, arguments or method; accepted by a second pod of the zone and refused by another zone or group),
+      what a 2025-06-18 client sees, progress, and the guardrail on every round.
+    - `test_tasks.py`, `test_subscriptions.py`: the task lifecycle, caps, expiry, another caller's task, the
+      stream's acknowledgement, filter, cap, keep-alive and the final result at shutdown.
+    - `test_bridge_modern.py`: a 2026-07-28 message through the stdio bridge.
+    - The Redis task store, against a real Redis: two workers sharing one store, a task started on one and read,
+      answered and cancelled through the other (`test_tasks.py`; skipped when `RAMEN_TEST_REDIS_URL` is unset, as in CI).
+    - The official conformance suite: [below](#the-official-conformance-suite).
+    - Final local run: node 166 tests (121 unit, 15 integration, 12 modern, 18 sleep and telemetry), runtime 155
+      (99 % coverage), console 950 (97 %). On a kind cluster the existing kind, e2e and conformance suites ran 870
+      passed. The module for sleeping, image builds and telemetry (`tests/kind/test_v1_sleep_build_otel.py`) ran
+      21 passed, 1 failed, 1 skipped on its last cluster run. One more fix followed that run (an activator asking
+      for the wake again); it was verified by unit and integration tests and on the three clouds, and the module
+      was not re-run on kind afterwards.
+- **Verified live in 1.0.0 on GKE, EKS and AKS** (2026-11-13 to 2026-11-14, each torn down afterwards and checked
+  empty): GKE Autopilot on Firestore behind the Gateway, EKS on DynamoDB behind the ALB, AKS on Table Storage behind
+  Envoy Gateway, each with the chart's Jaeger, an in-cluster Redis as the group's throttle Redis and the
+  `ramen-builder` identity.
+    - `scripts/cloud_smoke.sh` passed on each.
+    - The full check set — `tests/cloud/test_release_features.py` (the 0.8 checks, six 2026-07-28 checks through
+      the edge, and the 1.0 block: a deploy building the group's image in the cloud's registry, workers on the
+      built image, spans in Jaeger, consent by prompt and by token, refusal of a 2025-06-18 client, sleep on idle
+      and wake by a call through the load balancer), `tests/cloud/test_auth_matrix.py`, `tests/e2e` and the remote
+      conformance modules — ran **134 passed, 0 failed, 11 skipped on EKS and on AKS; 133 passed, 1 failed,
+      11 skipped on GKE**. The GKE failure was `upstream connect error … connection timeout`, a `503` from the
+      Google load balancer on the first call after a deploy; the same four checks passed on a re-run minutes later.
+      It is listed as a known limit: on GKE a call can meet a `503` for a moment after a rollout.
+    - `scripts/load_test.py` (five scenarios and console readiness): all passed on each cloud. GKE reached 3
+      workers at 159 s and was back to 1 at 615 s, with 25,004 calls answered and 17 answered `429`; EKS 148 s and
+      609 s, 11,743 answered and 621 `429`; AKS 134 s and 600 s, 26,269 answered and no errors. No 5xx in any load
+      test.
+    - Waking a sleeping zone through the edge: EKS answered the waking call after 13 s (held, no retry); GKE and
+      AKS after 1 s, served by workers that were still draining while the zone was woken behind them. On GKE
+      Autopilot a cold wake can take longer than the 25 s hold: the caller then gets the activator's `503` with
+      `Retry-After: 10` (seen once) and retries, never the load balancer's `504`.
+    - The eleven checks an edge run skips, run separately on each cloud. Straight to a worker over a port-forward
+      (the Admin key, metrics, reload, the access-log line): 36 passed on each. A blocked tool hidden and denied
+      through the edge: passed on each. The two IP allow-list checks with a range that excludes the test host:
+      passed on each (Cloud Armor on GKE; Envoy on AKS, `RBAC: access denied`, health closed too; AWS WAF on EKS,
+      refusing within about 10 s of the rule and accepting again about 10 s after it was cleared). A change of the
+      sign-in configuration ending every session (the security matrix): 49 passed on each. Password reset through
+      the file mail backend: 5 of 5 on GKE, and 5 of 5 three runs in a row on EKS; on AKS it passed alone and
+      failed after the file's other tests, which was traced to the test harness's loop that copies mail out of
+      the pod (it rewrote old mails, so a stale invitation looked new), not to the product, and the corrected loop
+      was not re-run on AKS before teardown.
+    - Microsoft Entra ID sign-in with the groups lookup on all three: a group id mapped to Group Admin on the
+      group; on AKS, removal from that group gave the fallback role at the next sign-in. Google sign-in with the
+      Cloud Identity group lookup on all three consoles: the lookup returned the account's groups (more than one
+      page), and a first attempt on GKE where the lookup answered `403` was refused. Not done: the account was a
+      consumer Google account that belongs to Google Groups, not a Workspace-domain account, and no sign-in
+      applied a group → role rule to a looked-up Google group, so that mapping is still verified against a fake
+      only.
 - **Verified live in 0.8.0 on GKE, EKS and AKS** (2026-10-17, each torn down afterwards), on the build that carries the
   security review's fixes: `scripts/cloud_smoke.sh` (zone, group, key, canary deploy of the demo repo with its NeMo rails
   and golden cases, a call through the edge) on each; then `tests/cloud/test_release_features.py` with `tests/e2e` and the
@@ -307,6 +533,48 @@ the home page point here.
   secrets in its environment. Tool code in a group can read that group's secrets directly. Isolation between
   groups is the pod, the namespace and the per-zone identity — not the Python process. See
   [the threat model](../threat-model.md).
+
+### The official conformance suite
+
+CI runs the official [`@modelcontextprotocol/conformance`](https://www.npmjs.com/package/@modelcontextprotocol/conformance)
+suite, **version pinned at 0.2.0-alpha.12**, against a real worker serving `tests/fixtures/conformance_group`. The
+suite cannot send a credential, so a small local proxy adds the key and the routing headers
+(`tests/conformance_suite/`). It runs once per protocol version, each against a checked-in list of expected failures
+(`baseline-<version>.yaml`) with a reason per entry. The suite fails the run on a failure that is not listed **and**
+on a listed entry that starts passing, so the lists cannot go stale.
+
+**2025-06-18** (`--spec-version 2025-06-18`, 27 scenarios): 49 checks passed, 7 did not. All seven are the baseline:
+
+| Baseline entry | Why Ramen does not do this |
+|---|---|
+| `logging-set-level` | Ramen declares no `logging` capability; `logging/setLevel` is `-32601` |
+| `tools-call-with-logging` | no log notifications are sent to clients; the tool returns a plain result |
+| `tools-call-sampling` | no server-initiated sampling for a 2025-06-18 client; sampling is an input request on 2026-07-28 only |
+| `tools-call-elicitation` | no server-initiated elicitation for a 2025-06-18 client; elicitation is an input request on 2026-07-28 only |
+| `resources-subscribe` | `resources/subscribe` is not offered |
+| `resources-unsubscribe` | `resources/unsubscribe` is not offered |
+| `server-session-lifecycle:server-session-terminated-returns-404` | session ids are signed, not stored: `DELETE` answers, but a deleted id still verifies until it expires |
+
+**2026-07-28** (`--requirements 2026-07-28`, 50 scenarios): 184 checks passed, 9 did not. Two are the baseline, both
+"should" level warnings:
+
+| Baseline entry | Why Ramen does not do this |
+|---|---|
+| `server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription` | the suite triggers the change by calling a tool that alters the tool list; a Ramen tool cannot change the manifest. `list_changed` follows a deploy, which `test_subscriptions.py` covers |
+| `server-stateless:sep-2575-server-sends-prompts-list-changed-on-subscription` | the same trigger for the prompt list |
+
+The other seven are failures in scenarios that the suite's baseline check did not count in that run. They are real
+differences, listed here so that "passes" is not read as more than it is:
+
+| Check | What Ramen does |
+|---|---|
+| `json-schema-2020-12` (five checks: `$schema`, `$defs`, `allOf`, `if`/`then`/`else`, `$anchor` kept in `inputSchema`) | a tool's `inputSchema` is built from the flat `input` map of its JSON file (scalars and enums); those keywords cannot be declared |
+| `tasks-lifecycle:sep-2663-tasks-get-status-failed` | a tool that raises ends its task `completed` with an `isError` result; `failed` is a lost worker, a runtime fault or a missing capability |
+| `tasks-required-task-error:sep-2663-server-returns-missing-capability-when-required` | there is no task-required tool: a client that did not declare the extension gets the synchronous call |
+| `tasks-mrtr-composition:sep-2663-mrtr-synchronous-before-task-creation` | a task tool does not ask for input before the task is created; it asks through the task |
+| `tasks-mrtr-input:tasks-mrtr-partial-fulfillment` | failed in that run: the answered request was still listed by the next `tasks/get`. A `tasks/update` is queued for the pod that owns the task and applied on its next poll, not before the update returns |
+
+Those numbers are from the local run of 2026-11-13.
 
 ## Connecting
 

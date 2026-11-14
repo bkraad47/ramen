@@ -9,6 +9,12 @@ VERSION=${VERSION:-$(cat "$ROOT/VERSION")}
 GATEWAY_API_VERSION=${GATEWAY_API_VERSION:-v1.2.1}
 METRICS_SERVER_VERSION=${METRICS_SERVER_VERSION:-v0.8.0}
 KCTX="kind-$CLUSTER"
+# §24.2: the registry image builds push to and the nodes pull from (the kind local-registry pattern: a registry
+# container on the `kind` docker network; pods and containerd both reach it as kind-registry:5000, plain http)
+REGISTRY_NAME=${KIND_REGISTRY_NAME:-kind-registry}
+REGISTRY_HOST_PORT=${KIND_REGISTRY_PORT:-5001}
+REGISTRY_IMAGE=${KIND_REGISTRY_IMAGE:-registry:2.8.3}
+REGISTRY="$REGISTRY_NAME:5000"
 k() { kubectl --context "$KCTX" "$@"; }
 say() { printf '\n== %s\n' "$*"; }
 
@@ -25,7 +31,29 @@ say "images"
 docker image inspect "ramen-console:$VERSION" >/dev/null 2>&1 || { echo "build ramen-console:$VERSION first (make build)" >&2; exit 2; }
 docker image inspect "ramen-worker:$VERSION" >/dev/null 2>&1 || { echo "build ramen-worker:$VERSION first (make build)" >&2; exit 2; }
 docker build -q -t "ramen-worker-kind:$VERSION" --build-arg "BASE=ramen-worker:$VERSION" -f "$HERE/worker.Dockerfile" "$HERE"
-kind load docker-image "ramen-console:$VERSION" "ramen-worker-kind:$VERSION" --name "$CLUSTER"
+# the worker image under its registry name: side-loaded (zones never wait on a pull) AND pushed (a build's FROM)
+docker tag "ramen-worker-kind:$VERSION" "$REGISTRY/ramen-worker-kind:$VERSION"
+kind load docker-image "ramen-console:$VERSION" "ramen-worker-kind:$VERSION" "$REGISTRY/ramen-worker-kind:$VERSION" --name "$CLUSTER"
+
+say "registry $REGISTRY (image builds, §24.2)"
+if [ "$(docker inspect -f '{{.State.Running}}' "$REGISTRY_NAME" 2>/dev/null || true)" != "true" ]; then
+  docker rm -f "$REGISTRY_NAME" >/dev/null 2>&1 || true
+  docker run -d --restart=always -p "127.0.0.1:$REGISTRY_HOST_PORT:5000" --network bridge --name "$REGISTRY_NAME" "$REGISTRY_IMAGE" >/dev/null
+fi
+docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' | grep -qw "$REGISTRY_NAME" \
+  || docker network connect kind "$REGISTRY_NAME"
+for node in $(kind get nodes --name "$CLUSTER"); do
+  # containerd pulls <registry>/... over plain http; needs the registry config_path that cluster.yaml patches in
+  docker exec "$node" grep -q 'certs.d' /etc/containerd/config.toml \
+    || { echo "node $node: containerd has no registry config_path (deploy/kind/cluster.yaml sets it): the cluster predates it — make kind-down kind-up" >&2; exit 2; }
+  docker exec "$node" mkdir -p "/etc/containerd/certs.d/$REGISTRY"
+  printf '[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "$REGISTRY" \
+    | docker exec -i "$node" cp /dev/stdin "/etc/containerd/certs.d/$REGISTRY/hosts.toml"
+done
+# pushed from the host through the published port, under the name the cluster knows it by
+docker tag "ramen-worker-kind:$VERSION" "localhost:$REGISTRY_HOST_PORT/ramen-worker-kind:$VERSION"
+docker push -q "localhost:$REGISTRY_HOST_PORT/ramen-worker-kind:$VERSION"
+docker image rm "localhost:$REGISTRY_HOST_PORT/ramen-worker-kind:$VERSION" >/dev/null
 
 say "CRDs (Gateway API $GATEWAY_API_VERSION + the two GKE-only kinds the console renders)"
 k apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/standard-install.yaml"
@@ -58,6 +86,7 @@ fi
 set -a; . "$SECRETS"; set +a
 helm --kube-context "$KCTX" upgrade --install ramen "$ROOT/deploy/helm/ramen" \
   -n ramen-system -f "$HERE/values.yaml" --set "image.tag=$VERSION" \
+  --set "builder.registry=$REGISTRY/ramen,console.env.RAMEN_IMAGE_WORKER=$REGISTRY/ramen-worker-kind:$VERSION" \
   --set "console.secrets.RAMEN_ADMIN_PASSWORD=$RAMEN_ADMIN_PASSWORD,console.secrets.RAMEN_ADMIN_KEY=$RAMEN_ADMIN_KEY" \
   --set "console.secrets.RAMEN_SESSION_SECRET=$RAMEN_SESSION_SECRET,console.secrets.RAMEN_FERNET_KEY=$RAMEN_FERNET_KEY" \
   --wait --timeout 5m
@@ -82,5 +111,7 @@ zone a    localhost:18081  (gRPC h2c)       namespace ramen-demo-a, node label t
 zone b    localhost:18082  (gRPC h2c)       namespace ramen-demo-b, node label topology.kubernetes.io/zone=kind-b
 stable    localhost:18084 / 18085          the same zones, stable track only (see zones.yaml)
 fake GCS  http://localhost:18083/storage/v1/b/ramen-kind-groups/o
+registry  localhost:$REGISTRY_HOST_PORT (host) = $REGISTRY (cluster)   built images: $REGISTRY/ramen/worker:b-<group>-<hash>
+jaeger    http://localhost:18086            OTLP in-cluster: http://jaeger.ramen-system:4318 (Config → Telemetry)
 next      make kind-test
 TXT

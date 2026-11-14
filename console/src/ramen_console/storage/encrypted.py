@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from cryptography.fernet import Fernet
 
+from ..security import remember_secret
 from .base import Doc, Filters, Store
 
 SENSITIVE: dict[str, set[str]] = {
@@ -10,7 +11,7 @@ SENSITIVE: dict[str, set[str]] = {
     "api_keys": {"secret_hash"},
     "groups": {"github_token", "session_secret", "redis_scope_url"},
     "environments": {"github_token"},
-    "config": {"smtp_password", "github_app_private_key", "token_salt"},
+    "config": {"smtp_password", "github_app_private_key", "token_salt", "otel_headers", "otel_client_headers"},
     "workers": {"redis_item_url"},
 }
 # D50: a doc whose SECRET lives one level down, per entry — (collection, key) → the nested field name
@@ -23,12 +24,15 @@ class FieldCipher:
         self._f = Fernet(key.encode() if isinstance(key, str) else key)
 
     def encrypt(self, value: str) -> str:
+        remember_secret(value)
         return PREFIX + self._f.encrypt(value.encode()).decode()
 
     def decrypt(self, value: str) -> str:
         if not isinstance(value, str) or not value.startswith(PREFIX):
             return value
-        return self._f.decrypt(value[len(PREFIX) :].encode()).decode()
+        out = self._f.decrypt(value[len(PREFIX) :].encode()).decode()
+        remember_secret(out)
+        return out
 
 
 class EncryptedStore(Store):

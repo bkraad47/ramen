@@ -12,10 +12,13 @@ and sets the max; viewers and MCP users see the count only, and an API attempt i
 
 - **Group page → Zone actions**: *Count (min 1)*, *Max (autoscale up to)*, then **Scale workers**. A count outside
   1..max is refused (`422`). Lowering the max under load brings the count down to it at once.
-- **Zones and workers**: one row per group × zone with *Max workers* and **Save max**, and the last decision.
+- **Environments, Zones and Workers → Workers per group**: one row per group × zone with *Max workers* and **Save max**, and the last decision.
 - API: `PUT /api/v1/groups/{g}/zones/{z}/workers {"max_count": 3}`.
 
 A zone created before 0.7.5 starts with max = its current count, so nothing scales until an admin raises it.
+
+The one case with 0 workers is a zone an admin allowed to [sleep](sleeping-workers.md) (1.0, off by default): the
+autoscaler holds while a zone is asleep or waking.
 
 <figure markdown>
 ![Zone actions with count, max and the last autoscale decision](../img/group-autoscale.png){ .ramen-shot }
@@ -23,8 +26,8 @@ A zone created before 0.7.5 starts with max = its current count, so nothing scal
 </figure>
 
 <figure markdown>
-![The Zones and workers page with a max per group and zone](../img/zones.png){ .ramen-shot }
-<figcaption>Zones and workers: live workers with their load, the max per group × zone, and the last decision.</figcaption>
+![The Environments, Zones and Workers page with a max per group and zone](../img/environments.png){ .ramen-shot }
+<figcaption>Environments, Zones and Workers: live workers with their load, the max per group × zone, and the last decision.</figcaption>
 </figure>
 
 ## Who runs it

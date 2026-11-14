@@ -1,0 +1,15 @@
+{
+  "type": "resource",
+  "name": "watched_resource",
+  "description": "A resource the official suite tries to subscribe to. Ramen offers no resources/subscribe (CONTRACTS 23.1), so both subscribe scenarios are baseline entries.",
+  "callable": "read",
+  "input": {},
+  "uri": "test://watched-resource",
+  "mime_type": "text/plain",
+  "output": {
+    "type": "string"
+  },
+  "error": {
+    "type": "string"
+  }
+}

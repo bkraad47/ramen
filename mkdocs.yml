@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.8.0
+  version_current: 1.0.0
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -66,7 +66,9 @@ nav:
       - Deploy on Azure: wiki/deploy-azure.md
       - Groups, zones and regions: wiki/groups-zones.md
       - Autoscaling: wiki/autoscaling.md
+      - Sleeping workers: wiki/sleeping-workers.md
       - The MCP repo, structure and local development: wiki/mcp-repo.md
+      - Worker images: wiki/worker-images.md
       - Secrets at runtime: wiki/secrets.md
       - Users and access: wiki/users-access.md
       - Connect a client with OAuth: wiki/connect-oauth.md
@@ -76,6 +78,9 @@ nav:
       - Throttling with Redis: wiki/throttling.md
       - Entra ID and Google Workspace: wiki/sso.md
       - Guardrails (NeMo or your own policy): wiki/guardrails.md
+      - Multi round-trip requests: wiki/mrtr.md
+      - Tasks: wiki/tasks.md
+      - Telemetry: wiki/telemetry.md
       - Backups: wiki/backups.md
       - Configuration: wiki/configuration.md
   - Changelog: changelog.md
@@ -87,7 +92,7 @@ nav:
       - Interface contracts: CONTRACTS.md
       - Contributing and modifying: contributing.md
       - Version tracker: versions.md
-      - Architecture (v0.7.x): architecture/index.md
+      - Architecture: architecture/index.md
       - Architecture history:
           - v0.6.0: architecture/v0.6.0.md
           - v0.4.0: architecture/v0.4.0.md

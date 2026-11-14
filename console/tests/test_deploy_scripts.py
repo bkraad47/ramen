@@ -90,6 +90,7 @@ def test_cloud_smoke_deploy_poll_rides_out_a_non_json_answer(tmp_path):
         "     if [ $c -eq 1 ]; then echo '<html>502</html>'; elif [ $c -eq 2 ]; then echo '{\"status\":\"running\"}';\n"
         '     else echo \'{"status":"ok"}\'; fi ;;\n'
         '  */workers) echo \'{"live":[{"load":0}]}\' ;;\n'
+        '  */zones/a/groups) echo \'{"groups":["demo"]}\' ;;\n'  # §26.1: the smoke binds the zone first
         "  *) echo '{}' ;;\n"
         "esac\n"
     )

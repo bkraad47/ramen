@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% block title %}Config{% endblock %}{% from "partials/multi.html" import multi %}
 {% block body %}
-<div class="card"><b>Config file:</b> <code>{{ config_file or 'none (RAMEN_CONFIG unset)' }}</code> <button class="sm" hx-post="{{ base }}/api/v1/config/reload" hx-swap="none">Hot reload</button>
+<div class="card"><b>Config file:</b> <code>{{ config_file or 'none (RAMEN_CONFIG unset)' }}</code> <button class="act ghost" hx-post="{{ base }}/api/v1/config/reload" hx-swap="none">Hot reload</button>
 <p class="muted">Top-level yaml keys map to <code>RAMEN_*</code> env vars (nested keys join with <code>_</code>); real env vars win. OAuth providers: {{ providers|join(', ') or 'none configured' }}.</p></div>
 <div class="card"><h2 style="margin-top:0">Public address (base URI)</h2><p class="muted">The address people and MCP clients reach this console at, e.g. <code>https://ops.example.com/ramen</code>. When set, every link the console generates goes through it — pages, forms, redirects, email links, OAuth discovery and the address handed to workers — so the console can sit behind a proxy that forwards <code>&lt;base URI&gt;/…</code> to its root. Empty uses RAMEN_PUBLIC_URL ({{ public_url_env or 'unset' }}), then the request's own address. A wrong value breaks every link: clear it with <code>PUT /api/v1/config/base-uri {"base_uri": ""}</code> at the console's root.</p>
 <form class="inline" hx-put="{{ base }}/api/v1/config/base-uri" hx-ext="json" hx-swap="none"><label>Base URI<input name="base_uri" value="{{ base_uri }}" placeholder="https://ops.example.com/ramen" style="min-width:24em"></label> <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Authentication</h2><p class="muted">Providers: {{ providers|join(', ') or 'none' }} · mail backend: <code>{{ mail }}</code> · break-glass (RAMEN_ADMIN_FORCE_PASSWORD): {{ 'on' if auth.force_password else 'off' }}</p>
-<form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"password_login": {{ 'false' if auth.password_login else 'true' }}}' hx-swap="none"><button class="sm {{ 'danger' if auth.password_login else '' }}">Password login: {{ 'on → off' if auth.password_login else 'off → on' }}</button></form>
-<form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"magic_link": {{ 'false' if auth.magic_link else 'true' }}}' hx-swap="none"><button class="sm ghost">Magic-link login: {{ 'on → off' if auth.magic_link else 'off → on' }}</button></form>
+<div class="row-actions toggles"><form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"password_login": {{ 'false' if auth.password_login else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if auth.password_login else 'ghost' }}">Password login: {{ 'on → off' if auth.password_login else 'off → on' }}</button></form>
+<form class="inline" hx-put="{{ base }}/api/v1/config/auth" hx-ext="json" hx-vals='{"magic_link": {{ 'false' if auth.magic_link else 'true' }}}' hx-swap="none"><button class="act ghost">Magic-link login: {{ 'on → off' if auth.magic_link else 'off → on' }}</button></form></div>
 <p class="muted">MCP token lifetimes (environment, applied at the next mint): access <code>{{ oauth_ttl.access }}</code> s (<code>RAMEN_OAUTH_ACCESS_TTL</code>), refresh <code>{{ oauth_ttl.refresh }}</code> s (<code>RAMEN_OAUTH_REFRESH_TTL</code>). A client whose access token expired refreshes without asking the person again; its MCP session id stays valid.</p></div>
 <div class="card"><h2 style="margin-top:0">Roles</h2><p class="muted">Besides the built-in Group Admin, Viewer and MCP User, a custom role is a name with a <b>base</b>: in the console it may do exactly what its base may; on the workers it is a caller kind of its own in each tool's access lists (and inherits what its base is allowed). People hold it per group like any role, a sign-in provider's rule may grant it, and OAuth tokens carry the name. <b>OAuth only</b> makes everyone holding the role sign in through a provider — passwords and sign-in links are refused for them (the bootstrap admin excepted). A role in use cannot be removed.</p>
 <table class="settings"><tr><th>Role</th><th>Base</th><th>OAuth only</th><th></th></tr>
@@ -64,6 +64,23 @@
 <td><div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/oauth/clients/{{ c.client_id }}" hx-confirm="Remove the client {{ c.name }}? Its refresh tokens stop working." hx-swap="none">Remove client</button></div></td></tr>
 {% else %}<tr><td colspan="5" class="muted">No OAuth clients registered</td></tr>{% endfor %}</table>
 <p class="muted">Clients discover the flow at <code>/.well-known/oauth-authorization-server</code>; a worker points them here from <code>/.well-known/oauth-protected-resource</code>.</p></div>
+<div class="card" id="telemetry"><h2 style="margin-top:0">Telemetry (OpenTelemetry)</h2><p class="muted">When on, every worker exports one span per MCP call and call/error counters, and the console one span per deploy, as OTLP/HTTP to the endpoint below — tool name, timing and outcome, never arguments, results or credentials. Workers pick the setting up on their next deploy. Connected agents are told the <b>client</b> endpoint and headers (in their OAuth token answer and in <code>server/discover</code>) so their own telemetry lands in the same place; they are never given the headers Ramen itself sends. Header values are write-only and stored encrypted. A group admin can then require each person's consent on the group page.</p>
+<table class="kv">
+<tr><th>Telemetry</th><td><span class="badge {{ 'ok' if otel.enabled else '' }}">{{ 'on' if otel.enabled else 'off' }}</span>
+<form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-vals='{"enabled": {{ 'false' if otel.enabled else 'true' }}}' hx-swap="none"><button class="act {{ 'danger' if otel.enabled else '' }}">Telemetry: {{ 'on → off' if otel.enabled else 'off → on' }}</button></form></td></tr>
+<tr><th>Endpoint</th><td>{% if otel.endpoint %}<code>{{ otel.endpoint }}</code>{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+<tr><th>Headers Ramen sends</th><td><span class="badge {{ 'ok' if otel.headers_set else '' }}">{{ 'set (hidden)' if otel.headers_set else 'not set' }}</span>{% if otel.headers_set %} <span class="muted">{{ otel.header_names|join(', ') }}</span>{% endif %}</td></tr>
+<tr><th>Client endpoint</th><td>{% if otel.client_endpoint %}<code>{{ otel.client_endpoint }}</code>{% else %}<span class="muted">same as the endpoint</span>{% endif %}</td></tr>
+<tr><th>Headers agents send</th><td><span class="badge {{ 'ok' if otel.client_headers_set else '' }}">{{ 'set (hidden)' if otel.client_headers_set else 'not set' }}</span>{% if otel.client_headers_set %} <span class="muted">{{ otel.client_header_names|join(', ') }}</span>{% endif %}</td></tr>
+<tr><th>Config version</th><td><code>{{ otel.telemetry_version }}</code> <span class="muted">what clients report with (MCP 2026-07-28 <code>_meta["io.ramen/telemetry"]</code>); saving pushes the new config to every deployed zone, and a client on an older version signs in again.</span></td></tr>
+{% if otel_ui_url %}<tr><th>Trace UI</th><td><a href="{{ otel_ui_url }}">{{ otel_ui_url }}</a> <span class="muted">the chart's collector (<code>otel.collector</code>: Jaeger or Phoenix), reachable through a port-forward</span></td></tr>{% endif %}
+</table>
+<form class="inline" hx-put="{{ base }}/api/v1/config/otel" hx-ext="json" hx-swap="none">
+<label>Endpoint (OTLP/HTTP base URL)<input name="endpoint" value="{{ otel.endpoint }}" placeholder="http://jaeger.ramen-system:4318"></label>
+<label>Headers Ramen sends (JSON, {{ 'set: ' ~ otel.header_names|join(', ') if otel.headers_set else 'none set' }})<input name="headers" type="password" autocomplete="off" placeholder="{{ 'unchanged' if otel.headers_set else '{"Authorization": "Bearer …"}' }}"></label>
+<label>Client endpoint (empty = the endpoint above)<input name="client_endpoint" value="{{ otel.client_endpoint }}" placeholder="https://otel.example.com"></label>
+<label>Headers agents are told to send (JSON, {{ 'set: ' ~ otel.client_header_names|join(', ') if otel.client_headers_set else 'none set' }})<input name="client_headers" type="password" autocomplete="off" placeholder="{{ 'unchanged' if otel.client_headers_set else '{"x-team": "agents"}' }}"></label>
+<button class="act">Save telemetry</button></form></div>
 <div class="card"><h2 style="margin-top:0">Auto-rebalance scheduler</h2><p class="muted">Watches every group × zone for a skewed worker and rebalances it automatically, the same way the Rebalance button on a group page does. Each run is audited as user <code>scheduler</code>.</p>
 <table class="settings">
 <tr><th>Scheduler</th><td><span class="badge {{ 'ok' if scheduler.enabled else '' }}">{{ 'on' if scheduler.enabled else 'off' }}</span></td>
@@ -72,11 +89,21 @@
 <td><button class="act ghost" form="scheduler-interval">Set interval</button></td></tr>
 </table></div>
 <div class="card"><h2 style="margin-top:0">GitHub App (OIDC-free group repo access)</h2><p class="muted">Once set, a group with a GitHub App installation id needs no stored token — a short-lived installation token is minted per deploy. {{ 'A private key is set.' if github_app.private_key_set else 'No private key set.' }}</p>
+<table class="kv">
+<tr><th>App id</th><td>{% if github_app.app_id %}<code>{{ github_app.app_id }}</code>{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+<tr><th>Private key</th><td><span class="badge {{ 'ok' if github_app.private_key_set else '' }}">{{ 'set (hidden)' if github_app.private_key_set else 'not set' }}</span></td></tr>
+</table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/github-app" hx-ext="json" hx-swap="none">
 <label>App id<input name="app_id" value="{{ github_app.app_id }}" placeholder="123456"></label>
 <label>Private key (PEM)<textarea name="private_key" rows="3" placeholder="(unchanged)"></textarea></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server email (SMTP)</h2><p class="muted">Overrides RAMEN_SMTP_* env vars field by field; takes effect immediately. Password is write-only — {{ 'a password is set.' if smtp.password_set else 'no password set.' }}</p>
+<table class="kv">
+<tr><th>Server</th><td>{% if smtp.host %}<code>{{ smtp.host }}:{{ smtp.port }}</code> · {{ {'1': 'STARTTLS', 'ssl': 'SSL', '0': 'no TLS'}.get(smtp.tls, smtp.tls) }}{% else %}<span class="muted">not set (env RAMEN_SMTP_* or mail off)</span>{% endif %}</td></tr>
+<tr><th>User</th><td>{% if smtp.user %}{{ smtp.user }}{% else %}<span class="muted">none</span>{% endif %}</td></tr>
+<tr><th>Password</th><td><span class="badge {{ 'ok' if smtp.password_set else '' }}">{{ 'set (hidden)' if smtp.password_set else 'not set' }}</span></td></tr>
+<tr><th>From</th><td>{% if smtp.mail_from %}{{ smtp.mail_from }}{% else %}<span class="muted">not set</span>{% endif %}</td></tr>
+</table>
 <form class="inline" hx-put="{{ base }}/api/v1/config/smtp" hx-ext="json" hx-swap="none">
 <label>Host<input name="host" value="{{ smtp.host }}" placeholder="smtp.example.com"></label>
 <label>Port<input name="port" type="number" min="1" value="{{ smtp.port }}" style="width:6em"></label>
@@ -86,20 +113,23 @@
 <label>TLS<select name="tls"><option value="1" {{ 'selected' if smtp.tls == '1' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.tls == 'ssl' }}>SSL</option><option value="0" {{ 'selected' if smtp.tls == '0' }}>None</option></select></label>
 <button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Server warning/error emails</h2><p class="muted">These users get a digest email when the server logs a warning or error.</p>
-<form class="inline" hx-put="{{ base }}/api/v1/config/notify" hx-ext="json" hx-swap="none"><input type="hidden" name="user_ids" value="">
-<label>User<select id="notify-pick">{% for u in users %}<option value="{{ u.id }}">{{ u.email }}</option>{% else %}<option value="">No users yet</option>{% endfor %}</select></label>
-<button type="button" class="sm ghost" onclick="ramenAddNotify(this)">Add</button>
-<span class="chips" id="notify-chips">{% for u in users %}{% if u.id in notify_user_ids %}<span class="chip" data-notify="{{ u.id }}">{{ u.email }}<input type="hidden" name="user_ids" value="{{ u.id }}"> <button type="button" class="x" onclick="this.parentElement.remove()">Remove</button></span>{% endif %}{% endfor %}</span>
-<button class="act">Save</button></form></div>
+<table class="kv"><tr><th>Recipients</th><td>{% set rcpts = [] %}{% for u in users if u.id in notify_user_ids %}{% set _ = rcpts.append(u.email) %}{% endfor %}{{ rcpts|join(', ') if rcpts else '<span class="muted">nobody</span>'|safe }}</td></tr></table>
+<form class="inline" hx-put="{{ base }}/api/v1/config/notify" hx-ext="json" hx-swap="none">{% set notify_opts = [] %}{% for u in users %}{% set _ = notify_opts.append((u.id, u.email)) %}{% endfor %}{{ multi('user_ids', notify_opts, notify_user_ids, 'notify-users', 'Users', 'Nobody') }}<button class="act">Save</button></form></div>
 <div class="card"><h2 style="margin-top:0">Blocked regions</h2><p class="muted">Cloud regions no zone may be created in or deployed to — data-residency or cost rules. A zone whose region (GCP zone <code>us-west1-a</code> → region <code>us-west1</code>, AWS availability zone <code>eu-west-1a</code> → <code>eu-west-1</code>) is blocked is refused on creation, and an existing zone in a blocked region fails its next deploy with the reason in the job log and a server warning (see the digest above). The Zones page only offers what is left. {{ regions_note }}</p>
-<form class="inline" hx-put="{{ base }}/api/v1/config/regions" hx-ext="json" hx-swap="none">
+{% set ck = cloud_kind() %}{% if ck in ('gcp', 'aws', 'azure') %}<table class="kv"><tr><th>Blocked now</th><td>{{ blocked_regions[ck]|join(', ') if blocked_regions[ck] else '<span class="muted">none</span>'|safe }}</td></tr></table>
+{% endif %}<form class="inline" hx-put="{{ base }}/api/v1/config/regions" hx-ext="json" hx-swap="none">
 {% set ck = cloud_kind() %}{% for prov in ([ck] if ck in ('gcp', 'aws', 'azure') else []) %}{% set opts = [] %}{% for r in regions[prov] %}{% set _ = opts.append((r, r)) %}{% endfor %}{{ multi(prov, opts, blocked_regions[prov], 'blocked-' ~ prov, cloud_label(prov) ~ ' regions blocked', 'None blocked') }}{% else %}<p class="muted">This console runs the local (compose) stack: no cloud regions to block.</p>{% endfor %}
 <button class="act">Save blocked regions</button></form></div>
 <div class="card"><h2 style="margin-top:0">Drift warning threshold</h2><p class="muted">Each group page's Drift card reads a zone's recent log and counts, per tool, the calls that repeat an identical call (same key, tool and arguments) within a minute — a language model looping on a tool. When a tool's repeat rate reaches this share of its calls the console logs a <code>ramen.drift</code> warning (the digest above carries it) and the card shows the tool in red. 0 warns on any repeat, 100 only when every call repeats.</p>
 <form class="inline" hx-put="{{ base }}/api/v1/config/drift" hx-ext="json" hx-swap="none"><label>Repeat rate (%)<input type="number" min="0" max="100" name="warn_pct" value="{{ drift.warn_pct }}" style="width:6em"></label><button class="act">Save threshold</button></form></div>
-<div class="card"><h2 style="margin-top:0">Service-account permission catalogue</h2><table><tr><th>permission</th><th>GCP</th><th>AWS</th><th>Azure</th><th></th></tr>{% for q in permissions %}<tr><td><code>{{ q.permission }}</code></td><td>{{ q.gcp|join(', ') }}</td><td>{{ q.aws|join(', ') }}</td><td>{{ (q.azure or [])|join(', ') }}</td><td class="muted">{{ q.desc }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h2 style="margin-top:0">Service-account permission catalogue</h2><table><tr><th>Permission</th><th>GCP</th><th>AWS</th><th>Azure</th><th>What it allows</th></tr>{% for q in permissions %}<tr><td><code>{{ q.permission }}</code></td><td>{{ q.gcp|join(', ') }}</td><td>{{ q.aws|join(', ') }}</td><td>{{ (q.azure or [])|join(', ') }}</td><td class="muted">{{ q.desc }}</td></tr>{% endfor %}</table></div>
 <div class="card"><h2 style="margin-top:0">Effective RAMEN_* environment</h2><table>{% for k, v in env.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></div>
-<div class="card"><h2 style="margin-top:0">Super-admin service-account rules</h2><p class="muted">Group admins cannot add restrictions that clash with these. Deny wins; when a rule set has allow rules, a permission must match one of them.</p>
+<div class="card"><h2 style="margin-top:0">Super-admin service-account rules</h2><p class="muted">The outer limit on what any group's zone service account may ever be granted. Group admins request permissions for their zones (group page → Service-account permissions); a request a rule here denies is refused, and group admins cannot add their own restrictions that clash with these.</p>
+<details class="help"><summary>How the rules combine</summary><ul>
+<li><b>Deny</b> always wins: a permission that matches any deny rule is refused.</li>
+<li>With no <b>allow</b> rules, every other permission in the catalogue may be requested. Once there is one allow rule, a permission must match an allow rule.</li>
+<li>Pick a permission from the catalogue, or type a pattern: <code>bucket.*</code> matches every bucket permission, <code>*</code> everything.</li>
+<li>Rules apply to new requests and approvals; a permission approved earlier stays until it is revoked on the group page.</li></ul></details>
 <table><tr><th>Effect</th><th>Permission</th><th>Actions</th></tr>
 {% for q in rules %}<tr><td>{{ q.effect|capitalize }}</td><td><code>{{ q.permission }}</code></td>
 <td><div class="row-actions"><button class="sm danger act" hx-put="{{ base }}/api/v1/config/sa-rules" hx-ext="json" hx-vals='{{ tojson({"rules": rules[:loop.index0] + rules[loop.index:]}) }}' hx-swap="none">Remove</button></div></td></tr>

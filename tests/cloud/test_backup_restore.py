@@ -1,6 +1,8 @@
 """CONTRACTS §13.1 against a populated cloud deployment (V5.1): a backup to the groups bucket, a restore that
 prunes and reconciles, and live zones that keep serving afterwards. Needs RAMEN_CONSOLE_URL (+ RAMEN_NODE_URL)."""
 
+import re
+
 import pytest
 
 from ramen_tests import env as E
@@ -15,6 +17,7 @@ S_OK = "ok"
 @pytest.fixture(scope="module")
 def backup(admin, world, suffix) -> dict:
     """Two workers in the zone, then a backup in the bucket — the state the restore has to bring back."""
+    ok(admin.put("workers", {"max_count": 2}, group=GROUP, zone=ZONE))  # D55: a fresh zone's max is 1
     ok(admin.put("workers", {"count": 2}, group=GROUP, zone=ZONE))
     b = ok(admin.post("backups", {"target": "bucket"}), 201).json()
     assert b["target"] == "bucket" and b["path"].startswith(("gs://", "/", "s3://", "./")), b
@@ -24,8 +27,10 @@ def backup(admin, world, suffix) -> dict:
 def test_the_backup_carries_the_state_and_no_secrets(admin, backup):
     body = ok(admin.get("backup_download", id=backup["id"])).text
     assert GROUP in body and ZONE in body
-    for leak in ("password_hash", "rmk_", "rmn_", '"value"'):
+    for leak in ("password_hash", "rmk_", "rmn_"):
         assert leak not in body, leak
+    # a secret entry is `"value": "<secret>"`; a tool schema may well have a property called "value"
+    assert not re.search(r'"value":\s*"', body), "a secret value"
 
 
 def test_restore_prunes_what_came_later_reconciles_the_zone_and_leaves_it_serving(admin, backup, node_opt, suffix):

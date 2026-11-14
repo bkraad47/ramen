@@ -22,10 +22,16 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 > install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. The stdio
 > bridge stays for clients that only speak stdio.
 
-**Status.** Current release **0.8.0**, verified live on GKE, EKS and AKS on 2026-10-17 — smoke, the 63-check release suite
-and six load-test scenarios on each cloud — then torn down; CI proves both transports on Linux and Windows. The single
-record of what each run covered, and what is tested only, is
+**Status.** Current release **1.0.0**, run live on GKE, EKS and AKS on 2026-11-13 and 14 — smoke, the full check set
+(134 passed on EKS and on AKS; 133 passed and 1 failed on GKE) and the load test on each cloud — then torn down; CI
+proves both transports on Linux and Windows. The single record of what each run covered, the failure included, is
 [Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
+
+**What's new in 1.0.** Workers speak MCP **2026-07-28** next to 2025-06-18 on the same endpoint: stateless requests,
+standard headers a load balancer can route on, tools that ask the user before they act
+([multi round-trip requests](https://bkraad47.github.io/ramen/wiki/mrtr/)) and long-running tools as
+[tasks](https://bkraad47.github.io/ramen/wiki/tasks/). 2025-06-18 clients are answered as before. What changed and the
+known limits: [CHANGELOG](CHANGELOG.md).
 
 **Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts**
 into a fleet of MCP workers behind a cloud load balancer, and keeps who-can-call-what, secrets, guardrails, canary
@@ -53,6 +59,12 @@ holds the keys. The shape, the data model and why each piece is where it is:
   Decide per environment who may see and who may call each tool; a drift signal flags a caller repeating one call.
 - **Autoscaling by Ramen.** Each zone runs between 1 worker and a max that admins set; the console scales up fast
   under load and back down when quiet, the same on all three clouds, with no HPA and every step in the audit log.
+- **Sleeping zones.** An idle zone can scale to 0 behind one small activator pod; the first authenticated call wakes it
+  ([Sleeping workers](https://bkraad47.github.io/ramen/wiki/sleeping-workers/)).
+- **Images built on deploy.** A group's `requirements.txt` is baked into its own worker image by a build Job, so new
+  pods start without installing ([Worker images](https://bkraad47.github.io/ramen/wiki/worker-images/)).
+- **OpenTelemetry, with consent.** A span per call and per deploy to your collector, never arguments or results; a group
+  can require each caller's consent ([Telemetry](https://bkraad47.github.io/ramen/wiki/telemetry/)).
 - **Three clouds.** Terraform and Helm for GKE, EKS and AKS, with the same console and guards on each
   ([Deploy to the cloud](#deploy-to-the-cloud)).
 - **Enterprise controls.** `rmk_` MCP keys and `rmn_` API keys stored as salted hashes, IP rules per zone at the node
@@ -118,13 +130,14 @@ Every form, with the pages you will see:
 |---|---|
 | ![identity providers](docs/img/config-identity.png) | ![roles](docs/img/config-roles.png) |
 
-| Zone actions: count, max, last autoscale decision | Zones and workers with the max per group |
+| Zone actions: count, max, last autoscale decision | Environments, Zones and Workers: environments with their groups, zones with their environments, the workers per pair |
 |---|---|
-| ![autoscale](docs/img/group-autoscale.png) | ![zones](docs/img/zones.png) |
+| ![autoscale](docs/img/group-autoscale.png) | ![environments, zones and workers](docs/img/environments.png) |
 
 ## Transport and security, in short
 
-Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2025-06-18) and **gRPC** (`ramen.v1.Mcp/Call`) on one port
+Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2026-07-28 (2025-06-18 still accepted)) and **gRPC**
+(`ramen.v1.Mcp/Call`) on one port
 through one implementation of every guard, so a check is on both transports or on neither. TLS ends at the load
 balancer. The node checks the credential, the source range at the provider's `x-forwarded-for` hop, blocked names
 and the size and in-flight caps. The runtime reaches the bucket as the zone's own cloud identity, and guardrails run

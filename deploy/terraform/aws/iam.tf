@@ -40,6 +40,7 @@ data "aws_iam_policy_document" "irsa_trust" {
     console    = local.console_ksa
     alb        = "system:serviceaccount:kube-system:aws-load-balancer-controller"
     fluent_bit = "system:serviceaccount:kube-system:aws-for-fluent-bit"
+    builder    = "system:serviceaccount:ramen-system:ramen-builder"
   }
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -79,7 +80,10 @@ data "aws_iam_policy_document" "console" {
   statement { # secrets backend `aws`: ramen/<group>/<env>/<zone>/<NAME>
     actions = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
     "secretsmanager:DeleteSecret", "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UpdateSecret"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*"]
+    resources = [ # ramen-console/*: the console's own secrets (1.0.0), outside every worker's boundary
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*",
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen-console/*",
+    ]
   }
   statement {
     actions   = ["secretsmanager:ListSecrets"]
@@ -180,4 +184,32 @@ resource "aws_cloudwatch_log_group" "application" {
   name              = local.log_group
   retention_in_days = var.log_retention_days
   tags              = local.tags
+}
+
+# §24.2: the identity worker-image builds run as (Job pods of KSA ramen-system/ramen-builder, started by the console):
+# pull and push on the ONE repository ramen/worker (built images are tags of it, no per-group repository), nothing
+# else. The console's own role gets no ECR permission.
+resource "aws_iam_role" "builder" {
+  name               = "ramen-builder"
+  path               = "/ramen/"
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust["builder"].json
+  tags               = local.tags
+}
+
+data "aws_iam_policy_document" "builder" {
+  statement { # registry login: not scopable to a repository
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    actions = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
+    "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"]
+    resources = [aws_ecr_repository.images["worker"].arn]
+  }
+}
+
+resource "aws_iam_role_policy" "builder" {
+  name   = "ramen-builder"
+  role   = aws_iam_role.builder.id
+  policy = data.aws_iam_policy_document.builder.json
 }

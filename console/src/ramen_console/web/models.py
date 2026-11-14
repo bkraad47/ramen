@@ -33,6 +33,8 @@ class GroupUpdate(BaseModel):
     mcp_auth: dict | None = None
     github_token: str | None = None
     github_app_installation_id: str | None = None
+    build_image: bool | None = None  # §24.2: build the group's worker image on deploy (needs a builder)
+    require_telemetry_consent: bool | None = None  # §24.3: only while telemetry is enabled
 
 
 class Rules(BaseModel):
@@ -58,10 +60,35 @@ class Rules(BaseModel):
         return {"rules": rules}
 
 
-class ZoneIn(BaseModel):
+class ZoneIn(ListFields):
     name: str
     provider: str = "local"
     region: str = ""
+    environments: list[str] = []  # §27.2: the environments the zone serves; its groups are derived
+    groups: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _no_groups(self):
+        if self.groups is not None:
+            raise ValueError("groups is gone (1.0.0b): a zone names environments; its groups follow from them")
+        return self
+
+
+class ZoneUpdate(ListFields):
+    region: str | None = None
+    environments: list[str] | None = None
+    provider: str | None = None  # accepted only unchanged (422 otherwise)
+
+
+class EnvByNameIn(ListFields):
+    name: str
+    ref: str | None = None
+    groups: list[str] = []
+
+
+class EnvByNameUpdate(ListFields):
+    ref: str | None = None
+    groups: list[str] | None = None
 
 
 class EnvIn(ListFields):
@@ -119,6 +146,43 @@ class WorkersIn(ListFields):
     max_count: int | None = None  # §21.7: super admins and group admins; min is always 1
     size: str | None = None
     allowed_sizes: list[str] | None = None
+    sleep_after_secs: int | None = None  # §24.1: 0 = never, otherwise 60 or more
+    sleep_after_minutes: float | None = None  # the group page's form speaks minutes; the API and the record, seconds
+
+    @model_validator(mode="after")
+    def _minutes(self):
+        if self.sleep_after_secs is None and self.sleep_after_minutes is not None:
+            self.sleep_after_secs = round(self.sleep_after_minutes * 60)
+        return self
+
+
+class WakeIn(BaseModel):
+    trigger: str = "call"
+
+
+def _json_map(v):
+    """A header map as an object, or as the JSON text a form field posts; an empty field means "unchanged"."""
+    if isinstance(v, str):
+        if not v.strip():
+            return None
+        try:
+            v = json.loads(v)
+        except ValueError:
+            raise ValueError('must be a JSON object like {"Authorization": "Bearer …"}') from None
+    return v
+
+
+class OtelConfig(BaseModel):
+    enabled: bool | None = None
+    endpoint: str | None = None
+    headers: dict[str, str] | None = None  # what Ramen sends; write-only
+    client_endpoint: str | None = None
+    client_headers: dict[str, str] | None = None  # what connected agents are told to send; write-only
+
+    @field_validator("headers", "client_headers", mode="before")
+    @classmethod
+    def _maps(cls, v):
+        return _json_map(v)
 
 
 class Cidrs(ListFields):

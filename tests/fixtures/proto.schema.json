@@ -1,52 +1,210 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bkraad47/ramen/blob/main/tests/fixtures/proto.schema.json",
-  "title": "Ramen package proto (CONTRACTS.md section 1)",
+  "title": "Ramen package proto (CONTRACTS.md sections 1 and 23.3)",
   "description": "Shape of mcp/{tools,resources,prompts}/<name>/<name>.json. Folder name == name == file stem and folder type == type are checked by the loader, not by this schema.",
   "type": "object",
-  "required": ["type", "name", "description", "input"],
+  "required": [
+    "type",
+    "name",
+    "description",
+    "input"
+  ],
   "properties": {
-    "type": {"enum": ["tool", "resource", "prompt"]},
-    "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
-    "description": {"type": "string"},
-    "callable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
-    "input": {"type": "object", "additionalProperties": {"$ref": "#/$defs/param"}},
-    "output": {"$ref": "#/$defs/typed"},
-    "error": {"$ref": "#/$defs/typed"},
-    "uri": {"type": "string", "minLength": 1},
-    "mime_type": {"type": "string", "pattern": "^[-\\w.+]+/[-\\w.+]+$"},
-    "skill": {"type": "string", "minLength": 1},
-    "settings": {"type": "string", "minLength": 1}
+    "type": {
+      "enum": [
+        "tool",
+        "resource",
+        "prompt"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "callable": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/param"
+      }
+    },
+    "output": {
+      "$ref": "#/$defs/typed"
+    },
+    "error": {
+      "$ref": "#/$defs/typed"
+    },
+    "uri": {
+      "type": "string",
+      "minLength": 1,
+      "description": "a {var} makes it a template (23.3): each variable is declared in input"
+    },
+    "mime_type": {
+      "type": "string",
+      "pattern": "^[-\\w.+]+/[-\\w.+]+$"
+    },
+    "skill": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task": {
+      "type": "boolean",
+      "description": "23.5: the tool may run as a task for clients that declare io.modelcontextprotocol/tasks"
+    }
   },
   "allOf": [
     {
-      "if": {"properties": {"type": {"const": "tool"}}},
-      "then": {"required": ["callable", "output", "error"]}
+      "if": {
+        "properties": {
+          "type": {
+            "const": "tool"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "callable"
+        ]
+      }
     },
     {
-      "if": {"properties": {"type": {"const": "resource"}}},
-      "then": {"required": ["callable", "uri", "mime_type", "output", "error"]}
+      "if": {
+        "properties": {
+          "type": {
+            "const": "resource"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "callable",
+          "uri",
+          "mime_type"
+        ],
+        "not": {
+          "required": [
+            "task"
+          ]
+        }
+      }
     },
     {
-      "if": {"properties": {"type": {"const": "prompt"}}},
-      "then": {"required": ["skill", "settings"], "not": {"required": ["callable"]}}
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prompt"
+          }
+        }
+      },
+      "then": {
+        "oneOf": [
+          {
+            "required": [
+              "skill"
+            ]
+          },
+          {
+            "required": [
+              "callable"
+            ]
+          }
+        ],
+        "not": {
+          "required": [
+            "task"
+          ]
+        }
+      }
     }
   ],
   "$defs": {
     "param": {
       "type": "object",
-      "oneOf": [{"required": ["type"]}, {"required": ["enum"]}],
+      "oneOf": [
+        {
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "required": [
+            "enum"
+          ]
+        }
+      ],
       "properties": {
-        "type": {"enum": ["string", "number", "integer", "boolean"]},
-        "enum": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
-        "description": {"type": "string"}
+        "type": {
+          "enum": [
+            "string",
+            "number",
+            "integer",
+            "boolean"
+          ]
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "description": {
+          "type": "string"
+        },
+        "header": {
+          "type": "string",
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+          "description": "23.2: mirrored in the Mcp-Param-<header> request header; string, integer, boolean and enum parameters only"
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "allOf": [
+          {
+            "required": [
+              "header",
+              "type"
+            ]
+          },
+          {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            }
+          }
+        ]
+      }
     },
     "typed": {
       "type": "object",
-      "required": ["type"],
-      "properties": {"type": {"enum": ["string", "number", "integer", "boolean", "object", "array"]}}
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "string",
+            "number",
+            "integer",
+            "boolean",
+            "object",
+            "array"
+          ]
+        }
+      }
     }
   }
 }

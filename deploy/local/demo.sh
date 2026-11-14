@@ -18,6 +18,7 @@ CSRF=$(awk '$6=="ramen_csrf"{print $7}' "$HERE/.cookies")   # CONTRACTS §9: coo
 api() { $C -H 'Content-Type: application/json' -H "X-Ramen-CSRF: $CSRF" -X "$1" "$CONSOLE/api/v1$2" ${3:+-d "$3"}; echo; }
 api POST /zones '{"name":"local","provider":"local","region":"local"}'
 api POST /groups "{\"name\":\"demo\",\"repo_url\":\"$REPO\",\"ref\":\"main\"}"
+api PUT /zones/local/groups '{"groups":["demo"]}'   # CONTRACTS §26.1: an environment may only name the group's zones
 api POST /groups/demo/environments '{"name":"dev","ref":"main","zones":["local"]}'
 KEY=$(api POST /groups/demo/mcp-keys "{\"name\":\"demo-$(date +%s)\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
 JOB=$(api POST /groups/demo/environments/dev/deploy '{"canary":true}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')

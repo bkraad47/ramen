@@ -5,8 +5,14 @@
 //! function the gRPC service runs — `grpc::guard` and `grpc::dispatch_body` — fed the request headers as a
 //! `MetadataMap`. This file adds only what HTTP has and gRPC does not: `Origin` validation and CORS,
 //! `Accept`/`Content-Type` negotiation, `Mcp-Session-Id`, and the status mapping.
+//!
+//! §23 (1.0.0): a 2026-07-28 request (`modern.rs`) is the same POST. The era is decided inside
+//! `grpc::dispatch_call`, after the credential; this file adds the HTTP status of a modern error, the streamed
+//! answers — `notifications/progress` ahead of a response (§23.4) and `subscriptions/listen` (§23.6) — and leaves
+//! the session id out. A 2025-06-18 request is answered byte for byte as before.
 use crate::config::Config;
 use crate::grpc::{self, Shared};
+use crate::modern;
 use crate::session::Invalid;
 use crate::token;
 use axum::Router;
@@ -16,6 +22,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Status};
 
@@ -23,8 +32,9 @@ pub const MCP_PATH: &str = "/mcp";
 pub const PROTECTED_RESOURCE_PATH: &str = "/.well-known/oauth-protected-resource";
 pub const SESSION_HEADER: &str = "mcp-session-id";
 pub const PROTOCOL_HEADER: &str = "mcp-protocol-version";
-/// What the node speaks (newest first). An unknown value on the request is `400`.
-pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// The 2025 versions the node speaks (newest first). Any other value on the request selects the modern era
+/// (§23.1), where it must be `2026-07-28` or the answer is `400` with a JSON-RPC error.
+pub const PROTOCOL_VERSIONS: &[&str] = modern::LEGACY;
 
 pub fn router(app: Shared) -> Router {
     Router::new()
@@ -128,6 +138,27 @@ fn sse(events: &[Value]) -> Response {
     resp
 }
 
+/// A POST answered as a live `text/event-stream`: each frame is written (and flushed) as it arrives, and the
+/// stream ends when the sender does. `X-Accel-Buffering: no` keeps a proxy from holding frames back (§23.6).
+fn sse_stream(frames: mpsc::UnboundedReceiver<String>) -> Response {
+    let body = axum::body::Body::from_stream(
+        UnboundedReceiverStream::new(frames)
+            .map(|f| Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(f))),
+    );
+    unbuffered((StatusCode::OK, body).into_response())
+}
+
+fn unbuffered(mut resp: Response) -> Response {
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    resp
+}
+
 /// The first 12 hex of the manifest hash of the last load (C11), `""` before any load.
 async fn manifest_hash12(app: &Shared) -> String {
     app.sidecar
@@ -179,21 +210,22 @@ fn cors(mut resp: Response, allowed: &[String], headers: &HeaderMap) -> Response
         h.insert(header::VARY, HeaderValue::from_static("Origin"));
         h.insert(
             header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            HeaderValue::from_static("Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate"),
+            HeaderValue::from_static(
+                "Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, WWW-Authenticate",
+            ),
         );
     }
     resp
 }
 
-fn protocol_version(headers: &HeaderMap) -> Result<&'static str, ()> {
-    match headers.get(PROTOCOL_HEADER).and_then(|v| v.to_str().ok()) {
-        None => Ok(PROTOCOL_VERSIONS[0]),
-        Some(v) => PROTOCOL_VERSIONS
-            .iter()
-            .copied()
-            .find(|p| *p == v.trim())
-            .ok_or(()),
-    }
+/// The 2025 version a legacy request named, else the newest. (A header that names anything else never gets here:
+/// it selects the modern era.)
+fn protocol_version(headers: &HeaderMap) -> &'static str {
+    headers
+        .get(PROTOCOL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| PROTOCOL_VERSIONS.iter().copied().find(|p| *p == v.trim()))
+        .unwrap_or(PROTOCOL_VERSIONS[0])
 }
 
 fn with_headers(mut resp: Response, version: &str, session: Option<&str>) -> Response {
@@ -208,20 +240,30 @@ fn with_headers(mut resp: Response, version: &str, session: Option<&str>) -> Res
 }
 
 /// A log record for a request refused before the credential was read, so the denial is still logged.
-fn log_for(cfg: &Config, peer: Option<SocketAddr>, md: &MetadataMap) -> grpc::CallLog {
-    grpc::CallLog::new(crate::auth::client_ip(cfg, peer, md), "http")
+fn log_for(
+    app: &Shared,
+    cfg: &Config,
+    peer: Option<SocketAddr>,
+    md: &MetadataMap,
+) -> grpc::CallLog {
+    // §24.1: the same address `grpc::guard` judges — the activator's word when this zone's activator forwarded it
+    let (ip, via_activator) = grpc::client_addr(app, cfg, peer, md);
+    let mut log = grpc::CallLog::new(ip, "http");
+    log.via_activator = via_activator;
+    log
 }
 
 /// Address first, then Origin (HTTP only), then the credential — the order every call goes through. A browser
 /// from a foreign origin is refused even with a valid key (DNS rebinding), and before the credential is looked
 /// at, so a refused page learns nothing about whether its key was any good.
 fn pre_guard(
+    app: &Shared,
     cfg: &Config,
     peer: Option<SocketAddr>,
     md: &MetadataMap,
     headers: &HeaderMap,
 ) -> Option<Response> {
-    let log = log_for(cfg, peer, md);
+    let log = log_for(app, cfg, peer, md);
     if !crate::auth::ip_allowed(cfg, log.ip) {
         return Some(denied(
             &log.deny(cfg, Status::permission_denied("ip not allowed"), "cidr"),
@@ -241,6 +283,45 @@ fn pre_guard(
     None
 }
 
+/// What a legacy answer is finished with: the version echo, the session id, and whether this response is where a
+/// stale session learns of a rollout (C11). `None` on the modern era, which has none of the three.
+struct Legacy {
+    version: &'static str,
+    verified: Option<crate::session::Session>,
+    presented: Option<String>,
+    binding: String,
+    is_init: bool,
+}
+
+impl Legacy {
+    /// C11: the manifest this pod serves right now is stamped into new session ids and compared with presented
+    /// ones. Returns the session header value and whether to announce the rollout on this response: once per
+    /// session per pod, on the first response an SSE-capable client asks for after it (`answers`: a notification's
+    /// 202 is not the place for it and does not use the announcement up).
+    async fn settle(
+        &self,
+        app: &Shared,
+        headers: &HeaderMap,
+        answers: bool,
+    ) -> (Option<String>, bool) {
+        let current12 = manifest_hash12(app).await;
+        let session = if self.is_init {
+            Some(app.sessions.issue(&self.binding, &current12))
+        } else {
+            self.presented.clone()
+        };
+        let stale = self
+            .verified
+            .as_ref()
+            .filter(|_| answers)
+            .filter(|s| !self.is_init && s.hash12 != current12 && accepts_sse(headers))
+            .is_some_and(|s| app.notified.first_time(&format!("{}.{current12}", s.nonce)));
+        (session, stale)
+    }
+}
+
+const LIST_CHANGED: &str = r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#;
+
 async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
     let cfg = app.cfg.read().await.clone();
     let peer = peer_of(&req);
@@ -248,16 +329,6 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
     let headers = parts.headers;
     let md = MetadataMap::from_headers(headers.clone());
 
-    let version = match protocol_version(&headers) {
-        Ok(v) => v,
-        Err(()) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": "unsupported MCP-Protocol-Version", "supported": PROTOCOL_VERSIONS})),
-            )
-                .into_response();
-        }
-    };
     if !accepts_json(&headers) {
         return (
             StatusCode::NOT_ACCEPTABLE,
@@ -272,7 +343,7 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
         )
             .into_response();
     }
-    if let Some(resp) = pre_guard(&cfg, peer, &md, &headers) {
+    if let Some(resp) = pre_guard(&app, &cfg, peer, &md, &headers) {
         return resp;
     }
     let (mut log, caller) = match grpc::guard(&app, &cfg, peer, &md, "http") {
@@ -286,77 +357,192 @@ async fn post_mcp(State(app): State<Shared>, req: Request) -> Response {
             return denied(&log.deny(&cfg, st, "too_large"), &cfg);
         }
     };
-    // §16.2: a session header on any request must validate for THIS credential, or the call is 404.
-    let presented = headers
-        .get(SESSION_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let verified = match presented
-        .as_deref()
-        .map(|sid| app.sessions.verify(sid, &caller.binding))
-    {
-        None => None,
-        Some(Ok(s)) => Some(s),
-        Some(Err(why)) => {
-            let (msg, reason) = match why {
-                Invalid::Expired => ("session expired", "session_expired"),
-                Invalid::BadMac | Invalid::Malformed => ("unknown session", "session_invalid"),
-            };
-            return with_headers(
-                denied(&log.deny(&cfg, Status::not_found(msg), reason), &cfg),
-                version,
-                None,
-            );
-        }
-    };
-    let is_init = serde_json::from_slice::<Value>(&body)
-        .ok()
-        .and_then(|v| {
-            v.get("method")
-                .and_then(Value::as_str)
-                .map(|m| m == "initialize")
-        })
-        .unwrap_or(false);
-    let out = match grpc::dispatch_body(&app, &cfg, &mut log, &caller.kind, &body).await {
-        Ok(o) => o,
-        Err(st) => {
-            return with_headers(
-                cors(denied(&st, &cfg), &cfg.allowed_origins, &headers),
-                version,
-                None,
-            );
-        }
-    };
-    // C11: the manifest this pod serves right now; stamped into new session ids, compared with presented ones.
-    let current12 = manifest_hash12(&app).await;
-    let session = if is_init {
-        Some(app.sessions.issue(&caller.binding, &current12))
+    // §23.1: body → era. The same test `dispatch_call` applies; here it only decides what HTTP dresses the answer in.
+    let rpc = serde_json::from_slice::<Value>(&body).ok();
+    let method = rpc
+        .as_ref()
+        .and_then(|v| v.get("method"))
+        .and_then(Value::as_str);
+    let params = rpc.as_ref().and_then(|v| v.get("params"));
+    let legacy = if modern::is_modern(Some(&headers), params.unwrap_or(&Value::Null)) {
+        None // a modern request ignores `Mcp-Session-Id` and never gets one
     } else {
-        presented
+        let version = protocol_version(&headers);
+        // §16.2: a session header on any request must validate for THIS credential, or the call is 404.
+        let presented = headers
+            .get(SESSION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let verified = match presented
+            .as_deref()
+            .map(|sid| app.sessions.verify(sid, &caller.binding))
+        {
+            None => None,
+            Some(Ok(s)) => Some(s),
+            Some(Err(why)) => {
+                let (msg, reason) = match why {
+                    Invalid::Expired => ("session expired", "session_expired"),
+                    Invalid::BadMac | Invalid::Malformed => ("unknown session", "session_invalid"),
+                };
+                // the line names the version this request would have been served as (§23.1)
+                log.protocol = Some(version.to_string());
+                return with_headers(
+                    denied(&log.deny(&cfg, Status::not_found(msg), reason), &cfg),
+                    version,
+                    None,
+                );
+            }
+        };
+        Some(Legacy {
+            version,
+            verified,
+            presented,
+            binding: caller.binding.clone(),
+            is_init: method == Some("initialize"),
+        })
     };
-    let resp = match out {
+    if let Some(act) = app.activator.clone() {
+        // §24.1: the same checks, then the request goes to the real workers exactly as it came — their answer
+        // (JSON, SSE or a `subscriptions/listen` stream, with its own headers) is passed through as it arrives
+        let ctx = grpc::Ctx {
+            kind: &caller.kind,
+            binding: &caller.binding,
+            http: Some(&headers),
+            progress: None,
+        };
+        return match grpc::dispatch_call(&app, &cfg, &mut log, ctx, &body).await {
+            Ok(r) if r.forward => {
+                act.http(&cfg, &log, parts.method, &parts.uri, &headers, body)
+                    .await
+            }
+            out => finish(&app, &cfg, &headers, legacy.as_ref(), out, false).await,
+        };
+    }
+    // §23.4: progress is streamed only to a request that named a token and can take a stream (either era)
+    let streams = accepts_sse(&headers)
+        && matches!(method, Some("tools/call" | "prompts/get"))
+        && rpc.as_ref().is_some_and(|v| v.get("id").is_some())
+        && params.and_then(grpc::progress_token).is_some();
+    if !streams {
+        let ctx = grpc::Ctx {
+            kind: &caller.kind,
+            binding: &caller.binding,
+            http: Some(&headers),
+            progress: None,
+        };
+        let out = grpc::dispatch_call(&app, &cfg, &mut log, ctx, &body).await;
+        return finish(&app, &cfg, &headers, legacy.as_ref(), out, false).await;
+    }
+    // The call runs on its own task so the response can start with the first progress line. Every refusal
+    // (modern checks, throttle, inflight) happens before the runtime is reached, so it still gets its status.
+    let (tx, mut progress) = mpsc::unbounded_channel::<Value>();
+    let call = {
+        let (app, cfg, headers) = (app.clone(), cfg.clone(), headers.clone());
+        tokio::spawn(async move {
+            let ctx = grpc::Ctx {
+                kind: &caller.kind,
+                binding: &caller.binding,
+                http: Some(&headers),
+                progress: Some(tx),
+            };
+            grpc::dispatch_call(&app, &cfg, &mut log, ctx, &body).await
+        })
+    };
+    let Some(first) = progress.recv().await else {
+        // the call ended without reporting progress: one event, the response
+        let out = call
+            .await
+            .unwrap_or_else(|_| Err(Status::internal("call failed")));
+        return finish(&app, &cfg, &headers, legacy.as_ref(), out, true).await;
+    };
+    let (session, stale) = match &legacy {
+        Some(l) => l.settle(&app, &headers, true).await,
+        None => (None, false),
+    };
+    let (frames, stream) = mpsc::unbounded_channel::<String>();
+    if stale {
+        let _ = frames.send(format!("data: {LIST_CHANGED}\n\n"));
+    }
+    let _ = frames.send(crate::subs::frame(&first));
+    tokio::spawn(async move {
+        while let Some(event) = progress.recv().await {
+            if frames.send(crate::subs::frame(&event)).is_err() {
+                return; // the client closed the stream; the call finishes on its own
+            }
+        }
+        let last = match call.await {
+            Ok(Ok(reply)) => reply.body,
+            // not reachable through dispatch (see above); answer rather than leave the stream without a response
+            _ => Some(grpc::rpc_error(Value::Null, -32603, "call failed")),
+        };
+        if let Some(v) = last {
+            let _ = frames.send(crate::subs::frame(&v));
+        }
+    });
+    let resp = sse_stream(stream);
+    let resp = match &legacy {
+        Some(l) => with_headers(resp, l.version, session.as_deref()),
+        None => resp,
+    };
+    cors(resp, &cfg.allowed_origins, &headers)
+}
+
+/// The dispatch outcome as an HTTP response. `as_sse`: the request asked for progress, so a `200` answer is one
+/// event on a stream rather than a JSON body (§23.4).
+async fn finish(
+    app: &Shared,
+    cfg: &Config,
+    headers: &HeaderMap,
+    legacy: Option<&Legacy>,
+    out: Result<grpc::Reply, Status>,
+    as_sse: bool,
+) -> Response {
+    let dress = |resp: Response, session: Option<&str>| match legacy {
+        Some(l) => with_headers(resp, l.version, session),
+        None => resp,
+    };
+    let reply = match out {
+        Ok(r) => r,
+        Err(st) => {
+            return dress(cors(denied(&st, cfg), &cfg.allowed_origins, headers), None);
+        }
+    };
+    if let Some(frames) = reply.listen {
+        // §23.6: the long-lived stream; the ack is already its first frame
+        return cors(sse_stream(frames), &cfg.allowed_origins, headers);
+    }
+    let (session, stale) = match legacy {
+        Some(l) => l.settle(app, headers, reply.body.is_some()).await,
+        None => (None, false),
+    };
+    let resp = match reply.body {
         Some(v) => {
-            // C11: a session minted against another manifest learns of the change once per pod, on its first
-            // response an SSE-capable client asks for after the rollout. A JSON-only client is answered as before.
-            let stale = verified
-                .as_ref()
-                .filter(|s| !is_init && s.hash12 != current12 && accepts_sse(&headers))
-                .is_some_and(|s| app.notified.first_time(&format!("{}.{current12}", s.nonce)));
+            let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::OK);
             if stale {
-                sse(&[
+                // C11: a session minted against another manifest learns of the change once per pod, on its
+                // first response an SSE-capable client asks for after the rollout. A JSON-only client is
+                // answered as before.
+                let events = [
                     json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}),
                     v,
-                ])
+                ];
+                if as_sse {
+                    unbuffered(sse(&events))
+                } else {
+                    sse(&events)
+                }
+            } else if as_sse && status == StatusCode::OK {
+                unbuffered(sse(&[v]))
             } else {
-                (StatusCode::OK, axum::Json(v)).into_response()
+                (status, axum::Json(v)).into_response()
             }
         }
         None => StatusCode::ACCEPTED.into_response(),
     };
     cors(
-        with_headers(resp, version, session.as_deref()),
+        dress(resp, session.as_deref()),
         &cfg.allowed_origins,
-        &headers,
+        headers,
     )
 }
 
@@ -387,12 +573,29 @@ async fn options_mcp(State(app): State<Shared>, req: Request) -> Response {
         header::ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static("POST, DELETE, OPTIONS"),
     );
-    h.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static(
-            "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, ramen-group, ramen-zone",
-        ),
+    // §23.2: the standard headers of 2026-07-28, the trace context, and — since a header list cannot say
+    // `Mcp-Param-*` — each `Mcp-Param-<Name>` the browser announced, when it is a plain token
+    let mut allow = String::from(
+        "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, \
+         traceparent, tracestate, baggage, ramen-group, ramen-zone",
     );
+    let asked = req
+        .headers()
+        .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    for name in asked.split(',').map(str::trim).filter(|n| {
+        n.len() <= 80
+            && n.to_ascii_lowercase().starts_with("mcp-param-")
+            && n.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }) {
+        allow.push_str(", ");
+        allow.push_str(name);
+    }
+    if let Ok(v) = HeaderValue::from_str(&allow) {
+        h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, v);
+    }
     h.insert(
         header::ACCESS_CONTROL_MAX_AGE,
         HeaderValue::from_static("600"),
@@ -404,7 +607,7 @@ async fn delete_mcp(State(app): State<Shared>, req: Request) -> Response {
     let cfg = app.cfg.read().await.clone();
     let peer = peer_of(&req);
     let md = MetadataMap::from_headers(req.headers().clone());
-    if let Some(resp) = pre_guard(&cfg, peer, &md, req.headers()) {
+    if let Some(resp) = pre_guard(&app, &cfg, peer, &md, req.headers()) {
         return resp;
     }
     let (log, caller) = match grpc::guard(&app, &cfg, peer, &md, "http") {
@@ -1374,6 +1577,171 @@ mod tests {
             204
         );
         let _ = stop.send(());
+    }
+
+    const MODERN_META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#;
+    const V2026: (&str, &str) = ("MCP-Protocol-Version", "2026-07-28");
+
+    /// §23.1: a 2026-07-28 request on the same endpoint — no session, the era's statuses — beside a 2025 one.
+    #[tokio::test]
+    async fn a_modern_request_is_served_statelessly_on_the_same_endpoint() {
+        let (addr, stop) = serve(cfg(&[
+            ("RAMEN_MCP_KEYS", "rmk_test"),
+            ("RAMEN_SESSION_SECRET", "s"),
+            ("RAMEN_ALLOWED_ORIGINS", "https://app.example"),
+        ]))
+        .await;
+        let discover = format!(
+            r#"{{"jsonrpc":"2.0","id":201,"method":"server/discover","params":{{{MODERN_META}}}}}"#
+        );
+        let hs = [
+            JSON,
+            KEY,
+            V2026,
+            ("Mcp-Method", "server/discover"),
+            ("Origin", "https://app.example"),
+        ];
+        let r = http(addr, "POST", "/mcp", &hs, &discover).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.json()["result"]["supportedVersions"][0], "2026-07-28");
+        assert!(r.header("mcp-session-id").is_none() && r.header("mcp-protocol-version").is_none());
+        // CORS still answers the allowed origin, and exposes the new names
+        assert_eq!(
+            r.header("access-control-allow-origin"),
+            Some("https://app.example")
+        );
+        assert!(
+            r.header("access-control-expose-headers")
+                .unwrap()
+                .contains("Mcp-Name")
+        );
+        // `initialize` with the modern markers is a method that no longer exists: 404, and no session is minted
+        let init = format!(
+            r#"{{"jsonrpc":"2.0","id":500,"method":"initialize","params":{{{MODERN_META}}}}}"#
+        );
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, V2026, ("Mcp-Method", "initialize")],
+            &init,
+        )
+        .await;
+        assert_eq!(
+            (
+                r.status,
+                r.json()["error"]["code"].as_i64(),
+                r.json()["id"].as_i64()
+            ),
+            (404, Some(-32601), Some(500))
+        );
+        assert!(r.header("mcp-session-id").is_none());
+        // the order is Accept/Content-Type → address → Origin → credential → era: no key is 401 whatever the version
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, ("MCP-Protocol-Version", "1999-01-01")],
+            PING,
+        )
+        .await;
+        assert_eq!(r.status, 401);
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, V2026, ("Accept", "text/html")],
+            &discover,
+        )
+        .await;
+        assert_eq!(r.status, 406);
+        // nothing loaded: -32603 on this era, as a JSON-RPC error with 200
+        let list = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{{{MODERN_META}}}}}"#
+        );
+        let r = http(
+            addr,
+            "POST",
+            "/mcp",
+            &[JSON, KEY, V2026, ("Mcp-Method", "tools/list")],
+            &list,
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.json()["error"]["code"].as_i64()),
+            (200, Some(-32603))
+        );
+        // DELETE stays what it was: a legacy verb that needs a session
+        assert_eq!(
+            http(addr, "DELETE", "/mcp", &[KEY, V2026], "").await.status,
+            400
+        );
+        // the 2025 initialize beside it is untouched
+        let r = http(addr, "POST", "/mcp", &[JSON, KEY], INIT).await;
+        assert!(r.status == 200 && r.header("mcp-session-id").is_some());
+        let _ = stop.send(());
+    }
+
+    /// §23.6: a stop is not held open by a listening client — the stream gets its completion result and ends.
+    #[tokio::test]
+    async fn shutdown_completes_open_subscription_streams() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::server::run(
+            cfg(&[("RAMEN_MCP_KEYS", "rmk_test")]),
+            listener,
+            async move {
+                let _ = stopped.await;
+            },
+        ));
+        let listen = format!(
+            r#"{{"jsonrpc":"2.0","id":88,"method":"subscriptions/listen","params":{{{MODERN_META},"notifications":{{"toolsListChanged":true}}}}}}"#
+        );
+        let hs = [
+            JSON,
+            KEY,
+            V2026,
+            ("Mcp-Method", "subscriptions/listen"),
+            ("Accept", "application/json, text/event-stream"),
+        ];
+        let client = tokio::spawn(async move { http(addr, "POST", "/mcp", &hs, &listen).await });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!client.is_finished(), "the stream stays open");
+        stop.send(()).unwrap();
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), client)
+            .await
+            .expect("the stream ends on shutdown")
+            .unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.header("content-type"), Some("text/event-stream"));
+        assert_eq!(r.header("x-accel-buffering"), Some("no"));
+        let events: Vec<Value> = r
+            .body
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(|d| serde_json::from_str(d).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2, "{}", r.body);
+        assert_eq!(
+            events[0]["method"],
+            "notifications/subscriptions/acknowledged"
+        );
+        assert_eq!(
+            events[0]["params"]["notifications"],
+            json!({"toolsListChanged": true})
+        );
+        assert_eq!(
+            (
+                events[1]["id"].as_i64(),
+                events[1]["result"]["resultType"].as_str()
+            ),
+            (Some(88), Some("complete"))
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the server stops")
+            .unwrap();
     }
 
     #[test]

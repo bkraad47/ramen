@@ -2,7 +2,10 @@
 
 import asyncio
 import functools
+import logging
 import os
+import shlex
+import time
 from typing import Any
 
 from .. import __version__, grpcclient
@@ -11,9 +14,28 @@ from ..grpcclient import GrpcError
 from ..policy import permissions as perm
 from ..util import now
 from . import gcp_api
-from .base import Cloud
+from .base import BuildError, Cloud, no_builder
 from .gcp_clients import GcpClients, http_status
-from .gcp_k8s import PORT, Kube, helm_available, helm_manifests, manifests, ns_name, rolebinding
+from .gcp_k8s import (
+    ACTIVATOR,
+    BUILD_NS,
+    BUILDER_IMAGE,
+    PORT,
+    ROLE,
+    SAME_ZONE_PEER,
+    WORKERS,
+    Kube,
+    activator,
+    build_objects,
+    direct_service,
+    helm_available,
+    helm_manifests,
+    job_state,
+    manifests,
+    ns_name,
+    rolebinding,
+    same_zone_rule,
+)
 from .local import worker_tls_from_env
 
 
@@ -36,6 +58,8 @@ def detail_of(e: Exception) -> str:
 
 
 class GcpCloud(Cloud):
+    PROVIDER = "GCP"
+
     def __init__(
         self,
         project,
@@ -150,6 +174,36 @@ class GcpCloud(Cloud):
         )
 
     # deploy -------------------------------------------------------------
+    async def _write_deploy_secret(self, ns, group, env, zone, config) -> dict:
+        """The `ramen-deploy` Secret the worker pods read as environment: identity, admin key, the kept IP
+        allow-list, then the deploy config."""
+        existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
+        data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
+        if self.admin_key:
+            data["RAMEN_ADMIN_KEY"] = self.admin_key
+        if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
+            data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
+        data.update(config)
+        await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+        return data
+
+    @_guard
+    async def push_config(self, group, env, zone, config) -> dict[str, Any]:
+        """§26.3: the Secret rewritten, `Admin/Reload` on every worker pod, then a rolling restart of the stable
+        track — the pods read the Secret as environment, so a reload alone cannot see the new values."""
+        ns = ns_name(group, zone)
+        await self._write_deploy_secret(ns, group, env, zone, dict(config))
+        n, failed = 0, []
+        for p in await asyncio.to_thread(self.kube.pods, ns, WORKERS):
+            try:
+                await self.rpc.reload(self._target(p), self.admin_key)
+                n += 1
+            except GrpcError as e:
+                failed.append(f"{p['metadata']['name']}: {e.code.name}")
+        if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker"):
+            await asyncio.to_thread(self.kube.restart, ns, "worker")
+        return {"ok": not failed, "reloaded": n, "restarted": "worker", "error": "; ".join(failed) or None}
+
     def _target(self, pod) -> str:
         return f"{pod['status'].get('podIP')}:{PORT}"
 
@@ -206,14 +260,7 @@ class GcpCloud(Cloud):
             note(f"{ns}: applying zone manifests")
             held: list[dict] = []
             await asyncio.to_thread(self._attach, group, zone, spec or {}, held if canary else None)
-            existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
-            data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
-            if self.admin_key:
-                data["RAMEN_ADMIN_KEY"] = self.admin_key
-            if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
-                data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
-            data.update(config)
-            await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+            data = await self._write_deploy_secret(ns, group, env, zone, config)
             note(f"{ns}: secret ramen-deploy written ({len(data)} keys)")
             mcp_key = (config.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
             if not canary:
@@ -250,7 +297,7 @@ class GcpCloud(Cloud):
             # old pods keep serving (with the old key set) until drained; the job is only "ok" once they are gone
             drained = await asyncio.to_thread(self.kube.wait_terminated, ns, "app=worker", 180)
             note("main: old pods drained" if drained else "main: old pods still terminating after 180s")
-            for p in await asyncio.to_thread(self.kube.pods, ns, "app=worker,ramen.io/track=stable"):
+            for p in await asyncio.to_thread(self.kube.pods, ns, f"{WORKERS},ramen.io/track=stable"):
                 w = {"id": p["metadata"]["name"], "ok": True, "track": "stable", "status": "OK"}
                 # Readiness+drain above already proves the rollout; a reload/smoke failure here must not flip
                 # it to failed. Still attempted so the group page's per-zone package list (F5.6) has data for
@@ -278,6 +325,203 @@ class GcpCloud(Cloud):
                     note(f"could not scale canary down: {type(e2).__name__}: {e2}")
             workers.append({"id": "worker-canary" if canary else "worker", "ok": False, "error": err})
             return {"ok": False, "error": err, "workers": workers, "namespace": ns, "log": lines}
+
+    # sleeping workers (§24.1) -------------------------------------------
+    def _replicas(self, ns, name) -> tuple[int, int]:
+        """(wanted, ready) replicas of a Deployment; (0, 0) when it does not exist."""
+        d = self.kube.read("Deployment", ns, name)
+        if d is None:
+            return 0, 0
+        return int(d["spec"].get("replicas", 1)), int((d.get("status") or {}).get("readyReplicas") or 0)
+
+    def _runtime(self, ns) -> dict:
+        if not self.kube.read("Namespace", None, ns):
+            return {"workers": 0, "canary": 0, "activator": 0}
+        return {
+            "workers": self._replicas(ns, "worker")[1],
+            "canary": self._replicas(ns, "worker-canary")[1],
+            "activator": self._replicas(ns, ACTIVATOR)[1],
+        }
+
+    @_guard
+    async def zone_runtime(self, group, zone) -> dict:
+        return await asyncio.to_thread(self._runtime, ns_name(group, zone))
+
+    def _scale_workers(self, ns, name, replicas: int) -> None:
+        """Replicas plus the role label on the pod template in one patch: a zone attached before 1.0 gets the label
+        that `worker-direct` selects without an extra rollout (the selector is untouched)."""
+        self.kube.patch(
+            "Deployment",
+            ns,
+            name,
+            {"spec": {"replicas": int(replicas), "template": {"metadata": {"labels": {ROLE: "worker"}}}}},
+        )
+
+    def _ensure_direct(self, group, zone) -> None:
+        """What a zone attached before 1.0 lacks for sleeping: `worker-direct` and the NetworkPolicy peer that lets the
+        activator reach the workers. Idempotent."""
+        ns = ns_name(group, zone)
+        self.kube.apply(direct_service(group, zone))
+        np = self.kube.read("NetworkPolicy", ns, "worker")
+        rules = ((np or {}).get("spec") or {}).get("ingress") or []
+        if rules and not any(SAME_ZONE_PEER in (r.get("from") or []) for r in rules):
+            self.kube.patch("NetworkPolicy", ns, "worker", {"spec": {"ingress": [*rules, same_zone_rule()]}})
+
+    def _sleep_prepare(self, group, zone) -> dict:
+        ns = ns_name(group, zone)
+        worker = self.kube.read("Namespace", None, ns) and self.kube.read("Deployment", ns, "worker")
+        if not worker:
+            raise ApiError(409, f"Zone {zone} of group {group} is not deployed: nothing to put to sleep")
+        self._ensure_direct(group, zone)
+        selector = ((self.kube.read("Service", ns, "worker") or {}).get("spec") or {}).get("selector") or {}
+        self.kube.apply(activator(worker, selector))  # replicas 1; an activator left at 0 by a wake is patched back
+        self.kube.wait_ready(ns, ACTIVATOR)
+        # P1 (1.0.0a): Ready is not enough — until the activator is listed behind Service/worker, kube-proxy routes
+        # to the terminating-but-serving workers, and a draining worker never asks for the wake.
+        try:
+            listed = self.kube.wait_endpoint(ns, "worker", f"app=worker,{ROLE}=activator")
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 403:
+                raise
+            logging.getLogger("ramen.cloud").warning("%s: cannot read Endpoints (zone role predates 1.0.0a)", ns)
+            listed = True
+        if not listed:
+            raise ApiError(502, f"Deployment {ACTIVATOR} is Ready but not in the Endpoints of Service/worker in {ns}")
+        return {"workers": self._replicas(ns, "worker")[0], "canary": self._replicas(ns, "worker-canary")[0]}
+
+    def _sleep_finish(self, ns) -> None:
+        for name in ("worker", "worker-canary"):
+            if self.kube.read("Deployment", ns, name):
+                self._scale_workers(ns, name, 0)
+
+    @_guard
+    async def sleep_zone(self, group, zone) -> dict:
+        """§24.1 sleep: the activator first (Ready behind `Service/worker`), then the workers to 0 — their SIGTERM
+        drain serves what is in flight. Idempotent. `previous` is what the Deployments asked for before this call."""
+        ns = ns_name(group, zone)
+        previous = await asyncio.to_thread(self._sleep_prepare, group, zone)
+        await self._canary_out(ns, lambda _msg: None)  # AWS: an empty canary target group must hold no weight
+        await asyncio.to_thread(self._sleep_finish, ns)
+        return {"ok": True, "namespace": ns, "previous": previous, **await asyncio.to_thread(self._runtime, ns)}
+
+    def _after_wake(self, ns, count: int, canary: int) -> None:
+        """Edge bookkeeping once the workers are Ready. GCP/Azure: none. AWS restores the ALB split."""
+
+    def _wake(self, group, zone, count: int, canary: int) -> dict:
+        ns = ns_name(group, zone)
+        if not (self.kube.read("Namespace", None, ns) and self.kube.read("Deployment", ns, "worker")):
+            raise ApiError(409, f"Zone {zone} of group {group} is not deployed: nothing to wake")
+        count, canary = max(1, int(count)), max(0, int(canary))
+        self._ensure_direct(group, zone)
+        self._scale_workers(ns, "worker", count)
+        has_canary = self.kube.read("Deployment", ns, "worker-canary") is not None
+        if has_canary:
+            self._scale_workers(ns, "worker-canary", canary)
+        self.kube.wait_ready(ns, "worker")  # a timeout names the stuck pods; the activator keeps answering 503
+        if has_canary:
+            self.kube.wait_ready(ns, "worker-canary")
+        self._after_wake(ns, count, canary if has_canary else 0)
+        if self.kube.read("Deployment", ns, ACTIVATOR):
+            self.kube.set_replicas(ns, ACTIVATOR, 0)  # last: while both exist the activator forwards (§24.1)
+        return {"ok": True, "namespace": ns, **self._runtime(ns)}
+
+    @_guard
+    async def wake_zone(self, group, zone, count, canary) -> dict:
+        """§24.1 wake: `worker` to `count` (≥ 1) and `worker-canary` to `canary`, wait Ready, then the activator to 0.
+        Idempotent; a zone that never slept is simply scaled."""
+        return await asyncio.to_thread(self._wake, group, zone, count, canary)
+
+    # images built on deploy (§24.2) ---------------------------------------
+    def builder_available(self) -> bool:
+        return os.environ.get("RAMEN_BUILDER") == "1" and bool(os.environ.get("RAMEN_BUILD_REGISTRY", "").strip())
+
+    def _build_extras(self, registry: str) -> dict:
+        """What the provider's registry needs on the build pod beyond `ramen-builder`'s workload identity (GKE:
+        nothing, kaniko's Google keychain reads the metadata server)."""
+        return {}
+
+    def _build_log(self, name, tail=40) -> str:
+        pods = self.kube.pods(BUILD_NS, f"job-name={name}")
+        if not pods:
+            return ""
+        pod = max(pods, key=lambda p: p["metadata"].get("creationTimestamp") or "")
+        out = []
+        for container in ("context", "build"):
+            try:
+                out += self.kube.pod_log(BUILD_NS, pod["metadata"]["name"], container, tail).splitlines()
+            except Exception:  # noqa: BLE001, S112, PERF203 - a container that never started has no log
+                continue
+        if not out:  # nothing ran: say why (image pull, scheduling) instead of nothing
+            out = [f"build pod {pod['metadata']['name']}{self.kube._stuck_pods_of([pod])}"]
+        return "\n".join(out[-tail:])
+
+    def _build(self, group, tag, dockerfile, files) -> dict:
+        if not self.builder_available():
+            raise no_builder()
+        registry = os.environ["RAMEN_BUILD_REGISTRY"].strip().rstrip("/")
+        image = f"{registry}/worker:{tag}"
+        timeout = float(os.environ.get("RAMEN_BUILD_TIMEOUT_SECS", "900"))
+        extras = self._build_extras(registry)
+        cm, job = build_objects(
+            group,
+            tag,
+            image,
+            dockerfile,
+            dict(files or {}),
+            builder_image=os.environ.get("RAMEN_BUILDER_IMAGE") or BUILDER_IMAGE,
+            init_image=os.environ.get("RAMEN_BUILD_INIT_IMAGE") or None,
+            args=(*extras.get("args", ()), *shlex.split(os.environ.get("RAMEN_BUILD_ARGS", ""))),
+            env=extras.get("env"),
+            pod_labels=extras.get("pod_labels"),
+            docker_config=extras.get("docker_config"),
+            cpu=os.environ.get("RAMEN_BUILD_CPU", "250m"),
+            memory=os.environ.get("RAMEN_BUILD_MEMORY", "768Mi"),
+            memory_limit=os.environ.get("RAMEN_BUILD_MEMORY_LIMIT", "2Gi"),
+        )
+        name = job["metadata"]["name"]
+        live = self.kube.read("Job", BUILD_NS, name)
+        if live is not None and job_state(live) == "failed":  # a failed earlier run of this tag: start over
+            self.kube.delete("Job", BUILD_NS, name)
+            live = None
+        try:
+            if live is None:  # else: the same build is already running (or just finished) — wait for that one
+                self.kube.apply(cm)
+                try:
+                    self.c.batch.create_namespaced_job(BUILD_NS, job)
+                except Exception as e:  # noqa: BLE001 - created by a concurrent caller between read and create
+                    if http_status(e) != 409:
+                        raise
+            deadline = time.monotonic() + timeout
+            while True:
+                current = self.kube.read("Job", BUILD_NS, name)
+                # gone: another caller waiting on the same build cleaned it up, its outcome is not ours to guess
+                state = job_state(current) if current is not None else "gone"
+                if state != "running":
+                    break
+                if time.monotonic() >= deadline:
+                    state = "timeout"
+                    break
+                time.sleep(self.kube.poll)
+            log = self._build_log(name)
+            self.kube.delete("Job", BUILD_NS, name)  # a timed-out build stops here; TTL 600 s is only the safety net
+        finally:
+            self.kube.delete("ConfigMap", BUILD_NS, name)
+        if state == "succeeded":
+            return {"image": image, "log": log}
+        why = {"timeout": f"timed out after {int(timeout)}s", "gone": "was removed before it finished"}.get(
+            state, "failed"
+        )
+        raise BuildError(f"image build {name} for {image} {why}" + (f":\n{log}" if log else ""), log)
+
+    async def build_image(self, group, tag, dockerfile, files) -> dict:
+        """§24.2: `Job/ramen-build-<hash>` in ramen-system (kaniko as `ramen-builder`), context from a ConfigMap.
+        Raises `BuildError` (its text ends with the last 40 log lines) on a failed or timed-out build."""
+        try:
+            return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
+        except (ApiError, BuildError):
+            raise
+        except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
+            raise ApiError(502, f"{self.PROVIDER} build_image: {type(e).__name__}: {str(e)[:300]}") from e
 
     # observe ------------------------------------------------------------
     @_guard
@@ -348,7 +592,7 @@ class GcpCloud(Cloud):
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
         # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
-        for dep in ("worker", "worker-canary"):
+        for dep in ("worker", "worker-canary", ACTIVATOR):  # a sleeping zone's activator enforces the list too
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)
@@ -404,6 +648,8 @@ class GcpCloud(Cloud):
         email = f"{iam.account_id(group, zone)}@{self.project}.iam.gserviceaccount.com"
         removed = {"namespaces": [ns], "service_accounts": []}
         if email in await asyncio.to_thread(iam.list_service_accounts, f"ramen-{group}-{zone}@"):
+            # unbind before deleting: a deleted identity left in the bucket policy blocks later policy writes
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         return removed
@@ -417,6 +663,7 @@ class GcpCloud(Cloud):
             removed["namespaces"].append(ns)
         iam = self._iam()
         for email in await asyncio.to_thread(iam.list_service_accounts, prefix):
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         comp = gcp_api.Compute(self.c.compute, self.project)

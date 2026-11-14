@@ -21,6 +21,15 @@ class FakeK8s:
         self.pull_error = False
         self.calls: list[tuple] = []
         self.rbac_lag = 0  # zone-scoped reads still answering 403 after the RoleBinding exists (RBAC cache lag)
+        # §24.2 build Jobs: what a Job read reports once `job_polls` reads have said "running"; logs per (ns, pod[, c])
+        self.job_outcome = "succeeded"  # succeeded | failed | running
+        self.job_polls = 0
+        self.pod_logs: dict[tuple, list[str]] = {}
+        self.unready: set[str] = set()  # Deployment names that never get ready (while `ready` stays True)
+        # §24.1 P1: Endpoints reads that still leave the activator out (kube-proxy lag), and a zone role that cannot
+        # read Endpoints at all (pre-1.0.0a RoleBinding → 403)
+        self.endpoint_lag = 0
+        self.endpoints_forbidden = False
 
     # generic helpers ---------------------------------------------------
     def _key(self, kind, body, ns=None):
@@ -57,9 +66,16 @@ class FakeK8s:
         if k not in self.objs:
             raise FakeApiError(404, "NotFound")
         obj = copy.deepcopy(self.objs[k])
+        if kind == "Job":
+            if self.job_polls > 0:
+                self.job_polls -= 1
+            elif self.job_outcome == "succeeded":
+                obj["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+            elif self.job_outcome == "failed":
+                obj["status"] = {"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}
         if kind == "Deployment":
             reps = obj["spec"].get("replicas", 1)
-            ready = reps if self.ready else 0
+            ready = reps if self.ready and name not in self.unready else 0
             obj["status"] = {
                 "replicas": reps,
                 "readyReplicas": ready,
@@ -70,17 +86,36 @@ class FakeK8s:
             obj["metadata"]["generation"] = 1
         return obj
 
+    def _delete(self, kind, ns, name):
+        k = (kind, ns, name)
+        if k not in self.objs:
+            raise FakeApiError(404, "NotFound")
+        self.calls.append(("delete", *k))
+        del self.objs[k]
+
     def pods(self, ns, selector=""):
-        want = dict(kv.split("=") for kv in selector.split(",") if kv)
+        terms = [kv for kv in selector.split(",") if kv]
+        want = dict(kv.split("=") for kv in terms if "!=" not in kv)
+        unwanted = dict(kv.split("!=") for kv in terms if "!=" in kv)
         out = []
+        if "job-name" in want:  # one pod per live Job, as the Job controller labels it
+            if ("Job", ns, want["job-name"]) in self.objs:
+                out.append(
+                    {
+                        "metadata": {"name": f"{want['job-name']}-pod", "namespace": ns, "labels": dict(want)},
+                        "status": {"phase": "Succeeded" if self.job_outcome == "succeeded" else "Failed"},
+                    }
+                )
+            return out
         for (kind, n, name), d in self.objs.items():
             if kind != "Deployment" or n != ns:
                 continue
             labels = d["spec"]["template"]["metadata"]["labels"]
-            if any(labels.get(k) != v for k, v in want.items()):
+            if any(labels.get(k) != v for k, v in want.items()) or any(labels.get(k) == v for k, v in unwanted.items()):
                 continue
             for i in range(d["spec"].get("replicas", 1)):
-                ip = f"10.{1 if labels.get('ramen.io/track') == 'canary' else 2}.0.{i + 1}"
+                canary, act = labels.get("ramen.io/track") == "canary", labels.get("ramen.io/role") == "activator"
+                ip = f"10.{1 if canary else 3 if act else 2}.0.{i + 1}"
                 out.append(
                     {
                         "metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
@@ -131,6 +166,28 @@ class FakeK8s:
     @property
     def rbac(self):
         return _Rbac(self)
+
+    @property
+    def batch(self):
+        return _Batch(self)
+
+
+class _Batch:
+    def __init__(self, s):
+        self.s = s
+
+    def create_namespaced_job(self, ns, body):
+        return self.s._create("Job", ns, body)
+
+    def patch_namespaced_job(self, name, ns, body):
+        return self.s._patch("Job", ns, name, body)
+
+    def read_namespaced_job(self, name, ns):
+        return self.s._read("Job", ns, name)
+
+    def delete_namespaced_job(self, name, ns, propagation_policy=None):
+        self.s.calls.append(("propagation", propagation_policy))
+        return self.s._delete("Job", ns, name)
 
 
 class _Rbac:
@@ -248,8 +305,48 @@ class _Core:
     def patch_namespaced_service(self, name, ns, body):
         return self.s._patch("Service", ns, name, body)
 
+    def read_namespaced_service(self, name, ns):
+        return self.s._read("Service", ns, name)
+
+    def create_namespaced_config_map(self, ns, body):
+        return self.s._create("ConfigMap", ns, body)
+
+    def patch_namespaced_config_map(self, name, ns, body):
+        return self.s._patch("ConfigMap", ns, name, body)
+
+    def read_namespaced_config_map(self, name, ns):
+        return self.s._read("ConfigMap", ns, name)
+
+    def delete_namespaced_config_map(self, name, ns):
+        return self.s._delete("ConfigMap", ns, name)
+
+    def read_namespaced_pod_log(self, name, namespace, container=None, tail_lines=None, timestamps=False):
+        lines = self.s.pod_logs.get((namespace, name, container)) or self.s.pod_logs.get((namespace, name), [])
+        return "\n".join(lines[-tail_lines:] if tail_lines else lines)
+
     def list_namespaced_pod(self, ns, label_selector=""):
         return {"items": self.s.pods(ns, label_selector)}
+
+    def read_namespaced_endpoints(self, name, ns):
+        """Ready addresses of the Service's selector: pods of ready Deployments, the activator's only once the
+        `endpoint_lag` reads are spent."""
+        self.s.calls.append(("endpoints", ns, name))
+        if self.s.endpoints_forbidden:
+            raise FakeApiError(403, "Forbidden")
+        svc = self.s.objs.get(("Service", ns, name))
+        if svc is None:
+            raise FakeApiError(404, "NotFound")
+        selector = ",".join(f"{k}={v}" for k, v in (svc["spec"].get("selector") or {}).items())
+        if self.s.endpoint_lag > 0:
+            self.s.endpoint_lag -= 1
+            selector += ",ramen.io/role!=activator"
+        pods = [
+            p
+            for p in self.s.pods(ns, selector)
+            if self.s.ready and p["metadata"]["name"].rsplit("-", 1)[0] not in self.s.unready
+        ]
+        addresses = [{"ip": p["status"]["podIP"], "targetRef": {"name": p["metadata"]["name"]}} for p in pods]
+        return {"metadata": {"name": name, "namespace": ns}, "subsets": [{"addresses": addresses}] if pods else []}
 
 
 class _Apps:
@@ -326,6 +423,10 @@ class FakeBucket:
         if self.iam_lag > 0:
             self.iam_lag -= 1
             raise FakeApiError(400, "Service account ramen-x-y@p1.iam.gserviceaccount.com does not exist.")
+        if getattr(self, "refuse_deleted", False) and any(
+            m.startswith("deleted:") for b in policy.bindings for m in b["members"]
+        ):
+            raise FakeApiError(400, "Deleted member 'x' is not deleted.")
         self.policy = NS(version=policy.version, bindings=copy.deepcopy(list(policy.bindings)))
         return self.policy
 
@@ -605,6 +706,10 @@ class FakeClients:
     @property
     def rbac(self):
         return self.k8s.rbac
+
+    @property
+    def batch(self):
+        return self.k8s.batch
 
     def to_dict(self, obj):
         return obj

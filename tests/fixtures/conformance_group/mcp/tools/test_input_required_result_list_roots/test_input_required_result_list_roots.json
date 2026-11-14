@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_list_roots",
+  "description": "Ask the client for its roots (roots/list) and return how many it has.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

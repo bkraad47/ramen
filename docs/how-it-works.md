@@ -66,11 +66,12 @@ it is about to return, and secret values never reach it.
 | **Blocked tools** | Per environment and per zone, enforced by the node. A blocked name vanishes from `tools/list`. | [Groups, zones and regions](wiki/groups-zones.md#packages-per-zone) |
 | **Logs and audit** | One JSON line per MCP call naming the key or the person. Every console action with user, address and outcome. | [Users and access](wiki/users-access.md#audit-and-logs) |
 | **Backups** | JSON exports of the console state, tagged with the release, with preview and restore. | [Backups](wiki/backups.md) |
-| **Worker images** | A group can run a recorded worker image with its own system packages. | [The MCP repo](wiki/mcp-repo.md#heavy-dependencies) |
+| **Worker images** | A group runs the release image, one built on deploy from its `requirements.txt` (1.0), or a recorded image with its own system packages. | [Worker images](wiki/worker-images.md) |
 | **Agent skills** | `SKILL.md` playbooks for deploy, rotate, backup and scale. | [Cloud-ops skills](wiki/skills.md) |
 
 ## What is verified
 
-0.8.0 passed the release suite and the load tests live on GKE, EKS and AKS; what each run covered, and what is tested only:
+1.0.0 ran live on GKE, EKS and AKS — smoke, the full check set (one check failed on GKE, none on EKS or AKS) and the
+load tests; what each run covered, and what is tested only:
 [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). The boundaries:
 [Threat model](threat-model.md).

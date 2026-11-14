@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "failing_job",
+  "description": "Work for a second, then fail: the task completes with an isError result.",
+  "callable": "run",
+  "input": {},
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

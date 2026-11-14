@@ -39,7 +39,7 @@ def test_the_demo_rails_load_for_the_tools_the_repo_opts_in(demo):
     assert load["guardrails"] == {
         "engine": "nemo",
         "fail": "closed",
-        "tools": {"demo_calculator_tool": ["pre"], "word_count": ["pre", "post"]},
+        "tools": {"confirm_delete_note": ["pre"], "demo_calculator_tool": ["pre"], "word_count": ["pre", "post"]},
     }
 
 

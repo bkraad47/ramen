@@ -14,9 +14,25 @@ pub struct Throttle {
     scope: Option<ConnectionManager>,
 }
 
+/// How long the node waits for a Redis at start. `ConnectionManager::new` retries a host that does not resolve or
+/// answer for minutes, and the node does not listen until this returns: an unreachable Redis used to keep the pod
+/// from ever becoming Ready (kind run, 1.0.0 — the Redis had been deleted). A Redis outage fails open (§14), so
+/// does a Redis that is not there at start: no throttle, no shared task store, until the pod restarts.
+const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 async fn dial(url: &Option<String>) -> Option<ConnectionManager> {
     let client = redis::Client::open(url.as_deref()?).ok()?;
-    ConnectionManager::new(client).await.ok()
+    match tokio::time::timeout(DIAL_TIMEOUT, ConnectionManager::new(client)).await {
+        Ok(Ok(conn)) => Some(conn),
+        _ => {
+            crate::log::emit(
+                "warn",
+                "redis unreachable at start: throttling and the shared task store are off for this pod",
+                serde_json::json!({}),
+            );
+            None
+        }
+    }
 }
 
 impl Throttle {
@@ -25,6 +41,11 @@ impl Throttle {
             item: dial(&cfg.redis_item_url).await,
             scope: dial(&cfg.redis_scope_url).await,
         }
+    }
+
+    /// §23.5: the Redis the task store shares — the scope instance, else the zone-local one, else none (memory).
+    pub fn shared_store(&self) -> Option<ConnectionManager> {
+        self.scope.clone().or_else(|| self.item.clone())
     }
 
     pub fn none() -> Self {
@@ -113,6 +134,15 @@ async fn check(conn: &ConnectionManager, key: &str, limit: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn an_unreachable_redis_at_start_fails_open_within_the_dial_timeout() {
+        let t0 = std::time::Instant::now();
+        // a name that does not resolve: the connection manager alone would keep retrying
+        let got = super::dial(&Some("redis://redis.invalid.:6379".to_string())).await;
+        assert!(got.is_none());
+        assert!(t0.elapsed() < super::DIAL_TIMEOUT + std::time::Duration::from_secs(2));
+    }
+
     use super::*;
 
     fn test_cfg(overrides: &[(&str, &str)]) -> Config {

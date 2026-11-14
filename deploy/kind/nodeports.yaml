@@ -12,3 +12,16 @@ spec:
     app.kubernetes.io/name: ramen-console
     app.kubernetes.io/instance: ramen
   ports: [{ name: http, port: 8000, targetPort: http, nodePort: 30080 }]
+---
+# Jaeger's query API/UI for the telemetry proofs (§24.3). kind only: the chart never routes Jaeger through an edge.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-host
+  namespace: ramen-system
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/instance: ramen
+  ports: [{ name: query, port: 16686, targetPort: query, nodePort: 30086 }]

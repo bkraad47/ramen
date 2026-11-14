@@ -268,7 +268,7 @@ def fetch_pod_logs(kube, ns, worker, tail) -> str:
         return ""
     tail = max(1, min(int(tail), 10000))
     entries: list[tuple[str, str]] = []
-    for p in kube.pods(ns):
+    for p in kube.pods(ns, "app=worker"):  # a sleeping zone's activator logs here too (`activator: true`)
         name = p["metadata"]["name"]
         if worker and name != worker:
             continue

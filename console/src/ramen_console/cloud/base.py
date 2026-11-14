@@ -7,6 +7,24 @@ class GateError(RuntimeError):
     canary down exactly as on a failed smoke test."""
 
 
+class BuildError(RuntimeError):
+    """An image build failed or timed out (§24.2). `str(e)` ends with the build's last log lines; `.log` is them."""
+
+    def __init__(self, msg: str, log: str = ""):
+        super().__init__(msg)
+        self.log = log
+
+
+def no_builder():
+    from ..errors import ApiError
+
+    return ApiError(
+        422,
+        "No image builder in this deployment: worker images cannot be built here. Terraform creates the "
+        "ramen-builder identity and the chart (builder.*) sets RAMEN_BUILDER=1 and RAMEN_BUILD_REGISTRY on the console",
+    )
+
+
 class Cloud(ABC):
     @abstractmethod
     async def sync_repo(self, group: str, repo_url: str, ref: str, token: str | None) -> str: ...
@@ -30,6 +48,11 @@ class Cloud(ABC):
     async def read_file(self, group: str, path: str) -> bytes | None:
         """A file of the group's synced repo (`mcp/tests.yaml`), from wherever `sync_repo` put it; None if absent."""
         return None
+
+    async def push_config(self, group: str, env: str, zone: str, config: dict[str, str]) -> dict[str, Any]:
+        """§26.3: rewrite the zone's worker config (what `deploy` writes) and `Admin/Reload` its workers — no new
+        code, no canary. `{"ok", "reloaded", "error"}`; an adapter that cannot raises."""
+        raise NotImplementedError("this adapter cannot push a config without a deploy")
 
     @abstractmethod
     async def rebalance(self, group: str, zone: str) -> dict[str, Any]: ...
@@ -76,3 +99,34 @@ class Cloud(ABC):
         resources per permission (`["*"]` = the group's own area), `previous` is what the last apply used so a
         narrowed scope can be unbound. Default: no IAM."""
         return {"ok": True, "applied": [], "permissions": list(permissions), "note": "no IAM for this adapter"}
+
+    # v1.0.0 (§24.1): sleeping workers ------------------------------------
+    async def sleep_zone(self, group: str, zone: str) -> dict[str, Any]:
+        """Put a zone to sleep: `Deployment/worker-activator` (the zone's own worker image and config, started with
+        `RAMEN_ACTIVATOR=1`) Ready behind `Service/worker`, then `worker` and `worker-canary` at 0 replicas.
+        Idempotent. Kube adapters answer `{"ok", "namespace", "previous": {"workers", "canary"}, "workers", "canary",
+        "activator"}` (`previous` = the replicas asked for before the call; the last three as `zone_runtime`).
+        Default: nothing to do — the console only flips the zone's state."""
+        return {"ok": True, "note": "no sleeping workers for this adapter"}
+
+    async def wake_zone(self, group: str, zone: str, count: int, canary: int) -> dict[str, Any]:
+        """Wake a zone: `worker` to `count` (≥ 1), `worker-canary` to `canary`, wait until they are Ready (a timeout
+        names the pods that are not running), then the activator to 0. Idempotent. Default: nothing to do."""
+        return {"ok": True, "note": "no sleeping workers for this adapter"}
+
+    async def zone_runtime(self, group: str, zone: str) -> dict[str, int]:
+        """Ready replicas of the zone's three Deployments: `{"workers": n, "canary": n, "activator": n}`. All 0 when
+        the zone is not deployed (and for adapters that manage no pods)."""
+        return {"workers": 0, "canary": 0, "activator": 0}
+
+    # v1.0.0 (§24.2): worker images built on deploy --------------------------
+    def builder_available(self) -> bool:
+        """True when this deployment can build images: `RAMEN_BUILDER=1` and `RAMEN_BUILD_REGISTRY` (the repository
+        prefix that holds `worker`, e.g. `<region>-docker.pkg.dev/<project>/ramen`) are set."""
+        return False
+
+    async def build_image(self, group: str, tag: str, dockerfile: str, files: dict[str, str]) -> dict[str, str]:
+        """Build `<RAMEN_BUILD_REGISTRY>/worker:<tag>` from `dockerfile` and the context `files` (path → text) and
+        push it; answers `{"image": ref, "log": last 40 lines}`. Raises `BuildError` when the build fails or exceeds
+        `RAMEN_BUILD_TIMEOUT_SECS` (default 900), a 422 `ApiError` when there is no builder (the default)."""
+        raise no_builder()

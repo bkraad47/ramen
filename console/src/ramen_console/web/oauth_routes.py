@@ -81,7 +81,7 @@ async def authorize_decide(
     _=Depends(csrf.csrf_form),
 ):
     form = await request.form()
-    q = {k: str(v) for k, v in form.items() if k not in ("decision", "csrf_token")}
+    q = {k: str(v) for k, v in form.items() if k not in ("decision", "csrf_token", "telemetry_consent")}
     a = await server(request).validate_authorize(p, q)  # re-validated: the form is untrusted input like the query
     tags = [f"group:{a['group']}", f"client:{a['client']['client_id']}", f"zone:{a['zone']}"]
     params = {"state": a["state"]} if a["state"] else {}
@@ -90,8 +90,12 @@ async def authorize_decide(
         return _back_to_client(
             request, with_params(a["redirect_uri"], {**params, "error": "access_denied"}), a["client"].get("name", "")
         )
-    code = await server(request).issue_code(p, a)
-    note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"])
+    tel = a.get("telemetry") is not None
+    if tel and form.get("telemetry_consent") != "1":  # §24.3: approving without the acceptance is impossible
+        note(request, "oauth.authorize", a["scope"], tags + ["decision:allow", "reason:consent_required"])
+        raise OAuthError("invalid_request", "this group requires telemetry consent: tick the box to allow, or deny")
+    code = await server(request).issue_code(p, a, tel=tel)
+    note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"] + (["telemetry:accepted"] if tel else []))
     target = with_params(a["redirect_uri"], {**params, "code": code})
     return _back_to_client(request, target, a["client"].get("name", ""))
 

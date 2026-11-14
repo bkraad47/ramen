@@ -1,15 +1,41 @@
-{% extends "base.html" %}{% block title %}Environments{% endblock %}
+{% extends "base.html" %}{% from "partials/multi.html" import multi %}{% block title %}Environments, Zones and Workers{% endblock %}
 {% block body %}
+{% set ck = cloud_kind() %}{% set clouds = [ck] if ck in ('gcp', 'aws', 'azure') else [] %}
+{% set group_opts = [] %}{% for g in groups %}{% set _ = group_opts.append((g, g)) %}{% endfor %}
+{% set env_options = [] %}{% for n in env_opts %}{% set _ = env_options.append((n, n)) %}{% endfor %}
+<h2>New environment</h2>
+<div class="card"><p class="muted">An environment is a name shared by the groups it applies to: each group runs its repo at the <b>ref</b> (a branch or tag) in the zones the environment is attached to. The ref is one value for every group; verbose, blocked packages and the last deploy stay per group on the group page.</p>
+<form class="inline controls" hx-post="{{ base }}/api/v1/environments" hx-ext="json" hx-swap="none"><label>Name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="prod"></label><label>Ref<input name="ref" placeholder="main"></label>{{ multi('groups', group_opts, [], 'new-env-groups', 'Groups', 'Pick groups') }}<button class="act">Add environment</button></form></div>
 <div class="card"><div class="dl">Download: <a href="{{ base }}/api/v1/environments?format=csv">CSV</a><a href="{{ base }}/api/v1/environments?format=json">JSON</a></div>
-<h2 style="margin-top:0">Environments</h2>
-<table><thead><tr><th>Group</th><th>Name</th><th>Ref</th><th>Zones</th><th>Verbose</th><th>Last deploy</th><th>When</th><th>Error</th><th>Actions</th></tr></thead><tbody>
-{% for e in envs %}{% set d = e.last_deploy or {} %}<tr>
-<td>{{ e.group }}</td><td>{{ e.name }}</td><td>{{ e.ref or '' }}</td><td>{{ (e.zones or [])|join(', ') or '—' }}</td>
-<td>{{ 'On' if e.verbose else 'Off' }}</td>
-<td>{% if d.status %}<span class="badge {{ d.status }}">{{ 'Succeeded' if d.status == 'ok' else d.status|capitalize }}</span>{% else %}<span class="muted">Never deployed</span>{% endif %}</td>
-<td>{{ d.at or '—' }}</td><td>{% if d.error %}<span class="err">{{ d.error }}</span>{% else %}—{% endif %}</td>
-<td><div class="row-actions"><a class="btn ghost act" href="{{ base }}/groups/{{ e.group }}">Open group</a></div></td></tr>
-{% else %}<tr><td colspan="9" class="muted">No environments</td></tr>{% endfor %}
+<h2 style="margin-top:0">Environments</h2><p class="muted">Changing the groups binds or detaches every zone of the environment for them (a new group's workers are deployed at once). <b>Delete</b> removes the environment from every group and deletes the zones, with their workers, that no other environment uses.</p>
+<table><thead><tr><th>Name</th><th>Ref</th><th>Groups</th><th>Zones</th><th>Last deploy</th><th>Actions</th></tr></thead><tbody>
+{% for e in envs %}{% set ok = env_ok.get(e.name) %}<tr><td><b>{{ e.name }}</b></td>
+{% if ok %}<td colspan="2"><form class="inline" style="margin:0" hx-put="{{ base }}/api/v1/environments/{{ e.name }}" hx-ext="json" hx-swap="none"><label>Ref<input name="ref" value="{{ e.ref or '' }}"{% if e.ref_differs %} title="Differs per group; saving sets every group to this value"{% endif %}></label>{{ multi('groups', group_opts, e.groups, 'env-groups-' ~ e.name, 'Groups', 'No groups') }}<button class="act ghost">Save</button></form>{% if e.ref_differs %}<small class="muted">Ref differs per group</small>{% endif %}</td>
+{% else %}<td>{{ e.ref or '' }}{% if e.ref_differs %} <small class="muted">(differs per group)</small>{% endif %}</td><td>{{ e.groups|join(', ') }}</td>{% endif %}
+<td>{{ e.zones|join(', ') or '—' }}</td>
+<td>{% for g, d in e.last_deploy.items() %}<div><a href="{{ base }}/groups/{{ g }}">{{ g }}</a>: {% if d and d.status %}<span class="badge {{ d.status }}">{{ 'Succeeded' if d.status == 'ok' else d.status|capitalize }}</span> <small class="muted">{{ d.at }}</small>{% else %}<span class="muted">Never deployed</span>{% endif %}</div>{% endfor %}</td>
+<td>{% if ok %}<div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/environments/{{ e.name }}" hx-confirm="Delete environment {{ e.name }} from every group? Zones only it uses are deleted with their workers." hx-swap="none">Delete</button></div>{% else %}<span class="muted">Read-only: a group not yours is in it</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No environments yet</td></tr>{% endfor %}
 </tbody></table></div>
-<p class="muted">Create and deploy environments from a group's page.</p>
+<h2>New zone</h2>
+<div class="card"><p class="muted">A zone is a place workers run. This console runs on <b>{{ cloud_label(ck) }}</b>, so its zones are {{ {'gcp': 'GCP zones such as <code>us-central1-a</code>', 'aws': 'AWS availability zones such as <code>us-east-1a</code>', 'azure': 'Azure zones such as <code>westus2-1</code>', 'local': '<code>local</code> zones of the compose stack'}[ck]|safe if ck in ('gcp', 'aws', 'azure', 'local') else ck }}. Name it with lowercase letters, digits and dashes and pick the environments it serves: the console creates each group's namespace, service account and workers in it and deploys the group's code at once. The cloud lists offer every region the Config page has not blocked{% for prov in clouds %}{% if blocked[prov] %} — Blocked by a super admin: {{ blocked[prov]|join(', ') }}{% endif %}{% endfor %}.</p>
+{% for prov in clouds %}<form class="inline controls" hx-post="{{ base }}/api/v1/zones" hx-ext="json" hx-swap="none"><input type="hidden" name="provider" value="{{ prov }}">
+<label>{{ cloud_label(prov) }} zone name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="{{ {'gcp': 'a', 'aws': 'use1', 'azure': 'eus1'}[prov] }}"></label>{{ multi('environments', env_options, [], 'new-zone-envs', 'Environments', 'Pick environments') }}<label>Location<select name="region">{% for r, zs in region_zones[prov].items() %}<optgroup label="{{ r }}">{% for z in zs %}<option>{{ z }}</option>{% endfor %}</optgroup>{% else %}<option value="">Every {{ cloud_label(prov) }} region is blocked</option>{% endfor %}</select></label><button class="act">Add {{ cloud_label(prov) }} zone</button></form>
+{% endfor %}{% if ck == 'local' %}<form class="inline controls" hx-post="{{ base }}/api/v1/zones" hx-ext="json" hx-swap="none"><input type="hidden" name="provider" value="local">
+<label>Local zone name<input name="name" pattern="[a-z][a-z0-9-]*" required placeholder="local"></label>{{ multi('environments', env_options, [], 'new-zone-envs', 'Environments', 'Pick environments') }}<label>Location (free text)<input name="region" placeholder="local"></label><button class="act">Add local zone</button></form>{% endif %}</div>
+<div class="card"><div class="dl">Download: <a href="{{ base }}/api/v1/zones?format=csv">CSV</a><a href="{{ base }}/api/v1/zones?format=json">JSON</a></div>
+<h2 style="margin-top:0">Zones</h2><p class="muted">A zone serves the groups of its environments. Adding an environment binds and deploys its groups here; removing one detaches them. Changing the location destroys the old workers and deploys new ones there; counts, sizes, sleep, IP rules and throttles are kept.</p>
+<table><thead><tr><th>Name</th><th>Provider</th><th>Location</th><th>Environments</th><th>Groups</th><th>Created</th><th>Actions</th></tr></thead><tbody>
+{% for z in zones %}{% set ok = zone_ok.get(z.id) %}<tr><td>{{ z.name }}</td><td>{{ z.provider }}</td>
+{% if ok %}<td colspan="2"><form class="inline" style="margin:0" hx-put="{{ base }}/api/v1/zones/{{ z.id }}" hx-ext="json" hx-swap="none"><label>Location{% if z.provider in region_zones %}<select name="region">{% set ns = namespace(seen=false) %}{% for r, zs in region_zones[z.provider].items() %}<optgroup label="{{ r }}">{% for loc in zs %}{% if loc == z.region %}{% set ns.seen = true %}{% endif %}<option{{ ' selected' if loc == z.region }}>{{ loc }}</option>{% endfor %}</optgroup>{% endfor %}{% if not ns.seen %}<option selected>{{ z.region }}</option>{% endif %}</select>{% else %}<input name="region" value="{{ z.region }}">{% endif %}</label>{{ multi('environments', env_options, z.environments or [], 'zone-envs-' ~ z.id, 'Environments', 'No environments') }}<button class="act ghost">Save</button></form></td>
+{% else %}<td>{{ z.region }}</td><td>{{ (z.environments or [])|join(', ') or '—' }}</td>{% endif %}
+<td>{{ (z.groups or [])|join(', ') or '—' }}</td><td>{{ z.created }}</td>
+<td>{% if ok %}<div class="row-actions"><button class="sm danger act" hx-delete="{{ base }}/api/v1/zones/{{ z.id }}" hx-confirm="Delete zone {{ z.id }}? Every group's workers in it are destroyed." hx-swap="none">Delete zone</button></div>{% else %}<span class="muted">Read-only: a group not yours is in it</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Nothing yet</td></tr>{% endfor %}</tbody></table></div>
+<h2>Workers per group</h2><div class="card"><p class="muted">One row per group × zone the derivation yields, with the environments that put it there. A worker is one pod: the Rust node (gRPC + Streamable HTTP, auth, limits) plus a Python sidecar that runs the group's tools. The sidecar starts on the first call and is stopped after <code>RAMEN_SIDECAR_IDLE_SECS</code> (default 300) without calls, then starts again on the next one — "sidecar stopped" in a log is idle, not broken. The live cell refreshes every 15 s: one entry per worker with its load (low / even / high, calls in flight over total) and the canary when one is running. Deploy jobs are on the group page.</p>
+<table><tr><th>Group</th><th>Zone</th><th>Environments</th><th>Namespace</th><th>Live workers and canary</th></tr>
+{% set ns = namespace(n=0) %}{% for z in zones %}{% for g in z.groups or [] %}{% if p.role == 'super_admin' or g in groups %}{% set ns.n = ns.n + 1 %}<tr><td><a href="{{ base }}/groups/{{ g }}">{{ g }}</a></td><td>{{ z.id }} <small class="muted">{{ z.provider }}{% if z.region %}/{{ z.region }}{% endif %}</small></td>
+<td>{{ pair_envs.get((g, z.id), [])|join(', ') or '—' }}</td>
+<td>{% if z.provider == 'gcp' %}<code>ramen-{{ g }}-{{ z.id }}</code>{% else %}—{% endif %}</td>
+<td hx-get="{{ base }}/ui/groups/{{ g }}/zones/{{ z.id }}/workers" hx-trigger="load, every 15s" hx-swap="innerHTML">…</td></tr>{% endif %}{% endfor %}{% endfor %}{% if not ns.n %}<tr><td colspan="5" class="muted">No zone serves a group yet</td></tr>{% endif %}</table></div>
 {% endblock %}

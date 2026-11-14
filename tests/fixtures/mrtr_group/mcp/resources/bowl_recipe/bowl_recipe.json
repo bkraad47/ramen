@@ -1,0 +1,19 @@
+{
+  "type": "resource",
+  "name": "bowl_recipe",
+  "description": "A templated resource: the recipe for one flavour.",
+  "callable": "read",
+  "input": {
+    "flavour": {
+      "enum": [
+        "shoyu",
+        "shio",
+        "miso",
+        "tonkotsu"
+      ],
+      "description": "which bowl"
+    }
+  },
+  "uri": "ramen://bowl/{flavour}/recipe",
+  "mime_type": "text/plain"
+}

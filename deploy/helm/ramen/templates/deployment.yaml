@@ -39,6 +39,19 @@
   "RAMEN_COOKIE_SECURE" "1"
   "RAMEN_TRUST_PROXY_HOPS" "2") }}
 {{- end }}
+{{- /* §24.1 / §24.2: set for every provider; console.env still wins */ -}}
+{{- $v1 := dict "RAMEN_CONSOLE_INTERNAL_URL" (include "ramen.internalUrl" .) }}
+{{- if include "ramen.builder.enabled" . }}
+{{- $_ := set $v1 "RAMEN_BUILDER" "1" }}
+{{- $_ := set $v1 "RAMEN_BUILD_REGISTRY" (include "ramen.builder.registry" .) }}
+{{- with .Values.builder.image }}{{- $_ := set $v1 "RAMEN_BUILDER_IMAGE" . }}{{- end }}
+{{- end }}
+{{- if eq .Values.otel.collector "jaeger" }}{{- /* §26.3: the Config page names the chart's trace UI (port-forward only) */ -}}
+{{- $_ := set $v1 "RAMEN_OTEL_UI_URL" (printf "http://jaeger.%s:16686" .Release.Namespace) }}
+{{- else if eq .Values.otel.collector "phoenix" }}
+{{- $_ := set $v1 "RAMEN_OTEL_UI_URL" (printf "http://phoenix.%s:6006" .Release.Namespace) }}
+{{- end }}
+{{- $env = merge (dict) $env $v1 }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

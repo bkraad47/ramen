@@ -162,7 +162,13 @@ def test_cidr_lock(node):
     if E.env("RAMEN_EXPECT_CIDR_DENIED") != "1" and E.env("RAMEN_EXPECT_CIDR_403") != "1":
         pytest.skip("node not configured with an excluding RAMEN_ALLOWED_CIDRS (set RAMEN_EXPECT_CIDR_DENIED=1)")
     assert node.status({"jsonrpc": "2.0", "id": 1, "method": "ping"}) == S.PERMISSION_DENIED
-    assert node.health() in ("SERVING", "NOT_SERVING"), "health must stay reachable"
+    try:
+        health = node.health()
+    except grpc.RpcError as e:  # an edge firewall closes the whole route to this address, health included
+        health = e.code().name
+    assert health in ("SERVING", "NOT_SERVING", "PERMISSION_DENIED"), (
+        "health: open at the worker, or closed by the edge"
+    )
 
 
 def test_blocked_name_hidden_and_denied(node):

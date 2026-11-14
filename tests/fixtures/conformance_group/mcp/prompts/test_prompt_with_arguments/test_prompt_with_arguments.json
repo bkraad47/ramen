@@ -1,0 +1,16 @@
+{
+  "type": "prompt",
+  "name": "test_prompt_with_arguments",
+  "description": "A prompt that repeats its two arguments.",
+  "callable": "build",
+  "input": {
+    "arg1": {
+      "type": "string",
+      "description": "first value"
+    },
+    "arg2": {
+      "type": "string",
+      "description": "second value"
+    }
+  }
+}

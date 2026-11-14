@@ -1,6 +1,8 @@
 """Cross-cutting hardening: password and key strength, signing-secret resolution, security headers, login rate
 limiting, log redaction."""
 
+import contextlib
+import json
 import logging
 import os
 import re
@@ -120,10 +122,15 @@ class HttpsOnlyMiddleware(BaseHTTPMiddleware):
     in X-Forwarded-Proto; the kubelet's probes reach the pod directly, so the probe paths stay plain."""
 
     EXEMPT = ("/healthz", "/readyz")
+    INTERNAL = "/api/v1/internal/"
 
     async def dispatch(self, request: Request, call_next):
         proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip().lower()
         if proto == "https" or request.url.path in self.EXEMPT:
+            return await call_next(request)
+        # §24.1: the activator's wake call comes from inside the cluster over plain http; the internal routes refuse
+        # whatever an edge forwarded, so only a request no edge touched is let through here
+        if request.url.path.startswith(self.INTERNAL) and "x-forwarded-for" not in request.headers:
             return await call_next(request)
         if request.method in ("GET", "HEAD"):
             from .baseuri import base_of
@@ -188,6 +195,64 @@ class _RedactTokens(logging.Filter):
             record.args = tuple(_redact(a) if isinstance(a, str) else a for a in record.args)
         record.msg = _redact(record.msg) if isinstance(record.msg, str) else record.msg
         return True
+
+
+_USERINFO = re.compile(r"(://)[^/@\s:]*:[^/@\s]+@")
+_KNOWN: set[str] = set()
+
+
+def remember_secret(value) -> None:
+    """1.0.0: every secret the console reads or writes is scrubbed from any log line and deploy log afterwards."""
+    if not isinstance(value, str):
+        return
+    if value.startswith("{"):  # telemetry headers: a JSON object whose values are the secrets
+        with contextlib.suppress(ValueError):
+            for v in json.loads(value).values():
+                remember_secret(v)
+    if len(value) >= 8:
+        _KNOWN.add(value)
+
+
+def scrub(text: str) -> str:
+    """Credentials in URLs (`scheme://user:pass@`) and every remembered secret become `***`."""
+    text = _USERINFO.sub(r"\1***@", _redact(text))
+    for v in sorted((v for v in _KNOWN if v in text), key=len, reverse=True):
+        text = text.replace(v, "***")
+    return text
+
+
+class ScrubbedLog(list):
+    """A deploy job's log: each line is scrubbed as it is written."""
+
+    def append(self, line) -> None:
+        super().append(scrub(line) if isinstance(line, str) else line)
+
+
+class _ScrubSecrets(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # `args` stay in place: uvicorn's access formatter unpacks them (dropping them printed a TypeError stack
+        # on every access line); each string argument and the template are scrubbed on their own.
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        elif isinstance(record.args, dict):
+            record.args = {k: scrub(v) if isinstance(v, str) else v for k, v in record.args.items()}
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        else:
+            record.msg, record.args = scrub(record.getMessage()), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))
+        return True
+
+
+def scrub_all_logs() -> None:
+    """On every handler the process logs through, so no logger can bypass it."""
+    for name in (None, "uvicorn", "uvicorn.error", "uvicorn.access"):
+        for h in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _ScrubSecrets) for f in h.filters):
+                h.addFilter(_ScrubSecrets())
 
 
 def redact_tokens_in_access_log() -> None:

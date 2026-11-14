@@ -23,7 +23,11 @@ def test_rebalance_returns_ok(rebalanced):
 
 def test_rebalance_is_audited(admin, rebalanced, admin_creds):
     entries = items(ok(admin.audit()))
-    mine = [e for e in entries if e.get("action") == "rebalance" and e.get("target") == f"{GROUP}/{ZONE}"]
+    mine = [
+        e
+        for e in entries
+        if e.get("action") in ("rebalance", "workers.rebalance") and e.get("target") == f"{GROUP}/{ZONE}"
+    ]
     assert mine, [e.get("action") for e in entries[:10]]
     assert mine[0]["user"] == admin_creds[0] and mine[0]["ok"] is True
     assert f"group:{GROUP}" in mine[0].get("tags", [])

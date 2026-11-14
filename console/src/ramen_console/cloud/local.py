@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .. import grpcclient
 from ..grpcclient import GrpcError, target_of
-from .base import Cloud, GateError
+from .base import BuildError, Cloud, GateError, no_builder
 
 
 def git_env(token: str | None) -> dict[str, str]:
@@ -44,13 +44,49 @@ def repo_files(root) -> dict:
     return out
 
 
+def docker_build(image: str, dockerfile: str, files: dict[str, str], run=subprocess.run) -> dict:
+    """`docker build` + `docker push` of a small context (§24.2, local adapter). BuildError carries the log tail."""
+    import shutil
+    import tempfile
+
+    if run is subprocess.run and shutil.which("docker") is None:
+        raise no_builder()
+    timeout = float(os.environ.get("RAMEN_BUILD_TIMEOUT_SECS", "900"))
+    with tempfile.TemporaryDirectory() as ctx:
+        for rel, text in {"Dockerfile": dockerfile, **files}.items():
+            dest = (Path(ctx) / rel).resolve()
+            if Path(ctx).resolve() not in dest.parents:
+                raise ValueError(f"build context path escapes the context: {rel!r}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text)
+        lines: list[str] = []
+        for cmd in (["docker", "build", "-t", image, "-f", f"{ctx}/Dockerfile", ctx], ["docker", "push", image]):
+            try:
+                r = run(cmd, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                log = "\n".join(lines[-40:])
+                raise BuildError(f"image build for {image} timed out after {int(timeout)}s:\n{log}", log) from None
+            lines += (r.stdout + r.stderr).splitlines()
+            if r.returncode != 0:
+                log = "\n".join(lines[-40:])
+                raise BuildError(f"image build for {image} failed ({cmd[1]}):\n{log}", log)
+    return {"image": image, "log": "\n".join(lines[-40:])}
+
+
 def redact(text: str, token: str | None) -> str:
     return text.replace(token, "***") if token else text
 
 
 # Never written into the bucket's `.ramen/env*`: the runtime reads the bucket, and these are the node's alone. The
 # local worker takes them from its own environment instead (docker-compose.yml). Security review 0.5.0 L6.
-NODE_ONLY = ("RAMEN_SESSION_SECRET", "RAMEN_OAUTH_ISSUER", "RAMEN_PUBLIC_URL")
+# §24.3: the telemetry settings (`RAMEN_OTEL_HEADERS`, `RAMEN_OTEL_CLIENT`) are set on the Config page, so a local
+# worker cannot have them in its own environment: here the deploy file is their only way in. The node still keeps
+# them out of the runtime's environment (`hidden_from_runtime`); on the cloud adapters they travel in a Secret.
+NODE_ONLY = (
+    "RAMEN_SESSION_SECRET",
+    "RAMEN_OAUTH_ISSUER",
+    "RAMEN_PUBLIC_URL",
+)
 
 
 class LocalCloud(Cloud):
@@ -127,7 +163,8 @@ class LocalCloud(Cloud):
         p = self._bucket(group) / path
         return p.read_bytes() if p.is_file() else None
 
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+    def _write_env(self, group, env, zone, canary, config) -> tuple[dict, Path]:
+        """The deploy file the compose worker reads on `Admin/Reload`: `.ramen/env` and `.ramen/env-<zone>`."""
         vars_ = {
             "RAMEN_GROUP": group,
             "RAMEN_ENV": env,
@@ -144,6 +181,22 @@ class LocalCloud(Cloud):
         text = "".join(f"{k}={v}\n" for k, v in vars_.items() if k not in NODE_ONLY)
         (d / "env").write_text(text)
         (d / f"env-{zone}").write_text(text)
+        return vars_, d
+
+    async def push_config(self, group, env, zone, config):
+        """§26.3: the deploy file rewritten, every worker of the zone reloaded; no gate, no canary."""
+        self._write_env(group, env, zone, False, config)
+        n, failed = 0, []
+        for target in self._targets(group, zone):
+            try:
+                await self.rpc.reload(target, self.admin_key)
+                n += 1
+            except (GrpcError, ValueError) as e:
+                failed.append(f"{target}: {type(e).__name__}: {e}")
+        return {"ok": not failed, "reloaded": n, "error": "; ".join(failed) or None}
+
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+        vars_, d = self._write_env(group, env, zone, canary, config)
         results = []
         mcp_key = (vars_.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
         for target in self._targets(group, zone):
@@ -193,6 +246,29 @@ class LocalCloud(Cloud):
 
     async def rebalance(self, group, zone):
         return {"ok": True, "note": "local adapter: no load balancer to rebalance"}
+
+    # §24.1: compose has one fixed worker per zone; the console only flips the zone's state
+    async def sleep_zone(self, group, zone):
+        return {"ok": True, "note": "local adapter: the compose worker keeps running", **self._runtime(group, zone)}
+
+    async def wake_zone(self, group, zone, count, canary):
+        return {"ok": True, "note": "local adapter: the compose worker keeps running", **self._runtime(group, zone)}
+
+    def _runtime(self, group, zone) -> dict:
+        return {"workers": len(self._targets(group, zone)), "canary": 0, "activator": 0}
+
+    async def zone_runtime(self, group, zone):
+        return self._runtime(group, zone)
+
+    # §24.2: no builder unless RAMEN_BUILD_REGISTRY names a registry the local docker daemon can push to
+    def builder_available(self) -> bool:
+        return os.environ.get("RAMEN_BUILDER") == "1" and bool(os.environ.get("RAMEN_BUILD_REGISTRY", "").strip())
+
+    async def build_image(self, group, tag, dockerfile, files):
+        registry = os.environ.get("RAMEN_BUILD_REGISTRY", "").strip().rstrip("/")
+        if not registry:
+            raise no_builder()
+        return await asyncio.to_thread(docker_build, f"{registry}/worker:{tag}", dockerfile, files or {})
 
     async def detach_zone(self, group, zone):
         removed = []

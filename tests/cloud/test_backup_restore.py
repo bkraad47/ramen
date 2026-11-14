@@ -15,6 +15,7 @@ S_OK = "ok"
 @pytest.fixture(scope="module")
 def backup(admin, world, suffix) -> dict:
     """Two workers in the zone, then a backup in the bucket — the state the restore has to bring back."""
+    ok(admin.put("workers", {"max_count": 2}, group=GROUP, zone=ZONE))  # D55: a fresh zone's max is 1
     ok(admin.put("workers", {"count": 2}, group=GROUP, zone=ZONE))
     b = ok(admin.post("backups", {"target": "bucket"}), 201).json()
     assert b["target"] == "bucket" and b["path"].startswith(("gs://", "/", "s3://", "./")), b

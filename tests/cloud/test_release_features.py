@@ -631,7 +631,7 @@ def test_saving_the_telemetry_config_pushes_the_version_to_the_zone_without_a_de
             # the push rolls the zone's stable track; through the edge the old pods answer until they are gone
             poll(
                 lambda: m.discover()["_meta"][TELEMETRY_META]["version"] == after,
-                timeout=600,
+                timeout=float(E.env("RAMEN_JOB_TIMEOUT") or 600),  # a node per rollout on Autopilot: 15+ min
                 every=10,
                 what="discover names the pushed version",
             )

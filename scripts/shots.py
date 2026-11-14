@@ -48,7 +48,7 @@ PAGES = {
         "Config: the public address (base URI), authentication, the permission catalogue, service-account rules",
         True,
     ),
-    "zones.png": ("/zones", "Zones and workers: this cloud's zones with their groups, the workers per bound pair", True),
+    "zones.png": ("/zones", "Zones: this cloud's zones with their groups, the workers per bound pair", True),
     # 0.7.5: the parts of a page the identity, roles and autoscaling docs point at
     "config-roles.png": (
         "/config",

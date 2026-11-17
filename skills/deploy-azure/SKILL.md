@@ -59,7 +59,8 @@ About 30 minutes; Terraform about fifteen.
    ```
    `helm_set` carries the provider values, `RAMEN_PUBLIC_URL` (`https://<public_hostname>`), `builder.enabled=true`,
    `evals.clientId`, the engines and `redis.externalUrl`. `cluster.serviceCidr` (the AKS default range) is not in it
-   and is what gives each zone its `worker-egress` policy (Calico enforces it). `tls.require` is always true (D86).
+   and is what gives each zone its `worker-egress` policy (Calico enforces it). `tls.require` is always true (D86). With
+   `otel_collector` on, spans flow once **Config → Telemetry** points at it.
 5. **Wait.** `kubectl --context "$CTX" -n ramen-system rollout status deploy/console`;
    `kubectl --context "$CTX" -n ramen-system get certificate console` until `READY True` (a few minutes);
    `EDGE=$(tf output -raw public_hostname); curl -s https://$EDGE/readyz` → `"store":"azuretables"`.

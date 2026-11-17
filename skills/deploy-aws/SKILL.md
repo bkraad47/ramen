@@ -30,11 +30,18 @@ applies this path on a real account. Budget about 30 minutes, most of it the EKS
 1. **Credentials.** `aws login --profile ramen` (or `aws sso login`), `export AWS_PROFILE=ramen AWS_REGION=us-east-1`.
    Terraform's AWS provider (5.x) cannot read a `login_session` profile: give it a wrapper profile in
    `~/.aws/config` (`credential_process = aws configure export-credentials --profile ramen --format process`) and
-   `export AWS_PROFILE=<that profile>` for Terraform.
+   `export AWS_PROFILE=<that profile>` for Terraform. The wrapper does not outlive the `aws login` session (about an
+   hour; keys exported with `export-credentials` lapse sooner): log in again right before an apply (~25 min) or a
+   destroy (~15 min) so it cannot expire half-way.
 2. **Infrastructure.** `cd deploy/terraform/aws && cp terraform.tfvars.example terraform.tfvars` (region; defaults
    `node_count = 4`, `node_max = 5` `t3.small`; optional engines `otel_collector`, `evals_engine`,
-   `skillspector_engine`). `terraform init && terraform plan -out=ramen.plan`, summarise, `terraform apply ramen.plan`;
-   `cd ../../..`. If it fails before its Helm releases (Load Balancer Controller, Fluent Bit), apply again.
+   `skillspector_engine`). `terraform init && terraform plan -out="${TMPDIR:-/tmp}/ramen-aws.plan"`, summarise,
+   `terraform apply "${TMPDIR:-/tmp}/ramen-aws.plan"`; `cd ../../..`. If it fails before its Helm releases (Load
+   Balancer Controller, Fluent Bit), apply again. An apply that died while waiting on the node group leaves it
+   *tainted* though AWS shows it `ACTIVE`: check `aws eks describe-nodegroup --cluster-name ramen --nodegroup-name
+   ramen-podnet --query nodegroup.status`, then `terraform untaint aws_eks_node_group.ramen` (first
+   `terraform import aws_eks_node_group.ramen ramen:ramen-podnet` if it is not in the state) before applying again —
+   otherwise Terraform replaces it and the create fails on the existing name.
 3. **Images.** Default: the public images (flags below). Own build: push to the `ecr_console` / `ecr_worker`
    outputs (`docs/wiki/deploy-aws.md` step 2; from Colima/Lima use `crane push`).
    With your own registry, push SkillSpector too and set `skillspector.image` (the chart's default is
@@ -42,6 +49,7 @@ applies this path on a real account. Budget about 30 minutes, most of it the EKS
 4. **Console.**
    ```sh
    tf() { terraform -chdir=deploy/terraform/aws "$@"; }; REGION=$(tf output -raw region); V=$(cat VERSION)
+   export KUBECONFIG=$HOME/.kube/ramen-aws
    aws eks update-kubeconfig --name ramen --region $REGION; CTX=$(kubectl config current-context)
    helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
      --set provider=aws,region=$REGION --set-string aws.account=$(tf output -raw account) \
@@ -52,13 +60,16 @@ applies this path on a real account. Budget about 30 minutes, most of it the EKS
      --set cluster.serviceCidr=$(aws eks describe-cluster --name ramen --region $REGION --query cluster.kubernetesNetworkConfig.serviceIpv4Cidr --output text) \
      --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
      --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V \
+     --set redis.enabled=true \
      --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
      --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
      --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
    ```
    `network_set` gives the policies the ALB's public subnets (D89: pods live in their own subnets, so admitting the
    ALB admits no pod); without it the enforced policies cut the ALB off. `engines_set` carries the `gp3`
-   StorageClass the engines' PVCs need. `tls.require` is always true (D86).
+   StorageClass the engines' PVCs need. `tls.require` is always true (D86). Your own images: point `image.repository`
+   and `RAMEN_IMAGE_WORKER` at the ECR repos, pin them with `image.digest` / `image.workerDigest`, and set
+   `skillspector.image`. With `otel_collector` on, spans flow once **Config → Telemetry** points at it.
 5. **Wait, then the public URL.** `kubectl --context "$CTX" -n ramen-system rollout status deploy/console`; poll
    `kubectl --context "$CTX" -n ramen-system get ingress console` until ADDRESS is set (`ALB=<it>`; if never, read
    `kubectl -n kube-system logs deploy/aws-load-balancer-controller`).
@@ -66,8 +77,8 @@ applies this path on a real account. Budget about 30 minutes, most of it the EKS
    `curl --cacert ramen-lb.pem https://$ALB/readyz` → `"store":"dynamodb"`. Then
    `helm --kube-context "$CTX" upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set console.env.RAMEN_PUBLIC_URL=https://$ALB`
    (the OAuth issuer the workers trust).
-6. **LLM provider, only if the group needs one** (LLM rails in `mcp/guardrails.yaml`): the human adds it on
-   **Config → LLM providers**. Bedrock goes through the console's own role (`console_bedrock`, default on).
+6. **LLM provider, only if the group needs one** (LLM rails in `mcp/guardrails.yaml` — the demo repo has them): the
+   human adds it on **Config → LLM providers**. Bedrock goes through the console's own role (`console_bedrock`, default on).
 7. **First group**: [references/first-group.md](references/first-group.md) with `PROVIDER=aws`,
    `LOCATION=us-east-1a`, `CA=(--cacert ramen-lb.pem)`. Bridge clients need `--ca ramen-lb.pem`.
    A deploy stuck `Pending` with "Too many pods" or "Insufficient memory" needs nodes (`t3.small` holds 8 pods with

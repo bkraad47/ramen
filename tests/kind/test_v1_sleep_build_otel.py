@@ -250,6 +250,25 @@ def zone_state(admin, group, zone) -> str:
     return admin.get("workers", group=group, zone=zone).json().get("state", "awake")
 
 
+def awake_or_explain(admin, group, zone, ns, timeout: float = 300) -> None:
+    """The zone reads `awake` within `timeout` (the console's own stale-wake limit, sleeping.WAKE_STALE): the wake
+    finishes once every worker and the canary are Ready. On failure: the states seen, the pods, the worker record."""
+    seen: list[str] = []
+
+    def awake() -> bool:
+        seen.append(zone_state(admin, group, zone))
+        return seen[-1] == "awake"
+
+    try:
+        wait_for(awake, timeout, f"{zone} awake")
+    except AssertionError as e:
+        pods = [
+            (p["metadata"]["name"], (p.get("status") or {}).get("phase"), ready(p)) for p in kube.pods(ns, "app=worker")
+        ]
+        w = admin.get("workers", group=group, zone=zone).json()
+        raise AssertionError(f"{e}; states {sorted(set(seen))}, last {seen[-1:]}; pods {pods}; workers {w}") from None
+
+
 def audited(admin, action: str, zone: str, trigger: str, since: float) -> list[dict]:
     out = []
     for e in audit_entries(admin):
@@ -855,7 +874,7 @@ def test_sleep_by_hand_and_wake_by_a_grpc_call(admin, sleepy, zone_targets, grou
         except grpc.RpcError as e:
             raise AssertionError(f"the waking call failed after {time.monotonic() - t0:.0f}s: {e.code()}") from None
     assert text_of(result) == "grpc morning" and time.monotonic() - t0 <= WAKE_TIMEOUT + 5
-    wait_for(lambda: zone_state(admin, group, zone) == "awake", 180, f"{zone} awake")
+    awake_or_explain(admin, group, zone, ns)
     wait_for(lambda: not activator_pods(ns), 120, "the activator is gone")
     assert audited(admin, "workers.wake", zone, "call", began)
 

@@ -1,6 +1,7 @@
 """GCP cloud adapter (CONTRACTS §7): GKE namespaces per zone, GCS group bucket, Cloud Logging, Cloud Armor, IAM."""
 
 import asyncio
+import contextlib
 import contextvars
 import functools
 import inspect
@@ -199,6 +200,16 @@ class GcpCloud(Cloud):
     def _use(self, cluster) -> Kube:
         _CLUSTER.set(cluster)
         return self.kube_for(cluster)
+
+    @contextlib.contextmanager
+    def _on_home(self):
+        """Home-cluster work (evals / scan Jobs, image builds) inside a zone's task: the zone's cluster is current
+        again afterwards — a satellite deploy's stable roll after its gate went to home and got 403 (1.0.0, F-GCP1)."""
+        tok = _CLUSTER.set("home")
+        try:
+            yield self.kube_for("home")
+        finally:
+            _CLUSTER.reset(tok)
 
     # zone lifecycle -----------------------------------------------------
     def _render(self, group, zone, spec):
@@ -583,9 +594,9 @@ class GcpCloud(Cloud):
         return {"exit_code": exit_code, "log": log}
 
     async def _job(self, spec, kind, timeout_env) -> dict:
-        self._use("home")  # home cluster, like builds
         try:
-            return await asyncio.to_thread(self._run_job, spec, kind, timeout_env)
+            with self._on_home():  # home cluster, like builds
+                return await asyncio.to_thread(self._run_job, spec, kind, timeout_env)
         except (ApiError, RuntimeError):
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure, never with secret values
@@ -1046,7 +1057,6 @@ class GcpCloud(Cloud):
         """§24.2: `Job/ramen-build-<hash>` in ramen-system, context from a ConfigMap; §38.2: kaniko runs as the
         group's `ramen-build-<group>` and pushes to the group's repository, the answer is the image by digest.
         Raises `BuildError` (its text ends with the last 40 log lines) on a failed or timed-out build."""
-        self._use("home")  # §28.2: builds stay in the home cluster
         # 1.0.0: the group's build identity (and its federated credential / IAM binding) may have been created moments
         # ago and not yet propagated — Entra answers AADSTS70025/700213, GCP and AWS a permission denial. Retry such a
         # build for RAMEN_BUILD_IDENTITY_WAIT_SECS (default 300); any other failure fails at once.
@@ -1054,7 +1064,8 @@ class GcpCloud(Cloud):
         try:
             while True:
                 try:
-                    return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
+                    with self._on_home():  # §28.2: builds stay in the home cluster
+                        return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
                 except BuildError as e:
                     if not IDENTITY_PROPAGATION.search(f"{e} {e.log}") or time.monotonic() >= deadline:
                         raise

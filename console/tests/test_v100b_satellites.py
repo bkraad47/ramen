@@ -495,3 +495,40 @@ def test_the_console_identity_and_source_networks_reach_every_zone_namespace(mon
     # S6: a satellite zone's policy only, in its own rule (tests/test_sec_gaps_netpol.py)
     peers = with_console_sources([networkpolicy("ramen-demo-a", "demo", "a")], True)[0]["spec"]["ingress"][-1]["from"]
     assert {"ipBlock": {"cidr": "10.7.128.0/17"}} in peers and {"ipBlock": {"cidr": "10.42.0.0/16"}} in peers
+
+
+# --- 1.0.0 final pass (F-GCP1): an evals / scan Job or an image build runs on the home cluster, and the deploy that
+# started it goes on with the zone's cluster — the stable roll on a satellite went to home and got 403 -------------
+@pytest.mark.parametrize("make", [gcp_pair, aws_pair, azure_pair], ids=["gcp", "aws", "azure"])
+def test_a_home_job_or_build_inside_a_satellite_deploy_hands_the_cluster_back(make, grpc_worker, monkeypatch):
+    from tests.fakes_aws import aws_env
+
+    with aws_env():
+        _hands_back(make, grpc_worker, monkeypatch)
+
+
+def _hands_back(make, grpc_worker, monkeypatch):
+    cloud, fk, sat, zones = make(grpc_worker)
+    cloud.set_cluster_lookup(Lookup(sat, zones))
+    seen = []
+
+    def on_home(*_a, **_k):
+        seen.append(cloud.current_cluster)
+        return {"exit_code": 0, "log": "", "image": "r/w@sha256:x", "tag_ref": "r/w:t", "digest": "sha256:x"}
+
+    monkeypatch.setattr(cloud, "_run_job", on_home)
+    monkeypatch.setattr(cloud, "_build", on_home)
+    monkeypatch.setattr(cloud, "builder_available", lambda *a, **k: True, raising=False)
+
+    async def go():
+        await cloud._select("far")
+        assert cloud.current_cluster == sat
+        await cloud.run_evals_job("demo", "far", {})
+        assert cloud.current_cluster == sat, "after the evals Job"
+        await cloud.run_scan_job("demo", "far", {})
+        assert cloud.current_cluster == sat, "after the scan Job"
+        await cloud.build_image("demo", "t", "FROM x", {})
+        assert cloud.current_cluster == sat, "after the image build"
+
+    run(go())
+    assert seen == ["home", "home", "home"]

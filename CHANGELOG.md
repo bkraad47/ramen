@@ -3,6 +3,9 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+- **A deploy to a satellite zone finishes when evals or scans run.** The evals / SkillSpector Job (and an image build)
+  runs on the home cluster and left it current for the rest of the deploy, so the stable roll went to home and got 403;
+  the zone's cluster is now current again after it (GCP, AWS and Azure; found in the final GCP pass).
 - **A group's first image build waits for its new build identity.** On Azure the first deploy of a group failed with
   AADSTS70025 (the federated credential created moments before had not propagated); a build failing with an identity-
   propagation error is now retried every 30 s for `RAMEN_BUILD_IDENTITY_WAIT_SECS` (300).

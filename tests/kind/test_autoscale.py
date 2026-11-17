@@ -71,7 +71,9 @@ def test_rebalance_scales_the_loaded_zone_up_to_max_and_back_down_to_one(admin, 
         calls = gen.total
     assert calls > 0, "no load was generated"
     assert kube.replicas(hot_ns)[0] == MAX, f"{hot_ns} went past max_count {MAX}"
-    assert [d["action"] for d in ups].count("up") == MAX - 1, ups
+    # §35.1: a step up is proportional to the pressure (one or more workers at once, never past max_count)
+    steps = [d for d in ups if d["action"] == "up"]
+    assert 1 <= len(steps) <= MAX - 1 and all(d["from"] < d["to"] <= MAX for d in steps), ups
     assert kube.replicas(cold_ns)[0] == start_cold, f"{cold_ns} moved while only {hot} was loaded"
 
     downs = rebalance_until(admin, group, hot, lambda: kube.replicas(hot_ns)[0] == 1, DOWN_TIMEOUT)

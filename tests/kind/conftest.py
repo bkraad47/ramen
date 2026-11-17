@@ -14,9 +14,27 @@ import pytest
 
 from ramen_tests import env as E
 from ramen_tests import kube, state
-from ramen_tests.mcp_client import HttpError, HttpNode, Node
+from ramen_tests.mcp_client import HttpError, HttpNode, Node, env_policy, legacy_policy
 
 pytestmark = pytest.mark.kind
+
+
+def _carry_policy(cls) -> None:
+    """1.0.0 (§31.4a): the demo group requires its LLM configs, so every gated call names the accepted version — the
+    clients the kind proofs build directly carry the console's `/.well-known/ramen-policy` for their group and zone,
+    as `Node.from_env` clients do (a group that requires nothing gets nothing added)."""
+    real = cls.__init__
+
+    def init(self, *a, **kw):
+        real(self, *a, **kw)
+        if self.policy is None and self.group and self.zone:
+            self.policy = env_policy(self.group, self.zone)
+
+    cls.__init__ = init
+
+
+for _cls in (Node, HttpNode):
+    _carry_policy(_cls)
 
 
 def _pairs(value: str) -> dict[str, str]:
@@ -144,7 +162,8 @@ class Load:
                     if self._stop.is_set():
                         return
                     try:
-                        got = "result" in json.loads(n.call_raw(dict(self.BODY)) or b"{}")
+                        body = legacy_policy(json.loads(json.dumps(self.BODY)), "tools/call", n.policy)
+                        got = "result" in json.loads(n.call_raw(body) or b"{}")
                         with self._lock:
                             self.ok += 1 if got else 0
                             self.failed += 0 if got else 1

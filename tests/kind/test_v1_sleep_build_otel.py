@@ -436,7 +436,8 @@ def test_jaeger_holds_the_consoles_deploy_span(v1, jaeger, group, env_name):
     last = max(mine, key=lambda s: s["startTime"])
     assert tag(last, "ramen.outcome") == "ok", last["tags"]
     if "image" in v1:
-        assert v1["image"]["tag"] in str(tag(last, "ramen.image")), tag(last, "ramen.image")
+        ran = str(tag(last, "ramen.image"))  # §38.2: the deploy pins the digest, so the span names repo@sha256:…
+        assert ran == v1["image"]["ref"] or v1["image"]["tag"] in ran, (ran, v1["image"])
 
 
 def test_discover_tells_an_agent_where_to_send_its_telemetry(v1, zone_targets, group):

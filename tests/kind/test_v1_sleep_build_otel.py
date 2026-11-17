@@ -871,7 +871,8 @@ def test_a_call_through_the_edge_wakes_the_zone_and_is_answered(admin, sleepy, z
         try:
             result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
         except Exception as e:  # 1.0.0 known issue (1.0.1): keep the evidence of a runtime restart during the wake
-            raise AssertionError(f"the waking call failed after {time.monotonic() - t0:.0f}s: {e}\n{wake_logs(ns)}")
+            took = time.monotonic() - t0
+            raise AssertionError(f"the waking call failed after {took:.0f}s: {e}\n{wake_logs(ns)}") from e
     took = time.monotonic() - t0
     assert text_of(result) == "good morning", result
     assert took <= WAKE_TIMEOUT + 5, f"answered within the wake timeout: {took:.0f}s"

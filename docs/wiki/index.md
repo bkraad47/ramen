@@ -1,6 +1,6 @@
 # Wiki
 
-One page per subject. [Get started](../get-started.md) and [Deploy your first group](../first-group.md) are the short
+One page per subject. [Try the demo](../get-started.md) (a beginner's walkthrough on a laptop) and [Deploy your first group](../first-group.md) are the short
 paths; these are the full ones. [Roles](../roles.md) and the [threat model](../threat-model.md) sit beside them.
 
 | Page | What it covers |

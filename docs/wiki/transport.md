@@ -438,6 +438,22 @@ stdio bridge forwards each message unchanged, so a 2026-07-28 client behind it i
 This section is the single record; [How it works](../how-it-works.md), the [threat model](../threat-model.md) and
 the home page point here.
 
+- **1.0.0 release candidate, verified live on GKE, EKS and AKS** (2026-11-17/18, console 1.0.0b39–b42, worker
+  1.0.0b39, Phoenix, promptfoo and SkillSpector 2.13.4 on, demo `v1.0.0`; each cluster applied fresh from
+  Terraform):
+    - Smoke on each: a deploy of the demo, promptfoo evals 6 passed / 0 failed,
+      SkillSpector SAFE (score 7, one finding), the configs and guardrails policies, and `2 + 3 = 5` through the edge.
+    - The full verification set (evals, scans, configs, guardrails, access, the auth matrix, OTLP ingest): GKE 28
+      passed, EKS 28 passed, AKS 32 passed, and on each one failure — the same outdated test assertion (the promptfoo
+      port-forward the console names since D92), which passed once corrected.
+    - Load (`scripts/cloud_load.sh`, four scenarios): every call p95 under 1.5 s on all three (task round trips are timed apart); `scale` went 1 → 3 → 1
+      workers on GKE and AKS and 1 → 4 → 1 on EKS.
+    - Live checks: revocation of a key and of a person's tokens within seconds (D92), zone-named TLS leaves refused
+      for another zone, NetworkPolicies blocking a pod in another namespace (Calico on AKS, the VPC CNI agent on EKS,
+      GKE), PVCs bound, the MCP user's page with filled commands, bridge 1.0.0 from PyPI calling a tool; on GKE a
+      satellite zone deployed through the evals and scan gates and was woken from sleep through its own edge; on AKS
+      a Microsoft Entra ID sign-in with the groups lookup mapped to a role.
+    - Not run in this pass: the Google group → role mapping (still a fake only), `-32029` through the edge.
 - **1.0.0, verified locally** on real node and runtime processes (the cloud run is the next entry). What the
   local harness covers:
     - `tests/conformance/test_golden_regression.py`: every tool, resource and prompt of the fixture groups and the

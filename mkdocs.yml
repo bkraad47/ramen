@@ -57,7 +57,7 @@ plugins:
   - search
 nav:
   - Home: index.md
-  - Get started: get-started.md
+  - Try the demo: get-started.md
   - Deploy your first group: first-group.md
   - Concepts:
       - How it works: how-it-works.md

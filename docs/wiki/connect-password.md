@@ -23,7 +23,7 @@ This page covers only the account. The client commands are in [Connect a client 
 
 <figure markdown>
 ![The MCP user's page](../img/mcp-user.png){ .ramen-shot }
-<figcaption>What an MCP user sees after signing in: their groups, and the command to point a client at one.</figcaption>
+<figcaption>What an MCP user sees after signing in: their groups' deployed zones and the commands to point a client at one, filled in for this install.</figcaption>
 </figure>
 
 ## Then connect

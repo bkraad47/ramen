@@ -8,7 +8,8 @@ stack and on GCP, AWS or Azure; only the addresses and zone locations change. Yo
 skills, golden cases, guardrails, evals and LLM configs ([what each one is](wiki/mcp-features.md)).
 
 The screenshots come from `make shots`, a throwaway console seeded with fictional data whose evals and scan Jobs are
-canned; `phoenix-demo.png` and `promptfoo-run.png` are from the live GKE run.
+canned; `phoenix-demo.png` and `promptfoo-run.png` are from the live GKE run. New to Ramen? [Try the demo](get-started.md)
+on your laptop first.
 
 ## 1. Sign in
 
@@ -142,7 +143,8 @@ there when it is needed), read the files and accept.
 </figure>
 
 Then **Group → MCP auth keys → Generate key**. The key is shown once. The console pushes it to the group's running
-workers at once (1.0.0, D92), so no deploy is needed.
+workers (1.0.0, D92), so no deploy is needed; on a cluster the zone's workers restart to take it, so wait until calls
+are accepted in a row (15–60 s in the release runs) before you rely on it, or revoke the key it replaces.
 
 ## 8. Call a tool
 

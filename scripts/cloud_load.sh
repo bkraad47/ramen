@@ -4,7 +4,7 @@
 #
 # Standalone: export RAMEN_CONSOLE_URL RAMEN_NODE_URL RAMEN_ADMIN_EMAIL RAMEN_ADMIN_PASSWORD RAMEN_E2E_GROUP RAMEN_E2E_ENV
 # RAMEN_E2E_ZONE RAMEN_NODE_TLS (RAMEN_NODE_CA for an edge with its own certificate) and run it. Without
-# RAMEN_CONSOLE_URL it hands the run to the session's driver (RAMEN_CLOUD_DRIVER, default the scratchpad cloud2.sh):
+# RAMEN_CONSOLE_URL it hands the run to the session's driver (RAMEN_CLOUD_DRIVER, a release operator's cloud driver script):
 # `cloud2.sh <cloud> verify load …`, which exports the same variables from its <cloud>-final.env.
 # Knobs: RAMEN_LOAD_IDLE_SECS (scale-down wait; default here 480 — 4→1 is three −1 steps of a 120 s cooldown),
 # RAMEN_LOAD_FAST=1 (dry run), RAMEN_PHOENIX_URL (port-forward of svc/phoenix 6006 for the span delta; D92: with
@@ -14,14 +14,14 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CLOUD=${1:?cloud (gcp|aws|azure)}; shift
 MD=${RAMEN_LOAD_REPORT_MD:-$ROOT/../reports/test-status-v1.0.0c.md}
-DRIVER=${RAMEN_CLOUD_DRIVER:-/private/tmp/claude-501/-Users-bulkg-Documents-ramen-master-ramen-master/6b0cf735-d8c2-41db-a2d4-8cb8b3137aba/scratchpad/cloud2.sh}
+DRIVER=${RAMEN_CLOUD_DRIVER:-}
 TABLE=$(mktemp)
 export RAMEN_LOAD=1 RAMEN_LOAD_REPORT=$TABLE RAMEN_LOAD_IDLE_SECS=${RAMEN_LOAD_IDLE_SECS:-480}
 START=$(date +%s)
 if [ -n "${RAMEN_CONSOLE_URL:-}" ]; then
   URL=${RAMEN_CONSOLE_URL%/}; CA=${RAMEN_NODE_CA:-}
   (cd "$ROOT/tests" && uv run pytest -q -rs load "$@"); RC=$?
-elif [ -x "$DRIVER" ]; then
+elif [ -n "$DRIVER" ] && [ -x "$DRIVER" ]; then
   HOST=$(. "$(dirname "$DRIVER")/$CLOUD-final.env" 2>/dev/null; echo "${HOST:-}"); URL=https://$HOST
   CA="$(dirname "$DRIVER")/aws-lb.pem"; [ "$CLOUD" = aws ] && [ -f "$CA" ] || CA=""
   "$DRIVER" "$CLOUD" verify load "$@"; RC=$?

@@ -100,7 +100,7 @@ to "is it entailed?"; the reverse when the prompt carries `fakes.JAILBREAK_MARKE
 worker's rails reach it through the console's judge proxy (`RAMEN_CONSOLE_INTERNAL_URL=https://console:8443`). The
 real-node suites need no compose: `LocalConsole` starts one TLS judge per process (CA from `ramen_console.tls init`,
 trusted through `SSL_CERT_FILE`) and `seed_group` sets it as the org provider (`conformance/test_fake_judge.py`).
-`RAMEN_NODE_URL` is a gRPC target `host:port`: a worker directly (compose `localhost:8080`, h2c) or the cloud LB (`RAMEN_NODE_TLS=1`);
+`RAMEN_NODE_URL` is a gRPC target `host:port`: a worker directly (compose `localhost:8080`, TLS with the compose CA) or the cloud LB (`RAMEN_NODE_TLS=1`);
 there is no path — the LB routes on the `ramen-group`/`ramen-zone` metadata the harness always sends. `Admin/*` cases skip
 with a reason when `RAMEN_ADMIN_KEY` is unset or the worker's `RAMEN_ADMIN_CIDRS` exclude the caller (typical through an LB).
 Node-configuration guards (CIDR deny, blocked names, TLS, log file, NOT_SERVING) run in `test_mcp_node_local.py` on real

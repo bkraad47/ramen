@@ -101,6 +101,11 @@ helm --kube-context "$KCTX" upgrade --install ramen "$ROOT/deploy/helm/ramen" \
   --wait --timeout 5m
 k apply -f "$HERE/nodeports.yaml"
 k -n ramen-system rollout status deployment/console --timeout=300s
+# the CI judge (fake-llm.yaml): its leaf comes from the console (tls.extraServices), so it starts after the console
+k -n ramen-system create configmap fake-llm-code --from-file=fakes.py="$ROOT/tests/src/ramen_tests/fakes.py" \
+  --dry-run=client -o yaml | k apply -f -
+sed "s|__VERSION__|$VERSION|" "$HERE/fake-llm.yaml" | k apply -f -
+k -n ramen-system rollout status deployment/fake-llm --timeout=180s
 
 say "zone namespaces demo/a and demo/b"
 k apply -f "$HERE/zones.yaml"
@@ -121,5 +126,6 @@ fake GCS  http://localhost:18083/storage/v1/b/ramen-kind-groups/o
 registry  localhost:$REGISTRY_HOST_PORT (host) = $REGISTRY (cluster)   built images: $REGISTRY/ramen/groups/<group>/worker:b-<group>-<hash>
 jaeger    https://localhost:18086           OTLP in-cluster: https://jaeger.ramen-system:4318 (Config → Telemetry)
 redis     redis.ramen-system:6379 (TLS)     password in Secret ramen-redis (§33.4a); the zones' default store
+fake-llm  https://fake-llm.ramen-system:8443/v1  the CI LLM judge (§36.4); test.sh sets it as the org provider
 next      make kind-test
 TXT

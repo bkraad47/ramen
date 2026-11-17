@@ -3,6 +3,10 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+- **Chart: `tls.extraServices`.** More Services in the console's namespace can get an install-CA leaf (Secret
+  `ramen-tls-<name>`); the console's Role names them. kind uses it for its fake LLM judge.
+- **kind CI deploys the real 1.0.0 demo again.** Its nodes and zones are `us-central1-a`/`-b` (inside the console's home
+  region, §28.0), and `fake-llm`, the CI judge compose already runs, is the org's LLM provider (§36.4).
 - **A deploy to a satellite zone finishes when evals or scans run.** The evals / SkillSpector Job (and an image build)
   runs on the home cluster and left it current for the rest of the deploy, so the stable roll went to home and got 403;
   the zone's cluster is now current again after it (GCP, AWS and Azure; found in the final GCP pass).

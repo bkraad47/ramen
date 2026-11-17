@@ -26,6 +26,8 @@ export RAMEN_E2E_ZONE=${RAMEN_E2E_ZONE:-a}
 export RAMEN_ZONE_PROVIDER=${RAMEN_ZONE_PROVIDER:-gcp}
 export RAMEN_ZONE_REGION=${RAMEN_ZONE_REGION:-us-central1-a}
 export RAMEN_NODE_URL=${RAMEN_NODE_URL:-localhost:18081}
+# §36.4: the demo's guardrails need an LLM provider; the admin fixture sets the org's to the in-cluster fake judge
+export RAMEN_FAKE_LLM_URL=${RAMEN_FAKE_LLM_URL:-https://fake-llm.ramen-system.svc.cluster.local:8443/v1}
 export KIND_CLUSTER=${KIND_CLUSTER:-ramen}
 export RAMEN_NO_CLOUD=${RAMEN_NO_CLOUD:-iam,logs,armor}
 # the security matrix is run on its own by `make kind-test`, so its destructive auth-config case is safe here

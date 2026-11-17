@@ -110,6 +110,7 @@ console.env.RAMEN_AWS_VPC_CIDR, then networkPolicy.awsVpcCidr (both deprecated, 
 {{- if .Values.redis.enabled }}{{ $s = append $s "redis" }}{{ end -}}
 {{- if has (.Values.otel.collector | default "none") (list "phoenix" "jaeger") }}{{ $s = append $s .Values.otel.collector }}{{ end -}}
 {{- if eq (.Values.evals.engine | default "none") "promptfoo" }}{{ $s = append $s "promptfoo" }}{{ end -}}
+{{- range (.Values.tls.extraServices | default list) }}{{ $s = append $s . }}{{ end -}}
 {{ join "," $s }}
 {{- end -}}
 {{/* a PVC's class: the component's own (dict own root), else storage.className, else none (the cluster default) */}}

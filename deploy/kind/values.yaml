@@ -58,5 +58,7 @@ rbac:
 # on kind is the host → NodePort path, so up.sh passes the kind node and pod CIDRs as networkPolicy.edgeCidrs.
 redis:
   enabled: true
+tls:
+  extraServices: [fake-llm]          # fake-llm.yaml: the CI LLM judge gets an install-CA leaf
 cluster:
   serviceCidr: 10.96.0.0/16          # kind's default Service range

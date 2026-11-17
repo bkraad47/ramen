@@ -54,6 +54,7 @@ Two more kind-only deviations, both deliberate and both visible in the files:
 | File | What it is |
 |---|---|
 | `cluster.yaml` | 1 control-plane + 2 workers labelled `topology.kubernetes.io/zone=us-central1-a|us-central1-b`; host ports 18000 (console), 18081/18082 (zones a/b, gRPC over TLS with the install CA), 18083 (fake GCS) |
+| `fake-llm.yaml` | the CI LLM judge (`tests/src/ramen_tests/fakes.py`, the compose profile `ci` one) over TLS with an install-CA leaf (`tls.extraServices` in `values.yaml`); `test.sh` makes it the org's `openai` provider, so the real demo repo's LLM rails deploy with no key |
 | `crds-gke.yaml` | `HealthCheckPolicy` and `GCPBackendPolicy` CRD stubs, so the GKE manifests apply unchanged |
 | `fake-gcs.yaml` | the groups-bucket stand-in, bucket `ramen-kind-groups` |
 | `worker.Dockerfile` | release worker image + the two kind-only env defaults above |

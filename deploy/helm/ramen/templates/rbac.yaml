@@ -85,7 +85,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [ramen-tls-redis, ramen-tls-phoenix, ramen-tls-jaeger, ramen-tls-promptfoo]
+    resourceNames: [ramen-tls-redis, ramen-tls-phoenix, ramen-tls-jaeger, ramen-tls-promptfoo{{ range (.Values.tls.extraServices | default list) }}, ramen-tls-{{ . }}{{ end }}]
     verbs: [get, patch, update]
   - apiGroups: [""]
     resources: [configmaps]
@@ -96,7 +96,7 @@ rules:
     verbs: [create]
   - apiGroups: [apps]
     resources: [deployments]
-    resourceNames: [redis, phoenix, jaeger, promptfoo]
+    resourceNames: [redis, phoenix, jaeger, promptfoo{{ range (.Values.tls.extraServices | default list) }}, {{ . }}{{ end }}]
     verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

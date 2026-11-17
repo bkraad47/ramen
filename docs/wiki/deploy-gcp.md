@@ -69,8 +69,9 @@ and push it with `crane`.
 ## 4. The console
 
 ```sh
+export KUBECONFIG=~/.kube/ramen-gcp            # this install's own kubeconfig (teardown relies on it)
 gcloud container clusters get-credentials ramen --region $REGION
-HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
+EDGE=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
 CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
 EVALS=$(terraform -chdir=deploy/terraform/gcp output -raw evals_gsa)
 kubectl create ns ramen-system
@@ -81,12 +82,12 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   $(terraform -chdir=deploy/terraform/gcp output -raw builder_set) --set evals.gsa=$EVALS \
   $(terraform -chdir=deploy/terraform/gcp output -raw engines_set) \
   --set cluster.serviceCidr=$(gcloud container clusters describe ramen --region $REGION --format='value(servicesIpv4Cidr)') \
-  --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
+  --set console.env.RAMEN_PUBLIC_URL=https://$EDGE \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
-curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
+curl https://$EDGE/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
 ```
 
 The three values are generated on the command line and never printed. Read them back from the chart's Secret
@@ -116,8 +117,9 @@ little later still: poll, do not judge early.
 `skillspector_engine = "skillspector"` in `terraform.tfvars` (all `none` by default) become the chart's
 `otel.collector`, `evals.engine` and `skillspector.engine` through `engines_set`: a try-out trace UI
 ([Telemetry](telemetry.md)), the promptfoo server every evals run is shared with ([Evals](evals.md)), and
-SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without
-auth or an edge route (`kubectl port-forward`); turning one on changes only that engine's objects.
+SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without an
+edge route (`kubectl port-forward`), behind the install's engines sign-in (Secret `ramen-engines`, D92;
+[Trust the install CA](trust-ca.md)); turning one on changes only that engine's objects.
 
 ## 5. The first zone, group and deploy
 
@@ -132,8 +134,8 @@ certificate is publicly trusted, so there is no warning.
    `ramen-zone: a` headers, and starts the first canary deploy of `demo/prod` there (the job is on the group page;
    its log reads sync, canary, reload, smoke, stable).
 4. Accept the group's LLM configs at **/groups/demo/configs** (the demo repo ships `mcp/llm-config/`; without
-   that the key is refused with `403 configs not accepted`), then **open the group → MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next
-   deploy, so **Deploy (canary)** again after generating one.
+   that the key is refused with `403 configs not accepted`), then **open the group → MCP auth keys → Generate key**. The key is shown once; the console pushes it to the
+   running workers (1.0.0, D92), no deploy needed; the zone's workers roll to take it, so allow about a minute.
 
 <figure markdown>
 ![The group page on GCP](../img/group.png){ .ramen-shot }
@@ -143,7 +145,7 @@ certificate is publicly trusted, so there is no warning.
 The route takes a few minutes to appear (see Gotchas). Then:
 
 ```sh
-curl -s https://$HOSTNAME/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
+curl -s https://$EDGE/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
   -H 'ramen-group: demo' -H 'ramen-zone: a' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 ```
@@ -153,7 +155,7 @@ version (`-32028 configs required`): add `"_meta": {"io.ramen/configs": {"versio
 `/.well-known/ramen-policy?group=demo&zone=<zone>` ([Deploy your first group → Call a tool](../first-group.md#8-call-a-tool)). The bridge
 does this by itself.
 
-`RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$HOSTNAME admin@ramen.local '<password>' '<admin key>' $HOSTNAME:443`
+`RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$EDGE admin@ramen.local '<password>' '<admin key>' $EDGE:443`
 runs the same steps (zone `a`, environment `dev`) and prints PASS or FAIL for each. The last argument is the gRPC
 target; `RAMEN_NODE_TLS=1` makes it speak TLS to the load balancer (without it `grpcurl` dials port 443 in plaintext
 and fails). The script needs `grpcurl`.
@@ -308,8 +310,10 @@ Caveats:
 ## Teardown
 
 ```sh
-# in the console: delete the group, which removes its namespaces, service accounts, routes and Cloud Armor policy
-helm uninstall ramen -n ramen-system
+# in the console: delete the group, which removes its namespaces, service accounts, routes, Cloud Armor policy and image repository
+export KUBECONFIG=~/.kube/ramen-gcp            # the install's own kubeconfig, never a shared one
+CTX=$(kubectl config current-context)                # check it is this install's cluster first
+helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # releases the Gateway's forwarding rule and the static IP
 terraform -chdir=deploy/terraform/gcp destroy
 scripts/gcp_test_project.sh delete            # deletes the whole project
 ```
@@ -321,6 +325,12 @@ them. If you keep the project, delete them after the destroy (Secret Manager has
 ```sh
 gcloud secrets list --filter='labels.ramen=console' --format='value(name)' | xargs -n1 gcloud secrets delete --quiet
 ```
+
+Uninstall the chart before `terraform destroy`: the Gateway's forwarding rule holds the static IP, and the destroy
+stalls on it otherwise. Satellites go first (their clean-up order above). The
+[`deploy-gcp` skill](skills.md) lists every leftover by name with its `scripts/leftovers.sh`: console and group
+secrets, group image repositories `ramen-groups-<group>`, network endpoint groups and backend services `ramen-…`,
+Cloud Armor policies, service accounts and PVC disks.
 
 Run `terraform destroy` before deleting the project. If you skip it, the local `terraform.tfstate` still describes
 the deleted project, and the next `terraform apply` in this directory plans against it: move or delete the state
@@ -336,8 +346,9 @@ file first. `scripts/gcp_cost_check.sh` lists anything billable that is left.
   `ReplacePrefixMatch`. A rejected route stops every route on the Gateway from reconciling, the worker routes the
   console writes included, until it is fixed or deleted.
 - A dropped zone's namespace would sit in `Terminating` for ten minutes or more while the Gateway controller
-  garbage-collects its backend service. Since 1.0.0b the console clears the NEG finalizer itself, so the namespace
-  goes at once and the same zone can be created again straight away; the zone's network endpoint groups are
+  garbage-collects its backend service. Since 1.0.0b the console clears the NEG finalizer itself when a **zone** is
+  deleted, so that namespace goes at once and the same zone can be created again straight away (deleting a whole
+  **group** does not yet: its namespaces wait up to about fifteen minutes; 1.0.1); the zone's network endpoint groups are
   deleted in the background once the controller lets go of them (up to fifteen minutes; the console log says
   `network endpoint groups reaped`). If a backend service never clears, find it with
   `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete it by hand.

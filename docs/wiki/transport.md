@@ -68,9 +68,11 @@ inferred from timing, though its bytes cannot. A miss is gRPC
 `UNAUTHENTICATED`, and **an empty key set denies everyone** rather than letting everyone in. Error details never
 echo key material.
 
-Keys are generated per group in the console and written into the zone's config on deploy. Rotation is one
-action (the deploy rewrites the zone's Secret and rolls both Deployments), but it is not *instant* revocation: the old pods keep accepting the old key set until they finish draining, and the deploy job waits up
-to 180 s for that. Assume a revoked key still works for a few minutes.
+Keys are generated per group in the console and written into the zone's config on every deploy. Since 1.0.0 (D92)
+minting or revoking a key needs no deploy: the console pushes the group's key set and the revoked key's SHA-256
+(`RAMEN_REVOKED`) to every zone of the group through `Admin/Reload`, so a revoked key is refused within seconds. A
+zone the push cannot reach keeps accepting it until the background retry lands; the group page says **Revocation
+pending** ([API keys](api-keys.md), [contract §16.7](../CONTRACTS.md)).
 
 The access log logs every call with a `key_id`, a short unsalted hash of the presented key. It is not key
 material, but anyone who can read worker logs can hash a candidate key and see whether it appears. Worker logs are

@@ -1,52 +1,62 @@
 ---
 name: backup-restore
-description: Take a versioned JSON backup of Ramen console state (zones, users, groups, environments, workers, config) to a local path or the groups bucket, verify it, and restore it after a bad change or into a new console. Use before risky operations and for disaster recovery.
+description: Take a versioned JSON backup of a Ramen console's state (groups, zones, environments, worker records, users, configuration), check it, and restore it after a bad change, into a new console, or across stores and clouds — preview first, prune only with consent. Use before risky changes, for scheduled backups, and for disaster recovery or migration.
+license: BSD-3-Clause
+compatibility: Needs a reachable Ramen 1.0 console and a super-admin rmn_ key or session; curl and python3.
+metadata:
+  version: "1.0.0"
+  author: bkraad47
+  docs: https://bkraad47.github.io/ramen/wiki/backups/
 ---
 
 # Backup and restore
 
-Console state lives in Firestore/DynamoDB; backups are JSON exports tagged with the release version
-(`docs/CONTRACTS.md` §4a, F7.2). They **exclude secret values and password hashes**. Group code is in git + the
-bucket and needs no backup. Super-admin `rmn_` key required: `H='X-Ramen-Api-Key: $RMN'`, `U=$RAMEN_CONSOLE_URL/api/v1`.
+`U=$RAMEN_CONSOLE_URL/api/v1`, header `X-Ramen-Api-Key: $RMN` (super admin; backups, restore and audit are
+super-admin only). Source of truth: `docs/wiki/backups.md`, CONTRACTS §4a and §13.1.
+
+A backup holds six collections — `groups`, `zones`, `environments`, `workers`, `users`, `config` — tagged with
+`release_version`. **It holds no secrets and no keys of any kind**, not even their names: no secret records, MCP
+keys, API keys, password hashes or GitHub tokens. Group code lives in git and the bucket and needs no backup; deploy
+jobs are not included.
 
 ## Backup
-1. `curl -sk -H "$H" -H 'Content-Type: application/json' -X POST $U/backups -d '{"target":"bucket"}'` (`"local"` writes under `RAMEN_BACKUP_ROOT` on the console pod/container — only useful locally). → `201 {id, release_version}`.
-2. Download a copy: `curl -sk -H "$H" $U/backups/<id>/download -o ramen-backup-<release>-<date>.json`; store it where the team keeps recovery material (not in the repo).
-3. Check the file: valid JSON, `release_version` matches `curl -sk $CONSOLE/readyz | jq .version`, contains `zones`, `users`, `groups`, `environments`, and `grep -c 'rmk_\|rmn_\|password' file` is 0.
-4. Note the id in the change ticket.
+1. `curl -s -H "X-Ramen-Api-Key: $RMN" -H 'Content-Type: application/json' -X POST $U/backups -d '{"target":"bucket"}'`
+   → `201 {id, release_version, counts, path}`. `bucket` writes under the groups bucket's `_backups/`; `local` writes
+   under the console's `RAMEN_BACKUP_ROOT` (useful on the local stack only).
+2. Download: `curl -s -H "X-Ramen-Api-Key: $RMN" $U/backups/<id>/download -o ramen-backup-<release>-<date>.json`; keep
+   it with the team's recovery material, never in the repo.
+3. Check the file (V1 below) and note the id in the change ticket.
+Schedule it like any job (a daily GitHub Actions `curl` is enough); Ramen never prunes old backups.
 
 ## Restore
-Flags (all default false, CONTRACTS §13.1): `dry_run` plans without writing, `prune` deletes what the backup does
-not contain, `reconcile` re-applies the restored zones, `force` accepts a backup from a newer release.
-1. Confirm the target console runs the **same or newer** release than `release_version`. A newer backup is refused
-   with 409; `force:true` is a human decision, not a default.
-2. Back up the current state first (step Backup) and quote both ids in the ticket.
-3. Plan it: `curl -sk -H "$H" -H 'Content-Type: application/json' -X POST $U/backups/<id>/restore -d '{"dry_run":true}'`
-   → `{restored:{col:{created,updated,unchanged}}, extra, warnings}`. Read `extra` before considering `prune`: those
-   are the rows a prune would delete.
-4. Restore: `… -d '{"reconcile":true}'` (merge and re-apply the zones), or `… -d '{"prune":true,"reconcile":true}'`
-   when the intent is "make it look exactly like the backup". `config` is never pruned and the key or account running
-   the restore is never deleted — the response says so in `warnings`.
-5. Everyone else is signed out (every restored user's session epoch is bumped); the caller keeps their session. Users
-   the store had lost come back `login_disabled`: re-invite them or `POST $U/users/<id>/password`. The bootstrap super
-   admin is re-applied from env on the next console start.
-6. `orphans` in the response lists namespaces the cloud still runs that the backup never knew about. Nothing deletes
-   them for you: check each one, then `DELETE $U/groups/<g>` if it should not exist.
-7. Re-add secret values (if `RAMEN_SECRETS_BACKEND=store`), generate `rmn_` keys again, and deploy every environment
-   that changed. To restore into a **different** console, upload the JSON to `<bucket>/_backups/` under the same name
-   first (or copy it into `RAMEN_BACKUP_ROOT` with `target:"local"`).
+Flags, all default false: `dry_run` (plan only), `prune` (delete what the backup lacks; `config` and the caller are
+never pruned), `reconcile` (re-apply the restored zones in the cluster), `force` (accept a backup from a newer
+release — a human decision only).
+1. Take a backup of the current state first and quote both ids.
+2. Preview: `POST $U/backups/<id>/restore {"dry_run":true}` → `{restored:{<col>:{created,updated,unchanged}}, extra,
+   warnings}`. `extra` is what a prune would delete: show it to the human.
+3. Restore: `{"reconcile":true}` (merge, then re-apply zones), or `{"prune":true,"reconcile":true}` after the human
+   approved the `extra` list. A backup from a newer release answers 409: stop and ask.
+4. After it: everyone else is signed out (restored users' session epochs are bumped; the caller keeps a session).
+   Users the store had lost come back unable to sign in: reset their password (`POST $U/users/<id>/password`) or
+   let them use their identity provider. `orphans` lists namespaces the cloud runs that the backup never knew: never
+   delete them yourself; ask, then `DELETE $U/groups/<g>` if one should go.
+5. Into a **new** console or store: upload the file to the new console's `<bucket>/_backups/` (or its
+   `RAMEN_BACKUP_ROOT` with `target:"local"`) first; after the restore re-add every secret, mint new MCP and API keys
+   (`docs/wiki/api-keys.md`), re-enter the Config page's provider and identity secrets, and deploy every environment
+   (a restored group gets a new session secret on its next deploy; OAuth tokens verify only after it).
+
+Rehearse: restore the file into a throwaway console started with `RAMEN_STORE=memory` and check groups and people.
 
 ## Validate
-(read-only sub-agent; viewer or super-admin `rmn_` key; the backup file path)
-- V1 Backup file parses as JSON, has keys `release_version`, `zones`, `users`, `groups`, `environments`; no string starts with `rmk_`/`rmn_`; no `password_hash`/`value` fields.
-- V2 `GET $U/audit` contains `backup.create` (and `backup.restore` after a restore) with `ok:true`.
-- V3 After restore: `GET $U/groups` lists every group in the file; `GET $U/zones` every zone; `GET $U/groups/<g>/environments` every environment with the same `zones` lists.
-- V4 After restore + deploy: `GET $U/groups/<g>/zones/<z>/workers` → ≥1 live worker; one `tools/list` through the LB with a fresh `rmk_` key → 200.
-- V5 A `dry_run` restore of the same backup now reports `created: 0` for every collection, and `extra` holds only what was deliberately created after it.
-
-## Boundaries
-- Restore only on explicit request; it overwrites current state. Take a backup of the current state first (step Backup) and quote both ids.
-- Never try to extract secret values or hashes from the store to "complete" a backup.
-- If the backup's `release_version` is newer than the console's, stop and ask; never pass `force` on your own.
-- Never pass `prune` without showing the human the `dry_run` `extra` list first — it deletes groups, zones,
-  environments, workers and users.
+Read-only sub-agent with a super-admin key for the audit (V2) or a viewer key otherwise, and the backup file path.
+Reply `PASS` or `FAIL: <id> — <evidence>`.
+- V1 The file parses as JSON with `release_version`, `groups`, `zones`, `environments`, `workers`, `users`, `config`;
+  no string starts with `rmk_`, `rmn_`, `rjt_` or `enc:`; no `password_hash`, `session_secret`, `ca_key` or
+  `client_secret` / `api_key` field anywhere.
+- V2 `GET $U/audit` has `backup.create` (and `backup.restore` after a restore) with `ok: true`.
+- V3 After a restore: `GET $U/groups`, `GET $U/zones` and `GET $U/environments` list everything in the file.
+- V4 After restore and deploy: `GET $U/groups/<g>/zones/<z>/workers` → ≥ 1 live worker; a `tools/call` with a freshly
+  minted `rmk_` key through the edge answers.
+- V5 A `dry_run` of the same backup reports `created: 0` in every collection, and `extra` holds only what was made
+  after it on purpose.

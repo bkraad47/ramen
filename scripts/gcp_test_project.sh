@@ -2,7 +2,7 @@
 # Throwaway GCP project for cloud test runs (F12.2, D7).
 #   gcp_test_project.sh create   → creates ramen-test-<yymmdd>, links billing, enables APIs, prints PROJECT_ID
 #   gcp_test_project.sh delete   → deletes it (irreversible after the 30-day grace period)
-# Env: RAMEN_GCP_PROJECT (override id), RAMEN_BILLING_ACCOUNT (default Raads Billing), DRY_RUN=1 (print only).
+# Env: RAMEN_GCP_PROJECT (override id), RAMEN_BILLING_ACCOUNT (required for create), DRY_RUN=1 (print only).
 set -euo pipefail
 cmd="${1:?usage: gcp_test_project.sh create|delete}"
 STATE="${RAMEN_GCP_PROJECT_FILE:-$HOME/.ramen-test-project}"   # remembers the id so `delete` works on a later day

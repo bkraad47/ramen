@@ -5,7 +5,7 @@
 | **Group** | A team. One git repo at a ref, one bucket prefix, its secrets, keys, members and service-account rules. Deleting a group destroys its cloud resources. | Super admins create and delete; group admins run it |
 | **Environment** | A name shared by the groups it applies to: each at the git ref, deployed to the zones attached to it, with a per-group verbose flag, blocked-package list and last deploy result. | Super admins and group admins (for their groups) |
 | **Zone** | Where workers run. A Kubernetes namespace `ramen-<group>-<zone>` pinned to a cloud zone, with its own service account, load-balancer route and IP rules. `local` is the compose worker. Names the environments it serves; its groups follow. | Super admins, and group admins for their own environments |
-| **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins |
+| **Worker** | One pod: the Rust node and the Python runtime. Two tracks per zone, `worker` and `worker-canary`. | Count and max by admins, scaled by Ramen in between; size by super admins, or by group admins within the zone's allowed sizes |
 
 
 ## Environments across groups, zones attached to environments (1.0.0b)
@@ -158,7 +158,7 @@ Since 0.7.5 Ramen scales the workers itself, between **1** and a **max** per zon
 admins set under the zone's **Zone actions** on the group page (*Count (min 1)*, *Max (autoscale up to)*, **Scale workers**) or
 on the Environments, Zones and Workers page. There is no HPA any more. How it decides, the cooldowns and the load tests are on
 [Autoscaling](autoscaling.md). Super admins set the **size** (`s` 250m CPU and 512Mi, `m` 500m and 1Gi, `l` 1 CPU and 2Gi)
-and the sizes a zone allows.
+and the sizes a zone allows; a group admin may pick a size from that allowed list.
 
 ## Rebalance
 

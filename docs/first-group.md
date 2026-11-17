@@ -141,8 +141,8 @@ there when it is needed), read the files and accept.
 <figcaption>The group's LLM configs, shown verbatim with where each lands on a member's machine.</figcaption>
 </figure>
 
-Then **Group → MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next deploy, so
-press **Deploy (canary)** once more.
+Then **Group → MCP auth keys → Generate key**. The key is shown once. The console pushes it to the group's running
+workers at once (1.0.0, D92), so no deploy is needed.
 
 ## 8. Call a tool
 

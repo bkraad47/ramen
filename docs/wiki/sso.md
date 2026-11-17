@@ -118,8 +118,9 @@ that came from the provider. They do not touch the memberships an admin set on t
 - Removed from the Entra group: the provider's membership is gone at the next sign-in, sessions and refresh tokens
   end at once (epoch bump), and the person keeps only what an admin set by hand. Ramen learns of the removal only
   at a sign-in: until the person signs in again, an MCP client's refresh token keeps renewing for up to
-  `RAMEN_OAUTH_REFRESH_TTL` (30 days by default). To cut someone off now, delete the account on the Users page (the
-  next sign-in recreates it from the provider's current groups), or shorten that TTL.
+  `RAMEN_OAUTH_REFRESH_TTL` (30 days by default). To cut someone off now, **Sign out everywhere**
+  (`POST /api/v1/users/<id>/sign-out`, 1.0.0, D92: ends their sessions, refresh tokens and live access tokens; the
+  next sign-in applies the provider's current groups), delete the account on the Users page, or shorten that TTL.
 
 The Users page shows the source next to each membership: *via entra*, *set here*. People whose claim values match
 no rule and have no admin entry see only their own account page.

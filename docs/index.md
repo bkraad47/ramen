@@ -191,4 +191,5 @@ LLM configs.</p>
 **What is verified.** The 1.0.0c final runs passed on GKE, EKS and AKS (smoke and the policy, guardrail, access
 and security suites), with load tests on all three (every miss recorded) and two independent security passes on GKE; what each covered
 and what is open: [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not) and the
-[Threat model](threat-model.md#findings-and-their-status). Everything else is in the [wiki](wiki/index.md).
+[Threat model](threat-model.md#findings-and-their-status). Everything else is in the [wiki](wiki/index.md); to let a coding
+agent deploy and run it, install the [agent skills](wiki/skills.md).

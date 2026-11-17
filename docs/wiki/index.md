@@ -34,5 +34,5 @@ paths; these are the full ones. [Roles](../roles.md) and the [threat model](../t
 | [Configuration](configuration.md) | The config file, the public address (base URI) and path-prefix proxies, the state store, every variable that matters, restricting actions |
 
 Reference material sits one level deeper: [transport hop by hop](transport.md), the
-[threat model](../threat-model.md), the [cloud-ops skills](skills.md) and the
+[threat model](../threat-model.md), the [agent skills](skills.md) (install them to have an agent deploy and run Ramen) and the
 [interface contracts](../CONTRACTS.md).

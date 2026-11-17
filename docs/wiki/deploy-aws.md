@@ -12,7 +12,7 @@ together), the application load balancer ($0.0225 an hour plus its LCUs) and Clo
 
 ## Prerequisites
 
-`aws` CLI logged in with admin on the target account, `terraform` 1.6 or newer, `helm` 3.12 or newer, `kubectl`,
+`aws` CLI logged in with admin on the target account, `terraform` 1.6 or newer, `helm` 3.14 or newer (`--reset-then-reuse-values`), `kubectl`,
 `docker` with buildx, `grpcurl`, `uv`, `openssl`, `python3`. SSO sessions expire mid-apply; `terraform apply`
 resumes.
 
@@ -88,6 +88,7 @@ or push a new tag.
 
 ```sh
 REGION=$(terraform -chdir=deploy/terraform/aws output -raw region); ACCOUNT=$(terraform -chdir=deploy/terraform/aws output -raw account)
+export KUBECONFIG=~/.kube/ramen-aws            # this install's own kubeconfig (teardown relies on it)
 aws eks update-kubeconfig --name ramen --region $REGION
 CERT=$(terraform -chdir=deploy/terraform/aws output -raw certificate_arn)
 TABLE=$(terraform -chdir=deploy/terraform/aws output -raw dynamodb_table)
@@ -98,6 +99,7 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespac
   $(terraform -chdir=deploy/terraform/aws output -raw builder_set) --set evals.roleArn=$EVALS \
   $(terraform -chdir=deploy/terraform/aws output -raw engines_set) \
   $(terraform -chdir=deploy/terraform/aws output -raw network_set) \
+  --set cluster.serviceCidr=$(aws eks describe-cluster --name ramen --query cluster.kubernetesNetworkConfig.serviceIpv4Cidr --output text) \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
@@ -134,7 +136,8 @@ images by digest. `evals.roleArn` is the `ramen-evals` role the evals and scan J
 may write its own CloudWatch log streams and nothing else, so a group's promptfoo config cannot reach ECR, the
 bucket or any secret.
 
-`network_set` (`--set networkPolicy.awsAlbCidrs={10.42.0.0/24,10.42.1.0/24}`, the two public subnets) tells the
+`cluster.serviceCidr` (the cluster's Service range) lets the console write each zone's `worker-egress` NetworkPolicy;
+without it there is none (the chart's NOTES warn). `network_set` (`--set networkPolicy.awsAlbCidrs={10.42.0.0/24,10.42.1.0/24}`, the two public subnets) tells the
 NetworkPolicies where the ALB comes from: the chart's `ramen-system` policies and, through `RAMEN_AWS_ALB_CIDRS`,
 the console's per-zone `worker` policies. Pods take their addresses from two separate pod subnets (VPC CNI custom
 networking, D89), so admitting the ALB's subnets does not admit other pods. Terraform turns on the VPC CNI's
@@ -145,8 +148,9 @@ the VPC and the ALB is cut off ([IAM and network on AWS](iam-network-aws.md)).
 `skillspector_engine = "skillspector"` in `terraform.tfvars` (all `none` by default) become the chart's
 `otel.collector`, `evals.engine` and `skillspector.engine` through `engines_set`: a try-out trace UI
 ([Telemetry](telemetry.md)), the promptfoo server every evals run is shared with ([Evals](evals.md)), and
-SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without
-auth or an edge route (`kubectl port-forward`); turning one on changes only that engine's objects.
+SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without an
+edge route (`kubectl port-forward`), behind the install's engines sign-in (Secret `ramen-engines`, D92;
+[Trust the install CA](trust-ca.md)); turning one on changes only that engine's objects.
 
 `engines_set` also carries `storage.className=gp3,storage.createAwsGp3=true`: the chart adds an encrypted `gp3`
 StorageClass (EBS CSI, `WaitForFirstConsumer`, the cluster default) and binds its PVCs (promptfoo, Phoenix) to it.
@@ -389,8 +393,10 @@ Caveats:
 ## Teardown
 
 ```sh
-# in the console: delete the group first, which removes its namespaces, IAM roles and WAF IP sets
-helm uninstall ramen -n ramen-system                 # releases the load balancer and the PVCs' EBS volumes
+# in the console: delete the group first, which removes its namespaces, IAM roles, ECR repository and WAF IP sets
+export KUBECONFIG=~/.kube/ramen-aws            # the install's own kubeconfig, never a shared one
+CTX=$(kubectl config current-context)                # check it is this install's cluster first
+helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # releases the load balancer and the PVCs' EBS volumes
 terraform -chdir=deploy/terraform/aws destroy
 # the console's own secrets (config values, including copies of LLM provider keys) are not Terraform's:
 for id in $(aws secretsmanager list-secrets --region $REGION --filters Key=name,Values=ramen-console/ \
@@ -417,7 +423,9 @@ bash deploy/terraform/aws/scripts/eni_sweep.sh <vpc id> us-east-1 cluster-sg ram
 ```
 
 Check for leftovers: load balancers and target groups, EBS volumes tagged `app=ramen`, the WAF web ACL and IP sets, CloudWatch log groups, the
-ECR images, the ACM certificate, IAM roles under `/ramen/` and Secrets Manager entries under `ramen/` (group secrets; a deleted group removes its own) and `ramen-console/`. If the
+ECR images and group repositories `ramen/groups/<group>/worker`, the ACM certificate, IAM roles under `/ramen/` (zone roles, and build roles under
+`/ramen/build/`) and Secrets Manager entries under `ramen/` (group secrets; a deleted group removes its own) and `ramen-console/`. The
+[`deploy-aws` skill](skills.md)'s `scripts/leftovers.sh` lists all of them by name. If the
 console was down when a group was deleted, its per-zone roles survive: `aws iam list-roles --path-prefix /ramen/`
 lists them and `aws iam delete-role` removes each one once its inline policy is gone. The web ACL `ramen` is created by the console, not
 by Terraform, and is billed monthly:

@@ -20,7 +20,7 @@ Vault at cents. Tear it down when you are done.
 
 ## Prerequisites
 
-`az` logged in to the subscription, `terraform` 1.6 or newer, `helm` 3.12 or newer, `kubectl` (`az aks
+`az` logged in to the subscription, `terraform` 1.6 or newer, `helm` 3.14 or newer (`--reset-then-reuse-values`), `kubectl` (`az aks
 install-cli`), `docker` with buildx (or `crane`), `grpcurl`, `uv`, `openssl`, `python3`.
 
 A new subscription has the resource providers unregistered, and AKS fails with `MissingSubscriptionRegistration`
@@ -41,7 +41,7 @@ VMs list zones, and some refuse older sizes (`The VM size of Standard_B2s is not
 
 ```hcl
 location   = "westus2"
-node_size  = "Standard_B2s_v2"   # the default; the error message lists the sizes your subscription allows
+node_size  = "Standard_B2s_v2"   # the default; without quota for it try Standard_D2ls_v6 (the error lists what you may use)
 node_max   = 2                   # a 4-core quota fits two 2-core nodes
 node_zones = []                  # no availability zones for AKS in this subscription
 ```
@@ -92,7 +92,8 @@ command below.
 ## 3. The console
 
 ```sh
-$(terraform -chdir=deploy/terraform/azure output -raw kubeconfig_command)
+export KUBECONFIG=~/.kube/ramen-azure          # this install's own kubeconfig (teardown relies on it)
+$(terraform -chdir=deploy/terraform/azure output -raw kubeconfig_command) --file "$KUBECONFIG"
 kubectl create ns ramen-system
 kubectl label ns ramen-system ramen.io/routes=true      # the Gateway's 443 listener admits labelled namespaces only
 helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
@@ -101,9 +102,9 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
-HOSTNAME=$(terraform -chdir=deploy/terraform/azure output -raw public_hostname)
+EDGE=$(terraform -chdir=deploy/terraform/azure output -raw public_hostname)
 kubectl -n ramen-system get certificate console      # READY True within a minute or two
-curl https://$HOSTNAME/readyz                        # {"ok":true,"store":"azuretables","version":"…"}
+curl https://$EDGE/readyz                        # {"ok":true,"store":"azuretables","version":"…"}
 ```
 
 The three values are generated on the command line and never printed. Read them back from the chart's Secret
@@ -160,10 +161,10 @@ the Gateway matching the two headers. Each deploy also writes the zone's TLS lea
 the zone's own name `<group>.<zone>.worker.ramen.internal` (D86, D92).
 
 ```sh
-curl https://$HOSTNAME/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
+curl https://$EDGE/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
   -H 'ramen-group: demo' -H 'ramen-zone: eastus-1' -H 'Accept: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
-ramen-mcp-bridge --target $HOSTNAME:443 --tls --key "$RAMEN_MCP_KEY" --group demo --zone eastus-1
+ramen-mcp-bridge --target $EDGE:443 --tls --key "$RAMEN_MCP_KEY" --group demo --zone eastus-1
 ```
 
 The demo repo ships `mcp/llm-config/`, so the workers refuse a call that does not carry the accepted configs
@@ -172,7 +173,7 @@ version (`-32028 configs required`): add `"_meta": {"io.ramen/configs": {"versio
 does this by itself.
 
 `scripts/cloud_smoke.sh` does the whole step: `RAMEN_NODE_TLS=1 RAMEN_ZONE_PROVIDER=azure scripts/cloud_smoke.sh
-https://$HOSTNAME admin@ramen.local <password> <admin key> $HOSTNAME:443`.
+https://$EDGE admin@ramen.local <password> <admin key> $EDGE:443`.
 
 Sign-in through Microsoft Entra ID or Google works exactly as on the other clouds ([Entra ID and
 Workspace](sso.md)); register `https://<public_hostname>/auth/<provider>/callback` on the app.
@@ -301,7 +302,9 @@ Caveats:
 
 ```sh
 # in the console: delete the group, which removes its namespaces, identities, role assignments and routes
-helm uninstall ramen -n ramen-system
+export KUBECONFIG=~/.kube/ramen-azure            # the install's own kubeconfig, never a shared one
+CTX=$(kubectl config current-context)                # check it is this install's cluster first
+helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # the Envoy Service releases the static public IP
 terraform -chdir=deploy/terraform/azure destroy
 ```
 

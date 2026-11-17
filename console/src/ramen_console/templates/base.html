@@ -44,12 +44,6 @@ try{if(sessionStorage.getItem('ramenFlash')){sessionStorage.removeItem('ramenFla
 // W2: the dashboard's every-60s trigger is filtered by this flag, so the toggle really stops the polling.
 window.ramenAuto=true;
 function ramenToggleAuto(b){window.ramenAuto=!window.ramenAuto;b.textContent='Auto refresh: '+(window.ramenAuto?'on':'off')}
-// W1: a dropdown plus Add builds removable chips that post as repeated `groups` fields.
-function ramenAddGroup(b){const sel=b.parentElement.querySelector('#group-pick')||document.getElementById('group-pick');
- const chips=document.getElementById('group-chips');const v=sel.value;if(!v||chips.querySelector('[data-group="'+v+'"]'))return;
- const chip=document.createElement('span');chip.className='chip';chip.dataset.group=v;
- chip.innerHTML='<input type="hidden" name="groups">'+sel.options[sel.selectedIndex].text+' <button type="button" class="x">Remove</button>';
- chip.querySelector('input').value=v;chip.querySelector('button').onclick=()=>chip.remove();chips.appendChild(chip)}
 // W5: a rule is added by sending the current list plus the new row; the API takes the whole list.
 // N2: a dropdown plus Add builds removable chips; the form reads their ids back at submit time.
 function ramenAddNotify(b){const sel=document.getElementById('notify-pick');

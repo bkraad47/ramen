@@ -16,7 +16,7 @@ Open http://localhost:8000, sign in with the bootstrap super admin. API docs: `/
 
 ## Talking to workers (gRPC, CONTRACTS §11)
 
-Since v0.3.1 workers serve gRPC (h2c) on port 8080: `ramen.v1.Mcp/Call` (one JSON-RPC 2.0 message per call),
+Since v0.3.1 workers serve gRPC on port 8080 (TLS with the install CA since D86): `ramen.v1.Mcp/Call` (one JSON-RPC 2.0 message per call),
 `ramen.v1.Admin/{Reload,Metrics}` and `grpc.health.v1.Health`. The console never speaks HTTP to a node any more:
 `ramen_console.grpcclient` (`call`, `reload`, `metrics`, `health`; one channel per call, 10 s deadline, 4 MiB messages)
 is used by every cloud adapter for deploys (`Admin/Reload` → `Mcp/Call tools/list` smoke, or `Health/Check` when the
@@ -60,14 +60,14 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_STORE` | `memory` | `memory` / `firestore` / `dynamodb` |
 | `FIRESTORE_EMULATOR_HOST`, `RAMEN_GCP_PROJECT`, `RAMEN_FIRESTORE_PREFIX` | – / – / `ramen_` | Firestore adapter (emulator honored automatically) |
 | `RAMEN_DDB_TABLE`, `RAMEN_DDB_ENDPOINT` + AWS creds | `ramen` / – | DynamoDB adapter (single table, pk=collection, sk=id; created if missing) |
-| `RAMEN_CLOUD` | `local` | `local` / `gcp` / `aws` (`aws` implemented in v0.3.0 but untested on a real account) |
+| `RAMEN_CLOUD` | `local` | `local` / `gcp` / `aws` / `azure` (each verified on its cloud every release) |
 | `RAMEN_SECRETS_BACKEND` | `store` | `store` keeps secret values Fernet-encrypted in the store; `gcp` writes them to Secret Manager as `ramen-<group>-<env|all>-<zone|all>-<NAME>` (labels group/env/zone) and the store keeps only name + `sm://` ref; `aws` writes them to Secrets Manager as `ramen/<group>/<env|all>/<zone|all>/<NAME>` (tags) with an `asm://` ref. Deploy resolves refs into the worker Secret |
 | `RAMEN_GCP_PROJECT` | – | GCP project (Firestore, Secret Manager, Logging, Compute, IAM). Required for `RAMEN_CLOUD=gcp` / `RAMEN_SECRETS_BACKEND=gcp` |
 | `RAMEN_GCP_REGION` | `us-central1` | GKE cluster region |
 | `RAMEN_GROUPS_BUCKET` | `ramen-<project>-groups` | One GCS bucket, one prefix per group (`gs://<bucket>/<group>/`) |
 | `RAMEN_IMAGE_WORKER` | `ramen-worker:<console version>` | Worker image used in the per-zone Deployments (the Helm chart sets the registry path) |
 | `RAMEN_DEPLOY_TIMEOUT_SECS` | `300` | Max wait for a Deployment rollout during deploy |
-| `RAMEN_WORKER_TLS` / `RAMEN_WORKER_CA` / `_CERT` / `_KEY` | `0` / – | `1` = TLS to worker nodes (PEM paths; without `_CA` the system roots are used). Default h2c inside the cluster |
+| `RAMEN_WORKER_TLS` / `RAMEN_WORKER_CA` / `_CERT` / `_KEY` | on under `RAMEN_REQUIRE_TLS` / – | TLS to worker nodes, verified against the install CA as the zone's own name (D86, D92); the chart sets `RAMEN_REQUIRE_TLS=1`, and `0` is then refused at start. Unset without `RAMEN_REQUIRE_TLS` (tests) = h2c |
 | `RAMEN_WORKER_DEADLINE` | `10` | Per-call gRPC deadline (seconds) for Admin/Mcp/Health calls to workers |
 | `RAMEN_LOGIN_RATE_LIMIT` | `20` | POST attempts per IP per minute on login/reset/magic before 429 |
 | `RAMEN_OAUTH_<NAME>_ALLOW_UNVERIFIED` | `0` | accept SSO emails without `email_verified: true` (only for providers that never send the claim) |
@@ -75,7 +75,7 @@ Unit tests need no Docker: storage uses the memory adapter, moto for DynamoDB an
 | `RAMEN_GCP_FRESH_HTTP` | `1` | `0` lets googleapiclient reuse its shared (not thread-safe) transport instead of a per-call authorized `httplib2.Http` |
 | `GOOGLE_OAUTH_ACCESS_TOKEN` | – | Explicit OAuth token for the Google clients when no ADC is available (`gcloud auth print-access-token`); dev only |
 | `GOOGLE_CLOUD_PROJECT` | – | Firestore project fallback when `RAMEN_GCP_PROJECT` is unset (the compose stack sets it for the emulator) |
-| `RAMEN_AWS_REGION` | `AWS_REGION` or `us-east-1` | AWS region for `RAMEN_CLOUD=aws` / `RAMEN_SECRETS_BACKEND=aws` (untested on a real account, CONTRACTS §8) |
+| `RAMEN_AWS_REGION` | `AWS_REGION` or `us-east-1` | AWS region for `RAMEN_CLOUD=aws` / `RAMEN_SECRETS_BACKEND=aws` (CONTRACTS §8) |
 | `RAMEN_EKS_CLUSTER`, `RAMEN_ALB_GROUP` | `ramen` / `ramen` | EKS cluster name (OIDC issuer for worker IAM roles, Container Insights log group) and the ALB IngressGroup shared by console + workers |
 | `RAMEN_AWS_PERMISSIONS_BOUNDARY` | `arn:aws:iam::<account>:policy/ramen/ramen-worker-boundary` | Managed policy attached as permissions boundary to every worker role the console creates (the console role may only create roles carrying it, SEC-10). `-` disables |
 | `RAMEN_LOG_GROUP` | `/aws/containerinsights/<cluster>/application` | CloudWatch log group queried by `logs()` (Logs Insights, Fluent Bit) |
@@ -158,7 +158,7 @@ canary to 0, leaves `worker` untouched and is reported in the job with the strea
 `Admin/Metrics`;
 `logs()` = Cloud Logging (`k8s_container`, namespace filter, `pod_name` for one worker); `rebalance` = capacity
 scaler 0.5/1.0 on the `ramen-<group>` backend service NEG for that zone (no-op with a note when the backend service
-does not exist) + replicas ← HPA min; `ip-rules` = Cloud Armor policy `ramen-<group>` (allow CIDRs, deny rest; empty
+does not exist) + the autoscaling decision (§21.7, no HPA); `ip-rules` = Cloud Armor policy `ramen-<group>` (allow CIDRs, deny rest; empty
 list = allow all) attached to the backend service + `RAMEN_ALLOWED_CIDRS` in the deploy Secret; `service-account` =
 GSA with `storage.objectViewer` bound on the groups bucket (prefix condition) + `secretmanager.secretAccessor` bound
 on each `ramen-<group>-*` secret (new secrets are bound at creation) + Workload Identity binding, idempotent; nothing

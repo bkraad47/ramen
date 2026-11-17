@@ -98,6 +98,7 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespac
   $(terraform -chdir=deploy/terraform/aws output -raw builder_set) --set evals.roleArn=$EVALS \
   $(terraform -chdir=deploy/terraform/aws output -raw engines_set) \
   $(terraform -chdir=deploy/terraform/aws output -raw network_set) \
+  --set cluster.serviceCidr=$(aws eks describe-cluster --name ramen --query cluster.kubernetesNetworkConfig.serviceIpv4Cidr --output text) \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
@@ -134,7 +135,8 @@ images by digest. `evals.roleArn` is the `ramen-evals` role the evals and scan J
 may write its own CloudWatch log streams and nothing else, so a group's promptfoo config cannot reach ECR, the
 bucket or any secret.
 
-`network_set` (`--set networkPolicy.awsAlbCidrs={10.42.0.0/24,10.42.1.0/24}`, the two public subnets) tells the
+`cluster.serviceCidr` (the cluster's Service range) lets the console write each zone's `worker-egress` NetworkPolicy;
+without it there is none (the chart's NOTES warn). `network_set` (`--set networkPolicy.awsAlbCidrs={10.42.0.0/24,10.42.1.0/24}`, the two public subnets) tells the
 NetworkPolicies where the ALB comes from: the chart's `ramen-system` policies and, through `RAMEN_AWS_ALB_CIDRS`,
 the console's per-zone `worker` policies. Pods take their addresses from two separate pod subnets (VPC CNI custom
 networking, D89), so admitting the ALB's subnets does not admit other pods. Terraform turns on the VPC CNI's

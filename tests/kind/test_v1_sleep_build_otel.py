@@ -228,6 +228,12 @@ def worker_pods(ns: str) -> list[dict]:
     return kube.pods(ns, "app=worker,ramen.io/role=worker")
 
 
+def draining_worker_pods(ns: str) -> list[str]:
+    """Worker pods still terminating (`kube.pods` leaves them out): they serve until their drain ends."""
+    out = json.loads(kube.kubectl("get", "pods", "-n", ns, "-l", "app=worker,ramen.io/role=worker", "-o", "json"))
+    return [p["metadata"]["name"] for p in out.get("items", []) if p["metadata"].get("deletionTimestamp")]
+
+
 def activator_pods(ns: str) -> list[dict]:
     return kube.pods(ns, "app=worker,ramen.io/role=activator")
 
@@ -866,6 +872,9 @@ def test_sleep_by_hand_and_wake_by_a_grpc_call(admin, sleepy, zone_targets, grou
     assert r.status_code == 200, r.text
     assert zone_state(admin, group, zone) == "asleep"
     wait_for(lambda: not worker_pods(ns), 120, "the worker pods are gone")
+    # only the activator may take the call: a worker still draining (20 s) would answer it without a wake
+    wait_for(lambda: [p for p in activator_pods(ns) if ready(p)], 60, "a Ready activator pod")
+    wait_for(lambda: not draining_worker_pods(ns), 120, "the draining worker pods are gone")
     assert audited(admin, "workers.sleep", zone, "manual", began)
     t0 = time.monotonic()
     with grpc_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as n:

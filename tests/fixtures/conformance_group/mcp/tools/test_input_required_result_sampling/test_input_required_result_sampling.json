@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_sampling",
+  "description": "Ask the client's model one question (sampling/createMessage) and return its answer.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

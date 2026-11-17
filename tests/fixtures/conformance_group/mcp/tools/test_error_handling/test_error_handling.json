@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_error_handling",
+  "description": "Always fail, so the call is a tool error result (isError), never a JSON-RPC error (official suite: tools-call-error).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

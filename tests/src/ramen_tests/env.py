@@ -27,6 +27,31 @@ def tls_verify() -> bool:
     return env("RAMEN_TLS_INSECURE", "0") != "1"
 
 
+def install_ca() -> str | None:
+    """D86 (CONTRACTS §39): RAMEN_INSTALL_CA = the install CA bundle of a stack whose every hop is TLS (local compose:
+    deploy/local/.certs/ca/ca.crt; kind: ConfigMap ramen-ca, saved by deploy/kind/test.sh). Set, workers and the
+    console are dialled over TLS and verified against it."""
+    return env("RAMEN_INSTALL_CA") or None
+
+
+def console_verify() -> bool | str:
+    return install_ca() or tls_verify()
+
+
+def engines_auth() -> tuple[str, str] | None:
+    """D92 (CONTRACTS §39.7): Basic credentials for Jaeger's / promptfoo's TLS front — `RAMEN_ENGINES_PASSWORD` (Secret
+    ramen-engines `password`; compose: deploy/local/.env)."""
+    pw = env("RAMEN_ENGINES_PASSWORD")
+    return ("admin", pw) if pw else None
+
+
+def phoenix_headers() -> dict[str, str]:
+    """D92: Phoenix's REST/GraphQL take its admin secret as a bearer (`RAMEN_PHOENIX_ADMIN_SECRET`, Secret ramen-engines
+    `phoenix-admin-secret`)."""
+    s = env("RAMEN_PHOENIX_ADMIN_SECRET")
+    return {"authorization": f"Bearer {s}"} if s else {}
+
+
 def strip(url: str) -> str:
     return url.rstrip("/")
 
@@ -36,7 +61,7 @@ def node_target(url: str) -> tuple[str, bool]:
     `host:port`, `grpc://host:port` (plaintext), `grpcs://`/`https://` (TLS); RAMEN_NODE_TLS=1 forces TLS.
     Any path is dropped (routing is by metadata, not by path)."""
     u = strip(url).strip()
-    tls = env("RAMEN_NODE_TLS", "0") == "1"
+    tls = env("RAMEN_NODE_TLS", "0") == "1" or install_ca() is not None
     for scheme, is_tls in (("grpcs://", True), ("https://", True), ("grpc://", False), ("http://", False)):
         if u.startswith(scheme):
             u, tls = u[len(scheme) :], tls or is_tls
@@ -60,6 +85,31 @@ def node_http_url(url: str) -> str:
                 path = "/" + rest.split("/", 1)[1]
             break
     return f"{'https' if tls else 'http'}://{host}{path}"
+
+
+def edge_url(host: str) -> str:
+    """A cluster's edge hostname (CONTRACTS §28.1: a zone's `host`, the satellite's own address + certificate) → the
+    spelling `node_target`/`node_http_url` read. A bare host is TLS on 443, like every Ramen edge; a scheme is kept."""
+    h = strip(host).strip()
+    return h if "://" in h else f"https://{h}"
+
+
+def edge_ca(host: str | None) -> str | None:
+    """The PEM to verify an edge against: RAMEN_NODE_CA for the home edge (`host` None), RAMEN_SATELLITE_CA for a
+    satellite's (an EKS satellite's ALB serves its own certificate); None = the system store."""
+    return env("RAMEN_SATELLITE_CA") if host else (env("RAMEN_NODE_CA") or install_ca())
+
+
+def region_of(provider: str, zone_region: str) -> str:
+    """A zone's region: GCP `us-central1-a` → `us-central1`, AWS `ap-southeast-2a` → `ap-southeast-2`, Azure
+    `australiaeast-1` → `australiaeast` (console `regions.zone_name` read backwards)."""
+    if provider == "aws":
+        return zone_region.rstrip("abcdefghijklmnopqrstuvwxyz")
+    return zone_region.rsplit("-", 1)[0]
+
+
+def zone_in(provider: str, region: str, letter: str) -> str:
+    return f"{region}{letter}" if provider == "aws" else f"{region}-{letter}"
 
 
 def routing_metadata() -> list[tuple[str, str]]:

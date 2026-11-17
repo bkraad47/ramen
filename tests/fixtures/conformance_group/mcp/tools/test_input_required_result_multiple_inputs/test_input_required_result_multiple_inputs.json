@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_multiple_inputs",
+  "description": "Ask for an elicitation, a sampling answer and the client's roots in one round, with state.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

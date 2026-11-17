@@ -30,7 +30,7 @@ spec:
           volumeMounts: [{ name: data, mountPath: /data }]
       containers:
         - name: fake-gcs
-          image: fsouza/fake-gcs-server:1.52.2
+          image: fsouza/fake-gcs-server:1.52.3
           args:
             - -scheme=http
             - -port=4443

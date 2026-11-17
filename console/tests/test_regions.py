@@ -106,7 +106,7 @@ def test_a_deploy_refuses_a_zone_whose_region_was_blocked_later(demo, caplog):
     assert (
         demo.post("/api/v1/zones", json={"name": "west", "provider": "gcp", "region": "us-west1-b"}).status_code == 201
     )
-    demo.put("/api/v1/groups/demo/environments/prod", json={"zones": ["zone-a", "west"]})
+    assert demo.put("/api/v1/groups/demo/environments/prod", json={"zones": ["zone-a", "west"]}).status_code == 200
     demo.put(URL, json={"gcp": ["us-west1"]})
     with caplog.at_level(logging.WARNING, logger="ramen.deploy"):
         job = wait_job(
@@ -142,17 +142,17 @@ def test_zones_page_offers_only_this_consoles_cloud_minus_blocked_regions(demo, 
     demo.put(URL, json={"gcp": ["us-west1"], "aws": ["eu-west-1"], "azure": ["westeurope"]})
     monkeypatch.setenv("RAMEN_CLOUD", "gcp")
     page = demo.get("/zones").text
-    assert '<optgroup label="us-central1">' in page and "<option>us-central1-a</option>" in page
-    assert "us-west1-a" not in page and '<optgroup label="us-west1">' not in page
+    assert '<optgroup label="Americas">' in page and '<option value="us-central1-a">us-central1-a' in page  # 1.0.0c
+    assert "us-west1-a" not in page and ">us-west1 — no cluster" not in page  # blocked: hidden, not greyed
     assert "eu-west-2a" not in page and "eastus-1" not in page and 'placeholder="local"' not in page
     assert page.count('hx-post="/api/v1/zones"') == 1 and "Add GCP zone" in page
     assert "Blocked by a super admin: us-west1" in page and "eu-west-1" not in page
     monkeypatch.setenv("RAMEN_CLOUD", "aws")
     page = demo.get("/zones").text
-    assert "<option>eu-west-2a</option>" in page and "eu-west-1a" not in page and "us-central1-a" not in page
+    assert '<option value="eu-west-2a">' in page and "eu-west-1a" not in page and "us-central1-a" not in page
     monkeypatch.setenv("RAMEN_CLOUD", "azure")
     page = demo.get("/zones").text
-    assert "<option>eastus-1</option>" in page and "westeurope-1" not in page and "Add Azure zone" in page
+    assert '<option value="eastus-1">' in page and "westeurope-1" not in page and "Add Azure zone" in page
     monkeypatch.setenv("RAMEN_CLOUD", "local")
     page = demo.get("/zones").text
     assert 'name="region" placeholder="local"' in page and page.count('hx-post="/api/v1/zones"') == 1

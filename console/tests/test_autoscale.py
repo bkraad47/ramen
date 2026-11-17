@@ -5,17 +5,20 @@ import pytest
 from ramen_console import autoscale as a
 
 
-def wk(name, load="low", inflight=0, total=None, max_inflight=32):
+def wk(name, load="low", inflight=0, total=None, max_inflight=32, p50=None, n=None):
     m = {"inflight": inflight, "max_inflight": max_inflight}
     if total is not None:
         m["total"] = total
+    if p50 is not None:  # §35.1: a 1.0.0c node's latency fields (n = samples in the last 60 s)
+        m.update(latency_p50_ms=p50, latency_p95_ms=p50 * 2, latency_n=60 * 5 if n is None else n)
     return {"id": name, "load": load, "metrics": m if load != "down" else {}}
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     monkeypatch.setenv("RAMEN_AUTOSCALE_TARGET_RPS", "50")
-    monkeypatch.delenv("RAMEN_AUTOSCALE_COOLDOWN_SECS", raising=False)
+    for k in ("RAMEN_AUTOSCALE_COOLDOWN_SECS", "RAMEN_AUTOSCALE_P50_MS", "RAMEN_AUTOSCALE_MIN_RPS"):
+        monkeypatch.delenv(k, raising=False)
 
 
 def test_bounds_clamp_count_and_max():
@@ -158,3 +161,72 @@ def test_rate_sums_pods_and_ignores_missing_totals():
     st = {"totals": {"p1": [0, 990], "p2": [100, 995]}}
     _, rate, _ = a.observe([wk("p1", "low", 0, total=100), wk("p2", "low", 0, total=150), wk("p3")], st, 1000)
     assert rate == pytest.approx(10.0 + 10.0)
+
+
+# --- §35.1 (1.0.0c, D83): the p50 latency trigger --------------------------------------------------------------------
+
+
+def test_latency_bounds_come_from_the_environment(monkeypatch):
+    # §35.1 (D80 perf, 1.0.0): the default bound is 250 ms (was 500) — a new worker needs 1–2.5 min to take traffic
+    # behind a cloud LB, so the zone has to ask for it while the first worker still has headroom
+    assert a.p50_bound_ms() == 250 and a.min_rps() == 2
+    monkeypatch.setenv("RAMEN_AUTOSCALE_P50_MS", "400")
+    monkeypatch.setenv("RAMEN_AUTOSCALE_MIN_RPS", "0.5")
+    assert a.p50_bound_ms() == 400 and a.min_rps() == 0.5
+    assert a.limits() == {"target_rps": 50.0, "p50_ms": 400.0, "min_rps": 0.5}
+
+
+def test_latency_is_read_from_the_nodes_that_report_it_and_none_from_older_ones():
+    assert a.latency([wk("p1"), wk("p2", "down")]) == {"p50_ms": None, "p95_ms": None, "rps": None}
+    # the zone p50 is the sample-weighted mean of the pods' p50s; rps = samples of the last minute / 60
+    lat = a.latency([wk("p1", p50=100, n=60), wk("p2", p50=400, n=180), wk("p3")])
+    assert lat == {"p50_ms": 325.0, "p95_ms": 650.0, "rps": 4.0}
+    assert a.latency([wk("p1", p50=100, n=0)]) == {"p50_ms": None, "p95_ms": None, "rps": 0.0}
+
+
+def test_a_high_p50_with_enough_rps_scales_up_and_names_it():
+    d, st = a.decide([wk("p1", "low", 0, p50=300, n=300)], {}, {"count": 1, "max_count": 3}, 1000, 120)
+    assert d["action"] == "up" and d["to"] == 2 and d["reason"] == "p50 300 ms ≥ 250"
+    assert d["p50_ms"] == 300 and d["rps"] == 5.0 and st["last_change"] == 1000
+
+
+def test_the_p50_step_is_proportional_within_max():
+    d, _ = a.decide([wk("p1", "low", 0, p50=600, n=300)], {}, {"count": 1, "max_count": 5}, 1000, 120)
+    assert d["action"] == "up" and d["to"] == 3  # 600 / 250 → three workers' worth
+    d, _ = a.decide([wk("p1", "low", 0, p50=600, n=300)], {}, {"count": 1, "max_count": 2}, 1000, 120)
+    assert d["to"] == 2
+
+
+def test_a_high_p50_below_the_minimum_rps_never_scales_up():
+    """An idle zone's one slow call a minute is noise, not load."""
+    d, st = a.decide([wk("p1", "low", 0, p50=812, n=30)], {}, {"count": 1, "max_count": 3}, 1000, 120)
+    assert d["action"] == "hold" and d["reason"] == "p50 812 ms, rps 0.5 < 2: no step up"
+    assert st["low_streak"] == 0
+
+
+def test_a_high_rate_still_scales_up_when_the_p50_is_fine():
+    st = {"totals": {"p1": [0, 990]}}
+    d, _ = a.decide([wk("p1", "low", 0, total=600, p50=40)], st, {"count": 1, "max_count": 3}, 1000, 120)
+    assert d["action"] == "up" and d["reason"] == "60.0 calls/s per worker ≥ 50" and d["p50_ms"] == 40
+
+
+def test_down_needs_both_a_low_rate_and_a_p50_under_half_the_bound():
+    w = {"count": 2, "max_count": 2}
+    pods = lambda t, p50: [wk(f"p{i}", "low", 0, total=t, p50=p50, n=120) for i in range(2)]  # noqa: E731
+    _, st = a.decide(pods(0, 60), {}, w, 1000, 120)
+    d, st = a.decide(pods(1, 60), st, w, 1010, 120)
+    assert d["action"] == "hold" and d["reason"] == "p50 ok, rps low 1/3"
+    d, st = a.decide(pods(2, 150), st, w, 1020, 120)  # p50 over half the bound: not low, the streak restarts
+    assert d["action"] == "hold" and d["reason"] == "p50 150 ms ≥ 125, not low" and st["low_streak"] == 0
+    d, st = a.decide(pods(3, 60), st, w, 1030, 120)
+    assert d["reason"] == "p50 ok, rps low 1/3"
+    d, st = a.decide(pods(4, 60), st, w, 1040, 120)
+    assert d["reason"] == "p50 ok, rps low 2/3"
+    d, st = a.decide(pods(5, 60), st, w, 1050, 120)
+    assert d["action"] == "down" and d["to"] == 1 and d["reason"] == "p50 ok, low for 3 rebalances"
+
+
+def test_older_nodes_keep_the_rps_only_decisions():
+    st = {"totals": {"p1": [0, 990], "p2": [0, 990]}}
+    d, _ = a.decide([wk("p1", total=1), wk("p2", total=1)], st, {"count": 2, "max_count": 2}, 1000, 120)
+    assert d["reason"] == "low 1/3" and d["p50_ms"] is None and d["rps"] is None

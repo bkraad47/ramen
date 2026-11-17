@@ -2,6 +2,8 @@
 set -e
 PORT="${RAMEN_CONSOLE_PORT:-8000}"
 PY="$(command -v python || command -v python3)"
+# D86 (CONTRACTS §39.2): a TLS install — the install CA, the console's own leaf, uvicorn on TLS, renewed in place
+case "${RAMEN_REQUIRE_TLS:-}" in 1|true|TRUE) exec "$PY" -m ramen_console.serve ;; esac
 if [ "${RAMEN_TLS:-}" = "self" ]; then
   "$PY" -m ramen_console.tls /tmp/ramen-tls "${RAMEN_TLS_HOST:-localhost}" >/dev/null
   exec uvicorn ramen_console.app:app --host 0.0.0.0 --port "${RAMEN_TLS_PORT:-8443}" \

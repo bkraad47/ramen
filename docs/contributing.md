@@ -18,6 +18,11 @@ is asked in return.
    [architecture decisions](architecture/index.md#decisions) explain why things are the way they are.
 2. Tests first. Every component has a suite (`console/`, `runtime-py/`, `node-rs/`, `tests/` conformance) and CI
    runs them on Linux and Windows plus an end-to-end compose stack; the coverage gate is 90% per component.
+   The end-to-end run deploys the real demo repo, whose LLM guardrails need a model: CI starts the compose profile
+   `ci` (`docker compose -f deploy/local/docker-compose.yml --profile ci up -d --build`), a deterministic fake
+   OpenAI-compatible judge served over TLS as `https://fake-llm:8443/v1`, and the harness sets it as the org's LLM
+   provider when `RAMEN_FAKE_LLM_URL` is set. No key, no cost; never use it outside tests
+   ([tests/README.md](https://github.com/bkraad47/ramen/blob/main/tests/README.md)).
 3. Keep the contracts honest: a change to a surface in [CONTRACTS.md](CONTRACTS.md) updates the document in the
    same change, and a release note in `CHANGELOG.md` says what a user will notice.
 4. No secrets in logs, no `unsafe-eval` in the console, no new dependency without a reason in the PR.

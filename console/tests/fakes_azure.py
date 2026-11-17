@@ -133,6 +133,35 @@ class FakeArm:
 
                 raise ArmError(status, f"injected {status}")
         p = path.split("?")[0]
+        if "/Microsoft.ContainerService/managedClusters/" in p:  # §28.2: a satellite AKS cluster
+            name = p.split("/managedClusters/")[1].split("/")[0]
+            if method == "GET":
+                return {
+                    "name": name,
+                    "properties": {"oidcIssuerProfile": {"issuerURL": f"https://oidc.example/{name}/"}},
+                }
+            if method == "POST" and p.endswith("/listClusterUserCredential"):
+                kubeconfig = {
+                    "clusters": [
+                        {
+                            "name": name,
+                            "cluster": {
+                                "server": f"https://{name}.hcp.westeurope.azmk8s.io:443",
+                                "certificate-authority-data": base64.b64encode(
+                                    b"-----BEGIN CERTIFICATE-----\n"
+                                ).decode(),
+                            },
+                        }
+                    ],
+                    "users": [{"name": "u", "user": {"exec": {"command": "kubelogin"}}}],
+                }
+                import yaml
+
+                return {
+                    "kubeconfigs": [
+                        {"name": "clusterUser", "value": base64.b64encode(yaml.safe_dump(kubeconfig).encode()).decode()}
+                    ]
+                }
         if "/federatedIdentityCredentials/" in p:
             ident, fic = p.split("/userAssignedIdentities/")[1].split("/federatedIdentityCredentials/")
             if method == "PUT":
@@ -220,29 +249,62 @@ class _AzureCore:
         return getattr(self.base, name)
 
     def read_namespaced_pod_log(self, name, namespace, container=None, tail_lines=None, timestamps=False):
-        lines = self.s.pod_logs.get((namespace, name), [])
+        lines = self.s.pod_logs.get((namespace, name, container)) or self.s.pod_logs.get((namespace, name), [])
         return "\n".join(lines[-tail_lines:] if tail_lines else lines)
 
 
 class FakeAzureK8s(FakeK8s):
     def __init__(self):
         super().__init__()
-        self.pod_logs: dict[tuple, list[str]] = {}
 
     @property
     def core(self):
         return _AzureCore(self, super().core)
 
 
+class FakeAcr:
+    """§38.2: the ACR data plane the console uses — repository deletes, recorded per registry."""
+
+    def __init__(self):
+        self.repos: set[tuple[str, str]] = set()
+        self.deleted: list[tuple[str, str]] = []
+
+    def for_server(self, server):
+        acr = self
+
+        class _One:
+            def delete_repository(self, repository):
+                acr.deleted.append((server, repository))
+                if (server, repository) in acr.repos:
+                    acr.repos.discard((server, repository))
+                    return True
+                return False
+
+        return _One()
+
+
 class FakeAzureClients:
     """What AzureCloud reads from `self.c`: kubernetes views (FakeK8s) + Azure data/control planes."""
 
-    def __init__(self):
+    def __init__(self, home=None, resource_group=RG, name="ramen"):
         self.k8s = FakeAzureK8s()
-        self.arm = FakeArm()
-        self.container = FakeContainer()
-        self.vault = FakeVault()
-        self.tables = FakeTableService()
+        self.arm = home.arm if home else FakeArm()
+        self.container = home.container if home else FakeContainer()
+        self.vault = home.vault if home else FakeVault()
+        self.tables = home.tables if home else FakeTableService()
+        self.acr_plane = home.acr_plane if home else FakeAcr()
+        self.resource_group, self.name = resource_group, name
+        self.oidc_issuer = f"https://oidc.example/{name}/"  # a satellite's own issuer (§28.2)
+        self.satellites: dict[str, FakeAzureClients] = {}
+
+    def for_cluster(self, resource_group, name):
+        """A satellite's bundle: its own FakeAzureK8s; ARM, blob, vault and tables shared with the home one."""
+        if name not in self.satellites:
+            self.satellites[name] = FakeAzureClients(self, resource_group, name)
+        return self.satellites[name]
+
+    def acr(self, server):
+        return self.acr_plane.for_server(server)
 
     def __getattr__(self, name):  # core, apps, autoscaling, custom, rbac, networking, to_dict
         if name == "to_dict":

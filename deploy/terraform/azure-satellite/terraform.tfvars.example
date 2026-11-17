@@ -1,0 +1,16 @@
+# cp terraform.tfvars.example terraform.tfvars && edit. Same subscription as deploy/terraform/azure.
+subscription_id      = "00000000-0000-0000-0000-000000000000" # az account show --query id -o tsv
+location             = "westeurope"
+console_principal_id = "00000000-0000-0000-0000-000000000000" # az identity show -g <home rg> -n ramen-console --query principalId -o tsv
+# the home cluster's VNet (terraform -chdir=../azure output vnet_id / vnet_name / vnet_resource_group)
+home_vnet_id             = "/subscriptions/.../resourceGroups/MC_ramen-<suffix>_ramen_<location>/providers/Microsoft.Network/virtualNetworks/aks-vnet-<n>"
+home_vnet_name           = "aks-vnet-<n>"
+home_vnet_resource_group = "MC_ramen-<suffix>_ramen_<location>"
+# vnet_cidr      = "10.2.0.0/16"      # the satellite VNet; must not overlap the home VNet (10.224.0.0/12 by default)
+# acr_id         = "/subscriptions/.../resourceGroups/ramen-<suffix>/providers/Microsoft.ContainerRegistry/registries/ramen<suffix>"
+# resource_group = ""                 # existing group to reuse; empty = create ramen-<suffix>-<location>
+# suffix         = "demo1"
+# node_size      = "Standard_B2s_v2"
+# node_count     = 2
+# node_max       = 3
+# node_zones     = ["1"]              # [] where AKS offers no zones in this subscription

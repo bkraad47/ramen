@@ -1,0 +1,1 @@
+Up at ≥ {{ '%g' % limits.target_rps }} calls/s per worker or p50 ≥ {{ '%g' % limits.p50_ms }} ms (with ≥ {{ '%g' % limits.min_rps }} rps); down only when both are low (p50 under {{ '%g' % (limits.p50_ms / 2) }} ms) for 3 rebalances.

@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "caps_echo",
+  "description": "Answer with the client capabilities the runtime was handed, as JSON.",
+  "callable": "run",
+  "input": {}
+}

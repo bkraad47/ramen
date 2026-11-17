@@ -61,3 +61,48 @@ variable "cert_manager_chart_version" {
   type    = string
   default = "v1.21.2"
 }
+# §34.1 optional engines: chart values otel.collector / evals.engine / skillspector.engine, pasted into `helm install`
+# through `terraform output -raw engines_set`. Off by default; turning one on changes only that engine's objects.
+variable "otel_collector" {
+  type        = string
+  default     = "none"
+  description = "none | jaeger | phoenix: the chart's try-out trace collector in ramen-system (§24.3)."
+  validation {
+    condition     = contains(["none", "jaeger", "phoenix"], var.otel_collector)
+    error_message = "otel_collector: none, jaeger or phoenix."
+  }
+}
+variable "evals_engine" {
+  type        = string
+  default     = "none"
+  description = "none | promptfoo: the promptfoo server the evals Jobs share their runs with (§29.2)."
+  validation {
+    condition     = contains(["none", "promptfoo"], var.evals_engine)
+    error_message = "evals_engine: none or promptfoo."
+  }
+}
+variable "skillspector_engine" {
+  type        = string
+  default     = "none"
+  description = "none | skillspector: scan every group's skills as a Job after the evals (§30)."
+  validation {
+    condition     = contains(["none", "skillspector"], var.skillspector_engine)
+    error_message = "skillspector_engine: none or skillspector."
+  }
+}
+# 1.0.0c: Azure Managed Redis as the chart's shared Redis (`redis.externalUrl`); off = bring your own / `redis.enabled`
+variable "managed_redis" {
+  type        = bool
+  default     = true
+  description = "Create an Azure Managed Redis and hand its rediss:// URL to the chart (helm_set gains redis.externalUrl)."
+}
+variable "managed_redis_sku" {
+  type        = string
+  default     = "Balanced_B0"
+  description = "Managed Redis SKU; Balanced_B0 is the smallest (about USD 0.02/h without HA)."
+}
+variable "managed_redis_ha" {
+  type        = bool
+  default     = false
+  description = "High availability (two nodes). Off for a test install."
+}

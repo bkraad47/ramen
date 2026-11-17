@@ -11,6 +11,7 @@ dist/
 .env
 .env.bak
 deploy/kind/.secrets.env
+deploy/kind/.ca.crt
 .terraform/
 *.tfstate*
 .DS_Store
@@ -20,3 +21,7 @@ site/
 
 # dev mail backend output (deploy/local compose)
 deploy/local/.mail/
+deploy/local/.certs/
+
+# per-install inputs, never committed (the satellite modules too)
+deploy/terraform/*/terraform.tfvars

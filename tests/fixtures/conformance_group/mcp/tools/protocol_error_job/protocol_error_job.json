@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "protocol_error_job",
+  "description": "Fail at once. Ramen reports a tool failure as a completed task with an isError result; a task that ends 'failed' needs a lost worker.",
+  "callable": "run",
+  "input": {},
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

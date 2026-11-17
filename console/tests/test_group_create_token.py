@@ -56,12 +56,11 @@ def test_the_token_set_at_create_is_what_deploy_resolves(root):
     assert seen["token"] == "glpat-abc"
 
 
-def test_groups_page_create_form_is_collapsed_behind_a_button(root):
+def test_groups_page_create_form_is_open_by_default(root):  # 1.0.0c Phase 6: no toggle button
     page = root.get("/groups").text
-    assert "<details" in page and "Create group" in page
+    assert "<details" not in page and '<h2 style="margin-top:0">Create group</h2>' in page
     assert 'name="github_token"' in page
-    # the form fields (repo, ref, token) live inside the collapsed box, not floating in the open page body
-    details_start = page.index("<details")
-    details_end = page.index("</details>")
-    box = page[details_start:details_end]
+    # the form fields (repo, ref, token) live in the create card, under its heading
+    start = page.index('<h2 style="margin-top:0">Create group</h2>')
+    box = page[start : page.index("</form>", start)]
     assert 'name="repo_url"' in box and 'name="ref"' in box and 'name="github_token"' in box

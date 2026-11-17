@@ -1,0 +1,5 @@
+title: Histogram
+description: Bars from the chart_data result.
+csp:
+  connectDomains: []
+  resourceDomains: ["https://cdn.example"]

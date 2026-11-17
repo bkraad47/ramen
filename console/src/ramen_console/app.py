@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -11,9 +12,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, alerts, baseuri, rbac, roles, scheduler
+from . import __version__, alerts, baseuri, llm_providers, rbac, revocation, roles, scheduler, tls
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth import providers
@@ -38,21 +40,25 @@ from .security import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     redact_tokens_in_access_log,
+    remember_env_secrets,
     resolve_signing_secret,
+    scrub_all_logs,
 )
 from .services import Services
 from .storage import make_store
-from .web import api, api_admin, auth_routes, oauth_routes, pages
+from .storage.vaulted import VaultedStore
+from .web import api, api_admin, auth_routes, configs_routes, internal, llm_routes, oauth_routes, otlp_routes, pages
 
 HERE = Path(__file__).parent
 
 
 def _wants_html(request: Request) -> bool:
-    return not request.url.path.startswith("/api/")
+    return not request.url.path.startswith(("/api/", "/llm/"))  # §38.1: the judge proxy answers JSON like the API
 
 
 def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     apply_config()
+    tls.refuse_plaintext()  # D86 §39.4: a cloud install never starts on a plaintext hop
     logging.basicConfig(level=os.environ.get("RAMEN_LOG_LEVEL", "INFO"))
     ramen_logger = logging.getLogger("ramen")
     if alerts.HANDLER not in ramen_logger.handlers:
@@ -60,15 +66,27 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if isinstance(app.state.store, VaultedStore):
+            try:
+                await app.state.store.migrate()
+            except Exception as e:  # noqa: BLE001 - values stay encrypted in the store until the next start
+                logging.getLogger("ramen.vault").warning("vault: migration failed (%s)", type(e).__name__)
         await ensure_super_admin(app.state.store)
         await roles.load(app.state.store, force=True)  # D48: custom roles before any membership is read
         await providers.refresh(app.state, force=True)  # D50: identity providers from env + the store doc
         await app.state.accounts.migrate_memberships()  # 0.5.95 (D41) and 0.7.5 (§21.3) membership shapes
+        await app.state.services.migrate_zone_groups()  # §26.1: zones list the groups that used them
+        await app.state.services.migrate_zone_environments()  # §27.4: zones name the environments that use them
         app.state.mailer = await build_mailer(app.state.store)  # N2: layer any persisted config/smtp over env
+        await tls.startup(app.state.store, app.state.cloud)  # D86 §39: the install CA and the chart services' leaves
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),
             asyncio.create_task(alerts.run_forever(app.state.services, app.state)),
+            asyncio.create_task(app.state.revocation.retry_forever()),  # D92: zones a revocation has not reached
         ]
+        if tls.require_tls():
+            every = float(os.environ.get("RAMEN_TLS_RENEW_SECS", "3600"))
+            tasks.append(asyncio.create_task(tls.renew_forever(app.state.store, app.state.cloud, every)))
         try:
             yield
         finally:
@@ -83,10 +101,14 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.store = store or make_store()
     st.cloud = cloud or make_cloud()
     st.secrets = secrets or make_secrets_backend(st.cloud)
+    if st.secrets.kind != "store":  # 1.0.0: the console's own secrets live in the cloud's secret manager
+        st.store = VaultedStore(st.store, st.secrets)
     st.services = Services(st.store, st.cloud, st.secrets)
     st.accounts = Accounts(st.store)
+    st.revocation = revocation.Pusher(st.services)  # D92 (§16.7): revocations pushed to the group's workers at once
+    st.accounts.on_revoke = st.revocation.schedule
     st.backups = Backups(st.services)
-    st.jobs = Jobs()
+    st.jobs = Jobs(st.store)  # §26.2: deploy jobs live in the store
     signing_secret = resolve_signing_secret()
     st.signer = SessionSigner(signing_secret)
     st.tokens = Tokens(signing_secret)
@@ -97,8 +119,11 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     st.cookie_secure = os.environ.get("RAMEN_COOKIE_SECURE", "0") == "1"
     st.base_uri = baseuri.Cache()
     st.templates = Jinja2Templates(directory=str(HERE / "templates"), context_processors=[baseuri.context])
+    css = (HERE / "static" / "ramen.css").read_bytes()
     st.templates.env.globals.update(
         version=release_version(),
+        # the stylesheet URL carries a content hash: a redeploy with the same version must not serve a cached sheet
+        static_v=hashlib.sha256(css).hexdigest()[:10],
         tojson=json.dumps,
         csrf_token=csrf_token,
         role_label=role_label,
@@ -107,8 +132,15 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         cloud_label=lambda k: {"gcp": "GCP", "aws": "AWS", "azure": "Azure", "local": "Local"}.get(k, k),
         provider_label=lambda n: {"entra": "Microsoft Entra ID", "google": "Google"}.get(n, n),
         custom_roles=rbac.custom_roles,  # D48: templates list custom roles after the built-ins
+        # 1.0.0c: the one LLM providers card (a macro, so globals rather than context)
+        provider_labels=lambda: llm_providers.LABELS,
+        llm_fields=lambda: llm_providers.FIELDS,
         password_rule=f"Use {PASSWORD_RULE}.",
         u=baseuri.u,
+    )
+    # §31.1: a repo file inside <pre> stays verbatim — only what would end the element is escaped, quotes are kept
+    st.templates.env.filters["pre"] = lambda s: Markup(
+        str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     )
 
     app.add_middleware(CsrfMiddleware)  # inner: a rejected token is still audited by the outer middleware
@@ -120,9 +152,22 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
     app.add_middleware(SessionMiddleware, secret_key=signing_secret, https_only=st.cookie_secure)
     app.add_middleware(baseuri.BaseUriMiddleware)  # outermost: every layer below may build links
     redact_tokens_in_access_log()
+    scrub_all_logs()
+    remember_env_secrets()  # N1 (§34.3): e.g. the chart Redis password inside RAMEN_REDIS_URL
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     st.oauth_server = OAuthServer(st.services, st.accounts)
-    for router in (auth_routes.r, pages.r, api.r, api_admin.r, oauth_routes.r):
+    routers = (
+        auth_routes.r,
+        pages.r,
+        api.r,
+        api_admin.r,
+        internal.r,
+        oauth_routes.r,
+        configs_routes.r,
+        otlp_routes.r,
+        llm_routes.r,  # §38.1: the LLM judge proxy
+    )
+    for router in routers:
         app.include_router(router)
 
     @app.exception_handler(OAuthError)
@@ -138,7 +183,10 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
             return RedirectResponse(exc.headers["Location"], 303)
         if request.headers.get("HX-Request") == "true" or _wants_html(request):
             return PlainTextResponse(str(exc.detail), exc.status_code)
-        return JSONResponse({"detail": exc.detail}, exc.status_code, headers=exc.headers)
+        body = {"detail": exc.detail}
+        if (data := getattr(exc, "data", None)) is not None:  # §31.1: `403 configs not accepted` names the version
+            body["data"] = data
+        return JSONResponse(body, exc.status_code, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):

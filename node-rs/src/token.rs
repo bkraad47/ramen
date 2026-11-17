@@ -19,6 +19,11 @@ pub struct Principal {
     /// C10 (0.7.2): the person's role in the group of the scope (`group_admin`, `viewer`, `mcp_user`, or
     /// `super_admin`), as the console minted it. Absent on older tokens → the node treats them as `mcp_user`.
     pub role: Option<String>,
+    /// §24.3 (1.0.0): the person accepted the telemetry notice on the console's OAuth consent page (`tel: true`).
+    /// Only the boolean `true` counts.
+    pub tel: bool,
+    /// D92 (§16.7): `iat`, what a subject's revocation cut-off is compared with.
+    pub iat: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +115,8 @@ pub fn verify(
             .and_then(Value::as_str)
             .filter(|r| !r.is_empty())
             .map(String::from),
+        tel: claims.get("tel") == Some(&Value::Bool(true)),
+        iat: claims.get("iat").and_then(Value::as_u64),
     })
 }
 

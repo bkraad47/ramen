@@ -60,3 +60,37 @@ variable "alb_group" {
   default     = "ramen"
   description = "ALB IngressGroup name (helm value aws.albGroup / RAMEN_ALB_GROUP): scopes the console's WAF and ALB permissions."
 }
+# §34.1 optional engines: chart values otel.collector / evals.engine / skillspector.engine, pasted into `helm install`
+# through `terraform output -raw engines_set`. Off by default; turning one on changes only that engine's objects.
+variable "otel_collector" {
+  type        = string
+  default     = "none"
+  description = "none | jaeger | phoenix: the chart's try-out trace collector in ramen-system (§24.3)."
+  validation {
+    condition     = contains(["none", "jaeger", "phoenix"], var.otel_collector)
+    error_message = "otel_collector: none, jaeger or phoenix."
+  }
+}
+variable "evals_engine" {
+  type        = string
+  default     = "none"
+  description = "none | promptfoo: the promptfoo server the evals Jobs share their runs with (§29.2)."
+  validation {
+    condition     = contains(["none", "promptfoo"], var.evals_engine)
+    error_message = "evals_engine: none or promptfoo."
+  }
+}
+variable "skillspector_engine" {
+  type        = string
+  default     = "none"
+  description = "none | skillspector: scan every group's skills as a Job after the evals (§30)."
+  validation {
+    condition     = contains(["none", "skillspector"], var.skillspector_engine)
+    error_message = "skillspector_engine: none or skillspector."
+  }
+}
+variable "console_bedrock" {
+  type        = bool
+  default     = true
+  description = "Let the console role invoke Bedrock models: Bedrock-backed LLM rails go through the console's judge proxy (§38.1), workers never call a provider."
+}

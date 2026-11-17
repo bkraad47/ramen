@@ -1,0 +1,16 @@
+{
+  "type": "tool",
+  "name": "confirm_delete",
+  "description": "Ask the user to confirm deleting `filename` (elicitation), then report what was decided. Runs as a task.",
+  "callable": "run",
+  "input": {
+    "filename": {
+      "type": "string",
+      "description": "the file to delete"
+    }
+  },
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

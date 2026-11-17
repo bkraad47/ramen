@@ -24,9 +24,9 @@ code from the bucket. The console clones the repo, uploads it on deploy and talk
 </p>
 
 - A **group** is a tenant. It owns one git repo, one bucket prefix, its secrets, its keys and its members.
-- An **environment** binds the group to a git ref and to one or more zones.
-- A **zone** is a Kubernetes namespace pinned to a cloud zone, with its own cloud identity, load-balancer route
-  and IP rules. It runs a `worker` and a `worker-canary` Deployment, and Ramen scales `worker` between 1 and the
+- An **environment** is a name with a git ref, shared by the groups it lists (`prod` for `demo` and `analytics`).
+- A **zone** names the environments it serves; for each group that yields, it is a Kubernetes namespace
+  `ramen-<group>-<zone>` pinned to a cloud zone, with its own cloud identity, load-balancer route and IP rules. It runs a `worker` and a `worker-canary` Deployment, and Ramen scales `worker` between 1 and the
   zone's max.
 - A **worker** is one pod: the Rust node and, on demand, the Python runtime.
 
@@ -66,11 +66,18 @@ it is about to return, and secret values never reach it.
 | **Blocked tools** | Per environment and per zone, enforced by the node. A blocked name vanishes from `tools/list`. | [Groups, zones and regions](wiki/groups-zones.md#packages-per-zone) |
 | **Logs and audit** | One JSON line per MCP call naming the key or the person. Every console action with user, address and outcome. | [Users and access](wiki/users-access.md#audit-and-logs) |
 | **Backups** | JSON exports of the console state, tagged with the release, with preview and restore. | [Backups](wiki/backups.md) |
-| **Worker images** | A group can run a recorded worker image with its own system packages. | [The MCP repo](wiki/mcp-repo.md#heavy-dependencies) |
+| **Worker images** | A group runs the release image, one built on deploy from its `requirements.txt` (1.0), or a recorded image with its own system packages. | [Worker images](wiki/worker-images.md) |
 | **Agent skills** | `SKILL.md` playbooks for deploy, rotate, backup and scale. | [Cloud-ops skills](wiki/skills.md) |
+| **MCP 2026-07-28** | Tasks, multi round-trip requests, subscriptions, standard headers, `server/discover`, MCP Apps (`ui://`) and Skills over MCP (`skill://`), next to 2025-06-18 on one endpoint. | [MCP features](wiki/mcp-features.md) |
+| **Evals and scans** | The repo's promptfoo suite and an NVIDIA SkillSpector scan run on every deploy after the golden cases; report or gate per group. | [Evals](wiki/evals.md), [SkillSpector](wiki/skillspector.md) |
+| **Client policies** | Telemetry, evals, scans, LLM configs and guardrails each carry a version every call must hold (`-32024`…`-32029`), handed out on every sign-in path; LLM configs are accepted per person. | [LLM configs](wiki/llm-configs.md), [Threat model](threat-model.md#gates-on-every-call) |
+| **Telemetry by group and user** | One Phoenix project per group, `ramen.user` on every span, client telemetry through the console's OTLP ingest. | [Telemetry](wiki/telemetry.md) |
+| **LLM judge proxy** | LLM rails, evals and scans use providers the console holds; keys never reach a worker or a laptop. | [Configuration](wiki/configuration.md#the-llm-judge-proxy-100c-d85) |
+| **Satellite clusters** | Zones in other regions, driven by the one console. | [Groups, zones and regions](wiki/groups-zones.md#where-a-zone-can-be) |
 
 ## What is verified
 
-0.8.0 passed the release suite and the load tests live on GKE, EKS and AKS; what each run covered, and what is tested only:
+The 1.0.0c final runs passed on GKE, EKS and AKS, with load tests on all three and two security passes on GKE; what
+each run covered, and what is tested only:
 [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not). The boundaries:
 [Threat model](threat-model.md).

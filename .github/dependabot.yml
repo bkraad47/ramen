@@ -1,0 +1,39 @@
+# Weekly update PRs (to main; D42 still applies: they land on the next version branch, not straight into a release).
+# cooldown: a release must be 14 days old before a PR proposes it (the same rule the 1.0.0 base-image bump followed).
+version: 2
+updates:
+  # Base images are named by language minor + -slim (no patch, no digest: upstream security rebuilds land on the tag).
+  # Python stays on its minor line: D45 pins the runtime to 3.12 and the console runs 3.14. A Rust minor goes with
+  # rust-toolchain.toml and the CI toolchain lines, so it is bumped by hand; uv and other COPY --from images come here.
+  - package-ecosystem: docker
+    directories: ["/console", "/node-rs", "/deploy/docker/skillspector", "/glama"]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: rust
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      base-images: { patterns: ["*"] }
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: uv
+    directories: ["/console", "/runtime-py", "/tests", "/docs", "/mcpb"]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    groups:
+      python-minor-patch: { update-types: ["minor", "patch"] }
+
+  - package-ecosystem: cargo
+    directory: "/node-rs"
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    groups:
+      cargo-minor-patch: { update-types: ["minor", "patch"] }

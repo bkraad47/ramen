@@ -60,14 +60,16 @@ def key_boxes(url: str, host: str, group: str, zone: str) -> list[dict]:
     ]
 
 
-def oauth_boxes(url: str, host: str, group: str, zone: str, client_id: str) -> list[dict]:
+def oauth_boxes(url: str, host: str, group: str, zone: str, client_id: str, issuer: str | None = None) -> list[dict]:
+    """`url`/`host` reach the zone (a satellite's own, §28.1); `issuer` is the console that signs the person in."""
     name = f"ramen-{group}-{zone}"
+    issuer = issuer or url
     bridge_args = [
         "--target",
         f"{host}:443",
         "--tls",
         "--oauth",
-        url,
+        issuer,
         "--client-id",
         client_id,
         "--group",
@@ -92,7 +94,7 @@ def oauth_boxes(url: str, host: str, group: str, zone: str, client_id: str) -> l
         {
             "label": "Claude Code — through the bridge (stdio)",
             "text": f"claude mcp add {name} -- uvx ramen-mcp-bridge@latest --target {host}:443 --tls \\\n"
-            f"  --oauth {url} --client-id {client_id} --group {group} --zone {zone}",
+            f"  --oauth {issuer} --client-id {client_id} --group {group} --zone {zone}",
         },
         {
             "label": "Cursor, VS Code / GitHub Copilot, Claude Desktop — through the bridge",
@@ -106,18 +108,29 @@ def oauth_boxes(url: str, host: str, group: str, zone: str, client_id: str) -> l
 
 
 def build(
-    public_url: str, group: str, zones: list[str], clients: list[dict], auth, members: list[dict], configured: list[str]
+    public_url: str,
+    group: str,
+    zones: list[str],
+    clients: list[dict],
+    auth,
+    members: list[dict],
+    configured: list[str],
+    hosts: dict[str, str] | None = None,
 ) -> dict:
+    """`hosts`: zone → the satellite host serving it (§28.1); every other zone is reached at the console's host.
+    The OAuth issuer (`--oauth`, the token's scope) stays the console in every box."""
     host = urlsplit(public_url).hostname or "<host>"
     zones = zones or ["<zone>"]
     client = pick_client(clients)
     cid = client["client_id"] if client else "<client id>"
     per_zone = len(zones) > 1
+    hosts = {z: (hosts or {}).get(z) or host for z in zones}
 
     def boxes(make, *extra):
         out = []
         for z in zones:
-            for b in make(public_url, host, group, z, *extra):
+            url = public_url if hosts[z] == host else f"https://{hosts[z]}"
+            for b in make(url, hosts[z], group, z, *extra):
                 out.append({**b, "label": b["label"] + (f" · zone {z}" if per_zone else "")})
         return out
 
@@ -140,11 +153,12 @@ def build(
                 "source": auth.source_of(name),
                 "rules": rules,
                 "members": sum(1 for m in members if m["source"] == "idp" and m["provider"] == name),
-                "boxes": boxes(oauth_boxes, cid) if name in configured else [],
+                "boxes": boxes(oauth_boxes, cid, public_url) if name in configured else [],
             }
         )
     return {
         "host": host,
+        "hosts": hosts,
         "public_url": public_url,
         "zones": zones,
         "client": client,
@@ -153,6 +167,6 @@ def build(
         "magic": auth.magic_link,
         "manual_members": sum(1 for m in members if m["source"] == "manual"),
         "key_boxes": boxes(key_boxes),
-        "account_boxes": boxes(oauth_boxes, cid),
+        "account_boxes": boxes(oauth_boxes, cid, public_url),
         "providers": providers,
     }

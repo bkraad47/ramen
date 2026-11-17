@@ -1,0 +1,20 @@
+{
+  "type": "tool",
+  "name": "slow_compute",
+  "description": "Sleep `seconds` and answer with `label`. Runs as a task for clients that declare the tasks extension.",
+  "callable": "run",
+  "input": {
+    "seconds": {
+      "type": "integer",
+      "description": "how long to work, 0 for at once (capped at 120)"
+    },
+    "label": {
+      "type": "string",
+      "description": "echoed in the result"
+    }
+  },
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

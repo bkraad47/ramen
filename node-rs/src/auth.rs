@@ -35,6 +35,14 @@ pub fn check_key(cfg: &Config, md: &MetadataMap) -> Option<String> {
     hit.then(|| key_id(k))
 }
 
+/// §31.4a: the bearer is `RAMEN_EVALS_KEY` (constant-time). No key configured = never.
+pub fn check_evals_key(cfg: &Config, md: &MetadataMap) -> bool {
+    match (&cfg.evals_key, bearer(md)) {
+        (Some(want), Some(got)) => ct_eq(want, got),
+        _ => false,
+    }
+}
+
 pub fn check_admin(cfg: &Config, md: &MetadataMap) -> bool {
     match (&cfg.admin_key, meta(md, "x-ramen-admin-key")) {
         (Some(want), Some(got)) => ct_eq(want, got),
@@ -131,6 +139,33 @@ mod tests {
         assert!(check_key(&cfg(&[]), &h(&[("authorization", "Bearer k1")])).is_none());
         assert_eq!(key_id("k1").len(), 8);
         assert!(ct_eq("abc", "abc") && !ct_eq("abc", "abd") && !ct_eq("ab", "abc"));
+    }
+
+    #[test]
+    fn evals_key() {
+        let c = cfg(&[("RAMEN_MCP_KEYS", "k1"), ("RAMEN_EVALS_KEY", "rek_abc")]);
+        assert!(check_evals_key(
+            &c,
+            &h(&[("authorization", "Bearer rek_abc")])
+        ));
+        assert!(!check_evals_key(
+            &c,
+            &h(&[("authorization", "Bearer rek_abd")])
+        ));
+        assert!(!check_evals_key(&c, &h(&[("authorization", "Bearer k1")])));
+        assert!(!check_evals_key(
+            &c,
+            &h(&[("x-ramen-admin-key", "rek_abc")])
+        ));
+        assert!(check_key(&c, &h(&[("authorization", "Bearer rek_abc")])).is_none());
+        assert!(!check_evals_key(
+            &cfg(&[]),
+            &h(&[("authorization", "Bearer rek_abc")])
+        ));
+        assert!(!check_evals_key(
+            &cfg(&[("RAMEN_EVALS_KEY", "")]),
+            &h(&[("authorization", "Bearer ")])
+        ));
     }
 
     #[test]

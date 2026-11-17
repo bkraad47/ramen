@@ -21,6 +21,20 @@ class FakeK8s:
         self.pull_error = False
         self.calls: list[tuple] = []
         self.rbac_lag = 0  # zone-scoped reads still answering 403 after the RoleBinding exists (RBAC cache lag)
+        # §24.2 build Jobs: what a Job read reports once `job_polls` reads have said "running"; logs per (ns, pod[, c])
+        self.job_outcome = "succeeded"  # succeeded | failed | running
+        self.job_polls = 0
+        self.job_exit_code: int | None = None  # §29.2: the Job pod's container exit code when set
+        self.job_digest: str | None = None  # §38.2: what kaniko wrote to the build container's termination message
+        self.pod_logs: dict[tuple, list[str]] = {}
+        self.unready: set[str] = set()  # Deployment names that never get ready (while `ready` stays True)
+        # §24.1 P1: Endpoints reads that still leave the activator out (kube-proxy lag), and a zone role that cannot
+        # read Endpoints at all (pre-1.0.0a RoleBinding → 403)
+        self.endpoint_lag = 0
+        self.endpoints_forbidden = False
+        # D69: namespaces GKE holds Terminating on the NEG finalizer until it is cleared; `ns_stuck` never clears
+        self.ns_hold: set[str] = set()
+        self.ns_stuck: set[str] = set()
 
     # generic helpers ---------------------------------------------------
     def _key(self, kind, body, ns=None):
@@ -57,9 +71,16 @@ class FakeK8s:
         if k not in self.objs:
             raise FakeApiError(404, "NotFound")
         obj = copy.deepcopy(self.objs[k])
+        if kind == "Job":
+            if self.job_polls > 0:
+                self.job_polls -= 1
+            elif self.job_outcome == "succeeded":
+                obj["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+            elif self.job_outcome == "failed":
+                obj["status"] = {"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}
         if kind == "Deployment":
             reps = obj["spec"].get("replicas", 1)
-            ready = reps if self.ready else 0
+            ready = reps if self.ready and name not in self.unready else 0
             obj["status"] = {
                 "replicas": reps,
                 "readyReplicas": ready,
@@ -70,17 +91,42 @@ class FakeK8s:
             obj["metadata"]["generation"] = 1
         return obj
 
+    def _delete(self, kind, ns, name):
+        k = (kind, ns, name)
+        if k not in self.objs:
+            raise FakeApiError(404, "NotFound")
+        self.calls.append(("delete", *k))
+        del self.objs[k]
+
     def pods(self, ns, selector=""):
-        want = dict(kv.split("=") for kv in selector.split(",") if kv)
+        terms = [kv for kv in selector.split(",") if kv]
+        want = dict(kv.split("=") for kv in terms if "!=" not in kv)
+        unwanted = dict(kv.split("!=") for kv in terms if "!=" in kv)
         out = []
+        if "job-name" in want:  # one pod per live Job, as the Job controller labels it
+            if ("Job", ns, want["job-name"]) in self.objs:
+                status = {"phase": "Succeeded" if self.job_outcome == "succeeded" else "Failed"}
+                if self.job_exit_code is not None:
+                    status["containerStatuses"] = [{"state": {"terminated": {"exitCode": self.job_exit_code}}}]
+                if self.job_digest is not None:
+                    term = {"exitCode": 0, "message": self.job_digest}
+                    status["containerStatuses"] = [{"name": "build", "state": {"terminated": term}}]
+                out.append(
+                    {
+                        "metadata": {"name": f"{want['job-name']}-pod", "namespace": ns, "labels": dict(want)},
+                        "status": status,
+                    }
+                )
+            return out
         for (kind, n, name), d in self.objs.items():
             if kind != "Deployment" or n != ns:
                 continue
             labels = d["spec"]["template"]["metadata"]["labels"]
-            if any(labels.get(k) != v for k, v in want.items()):
+            if any(labels.get(k) != v for k, v in want.items()) or any(labels.get(k) == v for k, v in unwanted.items()):
                 continue
             for i in range(d["spec"].get("replicas", 1)):
-                ip = f"10.{1 if labels.get('ramen.io/track') == 'canary' else 2}.0.{i + 1}"
+                canary, act = labels.get("ramen.io/track") == "canary", labels.get("ramen.io/role") == "activator"
+                ip = f"10.{1 if canary else 3 if act else 2}.0.{i + 1}"
                 out.append(
                     {
                         "metadata": {"name": f"{name}-{i}", "labels": labels, "namespace": ns},
@@ -132,6 +178,28 @@ class FakeK8s:
     def rbac(self):
         return _Rbac(self)
 
+    @property
+    def batch(self):
+        return _Batch(self)
+
+
+class _Batch:
+    def __init__(self, s):
+        self.s = s
+
+    def create_namespaced_job(self, ns, body):
+        return self.s._create("Job", ns, body)
+
+    def patch_namespaced_job(self, name, ns, body):
+        return self.s._patch("Job", ns, name, body)
+
+    def read_namespaced_job(self, name, ns):
+        return self.s._read("Job", ns, name)
+
+    def delete_namespaced_job(self, name, ns, propagation_policy=None):
+        self.s.calls.append(("propagation", propagation_policy))
+        return self.s._delete("Job", ns, name)
+
 
 class _Rbac:
     def __init__(self, s):
@@ -151,6 +219,7 @@ PLURAL_KIND = {
     "httproutes": "HTTPRoute",
     "healthcheckpolicies": "HealthCheckPolicy",
     "securitypolicies": "SecurityPolicy",
+    "servicenetworkendpointgroups": "ServiceNetworkEndpointGroup",
 }
 
 
@@ -162,7 +231,11 @@ class _Custom:
         return self.s._create(body["kind"], ns, body)
 
     def patch_namespaced_custom_object(self, group, version, ns, plural, name, body):
-        return self.s._patch(body["kind"], ns, name, body)
+        return self.s._patch(body.get("kind") or PLURAL_KIND[plural], ns, name, body)
+
+    def list_namespaced_custom_object(self, group, version, ns, plural):
+        kind = PLURAL_KIND[plural]
+        return {"items": [copy.deepcopy(v) for (k, n, _), v in self.s.objs.items() if k == kind and n == ns]}
 
     def get_namespaced_custom_object(self, group, version, ns, plural, name):
         return self.s._read(PLURAL_KIND[plural], ns, name)
@@ -194,6 +267,17 @@ class _Core:
         return self.s._patch("Namespace", None, name, body)
 
     def read_namespace(self, name):
+        k = ("Namespace", None, name)
+        ns = self.s.objs.get(k)
+        if ns and (ns.get("status") or {}).get("phase") == "Terminating" and name not in self.s.ns_stuck:
+            held = [
+                v
+                for (kind, n, _), v in self.s.objs.items()
+                if kind == "ServiceNetworkEndpointGroup" and n == name and v["metadata"].get("finalizers")
+            ]
+            if not held:  # the finalizer is gone: GKE finishes the deletion
+                for kk in [kk for kk in self.s.objs if kk[1] == name or kk == k]:
+                    del self.s.objs[kk]
         return self.s._read("Namespace", None, name)
 
     def list_namespace(self, label_selector=""):
@@ -211,6 +295,11 @@ class _Core:
     def delete_namespace(self, name):
         if ("Namespace", None, name) not in self.s.objs:
             raise FakeApiError(404, "no ns")
+        if name in self.s.ns_hold or name in self.s.ns_stuck:  # D69: GKE keeps it Terminating on the NEG finalizer
+            for k in [k for k in self.s.objs if k[1] == name and k[0] != "ServiceNetworkEndpointGroup"]:
+                del self.s.objs[k]
+            self.s.objs[("Namespace", None, name)]["status"] = {"phase": "Terminating"}
+            return {}
         for k in [k for k in self.s.objs if k[1] == name or k == ("Namespace", None, name)]:
             del self.s.objs[k]
         return {}
@@ -220,6 +309,9 @@ class _Core:
 
     def patch_namespaced_service_account(self, name, ns, body):
         return self.s._patch("ServiceAccount", ns, name, body)
+
+    def delete_namespaced_service_account(self, name, ns):  # §38.2
+        return self.s._delete("ServiceAccount", ns, name)
 
     def read_namespaced_service_account(self, name, ns):
         return self.s._read("ServiceAccount", ns, name)
@@ -242,14 +334,57 @@ class _Core:
     def read_namespaced_secret(self, name, ns):
         return self.s._read("Secret", ns, name)
 
+    def delete_namespaced_secret(self, name, ns):
+        return self.s._delete("Secret", ns, name)
+
     def create_namespaced_service(self, ns, body):
         return self.s._create("Service", ns, body)
 
     def patch_namespaced_service(self, name, ns, body):
         return self.s._patch("Service", ns, name, body)
 
+    def read_namespaced_service(self, name, ns):
+        return self.s._read("Service", ns, name)
+
+    def create_namespaced_config_map(self, ns, body):
+        return self.s._create("ConfigMap", ns, body)
+
+    def patch_namespaced_config_map(self, name, ns, body):
+        return self.s._patch("ConfigMap", ns, name, body)
+
+    def read_namespaced_config_map(self, name, ns):
+        return self.s._read("ConfigMap", ns, name)
+
+    def delete_namespaced_config_map(self, name, ns):
+        return self.s._delete("ConfigMap", ns, name)
+
+    def read_namespaced_pod_log(self, name, namespace, container=None, tail_lines=None, timestamps=False):
+        lines = self.s.pod_logs.get((namespace, name, container)) or self.s.pod_logs.get((namespace, name), [])
+        return "\n".join(lines[-tail_lines:] if tail_lines else lines)
+
     def list_namespaced_pod(self, ns, label_selector=""):
         return {"items": self.s.pods(ns, label_selector)}
+
+    def read_namespaced_endpoints(self, name, ns):
+        """Ready addresses of the Service's selector: pods of ready Deployments, the activator's only once the
+        `endpoint_lag` reads are spent."""
+        self.s.calls.append(("endpoints", ns, name))
+        if self.s.endpoints_forbidden:
+            raise FakeApiError(403, "Forbidden")
+        svc = self.s.objs.get(("Service", ns, name))
+        if svc is None:
+            raise FakeApiError(404, "NotFound")
+        selector = ",".join(f"{k}={v}" for k, v in (svc["spec"].get("selector") or {}).items())
+        if self.s.endpoint_lag > 0:
+            self.s.endpoint_lag -= 1
+            selector += ",ramen.io/role!=activator"
+        pods = [
+            p
+            for p in self.s.pods(ns, selector)
+            if self.s.ready and p["metadata"]["name"].rsplit("-", 1)[0] not in self.s.unready
+        ]
+        addresses = [{"ip": p["status"]["podIP"], "targetRef": {"name": p["metadata"]["name"]}} for p in pods]
+        return {"metadata": {"name": name, "namespace": ns}, "subsets": [{"addresses": addresses}] if pods else []}
 
 
 class _Apps:
@@ -326,6 +461,10 @@ class FakeBucket:
         if self.iam_lag > 0:
             self.iam_lag -= 1
             raise FakeApiError(400, "Service account ramen-x-y@p1.iam.gserviceaccount.com does not exist.")
+        if getattr(self, "refuse_deleted", False) and any(
+            m.startswith("deleted:") for b in policy.bindings for m in b["members"]
+        ):
+            raise FakeApiError(400, "Deleted member 'x' is not deleted.")
         self.policy = NS(version=policy.version, bindings=copy.deepcopy(list(policy.bindings)))
         return self.policy
 
@@ -430,7 +569,7 @@ class FakeLogging:
 class FakeDiscovery:
     """handler(collection, method, kwargs) -> response; collections chain through SUB names."""
 
-    SUB = {"serviceAccounts"}
+    SUB = {"serviceAccounts", "locations", "repositories"}
 
     def __init__(self, handler):
         self.handler, self.calls = handler, []
@@ -477,8 +616,48 @@ def compute_handler(state):
             if method == "patch":
                 state["backend"].update(kw["body"])
                 return {"status": "DONE"}
+            if method == "delete":  # D69: GCE refuses while a URL map references it, or while "not ready"
+                if state.get("bs_not_ready_delete", 0) > 0:
+                    state["bs_not_ready_delete"] -= 1
+                    raise FakeApiError(400, f"The resource 'backendServices/{kw['backendService']}' is not ready")
+                if state.get("bs_in_use", 0) > 0:
+                    state["bs_in_use"] -= 1
+                    raise FakeApiError(
+                        400, "The backend_service resource 'gkegw1-x' is already being used by 'urlMaps/gkegw1-y'"
+                    )
+                state["backend"] = None
+                return {"status": "DONE"}
             if method == "setSecurityPolicy":
                 state["backend"]["securityPolicy"] = kw["body"].get("securityPolicy")
+                return {"status": "DONE"}
+        if coll == "networkEndpointGroups":  # D69: the zonal NEGs the Gateway leaves behind
+            negs = state.setdefault("negs", {})
+            if method == "aggregatedList":
+                name = kw.get("filter", "").split("=")[-1]
+                return {
+                    "items": {
+                        f"zones/{z}": {"networkEndpointGroups": [{"name": name}]} for z in sorted(negs.get(name, ()))
+                    }
+                }
+            if method == "delete":
+                used_by = (state.get("backend") or {}).get("backends") or []
+                if any(
+                    b.get("group", "").endswith(f"/networkEndpointGroups/{kw['networkEndpointGroup']}") for b in used_by
+                ):
+                    raise FakeApiError(
+                        400, "The network_endpoint_group resource is already being used by backendServices/x"
+                    )
+                if state.get("neg_in_use", 0) > 0:
+                    state["neg_in_use"] -= 1
+                    raise FakeApiError(
+                        400,
+                        f"The network_endpoint_group resource '{kw['networkEndpointGroup']}' is already being used by "
+                        "'projects/p1/global/backendServices/gkegw1-x'",
+                    )
+                zs = negs.get(kw["networkEndpointGroup"], set())
+                if kw["zone"] not in zs:
+                    raise FakeApiError(404, "neg not found")
+                zs.discard(kw["zone"])
                 return {"status": "DONE"}
         if coll == "securityPolicies":
             pols = state.setdefault("policies", {})
@@ -570,6 +749,77 @@ def iam_handler(state):
     return h
 
 
+def ar_handler(state, tags=None):
+    """§38.2 Artifact Registry: state {'repos': {name: repo}, 'policies': {name: policy}, 'fail': {method: status}}.
+    `conditioned` = the tag value the console's repository rights need (terraform's matchTag condition): get, update,
+    delete and IAM answer 403 on a repository without it (also on a missing one, as AR does), and `propagation` more
+    403s once it is bound. `page_size` pages `list`."""
+    tags = tags if tags is not None else {}
+
+    def h(coll, method, kw):
+        assert coll == "projects.locations.repositories", coll
+        repos, pols = state.setdefault("repos", {}), state.setdefault("policies", {})
+        if status := state.setdefault("fail", {}).pop(method, None):
+            raise FakeApiError(status, f"injected {method}")
+        if method == "list":
+            names = sorted(n for n in repos if n.startswith(kw["parent"] + "/"))
+            size, start = state.get("page_size", 1000), int(kw.get("pageToken") or 0)
+            page = {"repositories": [copy.deepcopy(repos[n]) for n in names[start : start + size]]}
+            if start + size < len(names):
+                page["nextPageToken"] = str(start + size)
+            return page
+        if method == "create":
+            name = f"{kw['parent']}/repositories/{kw['repositoryId']}"
+            if name in repos:
+                raise FakeApiError(409, "exists")
+            repos[name] = {"name": name, **copy.deepcopy(kw["body"])}
+            return {"name": f"{kw['parent']}/operations/op1", "done": False}
+        name = kw.get("name") or kw.get("resource")
+        if want := state.get("conditioned"):
+            if tags.setdefault("bindings", {}).get(f"//artifactregistry.googleapis.com/{name}") != want:
+                raise FakeApiError(403, f"Permission denied on {name} (condition)")
+            if state.get("propagation", 0) > 0:
+                state["propagation"] -= 1
+                raise FakeApiError(403, f"Permission denied on {name} (propagating)")
+        if method in ("get", "delete"):
+            if name not in repos:
+                raise FakeApiError(404, "no repository")
+            if method == "delete":
+                del repos[name]
+                pols.pop(name, None)
+                tags.setdefault("bindings", {}).pop(f"//artifactregistry.googleapis.com/{name}", None)
+                return {"done": True}
+            return copy.deepcopy(repos[name])
+        if method == "getIamPolicy":
+            return copy.deepcopy(pols.get(name, {"bindings": []}))
+        if method == "setIamPolicy":
+            pols[name] = copy.deepcopy(kw["body"]["policy"])
+            return kw["body"]["policy"]
+        raise AssertionError(f"unexpected {coll}.{method}")
+
+    return h
+
+
+def tags_handler(state):
+    """Resource Manager v3 TagBindings (regional endpoint): state {'bindings': {parent: value}, 'fail': [status, …]}.
+    One value per key: a second, different value on the same resource is refused (400), the same one is 409."""
+
+    def h(coll, method, kw):
+        assert (coll, method) == ("tagBindings", "create"), (coll, method)
+        if state.setdefault("fail", []):
+            raise FakeApiError(state["fail"].pop(0), "injected tagBindings.create")
+        body, bindings = kw["body"], state.setdefault("bindings", {})
+        value = body.get("tagValue") or body["tagValueNamespacedName"]
+        if (had := bindings.get(body["parent"])) is not None:
+            if had == value:
+                raise FakeApiError(409, "tag binding exists")
+            raise FakeApiError(400, "FAILED_PRECONDITION: a value of this key is already attached")
+        bindings[body["parent"]] = value
+        return {"name": "operations/rctb.1", "done": True}
+
+    return h
+
+
 class FakeClients:
     def __init__(self, k8s=None, storage=None, sm=None, logging=None, compute_state=None, iam_state=None):
         self.k8s = k8s or FakeK8s()
@@ -581,6 +831,30 @@ class FakeClients:
         self.compute = FakeDiscovery(compute_handler(self.compute_state))
         self.iam = FakeDiscovery(iam_handler(self.iam_state))
         self.crm = self.iam
+        self.ar_state: dict = {}
+        self.tag_state: dict = {"bindings": {}, "locations": []}
+        self.artifactregistry = FakeDiscovery(ar_handler(self.ar_state, self.tag_state))
+        self._tags = FakeDiscovery(tags_handler(self.tag_state))
+        self.satellites: dict[str, FakeClients] = {}  # §28.2: name → the second cluster's bundle
+
+    def tag_bindings(self, location):
+        if location not in self.tag_state["locations"]:
+            self.tag_state["locations"].append(location)
+        return self._tags
+
+    def tag_calls(self):
+        return self._tags.calls
+
+    def for_cluster(self, project, location, name):
+        """A satellite bundle: its own FakeK8s; the project-level planes (storage, SM, logging, compute, IAM) shared."""
+        if name not in self.satellites:
+            sat = FakeClients(
+                FakeK8s(), self.storage, self.secretmanager, self.logging, self.compute_state, self.iam_state
+            )
+            sat.compute, sat.iam, sat.crm = self.compute, self.iam, self.crm
+            sat.cluster = (project, location, name)
+            self.satellites[name] = sat
+        return self.satellites[name]
 
     @property
     def core(self):
@@ -605,6 +879,10 @@ class FakeClients:
     @property
     def rbac(self):
         return self.k8s.rbac
+
+    @property
+    def batch(self):
+        return self.k8s.batch
 
     def to_dict(self, obj):
         return obj

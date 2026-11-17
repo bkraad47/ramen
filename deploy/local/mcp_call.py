@@ -2,12 +2,14 @@
 
 Usage: python mcp_call.py URL_OR_TARGET [KEY] [tool] [json-args]
   (run inside runtime-py's venv: `uv run --all-extras` — the `mcp` SDK is a dev extra there)
-  http://host:port/mcp   → Streamable HTTP straight at the worker or its load balancer (the front door)
+  https://host:port/mcp  → Streamable HTTP straight at the worker or its load balancer (the front door); RAMEN_CA
+                           names a CA bundle to verify it with (local compose: deploy/local/.certs/ca/ca.crt)
   host:port              → the stdio bridge over gRPC (compatibility path; needs `ramen-mcp-bridge` on PATH:
                            `uv tool install ramen-mcp-bridge` — its own package since 0.5.7)
   KEY                    → the rmk_ key; `-` or omitted reads RAMEN_MCP_KEY, so the key never sits in a shell history
-Env: RAMEN_MCP_GROUP / RAMEN_MCP_ZONE (routing headers; default demo / local); for the bridge path
-     RAMEN_BRIDGE_TLS / RAMEN_BRIDGE_CA pass through and RAMEN_BRIDGE=<command> replaces `ramen-mcp-bridge`.
+Env: RAMEN_MCP_GROUP / RAMEN_MCP_ZONE (routing headers; default demo / local); RAMEN_MCP_META (JSON) goes into the
+     call's `_meta` (the group's required policy versions, CONTRACTS §29.3/§31.2); for the bridge path
+     RAMEN_BRIDGE_CA / RAMEN_BRIDGE_INSECURE pass through and RAMEN_BRIDGE=<command> replaces `ramen-mcp-bridge`.
 """
 
 import asyncio
@@ -29,7 +31,9 @@ def _routing() -> dict:
 async def _run(session: ClientSession, tool: str, args: dict) -> int:
     await session.initialize()
     print(f"tools: {[t.name for t in (await session.list_tools()).tools]}")
-    res = await session.call_tool(tool, args)
+    # §29.3/§31.2/§36.3: the required policy versions (`{"io.ramen/configs": {"version": …}, …}`) demo.sh read
+    meta = json.loads(os.environ.get("RAMEN_MCP_META") or "{}") or None
+    res = await session.call_tool(tool, args, meta=meta)
     text = " ".join(getattr(c, "text", "") for c in res.content)
     print(f"{tool}({json.dumps(args)}) -> {text}{'  [error]' if res.is_error else ''}")
     return 1 if res.is_error else 0
@@ -40,7 +44,8 @@ async def over_http(url: str, key: str, tool: str, args: dict) -> int:
     from mcp.client.streamable_http import streamable_http_client
 
     headers = {"Authorization": f"Bearer {key}", **_routing()}
-    async with httpx2.AsyncClient(headers=headers, timeout=60) as client:
+    verify = os.environ.get("RAMEN_CA") or True  # D86: the local CA, or the system roots for a public edge
+    async with httpx2.AsyncClient(headers=headers, timeout=60, verify=verify) as client:
         async with streamable_http_client(url, http_client=client) as streams:
             async with ClientSession(streams[0], streams[1]) as s:
                 return await _run(s, tool, args)

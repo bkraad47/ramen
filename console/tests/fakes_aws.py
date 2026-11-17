@@ -104,6 +104,19 @@ class FakeAwsClients:
         self.logs = logs or FakeLogsInsights()
         self.region = region
         self._boto: dict = {}
+        self.satellites: dict[str, FakeAwsClients] = {}  # §28.2: name → the second cluster's bundle
+
+    def for_cluster(self, region, name):
+        """A satellite's bundle: its own FakeK8s and Logs Insights, boto3 clients in its region (moto); the EKS
+        cluster exists there so `describe_cluster` (OIDC issuer) answers."""
+        if name not in self.satellites:
+            sat = FakeAwsClients(region=region)
+            sat.eks.create_cluster(
+                name=name, roleArn=f"arn:aws:iam::{ACCOUNT}:role/eks", resourcesVpcConfig={"subnetIds": ["subnet-1"]}
+            )
+            sat.name = name
+            self.satellites[name] = sat
+        return self.satellites[name]
 
     def seed(self, cluster="ramen", bucket=BUCKET):
         self.s3.create_bucket(Bucket=bucket)
@@ -143,6 +156,7 @@ class FakeAwsClients:
     iam = property(lambda self: self._client("iam"))
     sts = property(lambda self: self._client("sts"))
     eks = property(lambda self: self._client("eks"))
+    ecr = property(lambda self: self._client("ecr"))
 
     @property
     def core(self):
@@ -167,6 +181,10 @@ class FakeAwsClients:
     @property
     def rbac(self):
         return self.k8s.rbac
+
+    @property
+    def batch(self):
+        return self.k8s.batch
 
     def to_dict(self, obj):
         return obj

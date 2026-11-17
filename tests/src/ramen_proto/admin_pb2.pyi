@@ -5,8 +5,10 @@ from typing import ClassVar as _ClassVar, Optional as _Optional
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class ReloadRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
+    __slots__ = ("revoked",)
+    REVOKED_FIELD_NUMBER: _ClassVar[int]
+    revoked: bytes
+    def __init__(self, revoked: _Optional[bytes] = ...) -> None: ...
 
 class LoadResult(_message.Message):
     __slots__ = ("json",)

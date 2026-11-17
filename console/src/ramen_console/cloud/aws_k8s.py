@@ -18,10 +18,13 @@ from .gcp_k8s import (
     PORT_NAME,
     Kube,
     _deployment,
+    direct_service,
+    ensure_direct,
     helm_available,
     networkpolicy,
     normalize_size,
     ns_name,
+    with_egress,
 )
 
 __all__ = [
@@ -154,6 +157,14 @@ def _service(ns, name, track, labels) -> dict:
     }
 
 
+def aws_alb_cidrs() -> list[str]:
+    """The subnets whose ALBs reach worker pods (S6b, D89): `RAMEN_AWS_ALB_CIDRS` (chart `networkPolicy.awsAlbCidrs`),
+    comma separated — the home public subnets, plus each satellite's. Never a pod subnet, so another pod is not
+    admitted. `RAMEN_AWS_VPC_CIDR` (whole VPCs, deprecated) is read when it is absent."""
+    raw = os.environ.get("RAMEN_AWS_ALB_CIDRS") or os.environ.get("RAMEN_AWS_VPC_CIDR") or "10.0.0.0/16"
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
 def manifests(
     group, zone, spec, image, bucket_uri, role_arn=None, alb_group="ramen", stable=100, canary=0
 ) -> list[dict]:
@@ -171,16 +182,18 @@ def manifests(
         _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_proxy_hops=1)
         for name, track in (("worker", "stable"), ("worker-canary", "canary"))
     ]
-    return [
+    docs = [
         {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns, "labels": labels}},
-        networkpolicy(ns, group, zone, [os.environ.get("RAMEN_AWS_VPC_CIDR", "10.0.0.0/16")]),
+        networkpolicy(ns, group, zone, aws_alb_cidrs()),
         ksa,
         _service(ns, "worker", "stable", labels),
         _service(ns, "worker-canary", "canary", labels),
         *deps,
         ingress(group, zone, alb_group, stable, canary),
         ingress(group, zone, alb_group, stable, canary, http=True),
+        direct_service(group, zone),  # §24.1: real workers of both tracks, for the activator of a sleeping zone
     ]
+    return with_egress(docs, group, zone)
 
 
 def helm_manifests(
@@ -205,6 +218,7 @@ def helm_manifests(
         "replicas": count,
         "secret.create": "false",
         "hpa.enabled": "false",  # §21.7: the console scales workers (rebalance), not an HPA
+        "networkPolicy.awsCidrs": "{" + ",".join(aws_alb_cidrs()) + "}",
     }
     cmd = ["helm", "template", "ramen-worker", str(chart), "--namespace", ns]
     for k, v in values.items():
@@ -219,8 +233,9 @@ def helm_manifests(
         if d["kind"] == "Ingress":
             ann = d["metadata"].setdefault("annotations", {})
             ann[ACTION], ann[CONDITIONS] = weights(stable, canary), conditions(group, zone)
+    ensure_direct(docs, group, zone)
     names = {d["metadata"]["name"] for d in docs if d["kind"] == "Ingress"}
     for name, http in zip(INGRESSES, (False, True), strict=True):
         if name not in names:
             docs.append(ingress(group, zone, alb_group, stable, canary, http=http))
-    return copy.deepcopy(docs)
+    return copy.deepcopy(with_egress(docs, group, zone))

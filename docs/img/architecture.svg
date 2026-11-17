@@ -3,9 +3,9 @@
   <title id="ramen-arch-title">One MCP call, end to end</title>
   <desc id="ramen-arch-desc">An MCP client posts each JSON-RPC message to /mcp over HTTPS. A client that only speaks stdio runs
   ramen-mcp-bridge beside itself and sends the same message over gRPC instead; a plain gRPC client skips the bridge and
-  calls ramen.v1.Mcp/Call on the same port. The bridge hop is plaintext HTTP/2 unless the client is given --tls or --ca.
-  TLS terminates at the load balancer, which reads the ramen-group and ramen-zone headers and forwards to that zone's
-  worker pod over cleartext HTTP/2 unless the node itself runs TLS. In the pod the Rust node checks the bearer key and
+  calls ramen.v1.Mcp/Call on the same port. The bridge hop is TLS by default.
+  The load balancer reads the ramen-group and ramen-zone headers and forwards to that zone's worker pod over TLS again:
+  every hop inside the install is TLS with Ramen's own CA, and plaintext is refused. In the pod the Rust node checks the bearer key and
   the source range and hands the message to the Python runtime over stdio; the runtime loads the group's packages from
   the group bucket. Alongside, the console clones the group git repo, uploads it to the bucket on deploy, and calls the
   node directly on its pod IP for reload, metrics and health. Health checks answer through the load balancer with no key
@@ -65,15 +65,15 @@
 
   <!-- what that hop really is -->
   <path class="warnline" d="M722,196 V212 H56"/>
-  <text x="48" y="232" class="warn">The browser hop is HTTPS. The bridge is plaintext h2c</text>
-  <text x="48" y="250" class="warn">unless you pass <tspan class="mono">--tls</tspan>, or <tspan class="mono">--ca &lt;pem&gt;</tspan> to pin the certificate.</text>
+  <text x="48" y="232" class="warn">The browser hop is HTTPS. The bridge is TLS by default;</text>
+  <text x="48" y="250" class="warn"><tspan class="mono">--ca &lt;pem&gt;</tspan> replaces its trust store, <tspan class="mono">--insecure</tspan> is local only.</text>
 
   <!-- edge to the worker pod -->
   <path class="flow" d="M930,196 V330" marker-end="url(#a-coral)"/>
   <text x="914" y="240" class="m" text-anchor="end">one <tspan class="mono">POST /mcp</tspan>, or one <tspan class="mono">ramen.v1.Mcp/Call</tspan>, per message</text>
   <text x="914" y="262" class="m" text-anchor="end"><tspan class="mono">Authorization: Bearer</tspan> an MCP key or an OAuth token</text>
   <text x="914" y="284" class="m" text-anchor="end"><tspan class="mono">ramen-group</tspan> and <tspan class="mono">ramen-zone</tspan> pick the zone</text>
-  <text x="914" y="310" class="warn" text-anchor="end">h2c from here on, unless the node runs TLS</text>
+  <text x="914" y="310" class="warn" text-anchor="end">TLS to the pod: the install CA's leaf</text>
 
   <!-- row 2: the worker pod -->
   <rect class="pod" x="800" y="330" width="288" height="226"/>
@@ -125,11 +125,11 @@
   <text x="668" y="578" class="m"><tspan class="mono">Admin/Reload</tspan>, <tspan class="mono">Admin/Metrics</tspan>, <tspan class="mono">Health/Check</tspan></text>
   <text x="668" y="596" class="m">straight to the pod IP, inside the cluster</text>
 
-  <!-- the hops that are plaintext unless you configure otherwise -->
+  <!-- D86: every hop is TLS; what still answers without a key -->
   <path class="warnline" d="M44,796 L54,814 L34,814 Z" stroke-linejoin="round"/>
   <text x="44" y="812" class="warn" font-size="12px" text-anchor="middle">!</text>
-  <text x="68" y="806" class="warn">Plaintext unless you ask for TLS: the bridge to the load balancer is h2c without <tspan class="mono">--tls</tspan> or <tspan class="mono">--ca</tspan>,</text>
-  <text x="68" y="824" class="warn">and the load balancer to the node is h2c unless the node runs <tspan class="mono">RAMEN_TLS_CERT</tspan> and <tspan class="mono">RAMEN_TLS_KEY</tspan>.</text>
+  <text x="68" y="806" class="warn">Every hop is TLS with Ramen's own per-install CA; a cloud install refuses plaintext.</text>
+  <text x="68" y="824" class="warn">Google's and AWS's load balancers encrypt to the pod but do not verify its certificate.</text>
   <text x="68" y="842" class="warn">Through the load balancer <tspan class="mono">grpc.health.v1.Health</tspan> answers with no key, by design. Reflection is off.</text>
 
   <!-- legend -->

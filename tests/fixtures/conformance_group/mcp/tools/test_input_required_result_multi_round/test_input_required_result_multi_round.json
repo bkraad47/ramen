@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_multi_round",
+  "description": "Two rounds of input: a name, then a favourite colour, each with its own state.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

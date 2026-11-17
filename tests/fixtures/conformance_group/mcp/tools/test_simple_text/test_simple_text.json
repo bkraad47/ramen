@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_simple_text",
+  "description": "Return one fixed text block (official suite: tools-call-simple-text).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

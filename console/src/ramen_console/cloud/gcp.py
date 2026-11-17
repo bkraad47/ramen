@@ -1,19 +1,48 @@
 """GCP cloud adapter (CONTRACTS §7): GKE namespaces per zone, GCS group bucket, Cloud Logging, Cloud Armor, IAM."""
 
 import asyncio
+import contextlib
+import contextvars
 import functools
+import inspect
+import logging
 import os
+import re
+import shlex
+import time
 from typing import Any
 
-from .. import __version__, grpcclient
+from .. import __version__, grpcclient, imagebuild
 from ..errors import ApiError
 from ..grpcclient import GrpcError
+from ..llm_proxy import PATH as LLM_PATH
 from ..policy import permissions as perm
+from ..tls import require_tls
 from ..util import now
-from . import gcp_api
-from .base import Cloud
+from . import gcp_api, zone_tls
+from .base import BuildError, Cloud, no_builder
 from .gcp_clients import GcpClients, http_status
-from .gcp_k8s import PORT, Kube, helm_available, helm_manifests, manifests, ns_name, rolebinding
+from .gcp_k8s import (
+    ACTIVATOR,
+    BUILD_NS,
+    BUILDER_IMAGE,
+    PORT,
+    ROLE,
+    SAME_ZONE_PEER,
+    WORKERS,
+    Kube,
+    activator,
+    build_objects,
+    direct_service,
+    helm_available,
+    helm_manifests,
+    job_state,
+    manifests,
+    ns_name,
+    rolebinding,
+    same_zone_rule,
+    with_console_sources,
+)
 from .local import worker_tls_from_env
 
 
@@ -35,7 +64,35 @@ def detail_of(e: Exception) -> str:
     return e.detail if isinstance(e, ApiError) else f"{type(e).__name__}: {str(e)[:200]}"
 
 
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def satellite_console_url(config: dict) -> str:
+    """§39.5a: where a satellite zone's pods reach the console — its public URL (the zone's `RAMEN_OAUTH_ISSUER`)."""
+    return (config.get("RAMEN_OAUTH_ISSUER") or "").strip().rstrip("/")
+
+
+# §28.2: the cluster the current task works on — "home" or a satellite entry {provider, region, name, host, ...}.
+# A task-local: `asyncio.to_thread` copies the context, so the sync helpers below see their caller's cluster.
+_CLUSTER: contextvars.ContextVar = contextvars.ContextVar("ramen_cluster", default="home")
+
+
+async def _maybe(v):
+    return await v if inspect.isawaitable(v) else v
+
+
+# 1.0.0: what a just-created build identity looks like before it has propagated (Entra federated credential, GCP WIF
+# repository binding, AWS IAM role policy) — a build failing with one of these is retried (`build_image`)
+IDENTITY_PROPAGATION = re.compile(
+    r"AADSTS70025|AADSTS700213|no configured federated identity|No matching federated identity record"
+    r"|artifactregistry\.repositories\.uploadArtifacts\W+denied|not authorized to perform: ecr:",
+    re.IGNORECASE,
+)
+
+
 class GcpCloud(Cloud):
+    PROVIDER = "GCP"
+
     def __init__(
         self,
         project,
@@ -48,11 +105,16 @@ class GcpCloud(Cloud):
         timeout=10.0,
         wait_secs=300,
         poll=2.0,
+        node_wait_secs=None,
         chart=None,
     ):
         self.project, self.region, self.bucket, self.image, self.admin_key = project, region, bucket, image, admin_key
         self.c = clients or GcpClients(project)
-        self.kube = Kube(self.c, poll=poll, wait_secs=wait_secs)
+        self._kubes: dict[str, Kube] = {}  # §28.2: one Kube per cluster, "home" + satellite names
+        self._satellites: dict[str, Any] = {}  # satellite name → its clients bundle
+        self._cluster_lookup = None
+        self.kube = Kube(self.c, poll=poll, wait_secs=wait_secs, node_wait_secs=node_wait_secs)
+        self._reapers: set[asyncio.Task] = set()
         self.chart = chart
         self.rpc = rpc or grpcclient.Client(tls=worker_tls_from_env(), deadline=timeout)
 
@@ -69,11 +131,85 @@ class GcpCloud(Cloud):
             os.environ.get("RAMEN_ADMIN_KEY", ""),
             timeout=float(os.environ.get("RAMEN_WORKER_DEADLINE", "10")),
             wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
+            node_wait_secs=int(os.environ.get("RAMEN_NODE_WAIT_SECS", "1200")),
             chart=os.environ.get("RAMEN_WORKER_CHART"),
         )
 
     def bucket_uri(self, group) -> str:
         return f"gs://{self.bucket}/{group}"
+
+    # clusters (§28.2) ---------------------------------------------------
+    @staticmethod
+    def cluster_key(cluster) -> str:
+        return "home" if cluster in (None, "home") else cluster["name"]
+
+    @property
+    def current_cluster(self):
+        """ "home" or the satellite entry the current task's zone lives on."""
+        return _CLUSTER.get()
+
+    @property
+    def kube(self) -> Kube:
+        return self._kubes.get(self.cluster_key(self.current_cluster)) or self._kubes["home"]
+
+    @kube.setter
+    def kube(self, k: Kube) -> None:
+        self._kubes["home"] = k
+
+    @property
+    def cc(self):
+        """The current cluster's clients bundle (regional AWS objects, a satellite's own kube); home's otherwise."""
+        return self._satellites.get(self.cluster_key(self.current_cluster), self.c)
+
+    def set_cluster_lookup(self, lookup) -> None:
+        self._cluster_lookup = lookup
+
+    def _satellite_clients(self, entry: dict):
+        return self.c.for_cluster(entry.get("project") or self.project, entry["region"], entry["name"])
+
+    def kube_for(self, cluster) -> Kube:
+        """The Kube of "home" or a satellite entry; a satellite's clients are built on first use (GKE API + ADC)."""
+        key = self.cluster_key(cluster)
+        if key not in self._kubes:
+            home = self._kubes["home"]
+            self._satellites[key] = self._satellite_clients(cluster)
+            self._kubes[key] = type(home)(
+                self._satellites[key],
+                poll=home.poll,
+                wait_secs=home.wait_secs,
+                rbac_wait=home.rbac_wait,
+                node_wait_secs=home.node_wait_secs,
+            )
+        return self._kubes[key]
+
+    async def _select(self, zone, region=None) -> Kube:
+        """Resolve the zone's cluster (its `region`, looked up by zone name when not given) and make it current for
+        this task; every kube call below, in this task and the threads it starts, then goes to that cluster."""
+        cluster = "home"
+        if (lk := self._cluster_lookup) is not None:
+            if region is None:
+                region = await _maybe(lk.zone_region(zone))
+            cluster = await _maybe(lk(region)) or "home"
+        _CLUSTER.set(cluster)
+        return self.kube_for(cluster)
+
+    async def _all_clusters(self) -> list:
+        lk = self._cluster_lookup
+        return ["home", *(await _maybe(lk.clusters()) if lk is not None else [])]
+
+    def _use(self, cluster) -> Kube:
+        _CLUSTER.set(cluster)
+        return self.kube_for(cluster)
+
+    @contextlib.contextmanager
+    def _on_home(self):
+        """Home-cluster work (evals / scan Jobs, image builds) inside a zone's task: the zone's cluster is current
+        again afterwards — a satellite deploy's stable roll after its gate went to home and got 403 (1.0.0, F-GCP1)."""
+        tok = _CLUSTER.set("home")
+        try:
+            yield self.kube_for("home")
+        finally:
+            _CLUSTER.reset(tok)
 
     # zone lifecycle -----------------------------------------------------
     def _render(self, group, zone, spec):
@@ -92,6 +228,14 @@ class GcpCloud(Cloud):
     def _ensure_namespace(self, group, zone) -> None:
         """Namespace + the RoleBinding that scopes the console's zone permissions to it (SEC-09)."""
         ns = ns_name(group, zone)
+        # D69: the zone was just removed and GKE still holds its namespace; wait it out rather than answer 403
+        # (bounded well under the edge's request timeout: the answer must reach the caller, not die at the LB)
+        if self.kube.namespace_phase(ns) == "Terminating" and not self.kube.release_namespace(
+            ns, min(45, self.kube.wait_secs)
+        ):
+            raise ApiError(
+                409, f"namespace {ns} is still terminating from the zone's last removal; try again in a minute"
+            )
         self.kube.apply(
             {
                 "apiVersion": "v1",
@@ -112,11 +256,25 @@ class GcpCloud(Cloud):
         # Namespace + RoleBinding first: _render reads the zone's KSA, which the console may only do once its
         # RoleBinding exists in that namespace (SEC-09; the API server answers 403, not 404, before that).
         self._ensure_namespace(group, zone)
+        # The pods read `ramen-deploy` as environment and the Secret is optional, so a pod that starts before the
+        # first deploy wrote it would run without the admin key (seen live: "UNAUTHENTICATED: admin key required"
+        # on a brand-new zone's stable worker until the rollout replaced it). Seed the identity now; the deploy
+        # replaces the whole Secret later.
+        seed = {"RAMEN_GROUP": group, "RAMEN_ZONE": zone}
+        if self.admin_key:
+            seed["RAMEN_ADMIN_KEY"] = self.admin_key
+        self.kube.merge_secret(ns_name(group, zone), "ramen-deploy", seed, False)
         spec = dict(spec or {})
         if not spec.get("service_account") and not self._ksa_gsa(group, zone):
             # CONTRACTS §7: the console creates the per-zone GSA; without it workers have no GCS/Secret identity
             spec["service_account"] = self._identity(group, zone)["name"]
         renderer, docs = self._render(group, zone, spec)
+        docs = with_console_sources(docs, self.cluster_key(self.current_cluster) != "home")  # S6: satellites only
+        issued = None
+        if require_tls():  # D86 §39.2: a fresh leaf + bundle first, then workers that serve TLS behind TLS backends
+            docs = zone_tls.secure(docs, self.PROVIDER)
+            docs[1:1] = zone_tls.objects(group, zone)
+            issued = zone_tls.fingerprint()
         docs.insert(1, rolebinding(group, zone))  # right after the Namespace: everything else needs it
         for d in docs:
             name = d["metadata"]["name"]
@@ -132,14 +290,148 @@ class GcpCloud(Cloud):
             "namespace": ns_name(group, zone),
             "renderer": renderer,
             "applied": [d["kind"] for d in docs],
+            **({"tls_ca": issued} if issued else {}),
         }
+
+    # TLS on every hop (D86, §39.2) ----------------------------------------
+    def _services(self) -> list[str]:
+        return [x.strip() for x in os.environ.get("RAMEN_TLS_SERVICES", "").split(",") if x.strip()]
+
+    def _system_tls(self, leaves: bool = True) -> list[str]:
+        """ConfigMap `ramen-ca` and one Secret `ramen-tls-<svc>` per chart service (`RAMEN_TLS_SERVICES`, set by the
+        chart) in the console's namespace. A leaf not from the issuing CA (or due) is re-issued and its Deployment
+        restarted (those servers do not reload) — unless `leaves` is False (§39.1 phase 1, retire): then only a
+        changed bundle is written into the Secret, and nothing restarts (the bundle there is the pod's own trust,
+        which matters only once its leaf changes, with a restart). The services whose leaf was re-issued."""
+        from .. import tls
+
+        ca, ns = zone_tls.ca(), os.environ.get("RAMEN_NAMESPACE", "ramen-system")
+        kube = self._use("home")
+        meta = {"namespace": ns, "labels": {"app.kubernetes.io/part-of": "ramen"}}
+        kube.apply(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": zone_tls.CONFIGMAP, **meta},
+                "data": {"ca.crt": ca.bundle},
+            }
+        )
+        done = []
+        for svc in self._services():
+            name = f"ramen-tls-{svc}"
+            cur = kube.secret_values(ns, name)
+            if cur and (not leaves or not tls.needs_renewal(cur.get("tls.crt", ""), ca)):
+                if cur.get("ca.crt") != ca.bundle:
+                    kube.patch("Secret", ns, name, {"stringData": {"ca.crt": ca.bundle}})
+                continue
+            leaf = ca.issue(tls.service_names(svc, ns))
+            data = {"tls.crt": leaf.cert, "tls.key": leaf.key, "ca.crt": leaf.ca}
+            kube.apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {"name": name, **meta},
+                    "type": "kubernetes.io/tls",
+                    "stringData": data,
+                }
+            )
+            if cur:
+                try:
+                    kube.restart(ns, svc)
+                except Exception as e:  # noqa: BLE001 - not running (engine off): the next start reads the new pair
+                    if http_status(e) != 404:
+                        raise
+            done.append(svc)
+        return done
+
+    async def ensure_system_tls(self) -> list[str]:
+        return await asyncio.to_thread(self._system_tls) if require_tls() else []
+
+    def _zones_with_leaves(self, kube):
+        """(namespace, group, zone, current Secret data) of every zone that has a leaf — a zone not deployed since
+        D86 has none: its next deploy writes one (renewal never starts TLS)."""
+        items = kube.c.to_dict(kube.c.core.list_namespace(label_selector="ramen.io/zone")).get("items", [])
+        for n in items:
+            ns, labels = n["metadata"]["name"], n["metadata"].get("labels") or {}
+            group, zone = labels.get("ramen.io/group"), labels.get("ramen.io/zone")
+            if group and zone and (cur := kube.secret_values(ns, zone_tls.SECRET)):
+                yield ns, group, zone, cur
+
+    def _renew_zones(self, cluster, leaves: bool = True) -> list[str]:
+        """Every zone's due leaf re-issued with the bundle; with `leaves` False (or a fresh leaf) only a changed bundle
+        is written (`ramen-tls` `ca.crt` + ConfigMap `ramen-ca`): the node re-reads it, no restart. Zones touched."""
+        from .. import tls
+
+        ca, kube, out = zone_tls.ca(), self._use(cluster), []
+        for ns, group, zone, cur in list(self._zones_with_leaves(kube)):
+            pem = cur.get("tls.crt", "")
+            # D92 §39.5b: a leaf without its zone name is due too; one that carried the generic name keeps it (the
+            # zone's activator and Envoy policy verify it until the zone's next deploy writes zone-only)
+            if leaves and (tls.needs_renewal(pem, ca) or not tls.has_name(pem, tls.worker_name(group, zone))):
+                docs = zone_tls.objects(group, zone, legacy=tls.has_name(pem, tls.WORKER_NAME))
+            elif cur.get("ca.crt") != ca.bundle:
+                kube.patch("Secret", ns, zone_tls.SECRET, {"stringData": {"ca.crt": ca.bundle}})
+                docs = [zone_tls.bundle_configmap(group, zone)]
+            else:
+                continue
+            for doc in docs:
+                kube.apply(doc)
+            out.append(ns)
+        return out
+
+    async def _each_cluster(self, fn, *args) -> list:
+        out: list = []
+        try:
+            for cluster in await self._all_clusters():
+                out += await asyncio.to_thread(fn, cluster, *args)
+        finally:
+            self._use("home")
+        return out
+
+    async def renew_zone_tls(self) -> list[str]:
+        return await self._each_cluster(self._renew_zones, True) if require_tls() else []
+
+    async def renew_tls(self) -> dict[str, list[str]]:
+        """§39.2: due leaves re-issued — every zone's on every cluster, then the chart services' (nodes reload the
+        files themselves)."""
+        out: dict[str, list[str]] = {"zones": [], "system": []}
+        if not require_tls():
+            return out
+        out["zones"] = await self.renew_zone_tls()
+        out["system"] = await self.ensure_system_tls()
+        return out
+
+    async def publish_tls_bundle(self) -> dict[str, list[str]]:
+        """§39.1 phase 1 and retire: the bundle written everywhere it is trusted; no leaf changes, nothing restarts."""
+        if not require_tls():
+            return {"zones": [], "system": []}
+        system = await asyncio.to_thread(self._system_tls, False)
+        return {"zones": await self._each_cluster(self._renew_zones, False), "system": system}
+
+    def _leaves(self, cluster) -> list[tuple[str, str]]:
+        kube = self._use(cluster)
+        out = []
+        if cluster == "home":
+            ns = os.environ.get("RAMEN_NAMESPACE", "ramen-system")
+            for svc in self._services():
+                if pem := kube.secret_values(ns, f"ramen-tls-{svc}").get("tls.crt"):
+                    out.append((svc, pem))
+        return out + [(ns, cur.get("tls.crt", "")) for ns, _, _, cur in self._zones_with_leaves(kube)]
+
+    async def tls_leaves(self) -> list[tuple[str, str]]:
+        return await self._each_cluster(self._leaves) if require_tls() else []
+
+    def home_region(self) -> str | None:
+        return self.region
 
     @_guard
     async def attach_zone(self, group, zone, spec=None) -> dict:
+        await self._select(zone, (spec or {}).get("region"))
         return await asyncio.to_thread(self._attach, group, zone, spec)
 
     @_guard
     async def scale(self, group, zone, spec) -> dict:
+        await self._select(zone, (spec or {}).get("region"))
         return await asyncio.to_thread(self._attach, group, zone, spec)
 
     # repo sync ----------------------------------------------------------
@@ -150,14 +442,77 @@ class GcpCloud(Cloud):
         )
 
     # deploy -------------------------------------------------------------
+    async def _write_deploy_secret(self, ns, group, env, zone, config) -> dict:
+        """The `ramen-deploy` Secret the worker pods read as environment: identity, admin key, the kept IP
+        allow-list, then the deploy config."""
+        existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
+        data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
+        if self.admin_key:
+            data["RAMEN_ADMIN_KEY"] = self.admin_key
+        if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
+            data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
+        data.update(config)
+        cluster = self.current_cluster  # §28.1: a satellite's workers name their own edge (RFC 9728 resource base)
+        if isinstance(cluster, dict) and cluster.get("host"):
+            data["RAMEN_PUBLIC_URL"] = f"https://{cluster['host']}"  # RAMEN_OAUTH_ISSUER stays the console
+        if isinstance(cluster, dict) and (console := satellite_console_url(data)):
+            # §39.5a: the home console's Service does not resolve on a satellite: the judge proxy is reached at the
+            # console's public URL (verified with the public roots next to the install CA)
+            if data.get("RAMEN_LLM_BASE_URL", "").rstrip("/").endswith(LLM_PATH):
+                data["RAMEN_LLM_BASE_URL"] = f"{console}{LLM_PATH}"
+        await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+        return data
+
+    @_guard
+    async def push_config(self, group, env, zone, config) -> dict[str, Any]:
+        """§26.3: the Secret rewritten, `Admin/Reload` on every worker pod, then a rolling restart of every track that
+        runs — the pods read the Secret as environment, so a reload alone cannot see the new values. P4-B1: a
+        `worker-canary` left by a canary deploy serves ~half the zone from the same Secret, so it rolls too; its
+        trouble is a `warning` (the restart still applies the Secret), a stable pod's an `error`."""
+        ns = ns_name(group, zone)
+        await self._select(zone)
+        await self._write_deploy_secret(ns, group, env, zone, dict(config))
+        n, failed, warned = 0, [], []
+        for p in await asyncio.to_thread(self.kube.pods, ns, WORKERS):
+            try:
+                await self.rpc.reload(
+                    self._target(p), self.admin_key, peer=(group, zone), revoked=config.get("RAMEN_REVOKED")
+                )  # D92 (§16.7): revocations apply at this reload; the restart below makes them the env
+                n += 1
+            except GrpcError as e:
+                is_canary = (p["metadata"].get("labels") or {}).get("ramen.io/track") == "canary"
+                (warned if is_canary else failed).append(f"{p['metadata']['name']}: {e.code.name}")
+        restarted = []
+        if await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker"):
+            await asyncio.to_thread(self.kube.restart, ns, "worker")
+            restarted.append("worker")
+        can = await asyncio.to_thread(self.kube.read, "Deployment", ns, "worker-canary")
+        if can and int(can["spec"].get("replicas", 0)) > 0:
+            try:
+                await self._canary_out(ns, lambda _msg: None)  # AWS: out of the ALB split while it rolls (maxSurge 0)
+                await asyncio.to_thread(self.kube.restart, ns, "worker-canary")
+                restarted.append("worker-canary")
+            except Exception as e:  # noqa: BLE001 - the stable track took the push; the canary is named, never silent
+                warned.append(f"worker-canary: restart failed: {detail_of(e)}")
+        return {
+            "ok": not failed,
+            "reloaded": n,
+            "restarted": restarted,
+            "error": "; ".join(failed) or None,
+            "warning": "; ".join(warned) or None,
+        }
+
     def _target(self, pod) -> str:
         return f"{pod['status'].get('podIP')}:{PORT}"
+
+    def worker_target(self, worker):  # §33.1: `workers()` entries carry the pod IP
+        return f"{worker['ip']}:{PORT}" if worker.get("ip") else None
 
     async def _reload_and_smoke(self, pod, mcp_key, group, zone, log) -> dict:
         """Admin/Reload, then Mcp/Call tools/list with the first MCP key (Health/Check when the group has no keys)."""
         target, name = self._target(pod), pod["metadata"]["name"]
         try:
-            result = await self.rpc.reload(target, self.admin_key)
+            result = await self.rpc.reload(target, self.admin_key, peer=(group, zone))
         except GrpcError as e:
             raise RuntimeError(f"reload on {name} returned {e.code.name}: {e.details[:200]}") from None
         log(f"{name}: reload ok ({len(result.get('tools', []))} tools, {len(result.get('errors', []))} errors)")
@@ -170,7 +525,7 @@ class GcpCloud(Cloud):
                 raise RuntimeError(f"smoke test on {name} failed: {e.code.name} {e.details[:200]}") from None
             if "result" not in r:
                 raise RuntimeError(f"smoke test on {name} failed: {str(r.get('error'))[:200]}")
-        elif not await self.rpc.health(target):
+        elif not await self.rpc.health(target, peer=(group, zone)):
             raise RuntimeError(f"smoke test on {name} failed: health not SERVING")
         log(f"{name}: smoke ok ({'tools/list' if mcp_key else 'health SERVING, no MCP keys configured'})")
         return result
@@ -183,12 +538,99 @@ class GcpCloud(Cloud):
         async def call(msg):
             return await self.rpc.call(target, mcp_key, group, zone, msg)
 
+        call.target = target  # §29.2: `<pod ip>:8080`, the evals Job's RAMEN_MCP_URL host
         return call
+
+    # evals Jobs (§29.2) ---------------------------------------------------
+    def _job_exit_code(self, ns, name, state) -> int:
+        pods = self.kube.pods(ns, f"job-name={name}")
+        for p in pods:
+            for cs in (p.get("status") or {}).get("containerStatuses") or []:
+                term = (cs.get("state") or {}).get("terminated") or {}
+                if term.get("exitCode") is not None:
+                    return int(term["exitCode"])
+        return 0 if state == "succeeded" else 1
+
+    JOB_POD_LABELS: dict[str, str] = {}  # §33.4a: Azure adds the workload-identity label for the evals identity
+
+    def _run_job(self, spec, kind="evals", timeout_env="RAMEN_EVALS_TIMEOUT_SECS") -> dict:
+        """One ConfigMap + Secret + Job in ramen-system run to its end: `{"exit_code", "log"}`; the objects removed."""
+        name, ns = spec["name"], spec["job"]["metadata"]["namespace"]
+        timeout = float(os.environ.get(timeout_env, "600"))
+        spec["job"]["spec"]["template"]["metadata"]["labels"].update(self.JOB_POD_LABELS)
+        try:
+            self.kube.apply(spec["configmap"])
+            self.c.core.create_namespaced_secret(ns, spec["secret"])
+            self.c.batch.create_namespaced_job(ns, spec["job"])
+            deadline = time.monotonic() + timeout
+            while True:
+                current = self.kube.read("Job", ns, name)
+                state = job_state(current) if current is not None else "gone"
+                if state != "running":
+                    break
+                if time.monotonic() >= deadline:
+                    state = "timeout"
+                    break
+                time.sleep(self.kube.poll)
+            log = ""
+            for p in self.kube.pods(ns, f"job-name={name}"):
+                try:
+                    log = self.kube.pod_log(ns, p["metadata"]["name"], None, 4000)
+                except Exception:  # noqa: BLE001, S112, PERF203 - a pod that never started has no log
+                    continue
+            exit_code = self._job_exit_code(ns, name, state)
+        finally:
+            self.kube.delete("Job", ns, name)
+            self.kube.delete("ConfigMap", ns, name)
+            try:
+                self.c.core.delete_namespaced_secret(name, ns)
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 404:
+                    raise
+        if state == "timeout":
+            raise RuntimeError(f"{kind} job {name} timed out after {int(timeout)}s")
+        if state == "gone":
+            raise RuntimeError(f"{kind} job {name} was removed before it finished")
+        return {"exit_code": exit_code, "log": log}
+
+    async def _job(self, spec, kind, timeout_env) -> dict:
+        try:
+            with self._on_home():  # home cluster, like builds
+                return await asyncio.to_thread(self._run_job, spec, kind, timeout_env)
+        except (ApiError, RuntimeError):
+            raise
+        except Exception as e:  # noqa: BLE001 - upstream failure, never with secret values
+            raise ApiError(502, f"{self.PROVIDER} run_{kind}_job: {type(e).__name__}: {str(e)[:300]}") from e
+
+    async def run_evals_job(self, group, zone, spec) -> dict:
+        """§29.2: the evals Job in ramen-system; `{"exit_code", "log"}`."""
+        return await self._job(spec, "evals", "RAMEN_EVALS_TIMEOUT_SECS")
+
+    async def run_scan_job(self, group, zone, spec) -> dict:
+        """§30.2: the SkillSpector Job in ramen-system; `{"exit_code", "log"}`."""
+        return await self._job(spec, "scan", "RAMEN_SKILLSPECTOR_TIMEOUT_SECS")
 
     @_guard
     async def read_file(self, group, path):
         blob = await asyncio.to_thread(self.c.storage.bucket(self.bucket).get_blob, f"{group}/{path}")
         return await asyncio.to_thread(blob.download_as_bytes) if blob else None
+
+    @_guard
+    async def list_files(self, group, prefix):
+        blobs = await asyncio.to_thread(
+            lambda: list(self.c.storage.bucket(self.bucket).list_blobs(prefix=f"{group}/{prefix}"))
+        )
+        return sorted(b.name[len(group) + 1 :] for b in blobs if not b.name.endswith("/"))
+
+    @_guard
+    async def delete_files(self, group):
+        def run():
+            blobs = list(self.c.storage.bucket(self.bucket).list_blobs(prefix=f"{group}/"))
+            for b in blobs:
+                b.delete()
+            return len(blobs)
+
+        return await asyncio.to_thread(run)
 
     async def deploy(
         self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None
@@ -203,17 +645,13 @@ class GcpCloud(Cloud):
         ns, config = ns_name(group, zone), dict(config or {})
         workers = []
         try:
-            note(f"{ns}: applying zone manifests")
+            cluster = await self._select(zone, (spec or {}).get("region")) and self.current_cluster
+            note(f"{ns}: applying zone manifests" + (f" on satellite {cluster['name']}" if cluster != "home" else ""))
             held: list[dict] = []
-            await asyncio.to_thread(self._attach, group, zone, spec or {}, held if canary else None)
-            existing = await asyncio.to_thread(self.kube.secret_values, ns, "ramen-deploy")
-            data = {"RAMEN_GROUP": group, "RAMEN_ENV": env, "RAMEN_ZONE": zone}
-            if self.admin_key:
-                data["RAMEN_ADMIN_KEY"] = self.admin_key
-            if "RAMEN_ALLOWED_CIDRS" in existing and "RAMEN_ALLOWED_CIDRS" not in config:
-                data["RAMEN_ALLOWED_CIDRS"] = existing["RAMEN_ALLOWED_CIDRS"]
-            data.update(config)
-            await asyncio.to_thread(self.kube.merge_secret, ns, "ramen-deploy", data, True)
+            attached = await asyncio.to_thread(self._attach, group, zone, spec or {}, held if canary else None)
+            if fp := attached.get("tls_ca"):
+                note(f"tls: issued {ns} leaf (CA {fp})")  # §39.5 step 3
+            data = await self._write_deploy_secret(ns, group, env, zone, config)
             note(f"{ns}: secret ramen-deploy written ({len(data)} keys)")
             mcp_key = (config.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
             if not canary:
@@ -250,7 +688,7 @@ class GcpCloud(Cloud):
             # old pods keep serving (with the old key set) until drained; the job is only "ok" once they are gone
             drained = await asyncio.to_thread(self.kube.wait_terminated, ns, "app=worker", 180)
             note("main: old pods drained" if drained else "main: old pods still terminating after 180s")
-            for p in await asyncio.to_thread(self.kube.pods, ns, "app=worker,ramen.io/track=stable"):
+            for p in await asyncio.to_thread(self.kube.pods, ns, f"{WORKERS},ramen.io/track=stable"):
                 w = {"id": p["metadata"]["name"], "ok": True, "track": "stable", "status": "OK"}
                 # Readiness+drain above already proves the rollout; a reload/smoke failure here must not flip
                 # it to failed. Still attempted so the group page's per-zone package list (F5.6) has data for
@@ -279,10 +717,372 @@ class GcpCloud(Cloud):
             workers.append({"id": "worker-canary" if canary else "worker", "ok": False, "error": err})
             return {"ok": False, "error": err, "workers": workers, "namespace": ns, "log": lines}
 
+    # sleeping workers (§24.1) -------------------------------------------
+    def _replicas(self, ns, name) -> tuple[int, int]:
+        """(wanted, ready) replicas of a Deployment; (0, 0) when it does not exist."""
+        d = self.kube.read("Deployment", ns, name)
+        if d is None:
+            return 0, 0
+        return int(d["spec"].get("replicas", 1)), int((d.get("status") or {}).get("readyReplicas") or 0)
+
+    def _runtime(self, ns) -> dict:
+        if not self.kube.read("Namespace", None, ns):
+            return {"workers": 0, "canary": 0, "activator": 0}
+        return {
+            "workers": self._replicas(ns, "worker")[1],
+            "canary": self._replicas(ns, "worker-canary")[1],
+            "activator": self._replicas(ns, ACTIVATOR)[1],
+        }
+
+    @_guard
+    async def zone_runtime(self, group, zone) -> dict:
+        await self._select(zone)
+        return await asyncio.to_thread(self._runtime, ns_name(group, zone))
+
+    def _scale_workers(self, ns, name, replicas: int) -> None:
+        """Replicas plus the role label on the pod template in one patch: a zone attached before 1.0 gets the label
+        that `worker-direct` selects without an extra rollout (the selector is untouched)."""
+        self.kube.patch(
+            "Deployment",
+            ns,
+            name,
+            {"spec": {"replicas": int(replicas), "template": {"metadata": {"labels": {ROLE: "worker"}}}}},
+        )
+
+    def _ensure_direct(self, group, zone) -> None:
+        """What a zone attached before 1.0 lacks for sleeping: `worker-direct` and the NetworkPolicy peer that lets the
+        activator reach the workers. Idempotent."""
+        ns = ns_name(group, zone)
+        self.kube.apply(direct_service(group, zone))
+        np = self.kube.read("NetworkPolicy", ns, "worker")
+        rules = ((np or {}).get("spec") or {}).get("ingress") or []
+        if rules and not any(SAME_ZONE_PEER in (r.get("from") or []) for r in rules):
+            self.kube.patch("NetworkPolicy", ns, "worker", {"spec": {"ingress": [*rules, same_zone_rule()]}})
+
+    def _sleep_prepare(self, group, zone) -> dict:
+        ns = ns_name(group, zone)
+        worker = self.kube.read("Namespace", None, ns) and self.kube.read("Deployment", ns, "worker")
+        if not worker:
+            raise ApiError(409, f"Zone {zone} of group {group} is not deployed: nothing to put to sleep")
+        self._ensure_direct(group, zone)
+        selector = ((self.kube.read("Service", ns, "worker") or {}).get("spec") or {}).get("selector") or {}
+        console = None  # §39.5a: a satellite's activator wakes the zone through the console's public URL
+        if isinstance(self.current_cluster, dict):
+            console = satellite_console_url(self.kube.secret_values(ns, "ramen-deploy")) or None
+        # replicas 1; an activator left at 0 by a wake is patched back
+        self.kube.apply(activator(worker, selector, console))
+        self.kube.wait_ready(ns, ACTIVATOR)
+        # P1 (1.0.0a): Ready is not enough — until the activator is listed behind Service/worker, kube-proxy routes
+        # to the terminating-but-serving workers, and a draining worker never asks for the wake.
+        try:
+            listed = self.kube.wait_endpoint(ns, "worker", f"app=worker,{ROLE}=activator")
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 403:
+                raise
+            logging.getLogger("ramen.cloud").warning("%s: cannot read Endpoints (zone role predates 1.0.0a)", ns)
+            listed = True
+        if not listed:
+            raise ApiError(502, f"Deployment {ACTIVATOR} is Ready but not in the Endpoints of Service/worker in {ns}")
+        return {"workers": self._replicas(ns, "worker")[0], "canary": self._replicas(ns, "worker-canary")[0]}
+
+    def _sleep_finish(self, ns) -> None:
+        for name in ("worker", "worker-canary"):
+            if self.kube.read("Deployment", ns, name):
+                self._scale_workers(ns, name, 0)
+
+    @_guard
+    async def sleep_zone(self, group, zone) -> dict:
+        """§24.1 sleep: the activator first (Ready behind `Service/worker`), then the workers to 0 — their SIGTERM
+        drain serves what is in flight. Idempotent. `previous` is what the Deployments asked for before this call."""
+        ns = ns_name(group, zone)
+        await self._select(zone)
+        previous = await asyncio.to_thread(self._sleep_prepare, group, zone)
+        await self._canary_out(ns, lambda _msg: None)  # AWS: an empty canary target group must hold no weight
+        await asyncio.to_thread(self._sleep_finish, ns)
+        return {"ok": True, "namespace": ns, "previous": previous, **await asyncio.to_thread(self._runtime, ns)}
+
+    def _after_wake(self, ns, count: int, canary: int) -> None:
+        """Edge bookkeeping once the workers are Ready. GCP/Azure: none. AWS restores the ALB split."""
+
+    def _wake(self, group, zone, count: int, canary: int) -> dict:
+        ns = ns_name(group, zone)
+        if not (self.kube.read("Namespace", None, ns) and self.kube.read("Deployment", ns, "worker")):
+            raise ApiError(409, f"Zone {zone} of group {group} is not deployed: nothing to wake")
+        count, canary = max(1, int(count)), max(0, int(canary))
+        self._ensure_direct(group, zone)
+        self._scale_workers(ns, "worker", count)
+        has_canary = self.kube.read("Deployment", ns, "worker-canary") is not None
+        if has_canary:
+            self._scale_workers(ns, "worker-canary", canary)
+        self.kube.wait_ready(ns, "worker")  # a timeout names the stuck pods; the activator keeps answering 503
+        if has_canary:
+            self.kube.wait_ready(ns, "worker-canary")
+        self._after_wake(ns, count, canary if has_canary else 0)
+        if self.kube.read("Deployment", ns, ACTIVATOR):
+            self.kube.set_replicas(ns, ACTIVATOR, 0)  # last: while both exist the activator forwards (§24.1)
+        return {"ok": True, "namespace": ns, **self._runtime(ns)}
+
+    @_guard
+    async def wake_zone(self, group, zone, count, canary) -> dict:
+        """§24.1 wake: `worker` to `count` (≥ 1) and `worker-canary` to `canary`, wait Ready, then the activator to 0.
+        Idempotent; a zone that never slept is simply scaled."""
+        await self._select(zone)
+        return await asyncio.to_thread(self._wake, group, zone, count, canary)
+
+    # images built on deploy (§24.2); per group since §38.2 (D85) --------------------------------------
+    def builder_available(self) -> bool:
+        return os.environ.get("RAMEN_BUILDER") == "1" and bool(self._build_registry())
+
+    @staticmethod
+    def _build_registry() -> str:
+        return os.environ.get("RAMEN_BUILD_REGISTRY", "").strip().rstrip("/")
+
+    @staticmethod
+    def _build_identities() -> bool:
+        """§38.2: `RAMEN_BUILD_IDENTITIES=cloud` (default) creates each group's repository and cloud identity; `none`
+        (kind: a registry that takes anonymous pushes) only the group's KSA."""
+        return os.environ.get("RAMEN_BUILD_IDENTITIES", "cloud").strip().lower() != "none"
+
+    @staticmethod
+    def build_ksa(group) -> str:
+        return f"ramen-build-{group}"
+
+    @staticmethod
+    def _ar(registry: str) -> tuple[str, str] | None:
+        """(location, project) when the build registry is Artifact Registry: `<location>-docker.pkg.dev/<project>/…`."""
+        host, _, rest = registry.partition("/")
+        if not host.endswith("-docker.pkg.dev") or not rest:
+            return None
+        return host.removesuffix("-docker.pkg.dev"), rest.split("/")[0]
+
+    @staticmethod
+    def ar_repo_id(group) -> str:
+        return f"ramen-groups-{imagebuild.repo_component(group)}"
+
+    def build_repository(self, group) -> str | None:
+        """§38.2: the group's own image repository. Artifact Registry grants per repository, so a group gets the
+        repository `ramen-groups-<group>`; any other registry takes the path
+        `<RAMEN_BUILD_REGISTRY>/groups/<group>/worker` (`…/ramen/groups/<group>/worker` on ECR and ACR, where the
+        repository is the path)."""
+        registry = self._build_registry()
+        if not registry:
+            return None
+        if ar := self._ar(registry):
+            return f"{ar[0]}-docker.pkg.dev/{ar[1]}/{self.ar_repo_id(group)}/worker"
+        return f"{registry}/groups/{imagebuild.repo_component(group)}/worker"
+
+    def _build_identity(self, group, repository) -> dict[str, str]:
+        """GKE: repository `ramen-groups-<group>` (labelled with the group) whose only writer is the KSA
+        `ramen-system/ramen-build-<group>` itself (Workload Identity Federation principal, no GSA); the base image is
+        read through Terraform's reader binding for the namespace. Answers the KSA annotations (none on GKE)."""
+        ar = self._ar(self._build_registry())
+        if ar is None:  # not Artifact Registry (kind, a plain registry): nothing to create
+            return {}
+        reg = self._registry(ar)
+        repo_id = repository.split("/")[2]
+        reg.ensure(repo_id, {"ramen": "group-worker", "ramen-group": group}, f"ramen worker images of group {group}")
+        number = self._iam().project_number()
+        member = (
+            f"principal://iam.googleapis.com/projects/{number}/locations/global/workloadIdentityPools/"
+            f"{self.project}.svc.id.goog/subject/ns/{BUILD_NS}/sa/{self.build_ksa(group)}"
+        )
+        reg.bind(repo_id, "roles/artifactregistry.writer", member)
+        return {}
+
+    @staticmethod
+    def _ar_group_tag(project) -> str | None:
+        """§38.2: the tag value bound to every group repository — terraform's `ramen-repo=group`, by namespaced name
+        (`<project>/ramen-repo/group`) unless `RAMEN_AR_GROUP_TAG` names another (`tagValues/<id>` or a namespaced
+        name); `none` turns tagging off (an install whose console rights are not tag-conditioned)."""
+        v = os.environ.get("RAMEN_AR_GROUP_TAG", "").strip()
+        if v.lower() == "none":
+            return None
+        return v or f"{project}/ramen-repo/group"
+
+    def _registry(self, ar) -> gcp_api.Registry:
+        location, project = ar
+        return gcp_api.Registry(
+            self.c.artifactregistry,
+            project,
+            location,
+            delay=self.kube.poll,
+            tags=self.c.tag_bindings(location),
+            tag_value=self._ar_group_tag(project),
+        )
+
+    def _ensure_builder(self, group, repository) -> str:
+        """The group's build identity (cloud side, unless `RAMEN_BUILD_IDENTITIES=none`) and its KSA in ramen-system."""
+        ksa = self.build_ksa(group)
+        annotations = self._build_identity(group, repository) if self._build_identities() else {}
+        self.kube.apply(
+            {
+                "apiVersion": "v1",
+                "kind": "ServiceAccount",
+                "metadata": {
+                    "name": ksa,
+                    "namespace": BUILD_NS,
+                    "labels": {"app.kubernetes.io/name": "ramen-build", "ramen.io/group": group},
+                    "annotations": annotations,
+                },
+                "automountServiceAccountToken": False,  # kaniko never calls the Kubernetes API
+            }
+        )
+        return ksa
+
+    def _drop_build_identity(self, group) -> dict[str, list[str]]:
+        """Provider side of `_drop_builder`: GKE deletes the group's repository (its IAM policy goes with it)."""
+        ar = self._ar(self._build_registry())
+        if ar is None:
+            return {}
+        reg = self._registry(ar)
+        repo_id = self.ar_repo_id(group)
+        return {"repositories": [repo_id] if reg.delete(repo_id) else []}
+
+    async def _drop_builder(self, group, removed: dict) -> None:
+        """§38.2: a deleted group takes its build KSA, repository and identity with it. Best effort: a failure is a
+        note on the result, the rest of the teardown already happened."""
+
+        def run():
+            self._use("home")
+            out = {"service_accounts": []}
+            if self.kube.delete("ServiceAccount", BUILD_NS, self.build_ksa(group)):
+                out["service_accounts"].append(f"{BUILD_NS}/{self.build_ksa(group)}")
+            if self.builder_available() and self._build_identities():
+                for k, v in self._drop_build_identity(group).items():
+                    out.setdefault(k, []).extend(v)
+            return out
+
+        try:
+            for k, v in (await asyncio.to_thread(run)).items():
+                removed.setdefault(k, []).extend(v)
+        except Exception as e:  # noqa: BLE001 - reported, never blocks the group's deletion
+            removed["build_note"] = f"build identity not fully removed: {detail_of(e)}"
+
+    def _build_extras(self, registry: str) -> dict:
+        """What the provider's registry needs on the build pod beyond the build KSA's workload identity (GKE:
+        nothing, kaniko's Google keychain reads the metadata server)."""
+        return {}
+
+    def _build_log(self, name, tail=40) -> str:
+        pods = self.kube.pods(BUILD_NS, f"job-name={name}")
+        if not pods:
+            return ""
+        pod = max(pods, key=lambda p: p["metadata"].get("creationTimestamp") or "")
+        out = []
+        for container in ("context", "build"):
+            try:
+                out += self.kube.pod_log(BUILD_NS, pod["metadata"]["name"], container, tail).splitlines()
+            except Exception:  # noqa: BLE001, S112, PERF203 - a container that never started has no log
+                continue
+        if not out:  # nothing ran: say why (image pull, scheduling) instead of nothing
+            out = [f"build pod {pod['metadata']['name']}{self.kube._stuck_pods_of([pod])}"]
+        return "\n".join(out[-tail:])
+
+    def _build_digest(self, name) -> str | None:
+        """The digest kaniko pushed (its --digest-file is the build container's termination message), else None."""
+        for pod in self.kube.pods(BUILD_NS, f"job-name={name}"):
+            for cs in (pod.get("status") or {}).get("containerStatuses") or []:
+                msg = ((cs.get("state") or {}).get("terminated") or {}).get("message") or ""
+                if cs.get("name") == "build" and DIGEST.match(msg.strip()):
+                    return msg.strip()
+        return None
+
+    def _build(self, group, tag, dockerfile, files) -> dict:
+        if not self.builder_available():
+            raise no_builder()
+        repository = self.build_repository(group)
+        image = f"{repository}:{tag}"
+        timeout = float(os.environ.get("RAMEN_BUILD_TIMEOUT_SECS", "900"))
+        ksa = self._ensure_builder(group, repository)
+        extras = self._build_extras(self._build_registry())
+        cm, job = build_objects(
+            group,
+            tag,
+            image,
+            dockerfile,
+            dict(files or {}),
+            builder_image=os.environ.get("RAMEN_BUILDER_IMAGE") or BUILDER_IMAGE,
+            init_image=os.environ.get("RAMEN_BUILD_INIT_IMAGE") or None,
+            args=(*extras.get("args", ()), *shlex.split(os.environ.get("RAMEN_BUILD_ARGS", ""))),
+            env=extras.get("env"),
+            pod_labels=extras.get("pod_labels"),
+            docker_config=extras.get("docker_config"),
+            cpu=os.environ.get("RAMEN_BUILD_CPU", "250m"),
+            memory=os.environ.get("RAMEN_BUILD_MEMORY", "768Mi"),
+            memory_limit=os.environ.get("RAMEN_BUILD_MEMORY_LIMIT", "2Gi"),
+            service_account=ksa,
+        )
+        name = job["metadata"]["name"]
+        live = self.kube.read("Job", BUILD_NS, name)
+        if live is not None and job_state(live) == "failed":  # a failed earlier run of this tag: start over
+            self.kube.delete("Job", BUILD_NS, name)
+            live = None
+        try:
+            if live is None:  # else: the same build is already running (or just finished) — wait for that one
+                self.kube.apply(cm)
+                try:
+                    self.c.batch.create_namespaced_job(BUILD_NS, job)
+                except Exception as e:  # noqa: BLE001 - created by a concurrent caller between read and create
+                    if http_status(e) != 409:
+                        raise
+            deadline = time.monotonic() + timeout
+            while True:
+                current = self.kube.read("Job", BUILD_NS, name)
+                # gone: another caller waiting on the same build cleaned it up, its outcome is not ours to guess
+                state = job_state(current) if current is not None else "gone"
+                if state != "running":
+                    break
+                if time.monotonic() >= deadline:
+                    state = "timeout"
+                    break
+                time.sleep(self.kube.poll)
+            log = self._build_log(name)
+            digest = self._build_digest(name) if state == "succeeded" else None
+            self.kube.delete("Job", BUILD_NS, name)  # a timed-out build stops here; TTL 600 s is only the safety net
+        finally:
+            self.kube.delete("ConfigMap", BUILD_NS, name)
+        if state == "succeeded":  # §38.2: deploys pin the digest when kaniko reported one
+            return {
+                "image": f"{repository}@{digest}" if digest else image,
+                "tag_ref": image,
+                "digest": digest,
+                "log": log,
+            }
+        why = {"timeout": f"timed out after {int(timeout)}s", "gone": "was removed before it finished"}.get(
+            state, "failed"
+        )
+        raise BuildError(f"image build {name} for {image} {why}" + (f":\n{log}" if log else ""), log)
+
+    async def build_image(self, group, tag, dockerfile, files) -> dict:
+        """§24.2: `Job/ramen-build-<hash>` in ramen-system, context from a ConfigMap; §38.2: kaniko runs as the
+        group's `ramen-build-<group>` and pushes to the group's repository, the answer is the image by digest.
+        Raises `BuildError` (its text ends with the last 40 log lines) on a failed or timed-out build."""
+        # 1.0.0: the group's build identity (and its federated credential / IAM binding) may have been created moments
+        # ago and not yet propagated — Entra answers AADSTS70025/700213, GCP and AWS a permission denial. Retry such a
+        # build for RAMEN_BUILD_IDENTITY_WAIT_SECS (default 300); any other failure fails at once.
+        deadline = time.monotonic() + float(os.environ.get("RAMEN_BUILD_IDENTITY_WAIT_SECS", "300"))
+        try:
+            while True:
+                try:
+                    with self._on_home():  # §28.2: builds stay in the home cluster
+                        return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
+                except BuildError as e:
+                    if not IDENTITY_PROPAGATION.search(f"{e} {e.log}") or time.monotonic() >= deadline:
+                        raise
+                    logging.getLogger("ramen.cloud").info(
+                        "image build %s: build identity not propagated yet, retrying", tag
+                    )
+                    await asyncio.to_thread(time.sleep, 30)
+        except (ApiError, BuildError):
+            raise
+        except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values
+            raise ApiError(502, f"{self.PROVIDER} build_image: {type(e).__name__}: {str(e)[:300]}") from e
+
     # observe ------------------------------------------------------------
     @_guard
     async def workers(self, group, zone):
         ns = ns_name(group, zone)
+        await self._select(zone)
         if not await asyncio.to_thread(self.kube.read, "Namespace", None, ns):
             return []
         pods = await asyncio.to_thread(self.kube.pods, ns)
@@ -294,7 +1094,7 @@ class GcpCloud(Cloud):
                 out.append({**w, "load": "down", "metrics": {}})
                 continue
             try:
-                m = await self.rpc.metrics(self._target(p), self.admin_key)
+                m = await self.rpc.metrics(self._target(p), self.admin_key, peer=(group, zone))
                 out.append({**w, "load": m.get("load", "unknown"), "metrics": m})
             except (GrpcError, ValueError) as e:
                 out.append({**w, "load": "down", "metrics": {}, "error": f"{type(e).__name__}: {e}"})
@@ -308,7 +1108,7 @@ class GcpCloud(Cloud):
     @_guard
     async def rebalance(self, group, zone):
         ns = ns_name(group, zone)
-        ws = await self.workers(group, zone)
+        ws = await self.workers(group, zone)  # selects the zone's cluster; the compute objects are project-global
         loads = [w["load"] for w in ws]
         load = "high" if "high" in loads else ("low" if loads and all(x in ("low", "down") for x in loads) else "even")
         scaler = 0.5 if load == "high" else 1.0
@@ -342,13 +1142,14 @@ class GcpCloud(Cloud):
     @_guard
     async def set_ip_rules(self, group, zone, cidrs):
         ns = ns_name(group, zone)
+        await self._select(zone)
         # Node enforcement first: it is the control that actually gates a call and it needs no cloud API.
         # Cloud Armor at the edge is defence in depth and is attempted afterwards, best effort.
         await asyncio.to_thread(
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
         # env comes from the Secret at pod start: roll the workers so the node enforces the new list now
-        for dep in ("worker", "worker-canary"):
+        for dep in ("worker", "worker-canary", ACTIVATOR):  # a sleeping zone's activator enforces the list too
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)
@@ -388,6 +1189,7 @@ class GcpCloud(Cloud):
     @_guard
     async def abort_deploy(self, group, zone):
         ns = ns_name(group, zone)
+        await self._select(zone)
         # Namespace reads are cluster-scoped; a Deployment read in a namespace without our RoleBinding is 403
         if not await asyncio.to_thread(self.kube.read, "Namespace", None, ns):
             return
@@ -400,28 +1202,59 @@ class GcpCloud(Cloud):
         """Destroy one group's deployment in one zone: its namespace (workers, services, routes go with it) and the
         zone GSA (0.6.0). Nothing else of the group is touched."""
         ns, iam = ns_name(group, zone), self._iam()
+        await self._select(zone)
         await asyncio.to_thread(self.kube.delete_namespace, ns)
+        # D69: clear the NEG finalizer so the namespace goes now; the zonal NEGs are reaped in the background once
+        # the Gateway controller releases them (minutes), so the same zone can be created again without a wait
+        await asyncio.to_thread(self.kube.release_namespace, ns, 60)
+        self._reap_later(ns)
         email = f"{iam.account_id(group, zone)}@{self.project}.iam.gserviceaccount.com"
-        removed = {"namespaces": [ns], "service_accounts": []}
+        removed = {"namespaces": [ns], "service_accounts": [], "network_endpoint_groups": ns}
         if email in await asyncio.to_thread(iam.list_service_accounts, f"ramen-{group}-{zone}@"):
+            # unbind before deleting: a deleted identity left in the bucket policy blocks later policy writes
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         return removed
 
+    neg_attempts, neg_delay = 45, 20.0  # D69: how long a reaper waits for the Gateway to release a zone's NEGs
+
+    def _reap_later(self, neg_name) -> None:
+        async def reap():
+            try:
+                comp = gcp_api.Compute(self.c.compute, self.project)
+                zones = await asyncio.to_thread(comp.delete_negs, neg_name, self.neg_attempts, self.neg_delay)
+                logging.getLogger("ramen.cloud").info("%s: network endpoint groups reaped in %s", neg_name, zones)
+            except Exception as e:  # noqa: BLE001 - best effort; the operator note in deploy-gcp.md covers the rest
+                logging.getLogger("ramen.cloud").warning("%s: NEG reaping gave up: %s", neg_name, str(e)[:600])
+
+        task = asyncio.create_task(reap())
+        self._reapers.add(task)
+        task.add_done_callback(self._reapers.discard)
+
+    async def drain_reapers(self) -> None:
+        await asyncio.gather(*list(self._reapers), return_exceptions=True)
+
     async def detach_group(self, group):
-        """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA, its Cloud Armor policy (F4.1)."""
+        """Destroy the group's infra: every `ramen-<group>-*` namespace and GSA, its Cloud Armor policy (F4.1), its
+        build KSA and repository (§38.2)."""
         prefix = f"ramen-{group}-"
         removed = {"namespaces": [], "service_accounts": [], "security_policies": []}
-        for ns in await asyncio.to_thread(self.kube.list_namespaces, group):
-            await asyncio.to_thread(self.kube.delete_namespace, ns)
-            removed["namespaces"].append(ns)
+        for cluster in await self._all_clusters():  # §28.2: the group's namespaces on every cluster
+            kube = self._use(cluster)
+            for ns in await asyncio.to_thread(kube.list_namespaces, group):
+                await asyncio.to_thread(kube.delete_namespace, ns)
+                removed["namespaces"].append(ns)
+        self._use("home")
         iam = self._iam()
         for email in await asyncio.to_thread(iam.list_service_accounts, prefix):
+            await asyncio.to_thread(iam.purge_bucket_member, self.c.storage, self.bucket, email)
             await asyncio.to_thread(iam.delete_service_account, email)
             removed["service_accounts"].append(email)
         comp = gcp_api.Compute(self.c.compute, self.project)
         if await asyncio.to_thread(comp.delete_armor, f"ramen-{group}"):
             removed["security_policies"].append(f"ramen-{group}")
+        await self._drop_builder(group, removed)
         return removed
 
     def _revoke_stale(self, iam, email, group, keep: list[str]) -> tuple[list[str], list[str]]:
@@ -565,6 +1398,7 @@ class GcpCloud(Cloud):
     @_guard
     async def create_service_account(self, group, zone):
         ns = ns_name(group, zone)
+        await self._select(zone)
 
         def run():
             out = self._identity(group, zone)
@@ -625,46 +1459,61 @@ class GcpCloud(Cloud):
 
         return await asyncio.to_thread(run)
 
+    SA_ANNOTATION = "iam.gke.io/gcp-service-account"
+
+    def _survey(self, kube: Kube, clients, cluster_key: str, zones: list, skipped: list) -> None:
+        """One cluster's zone namespaces into `zones`, unreadable ones into `skipped`; a satellite's rows are tagged
+        `cluster` (the home ones stay as they always were)."""
+        tag = {} if cluster_key == "home" else {"cluster": cluster_key}
+        for n in clients.to_dict(clients.core.list_namespace(label_selector="ramen.io/group")).get("items", []):
+            labels, ns = n["metadata"].get("labels", {}), n["metadata"]["name"]
+            # A namespace deleted with its group sits in Terminating for minutes, and its RoleBinding
+            # is collected first, so reads inside it answer 403. Reconcile is a survey of what exists:
+            # one unreadable namespace must not fail the whole call (D4, found on GKE).
+            if (n.get("status") or {}).get("phase") == "Terminating":
+                skipped.append({"namespace": ns, **tag, "reason": "terminating"})
+                continue
+            try:
+                main = kube.read("Deployment", ns, "worker") or {}
+                can = kube.read("Deployment", ns, "worker-canary") or {}
+                ksa = kube.read("ServiceAccount", ns, "worker") or {}
+            except Exception as e:  # noqa: BLE001 - report the namespace as unreadable, keep surveying
+                skipped.append({"namespace": ns, **tag, "reason": detail_of(e)})
+                continue
+            zones.append(
+                {
+                    "group": labels.get("ramen.io/group"),
+                    "zone": labels.get("ramen.io/zone"),
+                    "namespace": ns,
+                    **tag,
+                    "replicas": main.get("spec", {}).get("replicas", 0),
+                    "ready": (main.get("status") or {}).get("readyReplicas", 0),
+                    "canary_replicas": can.get("spec", {}).get("replicas", 0),
+                    "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
+                    "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(self.SA_ANNOTATION),
+                    **self._survey_extra(kube, ns),
+                }
+            )
+
+    def _survey_extra(self, kube: Kube, ns: str) -> dict:
+        return {}
+
+    def _accounts(self) -> list:
+        return self._iam().list_accounts()
+
     @_guard
     async def refresh(self):
-        def run():
-            zones = []
-            skipped = []
-            for n in self.c.to_dict(self.c.core.list_namespace(label_selector="ramen.io/group")).get("items", []):
-                labels, ns = n["metadata"].get("labels", {}), n["metadata"]["name"]
-                # A namespace deleted with its group sits in Terminating for minutes, and its RoleBinding
-                # is collected first, so reads inside it answer 403. Reconcile is a survey of what exists:
-                # one unreadable namespace must not fail the whole call (D4, found on GKE).
-                if (n.get("status") or {}).get("phase") == "Terminating":
-                    skipped.append({"namespace": ns, "reason": "terminating"})
-                    continue
-                try:
-                    main = self.kube.read("Deployment", ns, "worker") or {}
-                    can = self.kube.read("Deployment", ns, "worker-canary") or {}
-                    ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
-                except Exception as e:  # noqa: BLE001 - report the namespace as unreadable, keep surveying
-                    skipped.append({"namespace": ns, "reason": detail_of(e)})
-                    continue
-                zones.append(
-                    {
-                        "group": labels.get("ramen.io/group"),
-                        "zone": labels.get("ramen.io/zone"),
-                        "namespace": ns,
-                        "replicas": main.get("spec", {}).get("replicas", 0),
-                        "ready": (main.get("status") or {}).get("readyReplicas", 0),
-                        "canary_replicas": can.get("spec", {}).get("replicas", 0),
-                        "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
-                        "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(
-                            "iam.gke.io/gcp-service-account"
-                        ),
-                    }
-                )
-            return {
-                "groups": sorted({z["group"] for z in zones if z.get("group")}),
-                "zones": zones,
-                "skipped": skipped,
-                "service_accounts": self._iam().list_accounts(),
-                "at": now(),
-            }
-
-        return await asyncio.to_thread(run)
+        """Survey every cluster (§28.2: home and the satellites); identities are project-level, listed once."""
+        zones: list[dict] = []
+        skipped: list[dict] = []
+        for cluster in await self._all_clusters():
+            kube = self._use(cluster)
+            await asyncio.to_thread(self._survey, kube, self.cc, self.cluster_key(cluster), zones, skipped)
+        self._use("home")
+        return {
+            "groups": sorted({z["group"] for z in zones if z.get("group")}),
+            "zones": zones,
+            "skipped": skipped,
+            "service_accounts": await asyncio.to_thread(self._accounts),
+            "at": now(),
+        }

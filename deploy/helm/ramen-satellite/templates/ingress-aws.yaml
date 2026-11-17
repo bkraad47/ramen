@@ -1,0 +1,28 @@
+{{- if eq .Values.provider "aws" }}
+# The satellite edge on EKS (CONTRACTS §8 shape, §28.1): one ALB for IngressGroup {{ .Values.aws.albGroup }}. Worker
+# namespaces add their own Ingresses (header conditions ramen-group / ramen-zone, group.order 10) to it. There is no
+# console here, so this catch-all answers a fixed 404; it exists so the ALB, and with it the satellite host, exists
+# right after the install (kubectl -n {{ .Release.Namespace }} get ingress edge) rather than at the first zone.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: edge
+  labels: {{- include "satellite.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/group.name: {{ .Values.aws.albGroup }}
+    alb.ingress.kubernetes.io/group.order: "100"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: {{ required "aws.certificateArn is required (terraform output certificate_arn)" .Values.aws.certificateArn | quote }}
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+    alb.ingress.kubernetes.io/actions.no-zone: '{"type":"fixed-response","fixedResponseConfig":{"contentType":"text/plain","statusCode":"404","messageBody":"ramen satellite: no zone matches ramen-group/ramen-zone"}}'
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: no-zone, port: { name: use-annotation } } }
+{{- end }}

@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+NAME_RE = re.compile(r"^[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?$")  # D92: a DNS label (no trailing -), <= 40
 SECRET_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 KEYNAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # CONTRACTS §13.3: a worker image reference. Repo part: lowercase registry/path with an optional registry port.

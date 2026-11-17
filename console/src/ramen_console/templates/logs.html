@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}Logs{% endblock %}
 {% macro row(e) %}<button class="log-row{{ ' selected' if e.selected }}" type="button" data-i="{{ e.i }}">
 <span class="outcome {{ e.outcome }}">{{ 'Success' if e.outcome == 'success' else ('Failure' if e.outcome == 'failure' else '—') }}</span>
-<span class="who">{{ e.consumer or '—' }}</span><br><span class="meta">{{ e.ts or '—' }}{% if e.method %} · {{ e.method }}{% if e.name %} · {{ e.name }}{% endif %}{% endif %}</span></button>
+<span class="who">{{ e.consumer or '—' }}</span><br><span class="meta">{{ e.ts or '—' }}{% if e.method %} · {{ e.method }}{% if e.name %} · {{ e.name }}{% endif %}{% endif %}</span> <span class="badge proto" title="MCP protocol version served">{{ e.protocol or '—' }}</span></button>
 {% endmacro %}
 {% block body %}
 <div class="card"><form class="inline controls" method="get">

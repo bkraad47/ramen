@@ -1,0 +1,2 @@
+{"type": "tool", "name": "chart_data", "description": "Numbers to chart.", "callable": "run", "ui": "chart",
+ "input": {"n": {"type": "integer", "description": "how many"}}}

@@ -23,7 +23,7 @@ environment and zone.
 ## Add one
 
 === "Console"
-    **Secrets → choose the group** → name, value, optional environment and zone → **Add**. The page is open to
+    **Secrets → choose the group** → name, value, optional environment and zone → **Add secret**. The page is open to
     super admins and group admins only.
 
 === "API"
@@ -55,9 +55,20 @@ with a warning so the rest of the file still applies.
 | `store` | the console store, Fernet-encrypted with `RAMEN_FERNET_KEY` (local, kind) | nothing; the console injects the value on deploy |
 | `gcp` | Secret Manager `ramen-<group>-<env or all>-<zone or all>-<NAME>` | `secretAccessor` on `ramen-<group>-*`, granted at zone creation |
 | `aws` | Secrets Manager `ramen/<group>/<env or all>/<zone or all>/<NAME>` | `GetSecretValue` on `ramen/<group>/*`, granted at zone creation |
-| `azure` | Key Vault `ramen--<group>--<NAME>` | Key Vault Secrets User on exactly the group's secrets, granted at zone creation |
+| `azure` | Key Vault `ramen--<group>--<env or all>--<zone or all>--<NAME>` (characters Key Vault refuses, `-` and `_` included, escaped as `-XX` hex) | Key Vault Secrets User on exactly the group's secrets, granted at zone creation |
 
 The charts set `gcp`, `aws` and `azure`. MCP keys are stored through the same backend.
+
+### The console's own secrets (1.0.0)
+
+The console keeps secrets of its own: the SMTP password, the GitHub App private key, identity-provider client
+secrets, telemetry headers, group repo tokens and throttle Redis URLs. On a cloud each of them is written to the same
+secret manager as a secret of its own (`ramenc-…` on GCP, `ramenc--…` on Azure, `ramen-console/…` on AWS) and the store keeps
+only a reference; a new value is a new secret and the old one is deleted. No worker identity can read them: the
+names fall outside every worker's grant. Locally (`store`) they stay Fernet-encrypted in the store. Values written
+before 1.0.0 are moved on the first start. Password and key hashes are not secrets in this sense and stay in the
+store. The Config page lists each section's settings and shows a secret only as *set (hidden)* or *not set*; every
+secret the console reads or writes is scrubbed from its logs, deploy logs and backups (a URL's `user:pass@` too).
 
 ## Special names
 

@@ -13,6 +13,25 @@ Viewer of three and an MCP User of two more.
 Group admins cannot approve their own permission requests, grant a role above their own, or see other groups.
 A person with no membership anywhere sees only their own account page.
 
+Since 1.0.0c the console has more per-group sections; the same rule applies to each — **edit** is a super admin or
+that group's admin, **view** is any member of the group, a member of another group is refused (`403`):
+
+| Section | Super admin | Group admin | Viewer | MCP user |
+|---|---|---|---|---|
+| **LLM providers** (Config page, org scope) and their model lists | edit | — | — | — |
+| **LLM providers (group)** and their model lists | edit | edit | — | — |
+| **Evals**, **Scans**, **Guardrails** cards (Required, Gate, provider, model) | edit | edit | — | — |
+| Group page: packages, **apps and skills** per zone, deploy badges | view | view | view | — |
+| **Scan report** of a deploy, **app preview** | view | view | view | — |
+| **LLM configs** page and **Accept** (`POST /api/v1/groups/<g>/configs/accept`) | accept | accept | accept | accept |
+| **Telemetry ingest** `POST /otlp/v1/*` | with a session naming the group, an MCP key, or a user token: any member | | | |
+
+A `devops` API key follows the role and groups it was minted with on the API routes; an `agent` key (`rmk_`) is a
+worker credential and is refused by every console route. The ingest takes a bearer only (a person's OAuth token, an
+MCP key, or a console session naming its group in `ramen-group`); console API keys are not telemetry credentials.
+Every row is asserted per role by the local security matrix (`tests/conformance/test_security_matrix.py`) and on each
+cloud by the auth matrix (`tests/cloud/test_auth_matrix.py`).
+
 ## Custom roles
 
 Since 0.7.5 a super admin can define roles of their own on the Config page's **Roles** card (or
@@ -26,7 +45,10 @@ what the console lets it do; a label; and an **OAuth only** switch. Its name is 
 
 - **Per-tool access** ([groups and zones](groups-zones.md)) can list or call a tool for `analyst` without opening it
   to every viewer. A caller with a custom role matches a tool-access entry that names the role *or* its base, so a
-  custom role never has less than its base.
+  custom role never has less than its base. The list also offers **Evals Job** (kind `evals`): the repo's own
+  [evals](evals.md), run against the canary before a deploy goes live. Leave it out of a rule and that tool is hidden
+  from the evals too — its cases error with `Tool <name> not found` — so add it where the evals test a restricted
+  tool. `key` and `evals` are reserved: no custom role may use those names.
 - **Identity provider rules** ([Entra ID and Workspace](sso.md)) can map a provider group straight to it.
 - **OAuth only**: a person holding the role in any group cannot sign in with a password or a magic link; the login
   page answers `403 This account signs in with <provider>`. The built-in roles cannot be made OAuth-only.
@@ -35,7 +57,7 @@ The person's token carries the custom role name, so workers enforce it on both t
 roles and their bases (`RAMEN_ROLES`) on the group's **next deploy**, like per-tool access: until then a new role
 matches no tool-access entry on that worker (it fails closed). Deleting a role that a
 membership, a provider rule or a tool-access entry still uses is refused (`409`) until those are changed. Names are
-lowercase, `a-z0-9_`, up to 32 characters, and may not shadow a built-in.
+lowercase, `a-z0-9_`, start with a letter, 2 to 32 characters, and may not shadow a built-in.
 
 ## Where a membership comes from
 
@@ -70,6 +92,20 @@ login needs another way in first, or the break-glass `RAMEN_ADMIN_FORCE_PASSWORD
 
 Every role, group and password change bumps the person's session epoch, so open sessions and refresh tokens end
 at once and an open tab never keeps a permission it just lost.
+
+Since 1.0.0 (D92) their MCP access tokens end at once too. Workers check a token offline, so the console pushes a
+revocation to the workers of every group the person holds a token for: tokens issued before that moment are refused
+within seconds, and the client signs in again (only if the person still may). The triggers:
+
+- removing a membership, changing a role, setting a password, deleting the user, revoking an approved request;
+- **Sign out everywhere**: `POST /api/v1/users/me/sign-out` for yourself, or `/api/v1/users/<id>/sign-out` for anyone
+  whose account you manage — it ends console sessions and OAuth tokens alike;
+- a client revoking its own token (RFC 7009 `POST /oauth/revoke`), a replayed refresh token (the whole grant), and
+  deleting an OAuth client on the Config page.
+
+A token's life is `RAMEN_OAUTH_ACCESS_TTL` (default one hour); revocation entries are kept no longer than that. A zone
+the console cannot reach keeps accepting the token until the retried push lands (the group page says
+**Revocation pending**), or until the token expires.
 
 ## What an MCP user gets
 

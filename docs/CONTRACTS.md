@@ -60,7 +60,7 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | sa-restrictions | `PUT /api/v1/groups/{group}/sa-restrictions` {rules} | 409 on clash with super-admin rules |
 | verbose | `POST /api/v1/groups/{group}/environments/{env}/verbose` {verbose} | |
 | requests | `POST\|GET /api/v1/requests`, `POST /api/v1/requests/{id}/approve` | permission requests (F4.2) |
-| restore / password | `POST /api/v1/backups/{id}/restore` {dry_run,prune,reconcile,force} (§13.1), `POST /api/v1/users/{id}/password` | |
+| restore / password | `POST /api/v1/backups/{id}/restore` {dry_run,prune,reconcile,force} (§13.1), `POST /api/v1/users/{id}/password`, `POST /api/v1/users/{id|me}/sign-out` (D92, §16.7) | |
 | revocation (v0.4.1) | `POST /api/v1/requests/{id}/deny`, `POST /api/v1/requests/{id}/revoke`, `DELETE /api/v1/groups/{group}/zones/{zone}/permissions/{permission}` | super admin (§13.2) |
 | worker images (v0.4.1) | `GET\|POST /api/v1/groups/{group}/images`, `PUT\|DELETE /api/v1/groups/{group}/images/current` | GET: viewer of the group; writes: super admin (§13.3) |
 | logs | `GET /api/v1/logs?group&zone&worker?&tail&download=1` → text/plain (+Content-Disposition attachment) | |
@@ -81,6 +81,14 @@ Services: `firestore` (emulator, 8081), `console` (8443), `worker` (node-rs + ru
 
 ## 6. Versioning
 `ramen/VERSION` is the single source; Cargo.toml and both pyproject versions must equal it (CI checks).
+- **Base images (1.0.0, Phase 9).** Every Ramen-built image (worker, console, SkillSpector, both Glama files) names its
+  base by language minor + `-slim` only — `python:3.12-slim` for everything that installs the runtime and for
+  SkillSpector, `python:3.14-slim` for the console, `rust:<minor of rust-toolchain.toml>-slim` for the build stages —
+  never a patch version, a Debian codename or a digest: upstream re-publishes these tags with security fixes and the
+  next build takes them (Debian 13 trixie as of 1.0.0). Third-party images in the chart and compose carry plain version
+  tags (the chart and compose must agree, §34.1). `.github/dependabot.yml` proposes updates weekly with a 14-day
+  cooldown; a Python or Rust minor is bumped by hand. Ramen's own images may still be pinned per install with the
+  chart's opt-in `image.digest` / `image.workerDigest` (D85).
 
 ## 7. GCP deployment (v0.2.0, binding)
 Decisions: D6 one zone first but multi-zone capable, D16 throwaway project, D17 static IP + self-signed cert.
@@ -98,8 +106,8 @@ Decisions: D6 one zone first but multi-zone capable, D16 throwaway project, D17 
 
 ## 8. AWS deployment (v0.3.0, binding; applied to a real account since 0.5.6, so D18's "untested" no longer holds)
 Mirror of §7 with AWS primitives. Everything is built and unit-tested with moto/fakes; nothing is applied to a real account and the docs must say so.
-- **Terraform (`deploy/terraform/aws`)**: EKS cluster `ramen` (one small managed node group, var `region` default `us-east-1`), DynamoDB table `ramen` (pk/sk single-table, on-demand; matches the existing `dynamodb` store adapter), S3 groups bucket `ramen-<account>-groups`, Secrets Manager, ECR repos `ramen/console` + `ramen/worker`, console IAM role (IRSA) with S3/SecretsManager/DynamoDB/EKS-describe/IAM-create-role (scoped by path `/ramen/`)/WAF/ELB permissions, AWS Load Balancer Controller + Fluent Bit → CloudWatch Logs (Container Insights) installed via Helm from Terraform, a self-signed cert imported into ACM (no domain), outputs `cluster_name`, `region`, `console_url`, `ecr_console`, `ecr_worker`, `console_role_arn`.
-- **CloudFormation (`deploy/cloudformation/ramen.yaml`)**: the same base resources (EKS, node group, DynamoDB, S3, Secrets Manager, ECR, IAM roles, OIDC provider) as one template with parameters, for teams that cannot run Terraform. Helm steps are documented, not templated.
+- **Terraform (`deploy/terraform/aws`)**: EKS cluster `ramen` (one small managed node group, var `region` default `us-east-1`), DynamoDB table `ramen` (pk/sk single-table, on-demand; matches the existing `dynamodb` store adapter), S3 groups bucket `ramen-<account>-groups`, Secrets Manager, ECR repos `ramen/console` + `ramen/worker`, console IAM role (IRSA) with S3/SecretsManager/DynamoDB/EKS-describe/IAM-create-role (scoped by path `/ramen/`)/WAF/ELB permissions, AWS Load Balancer Controller + Fluent Bit → CloudWatch Logs (Container Insights) installed via Helm from Terraform, a self-signed cert imported into ACM (no domain), outputs `cluster_name`, `region`, `console_url`, `ecr_console`, `ecr_worker`, `console_role_arn`. Since 1.0.0c the managed `aws-ebs-csi-driver` addon (after the node group; IRSA role `/ramen/ramen-ebs-csi` for `kube-system/ebs-csi-controller-sa`, AWS-managed `AmazonEBSCSIDriverPolicy`; one controller replica, volumes tagged `app=ramen`; output `ebs_csi_role_arn`) provisions the chart's PVCs: EKS ships only the in-tree `gp2` class, which provisions nothing. The class is the chart's (no kubernetes provider in the module): `storage.createAwsGp3` (provider=aws only) adds StorageClass `gp3` (`ebs.csi.aws.com`, `type: gp3`, `encrypted: "true"`, `WaitForFirstConsumer`, expansion on, the cluster default) and `storage.className` is every chart PVC's class unless `evals.storageClassName` / `otel.phoenix.persistence.storageClass` names one (empty = the cluster default); the AWS `engines_set` carries `storage.className=gp3,storage.createAwsGp3=true`. Satellites run no PVCs and get no driver.
+- **CloudFormation (`deploy/cloudformation/ramen.yaml`)**: the same base resources (EKS, node group, DynamoDB, S3, Secrets Manager, ECR, IAM roles, OIDC provider; since 1.0.0c the `EbsCsi` addon with `EbsCsiRole` and output `StorageSet` for the chart's `gp3` class) as one template with parameters, for teams that cannot run Terraform. Helm steps are documented, not templated.
 - **Helm**: `deploy/helm/ramen` gains `provider: gcp|aws`. On AWS: console Ingress class `alb` with annotations `group.name: ramen`, `scheme: internet-facing`, `certificate-arn`, `listen-ports [{"HTTPS":443}]`; each worker namespace gets an Ingress in the same ALB group with header conditions `ramen-group`/`ramen-zone` + the gRPC paths of `route.paths` (Mcp, Health, reflection; Admin internal), `backend-protocol-version: GRPC` target groups and a gRPC health check (success code 0) — v0.3.1 §11; since 0.6.1 a second Ingress `worker-http` (same group, conditions and weighted split) carries `/mcp` and `/.well-known/oauth-protected-resource` on `HTTP1` target groups health-checked on the metadata path (`200-499`), because a GRPC target group answers `464` to non-gRPC requests; `RAMEN_MCP_PATH_PREFIX` is gone; worker KSA annotated with the group+zone IAM role (IRSA); pods get `RAMEN_BUCKET_URI=s3://<bucket>/<group>`.
 - **Runtime**: `ramen_runtime.bucket.sync` handles `s3://` (boto3) as it does `gs://`.
 - **Console AWS adapter (`ramen_console.cloud.aws`)**: `sync_repo` → S3 prefix; zone attach = namespace + manifests + Ingress; deploy = same canary flow as GCP; `workers()` = pods + `Admin/Metrics` (§11); `logs()` = CloudWatch Logs Insights query on the Container Insights log group filtered by namespace/pod, downloadable; `rebalance()` = weighted target groups (stable/canary) via the Ingress `actions` annotation; `set_ip_rules()` = WAFv2 IPSet + web ACL associated to the ALB (allow list, default block) + `RAMEN_ALLOWED_CIDRS` in the deploy Secret + worker roll; `create_service_account()` = IAM role `ramen-<group>-<zone>` trusting the cluster OIDC provider for KSA `ramen-<group>-<zone>/worker`, policies scoped to the group's S3 prefix and secrets path; `detach_group` deletes namespaces + roles + the group's WAF IP sets; `refresh` reconciles. Since 0.6.1: before any canary pod change the adapter sets the stable/canary split to 100/0 and waits `RAMEN_ALB_SPLIT_DRAIN_SECS` (default 15), and gives the canary its share back only after it passed; a match-all CIDR (`0.0.0.0/0`, `::/0`) goes to the WAF IP set as its two `/1` halves (IP sets take /1–/32); `wafv2:GetWebACLForResource` is granted on `*` (it names no web ACL), associate/disassociate stay scoped. Secrets backend `aws`: Secrets Manager names `ramen/<group>/<env|all>/<zone|all>/<NAME>` with tags; store keeps `sm://`-style ref `asm://`.
@@ -388,8 +396,8 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   access log records as the consumer (`key_id` stays for keys). A token for another group/zone is `401` — it is
   not a credential for this worker at all, and the challenge tells the client where to get one that is.
 - Revocation: the console's session epoch (V1.4) is embedded in refresh tokens; bumping it (password/role change,
-  delete, restore) invalidates refresh. Access tokens live ≤ 1 h and are not revocable individually — stated in the
-  security how-to.
+  delete, restore) invalidates refresh. Access tokens live ≤ 1 h (`RAMEN_OAUTH_ACCESS_TTL`) and, since 1.0.0 (D92),
+  are revocable before that through the pushed denylist of §16.7.
 
 ### 16.4 Defaults and clients (X2, X6, X7)
 - Quickstart, `make demo`, `deploy/local/mcp-client-config.example.json`, the README and the how-tos land a new user
@@ -421,6 +429,46 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   only once HTTP is the front door — which this release makes true, so it may be claimed for HTTP clients and no
   further. SECURE is one sentence: user code never runs in the process that holds keys and auth. The unverified
   list stays in the README as a feature of the pitch, not a footnote.
+
+### 16.7 Revocation that takes effect at once (D92, 1.0.0, binding)
+Keys and access tokens are checked offline by the node; the console tells the node what is revoked.
+- **The list.** `RAMEN_REVOKED` = compact JSON `{"keys": [<lowercase hex SHA-256 of an rmk_ key>], "jti": [<token id>],
+  "sub": {<user id>: <unix seconds>}}`, per group, in every zone's deploy config (`deploy.zone_config`, so every deploy
+  and every §26.3 push carries it). The node merges it from every source — env, deploy file, and the overlay below —
+  as a union (it never shrinks a list it holds); a listed key is dropped from `RAMEN_MCP_KEYS` (the call is
+  `UNAUTHENTICATED` / HTTP 401 like any unknown key); a token whose `jti` is listed, or whose `sub` is listed with
+  `iat` ≤ that time (or no `iat`), is refused the same way with access-log reason `token_revoked`. A malformed list is a
+  config error (fatal at start, "keeping current" at a reload).
+- **At once.** `ramen.v1.Admin/Reload` takes `ReloadRequest.revoked` (bytes, the same JSON); the node merges it over the
+  config it re-reads before anything else and keeps it (in memory) for every later reload until the pod restarts, so a
+  pushed revocation holds on a pod whose env (the deploy Secret) still names the key; malformed → `INVALID_ARGUMENT`,
+  nothing changes. Every adapter's `push_config` sends the zone's `RAMEN_REVOKED` on each reload, then rolls the pods
+  as before (the restart makes it the env).
+- **Store.** `revocations` docs `{kind: key|jti|sub, group, value, before?, exp, reason, created}`; `exp` = a key's
+  delete + 24 h, a token id's token `exp`, a person's cut-off + `RAMEN_OAUTH_ACCESS_TTL` — never longer than something
+  it covers can be presented; expired entries are pruned when the list is built. Refresh records carry the `jti` and
+  `access_exp` of the access token minted with them; a person's entry is written for every group in which they hold a
+  live refresh record (where a live token can be), and none when they hold none.
+- **Triggers.** Key: `DELETE /api/v1/groups/{g}/mcp-keys/{id}` and `DELETE /api/v1/api-keys/{id}` (an agent key, in
+  every group it was mirrored to); minting a key pushes too, so a rotation (mint, then revoke) needs no deploy. Person:
+  every session-epoch bump — membership removed or changed, role changed, user deleted, password set or reset, an
+  approved request revoked, an IdP mapping that changes the effective set — and `POST /api/v1/users/{uid}/sign-out`
+  (`me`, or anyone whose account the caller may manage; ends the console sessions too; answers `revoked_groups`).
+  Token: RFC 7009 `POST /oauth/revoke` (`token`, `token_type_hint`, `client_id`; public clients, no secret): an access
+  token's `jti` until it expires, a refresh token's whole grant with every access token it minted; unknown, malformed
+  or expired tokens answer `200 {}`, another client's token `400 invalid_request`, an unknown client `401
+  invalid_client`; the metadata names `revocation_endpoint`. Refresh-token reuse and OAuth client deletion deny every
+  live access token of the grants they end.
+- **Push and retry.** `revocation.Pusher.push(group)` = `deploy.push_config(svc, warnings, group)` (only that group's
+  zones), one at a time per group, a request that arrives during a push answered by the next one. Key routes push
+  synchronously and answer `pushed`, plus `warning` (`"<g>/<z>": "<error>; … retried in the background"`) and
+  `pending: ["<g>/<z>"]` for a zone not reached; person and token triggers push in the background. A zone not reached
+  is recorded in `config/revocation_pending` (`{groups: {g: {since, zones, tries}}}`), shown on the group page above
+  the MCP keys, and retried every `RAMEN_REVOKE_RETRY_SECS` (default 30) until it lands; a sleeping zone's Secret is
+  rewritten by the push, so it wakes with the list.
+- **TTL.** `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) is the access token's life and the longest a person's entry
+  is kept. Shorter = a smaller window if the console cannot reach a zone and a shorter list, at the cost of a refresh
+  per TTL per client. TLS and every enforcement gate are unchanged.
 
 ## 17. v0.5.1 — the end-to-end guide, its screenshots, and the GKE proof of 0.5.0 (binding)
 - 17.1 One how-to, `docs/how-tos/end-to-end.md` (folded into `docs/get-started.md` by the 0.6.0 docs reorganization), walks the whole path **console → worker → AI client** twice: on the
@@ -544,7 +592,7 @@ negative and combination tests (the brief's acceptance bar); the combinations ar
 
 ### 21.1 Runtime on Python 3.12 (D45)
 - `runtime-py` `requires-python = ">=3.12,<3.13"` — 3.12 only, because the flagship guardrails engine (NeMo
-  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim`; CI runtime jobs
+  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim` (§6); CI runtime jobs
   (`runtime`, `node-conformance`, compose, kind) install 3.12. The console stays on 3.14. `scripts/check_versions.py`
   fails when a runtime pin and the Dockerfiles disagree.
 
@@ -588,8 +636,11 @@ tools:                  # per-tool opt-in; a tool not listed is never checked
   section shows "Guardrails: nemo · word_count (pre, post), unit_convert (pre)" per zone. Golden cases (C3) run
   through the hooks like any call: a case whose tool is blocked by a rail fails the gate with the rail's message
   (that is the point of a test case).
-- LLM-backed rails (`models:` in NeMo's config.yml) take their API keys from `mcp/env.yaml` (0.6.0: exported into the
-  runtime process before load). The demo repo ships deterministic rails (no model, no cost).
+- LLM-backed rails get their model and key from Ramen only (§36.1 named rails, §36.2 scoped providers). Deprecated
+  since 1.0.0c: a non-empty `models:` in the repo's NeMo config (still handed to the repo's own flows, with
+  `warnings: ["guardrails: models: in config.yml is deprecated since 1.0.0c; set the provider on the group or the
+  org"]` in the `runtime.load` result, logged by the deploy, never a refusal) and LLM keys via `mcp/env.yaml` (the
+  rails still load after it). The demo repo keeps `models: []`.
 
 ### 21.3 Identity federation (D47)
 - **Group source per provider.** `RAMEN_OAUTH_<NAME>_GROUPS = claim` (default, today's behaviour: the role claim is
@@ -774,3 +825,1515 @@ Source: `reports/security-concurrency-v0.8.0.md` (private workspace). Each item 
 - 22.8 Known and documented, not changed: `Store.transaction()` is a per-process lock, so the console runs as one
   replica (chart default `console.replicas: 1`); a guardrail hook that overruns its timeout leaves its thread running
   after the fail-closed answer.
+
+## 23. v1.0.0 — MCP 2026-07-28: stateless core, standard headers, MRTR, tasks (binding)
+Spec revision 2026-07-28 (SEPs 2575, 2567, 2243, 2322, 2549, 2577; tasks extension `io.modelcontextprotocol/tasks`).
+The node is **dual-era**: 2025-06-18 clients are served exactly as in 0.8.0 (§16, §20); nothing below changes a legacy
+answer. `MODERN = "2026-07-28"`; `LEGACY = ["2025-06-18", "2025-03-26", "2024-11-05"]`.
+
+### 23.1 Era selection and the modern envelope
+- A message is **modern** when the HTTP header `MCP-Protocol-Version` is not a legacy version, or the body has
+  `params._meta["io.modelcontextprotocol/protocolVersion"]`. Everything else is legacy (a bare request with neither
+  included). On gRPC (`Mcp/Call`) only the body decides, and the header rules of §23.2 do not apply.
+- Order on `POST /mcp`: Accept/Content-Type → address → Origin → credential (§16.1, unchanged) → body → era → modern
+  checks → throttle/inflight → dispatch. Modern checks, in this order, each answered as a JSON-RPC error carrying the
+  request `id`:
+  1. `_meta` missing, or without `protocolVersion` or `clientCapabilities` (an object) → `-32602`, HTTP 400.
+     `clientInfo` is optional.
+  2. header `MCP-Protocol-Version` missing or ≠ the body version → `-32020`, HTTP 400.
+  3. version ≠ `MODERN` → `-32022`, HTTP 400, `data: {"supported": [MODERN, ...LEGACY], "requested": "<v>"}`.
+  4. standard headers (§23.2) → `-32020`, HTTP 400.
+  5. `initialize`, `ping`, `logging/setLevel`, `resources/subscribe`, `resources/unsubscribe` and any unknown method →
+     `-32601`, HTTP 404. `notifications/*` → 202, ignored.
+- HTTP status of a modern JSON-RPC error: 400 for `-32020/-32021/-32022` and the `_meta` `-32602`; 404 for `-32601`;
+  200 for every other JSON-RPC error. Transport denials keep §16.1 (401/403/413/429/503).
+- Modern requests ignore `Mcp-Session-Id` and never get one. `GET /mcp` stays 405; `DELETE /mcp` stays legacy-only.
+- Every modern result carries `resultType` (`complete` | `input_required` | `task`) and
+  `_meta["io.modelcontextprotocol/serverInfo"] = {"name": "ramen-node", "version": <node version>}` (merged into an
+  existing `_meta`). `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` and
+  `server/discover` add `ttlMs` (`RAMEN_LIST_TTL_MS`, default 60000; `resources/read` always 0) and
+  `cacheScope: "private"` (lists vary by caller).
+- Modern error codes — nothing from `-32000..-32019`: unknown, blocked or hidden tool → `-32602 Unknown tool: <name>`;
+  listable but not callable → `-32602 forbidden: <name> is not callable for <kind>`; unknown/blocked prompt → `-32602`;
+  resource not found or blocked → `-32602 Resource not found`, `data: {"uri": ...}`; runtime not loaded → `-32603`.
+  Access-log reasons (`blocked_name`, `tool_hidden`, `tool_denied`) are unchanged.
+- `server/discover` → `{"resultType": "complete", "supportedVersions": [MODERN, ...LEGACY], "capabilities": {"tools":
+  {"listChanged": true}, "prompts": {"listChanged": true}, "resources": {"listChanged": true}, "completions": {},
+  "extensions": {"io.modelcontextprotocol/tasks": {}}}, "ttlMs", "cacheScope"}`; `extensions` only when a loaded tool
+  has `task: true`. No `logging`, no `resources.subscribe`. Legacy `initialize` is unchanged except that it accepts a
+  requested `2025-11-25` by answering `2025-06-18` (as it already does for any version).
+- `completion/complete` (both eras): values = the `enum` entries of the named prompt argument / template variable that
+  start with `argument.value` (max 100), else `[]`; `{"completion": {"values": [...], "total": n, "hasMore": false}}`.
+- Access log: every `mcp` line gains `protocol` (the version served). `Admin/Metrics` gains
+  `calls_by_protocol: {"<version>": n}`; `subscriptions` (open streams) and `tasks` (live) counts.
+
+### 23.2 Standard headers (HTTP, modern only)
+- `Mcp-Method` is required and must equal `method`. `Mcp-Name` is required on `tools/call`, `prompts/get` (=
+  `params.name`), `resources/read` (= `params.uri`) and `tasks/get|update|cancel` (= `params.taskId`). A value of the
+  form `=?base64?<b64>?=` is decoded (UTF-8) before comparing. Missing, mismatching or undecodable → `-32020`.
+- `Mcp-Param-<Name>`: a tool parameter declares `"header": "<Name>"` in its proto `input` entry (types `string`,
+  `integer`, `boolean` and `enum` only; `<Name>` an RFC 9110 token, case-insensitively unique per tool — otherwise the
+  package fails to load). The MCP `inputSchema` property then carries `"x-mcp-header": "<Name>"`. On `tools/call`: the
+  argument present and non-null in the body ⇒ the header is required and must match (integers numerically, booleans
+  `true`/`false`, base64 sentinel decoded); argument absent or null ⇒ header not expected; unknown `Mcp-Param-*` ignored.
+- The body stays authoritative; a mismatch is refused and logged with reason `header_mismatch`, never guessed.
+- `traceparent`, `tracestate`, `baggage` (HTTP header, else the `_meta` key) are copied onto the access-log line as
+  `trace: {"traceparent": ..., ...}` when `traceparent` matches the W3C shape; never forwarded to tools.
+- CORS (§16.1) allows and exposes the new header names. Compatibility gate (§19): adding, removing or renaming a
+  parameter's `header` is a breaking change unless `breaking: true`.
+
+### 23.3 Group contract additions (runtime-py; all optional, 0.8 packages load unchanged with the same manifest hash)
+`from ramen_runtime import ...` inside tool/resource/prompt code:
+- Content: `text(s)`, `image(data: bytes, mime)`, `audio(data: bytes, mime)`, `resource(uri, text=None | blob=None,
+  mime="text/plain")`. A tool may return one block, a list of blocks, or (as before) any JSON value. Blocks go into
+  `content` as given; no `structuredContent` for a block result.
+- Resources: the callable may return `bytes` (→ `blob`, base64). A `uri` containing `{var}` is a template: listed by
+  `resources/templates/list` as `uriTemplate` (not by `resources/list`), matched on read (`{var}` = one path segment),
+  variables passed to the callable as keyword strings and declared in `input`.
+- Prompts: `"callable": "<fn>"` (in `<name>.py`) instead of `"skill"`: returns a string, a block, or a list of
+  `{"role", "content"}` messages / blocks (role `user`). Arguments as keywords.
+- `InputRequired(requests: dict[str, dict], state=None)` — raise it from a tool or callable prompt. Builders:
+  `elicit(message, schema)` (form), `elicit_url(message, url)`, `sample(messages | text, max_tokens=100, **params)`,
+  `list_roots()`. On the retry `input_responses()` returns the client's answers (dict, `{}` on the first call),
+  `request_state()` the verified `state` (or `None`), `client_capabilities()` the declared capabilities.
+  A form-mode schema with a property named like a credential (`password|passwd|secret|token|api[_-]?key|credential|
+  card|cvv|ssn`, case-insensitive) is refused: the call answers `isError` `input request refused: <key>.<field> looks
+  like a secret; use elicit_url` — so a golden case catches it at the canary.
+- `MissingCapability(required: dict)` — raise when the tool cannot run for this client → `-32021`.
+- `progress(progress, total=None, message=None)` — no-op unless the request carried `_meta.progressToken`.
+- Tool proto `"task": true` — see §23.5.
+
+### 23.4 MRTR (multi round-trip requests)
+- Sidecar protocol (§2): `runtime.call_tool` / `runtime.get_prompt` params gain `inputResponses` (object, optional),
+  `state` (any JSON, optional — already verified by the node), `client: {"capabilities": {...}}`, `progress: bool`.
+  The result is the 0.8 shape, or `{"resultType": "input_required", "inputRequests": {...}, "state": <json>?}`, or
+  `{"resultType": "missing_capability", "requiredCapabilities": {...}}`. While a call runs the runtime may write
+  `{"jsonrpc": "2.0", "method": "runtime.progress", "params": {"id": <call id>, "progress", "total"?, "message"?}}`.
+- Node, modern era: `input_required` → result `{"resultType": "input_required", "inputRequests", "requestState"?}`;
+  `requestState` only when the tool gave `state`. An input request whose method the client did not declare
+  (`elicitation/create` → `elicitation`, with `mode: "url"` → `elicitation.url`; `sampling/createMessage` → `sampling`;
+  `roots/list` → `roots`), and `missing_capability`, → `-32021` with `data.requiredCapabilities` (HTTP 400).
+- `requestState = b64url(payload) "." b64url(HMAC-SHA256(key, payload))`, key derived from the group session secret
+  (label `mrtr`), `payload = {"v": 1, "s": state, "b": caller binding (§16.2), "g": group, "z": zone, "m": method,
+  "n": name, "a": args digest (C12), "e": expiry}`; TTL `RAMEN_MRTR_TTL_SECS` (default 600). A presented state that is
+  malformed, fails the MAC, is expired, or was issued for another caller, group, zone, method, name or arguments →
+  `-32602 requestState integrity check failed` (log reason `state_invalid`). Not single-use.
+- `inputResponses` must be an object of objects when present → else `-32602`. Unknown keys are the tool's to ignore.
+- Guardrails (§21.2): **pre runs on every round** — the first call and each retry; on a retry the engine sees the
+  arguments plus `"$inputResponses": {...}` — and before the tool body runs again. **Post runs on the final
+  (`complete`) result only.** A blocked round is the usual `isError` result with `_meta.ramen.guardrail`.
+- Legacy era: an `input_required` outcome becomes `isError` `this tool needs more input (<keys>); it can only ask a
+  client that speaks MCP 2026-07-28` (prompts: `-32602` with the same text). `missing_capability` → the same style.
+- `progress`: when the request has `_meta.progressToken` and `Accept` includes `text/event-stream` (either era), the
+  POST is answered as SSE: one `notifications/progress` (`progressToken`, `progress`, `total`?, `message`?) per runtime
+  line, then the response. Otherwise progress lines are dropped.
+- Golden cases (§19): a case may carry `respond: {<key>: <response>}`; the console then calls in the modern era
+  declaring elicitation (form + url), sampling and roots, and on `input_required` retries once with those responses
+  and the `requestState`; `expect` applies to the final result. `expect: {input_required: [<keys>]}` asserts the
+  first round instead.
+
+### 23.5 Tasks (`io.modelcontextprotocol/tasks`, modern only)
+- A tool with `"task": true` called by a client that declared the extension on that request returns
+  `{"resultType": "task", "taskId", "status": "working", "createdAt", "lastUpdatedAt", "ttlMs", "pollIntervalMs"}`;
+  any other caller (legacy, or no declaration) gets the synchronous call as before (bounded by the call timeout).
+- `tasks/get {taskId}` → the task fields + `inputRequests` (`input_required`) | `result` (`completed`, the tool result
+  incl. `isError`) | `error` (`failed`); `tasks/update {taskId, inputResponses}` and `tasks/cancel {taskId}` →
+  `{"resultType": "complete"}`. Called without the extension declared → `-32021`. Unknown, expired, or another
+  caller's task → `-32602 Unknown task` (a task is bound to the caller binding of §16.2 and to group + zone).
+- `taskId`: 128 random bits, hex. `ttlMs` = `RAMEN_TASK_TTL_SECS` (default 3600) × 1000; `pollIntervalMs` 2000;
+  at most `RAMEN_MAX_TASKS` (default 4) running per pod — beyond it the call is refused like inflight (429).
+- Runtime: `runtime.task_start {taskId, name, arguments, client}` returns at once and runs the tool on a thread;
+  `runtime.task_poll {taskId}` → `{"status", "result"?, "error"?, "inputRequests"?}`; `runtime.task_update {taskId,
+  inputResponses}` (the tool body runs again with them); `runtime.task_cancel {taskId}` (cooperative: the result is
+  discarded). Guardrails: pre before the start and before every re-run, post on the final result; a block completes
+  the task with the `isError` result.
+- Node: the owning pod polls the runtime (500 ms) and writes the record to the task store: the scope Redis
+  (`RAMEN_REDIS_SCOPE_URL`), else the item Redis, else process memory (single pod; documented). Any pod of the zone
+  answers `tasks/get` from the store; `update`/`cancel` reaching another pod are queued in the store for the owner.
+  **In a pod without a Redis store no tasks are handed out**: a zone normally runs two pods (stable and
+  canary) and a poll would reach the wrong one, so `task: true` tools answer synchronously and the extension is not
+  advertised (`RAMEN_TASKS=1|0` forces either way).
+  A `working` task whose owner stopped heart-beating (30 s) is `failed` (`-32603 worker lost`). The sidecar is not
+  idle-killed while a task runs. Access log: `tasks/*` lines carry `name` = the tool and `task` = the id.
+
+### 23.6 Subscriptions (`subscriptions/listen`, HTTP, modern only)
+- A POST answered as `text/event-stream` (`X-Accel-Buffering: no`): first the ack
+  `notifications/subscriptions/acknowledged` with `params._meta["io.modelcontextprotocol/subscriptionId"]` = the
+  request id and `params.notifications` = the honoured subset of `toolsListChanged`, `promptsListChanged`,
+  `resourcesListChanged` (+ `taskIds` when the extension is declared — asking for `taskIds` without declaring it is
+  `-32021`, as the extension requires; `resourceSubscriptions` is never honoured);
+  then, after each load whose manifest hash differs, one `notifications/{tools,prompts,resources}/list_changed` per
+  requested kind, each tagged with the subscription id; `notifications/tasks` for watched tasks; an SSE comment every
+  15 s. On shutdown/drain the node sends `{"id", "result": {"resultType": "complete", "_meta": {subscriptionId}}}`.
+- A stream holds no inflight permit; at most `RAMEN_MAX_SUBSCRIPTIONS` (default 64) per pod, then 429. It is
+  per-pod: a stream learns of the reload of the pod it is connected to. Over gRPC the method is `-32601`.
+- Supersedes the "no push channel" note of §20 for modern clients; the legacy SSE answer of C11 is unchanged.
+
+### 23.7 Verification
+- Golden regression: every 0.8 tool/resource/prompt of the fixture and demo groups answers byte-identically (minus
+  `ms`) on the legacy era, and identically plus the modern envelope on the modern era, on both transports.
+- Official suite (`@modelcontextprotocol/conformance@alpha`, pinned version) against a node serving
+  `tests/fixtures/conformance_group` through a local proxy that adds the credential (the suite cannot send one):
+  `--requirements 2026-07-28` and `--spec-version 2025-06-18`, each with a checked-in expected-failures baseline.
+  A baseline entry needs a one-line reason in the file. Known for the legacy wire: server-initiated sampling,
+  elicitation and logging, and `resources/subscribe` are not offered to 2025-06-18 clients.
+
+## 24. v1.0.0 — sleeping workers, images built on deploy, OpenTelemetry with consent (binding)
+Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" (a sleeping zone has 0 workers) and
+§13.3 "the console never builds" (it starts a build Job; it still holds no registry credential itself).
+
+### 24.1 Sleeping workers
+- Setting per group × zone: `sleep_after_secs` (0 = never, the default; otherwise ≥ 60), set by a super admin or an
+  admin of the group — `PUT /api/v1/groups/{g}/zones/{z}/workers {"sleep_after_secs": n}`, group page → Zone actions.
+  Others never see the control. Zone state: `awake` | `asleep` | `waking`, shown on the workers table.
+- **Idle** = every worker pod of the zone reports (in `Admin/Metrics`) `last_call_at` older than `sleep_after_secs`,
+  `inflight` 0, `tasks` 0 and `subscriptions` 0, and the zone was woken or deployed longer ago than that too.
+  `last_call_at` (epoch seconds, 0 = never) counts authenticated MCP calls only — health, reflection, `Admin/*` and
+  denied calls do not keep a zone awake. The console scheduler checks on its tick; `POST …/zones/{z}/sleep` and
+  `POST …/zones/{z}/wake` (same roles) do it by hand. Every transition is audited (`workers.sleep`, `workers.wake`,
+  with `trigger: idle|manual|call|deploy`).
+- **Asleep** = the zone's `worker` and `worker-canary` Deployments are at 0 replicas and an **activator** runs in
+  the zone namespace: one small pod (`Deployment/worker-activator`, the worker image started with
+  `RAMEN_ACTIVATOR=1`, labels `app: worker`, `ramen.io/role: activator`, requests 10m / 32Mi, no Python runtime
+  started). It is selected by the zone's existing `worker` Service, so every edge (GKE Gateway NEG, ALB, Envoy
+  Gateway, kind NodePort) keeps its route and its health check untouched. Real worker pods carry
+  `ramen.io/role: worker`; `Service/worker-direct` selects `app: worker, ramen.io/role: worker`.
+- Activator behaviour (node-rs): the SAME guards as a worker (`grpc::guard`: address, Origin, credential, throttle)
+  with the zone's own config — an unauthenticated call never wakes a zone. `grpc.health.v1.Health` answers SERVING.
+  `Admin/Metrics` answers `{"asleep": true, "last_call_at": …, "woken": n}`; `Admin/Reload` → `FAILED_PRECONDITION`.
+  An accepted MCP call (HTTP or gRPC): `POST {RAMEN_CONSOLE_INTERNAL_URL}/api/v1/internal/zones/{g}/{z}/wake` with
+  header `x-ramen-admin-key` (once per wake, concurrent calls share it), poll `worker-direct:8080` gRPC health until
+  SERVING, then forward the request unchanged (HTTP: method, path, headers, body, streaming the answer; gRPC:
+  `Mcp/Call` bytes and metadata) and relay the answer. Not SERVING within `RAMEN_WAKE_TIMEOUT_SECS` (default 25, under every edge's default backend
+  timeout; the wake goes on, so the retry finds the zone awake) →
+  HTTP 503 with `Retry-After: 10` / gRPC `UNAVAILABLE`, access-log reason `waking`. Its log lines carry
+  `activator: true`.
+- Console: **sleep** = apply the activator (replicas 1), wait Ready **and listed as a ready address in the Endpoints
+  of `Service/worker`** (1.0.0a: until then kube-proxy still routes to the terminating-but-serving workers, and a
+  draining worker never asks for a wake; a zone role that cannot read Endpoints skips the wait with a warning; not
+  listed within the wait → 502), scale `worker` and `worker-canary` to 0 (the workers' SIGTERM drain serves what is in
+  flight), state `asleep`. **wake** = state `waking`, scale `worker` to
+  the zone's count before it slept (≥ 1) and `worker-canary` to what it was, wait Ready, state `awake`, then scale
+  the activator to 0 — while both exist the activator forwards, so no call is refused. A deploy, a rebalance or a
+  count change on a sleeping zone wakes it first. The autoscaler (§21.7) skips a zone that is not `awake`.
+  `Cloud` gains `sleep_zone(group, zone) -> dict`, `wake_zone(group, zone, count: int, canary: int) -> dict` and
+  `zone_runtime(group, zone) -> {"workers": n, "canary": n, "activator": n}`; local adapter: no-ops that only flip
+  the state (compose has one fixed worker). `/api/v1/internal/*` is reachable in-cluster only (not routed by any
+  edge; the chart's routes list `/api/v1/internal` nowhere and the console refuses it when `X-Forwarded-For` is set).
+
+### 24.2 Worker images built on deploy
+- Per group: `build_image` (bool; default true on gcp/aws/azure when the deployment has a builder, false otherwise),
+  group page → Worker image card, group admins. When true and the checkout has a non-empty `mcp/requirements.txt`,
+  a deploy first ensures the group's image (a file of comments and blank lines counts as empty): tag `b-<group>-<sha256(base image ref + "\n" + requirements.txt)[:16]>`
+  in the cloud's own registry next to the base image — `<region>-docker.pkg.dev/<project>/ramen/worker`, 
+  `<account>.dkr.ecr.<region>.amazonaws.com/ramen/worker`, `<acr>/ramen/worker` (one repository, no per-group
+  repository to create). An `images` record with that tag and `source: "build"`, `status: "ok"` means it exists:
+  nothing is built. Otherwise the console starts `Job/ramen-build-<hash>` in `ramen-system`
+  (`serviceAccountName: ramen-builder`, image `RAMEN_BUILDER_IMAGE`, default a pinned kaniko executor) whose context
+  is a ConfigMap holding `requirements.txt` and
+
+      FROM <base worker image>
+      COPY requirements.txt /opt/ramen/requirements.txt
+      RUN /opt/venv/bin/pip install --no-cache-dir -r /opt/ramen/requirements.txt
+      ENV RAMEN_DEPS_BAKED=<sha256 of requirements.txt>
+
+  waits up to `RAMEN_BUILD_TIMEOUT_SECS` (default 900), records the image (history as §13.3) and uses it for this
+  deploy. A failed or timed-out build fails the deploy before the canary, with the last 40 log lines of the Job in
+  the deploy log; the stable track is untouched. Job and ConfigMap are deleted afterwards (TTL 600 s on the Job).
+- Precedence for the zone's image: an admin's pinned image (§13.3 `images/current` with `source: "manual"`) → the
+  built image → the base image. Runtime: when `RAMEN_DEPS_BAKED` equals the sha256 of the bucket's
+  `mcp/requirements.txt`, `deps.install` is skipped (log `deps baked`); any other value installs as before.
+- The builder identity is the deployment's, never the console's: Terraform creates `ramen-builder` (GCP: GSA with
+  `roles/artifactregistry.writer` on the `ramen` repository, workload identity for `ramen-system/ramen-builder`; AWS:
+  IRSA role with ECR push on `ramen/worker`; Azure: user-assigned identity with `AcrPush`, federated to the KSA) and
+  the chart creates the KSA and sets `RAMEN_BUILDER=1` + `RAMEN_BUILD_REGISTRY` on the console. Without it
+  `build_image` cannot be turned on (422 naming the missing builder). `Cloud` gains
+  `build_image(group, tag, dockerfile, files: dict[str, str]) -> {"image": ref, "log": str}`.
+- kind: `deploy/kind/up.sh` runs an in-cluster registry and sets the same two variables, so the path is testable.
+
+### 24.3 OpenTelemetry
+- Settings (super admin, Config page → Telemetry; `GET|PUT /api/v1/config/otel`): `enabled`, `endpoint` (OTLP/HTTP
+  base URL, e.g. `http://jaeger.ramen-system:4318`), `headers` (what Ramen sends; encrypted, write-only),
+  `client_endpoint` + `client_headers` (what connected agents are told to use; default: `endpoint`, no headers —
+  never Ramen's own `headers`). Stored in `config/otel`; not in backups' secrets-free rule exception: the two header
+  maps are stripped from backups like every secret. Workers get `RAMEN_OTEL_ENDPOINT` / `RAMEN_OTEL_HEADERS` (JSON)
+  on their next deploy.
+- Export. Node: one span per MCP call (`SERVER`, name `mcp <method>`; attributes `mcp.method`, `mcp.name`,
+  `mcp.protocol`, `ramen.group|zone|env`, `ramen.transport`, `ramen.status`, `ramen.reason`, `ramen.key_id`,
+  `ramen.guardrail.stage|engine` when a rail blocked), a child span `runtime <call>` around the sidecar round trip,
+  parent taken from the request's `traceparent` (§23.2); counters `ramen.mcp.calls` and `ramen.mcp.errors` by
+  method/name/status. Never arguments, results or credentials. OTLP/HTTP JSON (`/v1/traces`, `/v1/metrics`),
+  batched off the call path, never failing a call. A batch an unreachable or failing (5xx, 408, 429) collector did not
+  take is kept (≤ 8192 spans, ≤ 120 s, oldest dropped first) and sent once it answers; a batch it refuses (other 4xx)
+  is dropped; counters are cumulative and re-sent (§39.5a, b35). One warning a minute while it fails.
+  Console: one span per deploy job (`ramen.deploy`, attributes group/env/zones, outcome, `ramen.golden.passed|failed`,
+  `ramen.compat`, `ramen.image`), tried again after 5/10/20/30/30 s on no answer, 5xx, 408 or 429. `service.name` `ramen-node` / `ramen-console`, `service.version`.
+- Telling the client. `POST /oauth/token` answers gain `telemetry: {"otlp_endpoint", "headers", "resource_attributes":
+  {"ramen.group", "ramen.zone"}}` when enabled; `server/discover` carries the same object under
+  `_meta["io.ramen/telemetry"]` for any authenticated modern caller.
+- **Consent.** Per group: `require_telemetry_consent` (group admin; only settable while telemetry is enabled).
+  Workers get `RAMEN_TELEMETRY_CONSENT=1` and `RAMEN_TELEMETRY_NOTICE` (the endpoint's host) on deploy. When on,
+  `tools/call`, `prompts/get` and `resources/read` are served only to a caller who accepted:
+  1. A console token carries `tel: true` when the person approved the OAuth consent page, which then shows the
+     telemetry notice and a required checkbox; approving without it is impossible, declining ends the flow as today.
+     Such a caller is never asked again.
+  2. Otherwise, modern era + the client declared `elicitation`: the node answers `input_required` with
+     `inputRequests: {"ramen_telemetry_consent": elicitation/create (form) message "This Ramen group records
+     telemetry about your calls (tool name, timing, outcome — never arguments or results) at <host> and asks your
+     agent to send its telemetry there. Accept to continue.", requestedSchema {accept: boolean}}` and a signed
+     `requestState` (§23.4, bound as usual). A retry with `accept: true` records the consent for that caller
+     binding (store: scope Redis → item Redis → pod memory; 30 days) and runs the call — the tool's own input
+     requests follow in later rounds. `decline`, `cancel` or `accept: false` → `-32602 telemetry consent declined`.
+  3. Modern era without `elicitation` → `-32021` (`requiredCapabilities: {"elicitation": {}}`). Legacy era →
+     `-32003 forbidden: this group requires telemetry consent; use a client that speaks MCP 2026-07-28 or sign in
+     through OAuth`.
+  Lists, `server/discover` and `completion/complete` are not gated (MRTR is not allowed on them). The console's own
+  calls (golden cases, package listing) present the worker admin key and skip the gate. Access-log reasons
+  `consent_required`, `consent_declined`; a recorded consent logs `consent: "granted"`.
+- Chart: `otel.collector: none | jaeger | phoenix` (default none) adds a Jaeger all-in-one (OTLP in, query API) or
+  Arize Phoenix (UI 6006, behind an OTel Collector sidecar on 4318 that turns Ramen's OTLP/JSON into protobuf and
+  drops metrics) to `ramen-system` for trying it out and for the test runs;
+  not for production. Both UIs want a sign-in since D92 (§39.7). Phoenix's SQLite lives on a PVC (`otel.phoenix.persistence`, default on, 5Gi, maxSurge 0);
+  Jaeger keeps traces in memory (lost at a restart).
+
+### 24.4 Verification
+Unit tests per component; kind: a zone sleeps on idle, a call through the edge wakes it and is answered, a deploy
+builds and uses a group image, spans of a call and a deploy arrive in Jaeger, consent by prompt / by token / refused.
+Cloud (GKE, EKS, AKS): the same four, plus every sign-in path: password, API key, MCP key, person's OAuth token over
+HTTP and through the bridge, Entra with group lookup; Google Workspace against a fake unless a live client is given.
+
+### 24.5 The console's own secrets
+On a cloud (`RAMEN_SECRETS_BACKEND` ≠ `store`) every reversible secret the console stores (`storage/encrypted.py`
+SENSITIVE minus hashes and group secrets, plus a provider's `client_secret`) is written to the cloud's secret manager
+as its own secret and the doc keeps `vault:<ref>`; a changed value is a new secret, the old one deleted; refs are
+cached. Names: GCP/Azure `ramenc-…`, AWS `ramen-console/…` — outside every worker grant and boundary. Plaintext
+values found at start are moved. Locally nothing changes (Fernet in the store). The Config page lists each section's
+settings; a secret shows only as set/not set. Every secret read or written is scrubbed (`***`) from every log handler,
+deploy job logs and backups; `scheme://user:pass@` is scrubbed always. Backups keep no nested provider secret and a
+restore merges per entry so the live one survives.
+
+## 25. v1.0.0 — the zones a group may use (superseded by §26.1 in v1.0.0a: zones are bound to groups, `allowed_zones` is gone)
+Asked for by the user on the live GKE console: a group must not reach every zone.
+- `groups[].allowed_zones: list[str]` — the zones the group's environments may use. `GET /api/v1/groups/{g}/zones` →
+  `{"allowed": [...]}` (viewers of the group); `PUT` the same body (super admin only; every zone must exist, 422
+  otherwise; a zone an environment of the group still uses cannot be removed, 409 naming the environment and zone).
+  Audited `group.zones` with a `zone:<z>` tag per zone.
+- A group admin's `POST …/environments` or `PUT …/environments/{env}` naming a zone outside the list → 403 naming the
+  zones. A super admin's environment adds the zones it names to the list (the super admin is the one who decides).
+- New groups start with `[]`. At startup a group without the field gets the zones its environments use, once; a list
+  a super admin set (even empty) is never widened.
+- Group page: the zone tables, zone actions and the environment zone picker show only allowed zones; a super admin
+  edits the list in the "Zones and workers" card, everyone else sees it read-only.
+
+## 26. v1.0.0a — zones bound to groups, persisted deploy jobs, telemetry through Ramen (binding)
+Asked for by the user (D60–D63, 2026-11-14). Supersedes §25.
+
+### 26.1 Zones bound to groups
+- `zones[].groups: list[str]` — the groups a zone serves. Super admin only: `POST /api/v1/zones` takes `groups`
+  (default `[]`), `PUT /api/v1/zones/{zone}/groups {"groups": [...]}` replaces the list (every group must exist, 422;
+  a group whose environment still uses the zone cannot be removed, 409 naming environment and zone). Audited
+  `zone.groups` with a `group:<g>` tag per group.
+- A group's zones are the zones listing it: `GET /api/v1/groups/{g}/zones` → `{"zones": [...]}` (read-only, viewers of
+  the group); `PUT` on it is gone (404). `groups[].allowed_zones` is gone; at startup a zone gets the groups whose
+  `allowed_zones` named it or whose environments use it, once (`zones[].groups` present → left alone).
+- An environment (`POST`/`PUT …/environments`) may name only the group's zones — 403 naming the zones, for every role
+  (a super admin binds the zone to the group first). A worker record (`workers/<g>:<z>`) exists only for a bound
+  pair: binding creates it (defaults as today), unbinding detaches the zone for that group (namespace, workers, zone
+  identity, record) after the 409 check; `worker_config(g, z)` for an unbound pair → 404.
+- Zones page: the zone table gains a `Groups` column with a checkbox dropdown + "Save groups" per row (super admin);
+  "Workers per group" lists bound pairs only. Group page: the "Zones and workers" and "Zone actions" cards are gone;
+  one **Environments** table (environment, ref, verbose, last deploy, actions) with, under each environment row, one
+  row per zone of it: zone (namespace), workers (live cell), size, sleep state, IP allow-list, service account, and
+  the zone's actions (scale, sleep, IP rules, throttle, service account, rebalance, logs) in a `details` disclosure
+  — every zone action keeps its route. The group's zones not used by any environment are listed once below the table
+  ("Bound, unused: …"). The environment zone picker offers the group's zones.
+
+### 26.2 Deploy jobs persisted
+- `jobs` collection: `{id, kind, target, status, started, finished, result, error, log: [...]}`, written at creation
+  and at every log line / end (the log is scrubbed, §24.5). `GET /api/v1/jobs/{id}` and the group page read the store,
+  so a job is visible after a console restart and from every replica. A job still `running` after
+  `RAMEN_JOB_STALE_SECS` (default 1800) without a change is shown and answered as `error: "lost (console restarted)"`.
+  Kept: the last 50 per target (older deleted at creation). Backups do not include jobs.
+
+### 26.3 Telemetry through Ramen
+- **Config version.** `telemetry_version` = first 12 hex of sha256 over the canonical JSON of
+  `{enabled, endpoint, client_endpoint, client_headers}` of `config/otel`. `GET /api/v1/config/otel` (public form) and
+  the Config page show it. The token answer's `telemetry` object (§24.3) gains `version` and `required` (the group's
+  consent switch); `server/discover`'s `_meta["io.ramen/telemetry"]` likewise. Workers get it in `RAMEN_OTEL_CLIENT`
+  (`version` key) and in `RAMEN_TELEMETRY_VERSION`.
+- **Push on update.** Saving `config/otel` rewrites every deployed zone's worker config (the same `cfg` the deploy
+  writes) and sends `Admin/Reload` to each zone's workers, so the new endpoint/headers/version are live without a
+  deploy; the reload's outcome per zone is in the `PUT` answer (`pushed: {"<g>/<z>": "ok" | "<error>"}`) and audited
+  `telemetry.push`. A worker that cannot be reached keeps the old config until its next deploy.
+  On Kubernetes the worker pods read the deploy Secret as env, so the push rewrites the Secret, reloads every pod and
+  rolling-restarts every track that runs — the stable `worker` and a `worker-canary` left by a canary deploy, which
+  serves ~half the zone from the same Secret (a 20 s drain per pod, §24 — calls are not dropped; on AWS the canary
+  leaves the ALB split while it rolls and gets its share back once Ready); a canary that could not be reloaded or
+  rolled leaves the zone `ok` and is named in the answer's `warning: {"<g>/<z>": "<pod>: <code>"}` and in the audit
+  (1.0.0c, P4-B1); locally the env files are rewritten and the workers reloaded.
+- **Report on every call.** When the group requires telemetry (`RAMEN_TELEMETRY_CONSENT=1`), a gated call
+  (`tools/call`, `prompts/get`, `resources/read`) from anyone but the console must carry
+  `params._meta["io.ramen/telemetry"]`:
+  `{"version": "<telemetry_version>", "seq": <int, +1 per report>, "events": [{"ts": "<RFC 3339>", "kind":
+  "mcp" | "llm" | "tool" | "other", "name": "<method or model or tool>", "ms": <int>, "ok": <bool>, "reasoning":
+  "<text, optional, ≤ 4 KiB kept>"}, …]}` — everything the client did since its last report (its MCP calls to any
+  server, its model calls with the reasoning, its other tool calls); `events: []` is a valid report. The same object is
+  accepted on `telemetry/report` (modern, authenticated; answer `{"accepted": <n>, "version": "<current>"}`) for
+  reporting between calls. Limits: ≤ 200 events and ≤ 64 KiB per report (`-32602` beyond).
+  - Missing on a gated call → `-32024 telemetry report required` (HTTP 428), `data: {"version": "<current>"}`;
+    a 2025-06-18 client without the report → `-32003 forbidden: this group requires telemetry; use a client that
+    reports it (MCP 2026-07-28 or the Ramen bridge)`. A 2025-06-18 body that carries the report (the bridge in front
+    of a legacy host) is accepted and forwarded like a modern one — the report is what matters, not the era; a
+    stale version on a legacy body → `-32025` too (HTTP 200 on the legacy era, §23.1). Access-log reason
+    `telemetry_required`.
+  - `version` ≠ the worker's → `-32025 telemetry config changed: sign in again` (HTTP 428), `data: {"version":
+    "<current>"}`; reason `telemetry_stale`. Nothing of the stale report is forwarded.
+  - The gate runs after the consent gate (§24.3) and before the runtime; a call refused here is not dispatched.
+  - A worker not yet told a version (`RAMEN_TELEMETRY_VERSION` empty, a deploy from before this console) accepts
+    any version; a malformed report (shape, limits) is `-32602 invalid telemetry report: <what>` with no reason.
+- **Forwarding.** Each event becomes a span (kind `CLIENT`, named by the event's `name` since 1.0.0c (§32.1; was
+  `client <kind> <name>`), attributes `ramen.event.kind`, `ramen.event.ok`, `openinference.span.kind`, start `ts`, duration `ms`,
+  error `!ok`) under the call's own span (§24.3), attributes `ramen.client.ip`, `ramen.user` (the token's subject /
+  email, else the key id), `ramen.key_id`, `ramen.group`, `ramen.zone`, `ramen.env`, `ramen.worker` (the pod's
+  hostname), `ramen.event.kind`, `ramen.event.seq`, `ramen.reasoning` (the text, ≤ 4 KiB), `ramen.transport`;
+  counter `ramen.client.events` by kind/ok. Reasoning and events never reach the access log or the console; they go
+  to the collector only. A collector that is down drops them (one warning a minute, §24.3) — the call still runs.
+- **Client side (the bridge).** At sign-in the bridge keeps the token answer's `telemetry` object encrypted in memory
+  (a per-process random key, never on disk); it records every call it forwards and offers the host a tool
+  `ramen_report(kind, name, ms, ok, reasoning)` (listed with instructions that the model must report its model and
+  non-MCP tool calls with its reasoning before the next Ramen call); every gated call it forwards carries the report
+  since the last one; `-32025` → it signs in again (refresh grant, else the interactive flow) and retries once;
+  `-32024` from a server it has no config for → it signs in, then retries. Not consenting at sign-in ends the flow
+  as today (§24.3).
+- Chart: `otel.collector: jaeger` or `phoenix` is set for the test deploys (`cloud2.sh`); the Config page's
+  Telemetry section lists the trace UI address when the chart's collector is on (`RAMEN_OTEL_UI_URL`).
+
+## 27. v1.0.0b — environments across groups, zones attached to environments, one admin page (binding)
+Asked for by the user (`instructions/v1.0.0b.md`, 2026-11-14): *a group has many environments, an environment has
+many zones, a zone has workers*; an environment applies to the groups it names, a zone to the environments it names.
+Supersedes §26.1's binding by group: a zone's groups are now **derived** — the union of the groups of its environments.
+Agent-settled details are marked D64–D66 (the user can overrule).
+
+### 27.1 Model
+- **Environment** = a name shared across groups. Storage stays `environments/<group>:<name>` (every per-group state —
+  `blocked`, `blocked_zones`, `tool_access`, `verbose`, `last_deploy`, `zones` — lives there, unchanged); the
+  environment the user sees is the set of docs with that `name` (D64). Its `ref` is one value: a change writes every
+  doc; on migration docs that differ keep theirs and the page shows the first with a "differs per group" note.
+  Names are unique console-wide: `POST` of a name that exists → 409 (add the group with `PUT` instead). An
+  environment names at least one group (422 otherwise). Only groups the caller administers may be named (403).
+- **Zone** = `{name, provider, region, environments: [names], groups: [derived], created}`. `groups` is kept in the
+  doc (so §26.1 readers — `GET /groups/{g}/zones`, worker records, the group page — work unchanged) and is
+  recomputed on every zone or environment write. Each environment doc's `zones` is kept in sync with the zones
+  naming it (write-through), so deploys, secrets scoping, keys and the group page keep working.
+- **Worker record** `workers/<g>:<z>` exists for every pair the derivation yields (as §26.1): a pair that appears is
+  bound (record created, `cloud.attach_zone`, then a deploy, 27.3); a pair that disappears is detached (namespace,
+  workers, identity, record).
+- **Who may edit (D65).** Super admins: everything. A group admin may create an environment for groups they
+  administer, edit/delete an environment whose groups are all theirs, create a zone whose environments are all
+  theirs, and edit/delete a zone whose groups (derived) are all theirs. Everything else 403. Viewers and MCP users
+  get 403 on the page and on every write; the reads in 27.2 stay viewer-scoped as before.
+
+### 27.2 API (`/api/v1`)
+- `GET /environments` unchanged (per-group docs, csv/json). New `GET /environments/by-name` →
+  `[{name, ref, ref_differs, groups: [...], zones: [...], last_deploy: {"<g>": {...}}}]`, viewer-scoped to the
+  caller's groups.
+- `POST /environments {name, ref?, groups: [..]}` → 201, the by-name object. Creates `<g>:<name>` for every group
+  (ref defaults to each group's `ref`); zones `[]`.
+- `PUT /environments/{name} {ref?, groups?}` → 200. `ref` rewrites every doc. `groups` replaces the set: a new group
+  gets a doc (same ref, the environment's zones → attach + deploy per zone); a removed group loses its doc and is
+  detached from every zone no other environment of that group uses (today's §26.1 rule).
+- `DELETE /environments/{name}` → 204. Removes every doc; a zone whose only environment it was is **deleted** (the
+  zone record too — the user's rule: "deleting an environment deletes the zones and workers related to it that are
+  not related to other environments"); a zone other environments still use is only detached for the groups that
+  lost it.
+- `POST /zones {name, provider, region, environments: [..]}` (`groups` is gone → 422 if sent) → 201
+  `{...zone, "jobs": [ids]}`: every environment must exist (422); region checked against the Config block list
+  (403); each derived pair is bound and **deployed** (one canary deploy job per `<g>/<env>` scoped to the zone, the
+  §26.2 job; `jobs` lists them; a pair that cannot be deployed records the error on the job, the zone stays).
+- `PUT /zones/{zone} {region?, environments?}` → 200 `{...zone, "jobs": [ids]}`. `environments` replaces the set
+  (bind + deploy the pairs that appear, detach the pairs that disappear). `region` change: every bound pair is
+  re-attached in place with the new location (the Deployments' node selector) and deployed, so the rollout destroys
+  the old workers and starts new ones there (D66: the zone keeps its name, namespace and worker records — count,
+  size, sleep, IP rules, throttle, service-account grants; the namespace is never deleted — on GKE a deleted one
+  sits Terminating on the NEG finalizer and a re-create is refused).
+  Provider cannot change (422). Audited `zone.update` with `region:` / `env:` tags.
+- D70: a zone of the console's own cloud (`RAMEN_CLOUD`) must be in its cluster's region (`Cloud.home_region()`:
+  GCP region, AWS region, Azure location): `POST /zones` and a `PUT` region change answer 422 naming the zones that
+  region has, and the page's location picker offers only them. Other providers' zones are records and unchecked.
+  A zone in another region needs a cluster there — not built; one console, one cluster.
+- `PUT /zones/{zone}/groups` is gone (404). `DELETE /zones/{zone}` as today (detaches every pair, removes the zone
+  from every environment doc), under 27.1's edit rule. On GKE a detach finishes the Gateway controller's cleanup
+  (D69): the `networking.gke.io/neg-finalizer` is cleared so the namespace terminates now, the zone's network
+  endpoint groups are deleted in the background once the controller releases them, and an attach that meets a
+  namespace still terminating waits for it (409 after the deploy deadline) instead of answering 403.
+- `POST /groups/{g}/environments {name, ref?, zones?}` stays as the per-group shortcut: it adds `g` to the
+  environment `name` (creating it when new) and, when `zones` are given, attaches the environment to those zones —
+  so the caller must be allowed to edit those zones (27.1), the old "zone not bound" 403 keeps its wording for an
+  unbound zone the caller may not edit. `PUT /groups/{g}/environments/{env}` keeps `ref`/`verbose`/`blocked`; its
+  `zones` field is accepted with the same meaning (attach/detach this environment on those zones) for the harness.
+  `DELETE /groups/{g}/environments/{env}` removes only that group's doc (= `PUT /environments/{name}` without `g`).
+
+### 27.3 Deploy on bind
+A pair that appears (new zone, zone gains an environment, environment gains a group, region change) is deployed at
+once: canary deploy of `<g>/<env>` scoped to that zone, a job per pair, started from the write (background), so the
+worker runs the group's code without a click. A running deploy of the same target → the write still succeeds, the
+pair's job is skipped with `error: "a deploy is already running"`. The group page's Deploy button stays for re-deploys.
+
+### 27.4 Pages
+- `/environments` is **Environments, Zones and Workers** (nav entry replaces both old ones; `/zones` → 301 there);
+  `require("group_admin")`. Sections in order: **New environment** (name, ref, groups checkbox dropdown of the
+  admin's groups); **Environments** table (name, ref input, groups dropdown, zones, last deploy per group, Save /
+  Delete with confirm); **New zone** (name, environments dropdown, location = the console cloud's regions not
+  blocked, as the old Zones page; local: free text); **Zones** table (name, provider, location select, environments
+  dropdown, derived groups, Save / Delete zone); **Workers per group** (group, zone, environments, namespace, live
+  cell every 15 s) — the old card plus the environments column. Rows the caller may not edit are read-only.
+- Group page: the "Add environment" form and its zone picker go; the Environments table keeps every row and action
+  (Deploy, Verbose, Delete = this group's doc) and links to the new page; "Bound, unused" stays.
+- Migration at start (once, idempotent): every zone gets `environments` = the names of the environment docs listing
+  it; `groups` is left as stored (a superset is harmless — recomputed on the next write). `zones.png` is replaced by
+  `environments.png` of the new page in `shots.json`.
+
+## 28. v1.0.0b — satellite clusters: zones in other regions, one console (binding, D71)
+The user: a zone in `australia-southeast1-b` on a `us-central1` cluster never got a node (28.0, D70); "create a
+duplicate for other regions, managed from the same Ramen". One console, many clusters: the **home** cluster the
+console runs in, plus **satellite** clusters — worker-only clusters in other regions the console drives directly.
+Records (groups, environments, zones, users, keys, secrets, jobs) stay in the one console store.
+
+### 28.0 Interim rule (D70, kept as the fallback)
+A zone of the console's own cloud must be in a region that has a cluster: the home region (`Cloud.home_region()`)
+or a satellite's. Otherwise `POST /zones` / a `PUT` region change answer 422 naming the regions that have a cluster
+and pointing at Config → Regions; the page's location picker offers only those regions' zones. Other providers'
+zones are records only and stay unchecked.
+
+### 28.1 Model
+- `config/regions` grows `clusters`: a list of satellites `{provider, region, name, host, project?}` — `host` is the
+  satellite edge hostname (its own static address + managed certificate; sslip.io by default, like the console's).
+  The home cluster is implicit (`home_region()`, host = the console's public URL). Super admins manage the list on
+  **Config → Regions → Clusters** (add: provider, region, cluster name, host; remove: refused with 409 while a zone
+  uses that region). `GET/PUT /api/v1/config/regions` carry `clusters`; audited `config.clusters`.
+- A zone belongs to the cluster of its region: `regions.cluster_for(provider, region, clusters, home)` → `"home"` or
+  a satellite entry; `GET /api/v1/zones` and the zone pages show each zone's `cluster` (home/satellite name) and
+  `host`. A region change across clusters is a detach from the old cluster and an attach + deploy on the new one
+  (D66's in-place rule holds within one cluster; D69 makes the re-create safe).
+- Clients reach a zone at **its cluster's host**: the sign-in guide boxes, `mcp_user` page and the group page name
+  the zone's host (`<host>/mcp` + headers, `--target <host>:443`); tokens and scopes are unchanged
+  (`mcp:<group>:<zone>`, issuer = the console). Satellite workers get `RAMEN_PUBLIC_URL` = the satellite host (the
+  RFC 9728 `resource_metadata` base); `RAMEN_OAUTH_ISSUER` stays the console. The console's own calls to satellite
+  workers (smoke, golden cases, packages, metrics, reload) go through the satellite host like any client, as they
+  do through the home edge today — no: the console keeps addressing workers by pod IP (per-pod smoke, metrics,
+  reload, canary), so a satellite's network is joined to the home network: GCP — same VPC (VPC-native pod ranges are
+  routable) plus a firewall rule home-pod-CIDR → satellite nodes tcp:8080; AWS — VPC peering home↔satellite with
+  routes both ways and a node security-group rule from the home VPC CIDR on 8080; Azure — VNet peering both ways
+  (non-overlapping address spaces) and an NSG rule. The satellite terraform modules create this from the home
+  module's outputs (network/VPC id + CIDR); the console-to-worker path never crosses the public edge.
+- Telemetry: the one OTLP endpoint must be reachable from every cluster; the chart's try-out collectors (Jaeger,
+  Phoenix) live in the home cluster and are cluster-local, so with satellites either expose a collector or accept
+  that satellite workers log `telemetry export failed` (documented, not papered over).
+
+### 28.2 Adapters (all three clouds; the user: "this should also work for azure and aws")
+- `GcpCloud` keeps one `Kube` per cluster: the home one as today (in-cluster config) and, per satellite, clients
+  built from the GKE API (`container.projects.locations.clusters.get` → endpoint + CA) with the console GSA's
+  Google credentials (google-auth ADC in the pod; `GOOGLE_OAUTH_ACCESS_TOKEN` locally). Every kube-touching
+  operation resolves the zone's cluster first (`attach`, `deploy`, `push_config`, `workers`, `logs`, `scale`,
+  `sleep`/`wake`, `set_ip_rules`, `rebalance`, `detach_zone`, `refresh` across all clusters, zone cleanup D69).
+  Compute objects (backend services, NEGs, Cloud Armor) are project-global and keyed by namespace name, which is
+  unique per zone — unchanged. The per-zone GSA, bucket and Secret Manager are project-level — unchanged.
+- Satellite cluster RBAC: the console authenticates to a satellite API server as its GSA email; the satellite chart
+  binds the console's ClusterRoles to that Google identity (`kind: User, name: <gsa email>`), plus the zone
+  ClusterRole bound per namespace by the console as today (SEC-09) — and since the console is not the home
+  ServiceAccount there, the per-namespace RoleBinding also carries the subjects the console chart is given
+  (`console.k8sSubjects` → `RAMEN_CONSOLE_SUBJECTS`: GKE `User <gsa>`, EKS `Group ramen-console`, AKS `User <object
+  id>`). Found live: on GKE `roles/container.developer` masks a missing binding, on EKS it is a 403 inside the
+  namespace. Likewise every worker NetworkPolicy admits the console's home networks (`console.sourceCidrs` →
+  `RAMEN_CONSOLE_SOURCE_CIDRS`: the home pod range / VPC / VNet) next to its own `ramen-system` namespace — found
+  live: a satellite worker dropped the console's reload (DEADLINE_EXCEEDED) until it did. (Amended by S6, §33.4a:
+  only a satellite zone's worker policy admits them; a home zone never does.)
+- Images: Artifact Registry is regional but world-readable to the project's identities; satellite nodes pull from
+  the home repo. Builds (kaniko Jobs) stay in the home cluster.
+- AWS: a satellite is an EKS cluster in another region (same account); the console builds its kube client from
+  `eks.describe_cluster` (endpoint, CA) and an STS-presigned token (the aws-iam-authenticator scheme) under its own
+  pod role, which the satellite's access entry / aws-auth maps to the console's ClusterRoles. The satellite's edge
+  is its own ALB IngressGroup (the chart's Ingress shape) with its own certificate; ECR is regional — the satellite
+  pulls the home region's repo (cross-region pull is allowed in one account). AWS compute objects (WAF IP sets,
+  target groups) are regional: IP rules and rebalance act in the zone's region.
+- Azure: a satellite is an AKS cluster in another location (same subscription/resource group or its own); the
+  console builds its kube client from ARM `managedClusters.listClusterUserCredential` (kubeconfig) with its
+  workload identity, the satellite's Envoy Gateway + public IP + certificate make its edge; the ACR is global.
+- Blocked regions (C7) win over everything: a region a super admin blocked cannot host a zone even when a satellite
+  covers it (403 `region … is blocked by a super admin` as today, checked before the cluster rule).
+
+### 28.3 Infra
+- `deploy/terraform/{gcp,aws,azure}-satellite/` (new), one per cloud, mirroring each home module's cluster + edge
+  pieces only. GCP: inputs `project`, `region`, `name` (default `ramen-<region>`),
+  `public_hostname` (optional), `console_gsa` (email, for the output only). Creates: regional Autopilot cluster,
+  global static address, Certificate Manager cert + map for the satellite host. Outputs `cluster_name`, `region`,
+  `host`, `certificate_map`, `helm_set`. No bucket, Firestore, registry, console GSA — shared from the home apply.
+- `deploy/helm/ramen-satellite/` (new chart, `provider: gcp|aws|azure` like the home chart): `ramen-system`
+  namespace label for routes, the edge (GKE Gateway + certmap / AWS ALB Ingress group / Azure Envoy Gateway, the
+  home chart's shapes), the console identity's ClusterRoleBindings (console + zone ClusterRoles; GCP: the GSA as a
+  User, AWS: the console pod role via an access entry or aws-auth, Azure: the console's workload identity object
+  id), no console/builder/collector. Values: provider, region, `console.identity`, `gateway.*`/`aws.*`/`azure.*`.
+- `scripts/cloud_smoke.sh` and `cloud2.sh` learn `RAMEN_SATELLITE_REGION`/`RAMEN_SATELLITE_HOST`: the §28 proof
+  creates a zone in the satellite region, waits for the attach job, calls `2+3=5` through the satellite host,
+  deletes the zone (D69 cleanup on the satellite cluster too).
+
+### 28.4 Verification
+Console: `regions.cluster_for`, the 422s (no cluster / AWS / Azure), the Clusters card round trip and its 409, the
+zone's `cluster`/`host` in API and pages, the sign-in guide naming the satellite host, `GcpCloud` routing every
+kube call to the zone's cluster (fakes: two clusters), cross-cluster region change = detach + attach. Cloud, on all three (GKE home us-central1 + satellite australia-southeast1; EKS home us-east-1 + satellite us-west-2;
+AKS home westus2 + satellite eastus): item list in 28.3, plus deleting the satellite zone frees its
+namespace and NEGs, and the Config card refuses to drop the satellite while the zone exists.
+
+## 29. v1.0.0c Phase 1 — promptfoo evals, LLM providers, client policy (binding, D72)
+`instructions/v1.0.0c.md` Phase 1, decided with the user on 2026-11-16: Phase 1 only; evals **report first, gate per
+group**; LLM providers **Anthropic, OpenAI, Azure OpenAI**; client enforcement = **bridge-held policy bundle AND
+client config files**. Phases 2–5 are later iterations.
+
+### 29.1 Config → LLM providers (super admin)
+`config/llm_providers` = `{anthropic: {api_key}, openai: {api_key, base_url?}, azure_openai: {api_key, host}}`, each
+optional; keys are console secrets (§24.5 vault, shown as set/not set). `GET/PUT /api/v1/config/llm-providers`
+(PUT merges; an empty string clears a key), audited `config.llm_providers` with `provider:` tags only. A card on the
+Config page. The providers feed evals as env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` + `OPENAI_BASE_URL`,
+`AZURE_API_KEY` + `AZURE_API_HOST`) — never written to a log, a job result or a client.
+
+### 29.2 Evals from the group repo, run on deploy
+- The group repo may carry `mcp/evals/promptfooconfig.yaml` (promptfoo-native; `providers` may be the `mcp`
+  provider pointed at `{{env.RAMEN_MCP_URL}}` with bearer `{{env.RAMEN_MCP_KEY}}`, or an LLM provider with
+  `config.mcp` tools; tests assert as promptfoo does). Ramen injects env `RAMEN_MCP_URL` (the canary's in-cluster
+  Streamable HTTP URL), `RAMEN_MCP_KEY` (the deploy's `RAMEN_EVALS_KEY`, §31.4a; a group key before D76),
+  `RAMEN_GROUP`, `RAMEN_ENV`, `RAMEN_ZONE` and the 29.1 provider env. The console renders `{{env.RAMEN_*}}` in the
+  config text before the run (promptfoo does not render env refs inside a provider's `server.url` / headers); the
+  provider keys stay env vars promptfoo reads itself. A run whose results file is missing reports promptfoo's last
+  log lines in `evals.error`.
+- Group settings `evals: {gate: false, required: false}` — `PUT /api/v1/groups/{g}/evals` (group admin), shown and
+  edited on the group page.
+- Deploy (after the golden cases of a zone, when the file exists and `RAMEN_EVALS_IMAGE` is set): a Job
+  `ramen-evals-<group>-<zone>-<rand>` in `ramen-system` (the builder's ServiceAccount pattern, §24.2) runs
+  `promptfoo eval -c <config> -o /out/results.json --no-cache --no-progress-bar --no-table` (plus `--share` with
+  `PROMPTFOO_REMOTE_API_BASE_URL`/`PROMPTFOO_REMOTE_APP_BASE_URL` = the chart's promptfoo server when it runs, so
+  the run appears in its UI) with the config mounted from a ConfigMap built from the synced repo file; the console
+  reads `results.json` from the pod log (`cat` after the eval; the builder's log pattern), parses
+  `stats.{successes,failures,errors}` and the failed tests' `description`/`failureReason` (≤ 20 lines into the job
+  log), and records `job.result[zone].evals = {passed, failed, errors, url, run?}` — `url` = the console's report page
+  `/groups/<g>/evals/<job>/<zone>`, `run` = promptfoo's eval id — and `job.reports[zone].evals = {passed, failed,
+  errors, id?, cases: [{name, status: pass|fail|error, input?, output?, reason?, latency_ms?}], truncated?}` (≤ 200
+  cases, each text ≤ 500 chars, scrubbed). promptfoo's `shareableUrl` is not kept (it names the in-cluster server).
+  Exit 100 = failures, 1 = error, timeout `RAMEN_EVALS_TIMEOUT_SECS` (600). With `gate` on, failures or an error
+  fail the deploy exactly like a failed golden case (canary scaled down, stable untouched); with `gate` off they are
+  a warning line and a red `evals: <n> failed` badge on the group page's last deploy. No file → nothing runs and the
+  zone's result carries no `evals` key (the harness reads that as "absent"). No `RAMEN_EVALS_IMAGE` → `evals: {skipped: "no evals engine"}` in the result, once per deploy in
+  the log.
+- Chart `evals.engine: none | promptfoo` (default none): `promptfoo` adds a Deployment + Service `promptfoo`
+  (`ghcr.io/promptfoo/promptfoo:<pinned>`, port 3000, a PVC for `/home/promptfoo/.promptfoo`, single replica, a
+  credential on its TLS front since D92 (§39.7), no edge route — try-out and test runs, like Jaeger/Phoenix) and hands the console `RAMEN_EVALS_IMAGE`,
+  `RAMEN_EVALS_API_URL` (`https://promptfoo.<ns>:3000`, §39) and `RAMEN_EVALS_UI_URL` = `evals.uiUrl` (default
+  `https://localhost:3443`: where a person opens promptfoo's UI, through its TLS front after `kubectl -n ramen-system
+  port-forward deploy/promptfoo 3443:3443`; also the Job's and the server's `PROMPTFOO_REMOTE_APP_BASE_URL`; promptfoo
+  itself listens on 127.0.0.1:3000 only, pinned by a chart-mounted Node preload). `evals.image` may be
+  set without the server (Jobs only, `--no-write`).
+- **The run page** `GET /groups/{g}/evals/{job}/{zone}` (group member, `viewer`+, like §30.2's scan report; 404 for a
+  job of another group or a zone without a run): the counts, every case of `job.reports[zone].evals`, and — when the
+  chart runs the server — the run's address in promptfoo's UI (`<RAMEN_EVALS_UI_URL>/eval/<run>`) with the
+  port-forward command. The group page's evals badge links it. promptfoo's UI itself is **not** proxied through the
+  console (1.0.0c, found on GKE): its single-page app hard-codes `/assets/…`, `/api/…` and a root router (no base
+  path), has no sign-in of its own and lists every group's runs, so it stays a port-forward-only operator tool behind
+  the operator's credential (D92, §39.7).
+
+### 29.3 Policy to clients: versions, the worker gate, the bridge, client config files
+- The token answer (§24.3/§26.3) gains `evals: {version, required, config}` when the group repo carries the file:
+  `config` is the file's text (≤ 64 KiB), `version` = first 12 hex of sha256 over `config` + `required`,
+  `required` = the group's `evals.required`. Workers learn `RAMEN_EVALS_VERSION` / `RAMEN_EVALS_REQUIRED` in the
+  deploy secret and by `push_config` when either changes (like telemetry). `GET /.well-known/ramen-policy?
+  group=&zone=` (public, no secrets) answers `{telemetry: {version, required}, evals: {version, required}}` for the
+  bridge's offline check.
+- Worker gate (node): a modern call carries `_meta["io.ramen/evals"] = {"version": "<v>"}` (a legacy body via the
+  bridge: `params.evals`). When the group `required`s evals: missing → `-32026 evals config required` (HTTP 428,
+  `data: {version}`), stale → `-32026 evals config changed: sign in again`; the gate runs after the telemetry gate,
+  before the runtime; a worker told no version accepts any. Access-log reason `evals_required` / `evals_stale`.
+- The bridge (0.5.0): the token answer's `telemetry` + `evals` form the **policy bundle**, kept at
+  `~/.ramen/policy/<host>/<group>-<zone>.json` (0600; telemetry headers stay in memory only, as §26.3) and the evals
+  config at `~/.ramen/evals/<host>/<group>/promptfooconfig.yaml`; every forwarded call carries the evals version;
+  `-32026` → sign in again once (as `-32025`); at start without a bundle and unable to sign in → exit non-zero with
+  `Ramen policy missing: reconnect (sign in) — Ramen cannot be used without it`. **Client config files** (default on,
+  `--no-client-config`): at sign-in the bridge merges, idempotently and with a `ramen` marker, (1) Claude Code
+  `~/.claude/settings.json` → `hooks.SessionStart` running `ramen-mcp-bridge policy check --target <host> --group
+  <g> --zone <z>` (non-zero = stale/missing, with the reconnect message), (2) Cursor
+  `~/.cursor/rules/ramen-<g>-<z>.mdc` stating the policy (telemetry/evals required, versions, how to re-sign-in),
+  (3) VS Code user `settings.json` → `mcp.servers.ramen-<g>-<z>` for the bridge; a ledger `~/.ramen/clients.json`
+  records every write; `ramen-mcp-bridge policy {show,check,remove}` show the bundle, compare it with
+  `/.well-known/ramen-policy`, or revert every write. An LLM that never uses the bridge or Ramen's workers cannot be
+  forced — documented limit. The bridge is one client of the policy, not the only enforcement point: every sign-in
+  path into Ramen (console password / magic link, OAuth providers, a group key) answers the same policy, and the
+  workers gate every call on every required version whatever client sent it (D73).
+
+### 29.4 Verification
+Console: providers card round trip (set/not set, clear, audit tags, never in logs), group `evals` settings, deploy
+with a fake Job (passed / failed-gate / failed-report / error / absent / no engine), results parsing, token answer
+`evals`, `/.well-known/ramen-policy`, pages, the run page (cases, member 200 / outsider 403 / other job 404, the
+port-forward address only with a server), `evals` offered in the tool-access lists and refused as a custom role name.
+Node: the `-32026` gate (required/missing/stale/none-known); the evals key is kind `evals` — hidden by a rule without
+it, admitted by a rule naming it — and a token with role `evals` is refused. Bridge:
+bundle persistence, version on calls, re-sign-in on `-32026`, start without a bundle, client files written /
+checked / removed in a temp HOME (every editor file merged, never clobbered). Cloud (GKE, latest): chart with
+`evals.engine: promptfoo`; the demo repo's `mcp/evals/promptfooconfig.yaml` (mcp provider, no LLM key needed) → a
+deploy reports `evals: {passed: 6, failed: 0, errors: 0}` with demo/dev's tool access narrowing `word_count` to
+group_admin, analyst and `evals`, and an analyst opens the run page from the badge; gate behaviour proven on the
+local stack where the test owns the repo file.
+
+## 30. v1.0.0c Phase 2 — NVIDIA SkillSpector scans, more LLM providers (binding, D73)
+
+SkillSpector (github.com/NVIDIA/SkillSpector, Apache-2.0, pinned tag **v2.13.4**) is a CLI scanner for agent skills:
+static rules (prompt injection, exfiltration, supply chain, MCP tool poisoning, least privilege) plus optional LLM
+semantic analysis; 0–100 risk score → `SAFE` (≤ 20) / `CAUTION` (≤ 50) / `DO_NOT_INSTALL`; JSON and SARIF output;
+`--recursive` scans the immediate subdirectories holding a `SKILL.md`, at most 32 (aggregate `{max_risk_score,
+risk_severity, risk_recommendation, analysis_completeness, skills_scanned, skills: [{name, path, risk_score,
+risk_severity, finding_count, issues: [{id, severity, location: {file, start_line}, explanation, …}], …}]}`); exit
+0/1 (score > 50 or a strict gate)/2 (error). No PyPI package, no image, no UI.
+
+### 30.0 Shipping it
+- `deploy/docker/skillspector/Dockerfile` builds **`ghcr.io/bkraad47/ramen-skillspector:2.13.4`** (clone of the
+  pinned tag, the upstream multi-stage build, non-root `USER`, `WORKDIR /scan`, `ENTRYPOINT ["skillspector"]`);
+  the release workflow publishes it next to console / worker; `scripts/check_versions.py` pins the tag in one place.
+- Chart `skillspector.engine: none | skillspector` (default `none`), `skillspector.image`, `skillspector.cpu/memory`;
+  `skillspector` → console env `RAMEN_SKILLSPECTOR_IMAGE` (+ `RAMEN_SKILLSPECTOR_TIMEOUT_SECS`, default 600). The
+  Config page shows the engine and the image under "Evals & scans". Nothing else runs: SkillSpector has no server.
+
+### 30.1 Config → LLM providers, part 2 (super admin)
+`config/llm_providers` (§29.1, same vault, same `PUT /api/v1/config/llm-providers`, same audit tags) gains
+`vertex: {project, location}` (ADC of the Job's ServiceAccount — Workload Identity on GKE, no key),
+`bedrock: {region}` (the Job's cluster identity — IRSA on EKS, no key), `foundry: {endpoint, api_key,
+deployment}` (Azure AI Foundry / Azure OpenAI), `openai_compatible: {base_url, api_key, headers}` (local or any
+OpenAI-compatible server; `headers` a flat JSON object). A second card, "More providers", on the Config page; the
+answer tells `set`/`not set` only. Env handed to the evals Job (§29.2) and the scan Job (30.2):
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `AWS_REGION`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`,
+`AZURE_OPENAI_DEPLOYMENT`, `SKILLSPECTOR_COMPAT_BASE_URL`, `SKILLSPECTOR_COMPAT_API_KEY`,
+`SKILLSPECTOR_COMPAT_HEADERS` (promptfoo gets `OPENAI_BASE_URL` for the compatible server as before). Only
+providers that are set are exported. The Job's ServiceAccount is the builder's (§24.2); the cloud adapters grant it
+nothing new in Phase 2 — Vertex / Bedrock analysis needs the operator to grant `roles/aiplatform.user` /
+`bedrock:InvokeModel` to that identity (documented, not automated; D73).
+
+### 30.2 Scan on deploy
+- Group settings `skillspector: {gate: false, required: false, llm: ""}` — `PUT /api/v1/groups/{g}/skillspector`
+  (group admin; `llm` is one of the configured providers' names or `""` = static only `--no-llm`; `vertex` is
+  refused for scans — v2.13.4 has no ADC Vertex provider; `foundry` maps to upstream `azure_openai`); shown and
+  edited on the group page next to evals.
+- Targets, per zone after the evals of §29.2 (when `RAMEN_SKILLSPECTOR_IMAGE` is set): a scan directory holding
+  (1) every immediate subdirectory of the repo's `mcp/skills/` that has a `SKILL.md` (the group repo's skills,
+  from the same synced copy the image build uses), and (2) a synthesized skill `ramen-served-<zone>/SKILL.md`
+  written by the console from the canary's `tools/list` and `prompts/list` (name, title, description, input schema
+  as fenced JSON) so the instruction-text rules run against what the zone really serves. The repo's optional
+  `mcp/skillspector-baseline.yaml` is applied to single-skill scans only (upstream rejects it with `--recursive`;
+  Ramen then scans skill by skill with the baseline and merges into the recursive shape). `skillspector scan /scan
+  --recursive --format json -o /out/report.json [--no-llm | SKILLSPECTOR_PROVIDER=<llm>]`; the Job is
+  `ramen-scan-<group>-<zone>-<rand>` in ramen-system, builder ServiceAccount, the directory handed as one ConfigMap
+  (`files.json` = {path: base64}, unpacked by a helper the image's python runs; ≤ 900 KiB packed — a larger
+  `mcp/skills` tree is an error of the run naming the size), report echoed between `RAMEN_SCAN_RESULTS_BEGIN/END`
+  like §29.2. The console env is set only when `skillspector.engine: skillspector` (the image alone does nothing).
+- `job.result[zone].skillspector = {score, severity, recommendation, skills, findings, url}`; `findings` = count;
+  the full report (≤ 256 KiB, else truncated with `truncated: true`) is kept on the job record under
+  `reports[zone].skillspector` and shown at `GET /groups/{g}/scans/{job}/{zone}` (group member; a table per skill
+  with each finding's rule, severity, file:line, message) — that page is the "link for prompts" of the brief, since
+  the tool has no UI; the group page's Prompts/Packages section and the per-zone badge link to the latest one.
+- `gate` on: `DO_NOT_INSTALL` (or a run error) fails the deploy like a golden case (`GateError`); `CAUTION` is a
+  warning line. `gate` off: report only. Env `RAMEN_SCAN_*` mirror §29.2's `RAMEN_EVALS_*` names.
+
+### 30.3 Policy to clients
+- Token answer gains `skillspector: {version, required, llm, baseline}` when the chart runs the engine or the group
+  sets `required`: `version` = first 12 hex of sha256 over `required` + `llm` + the baseline text (`""` without
+  one), `baseline` = `mcp/skillspector-baseline.yaml` text (≤ 64 KiB). `/.well-known/ramen-policy` answers
+  `skillspector: {version, required}` too. Workers learn `RAMEN_SKILLSPECTOR_VERSION` / `_REQUIRED` with the deploy
+  secret and `push_config`.
+- Worker gate (node): `_meta["io.ramen/skillspector"] = {"version"}` (legacy `params.skillspector`); when required:
+  missing → `-32027 skillspector policy required` (HTTP 428, `data.version`), stale → `-32027 skillspector policy
+  changed: sign in again`; after the evals gate, before the runtime; reasons `skillspector_required` / `_stale`.
+  Every sign-in path hands out the same policy; the gate does not care which client calls (D73).
+- Bridge (0.6.0): the bundle carries `skillspector`; every call carries its version; `-32027` → one re-sign-in.
+  `policy check` (the Claude Code `SessionStart` hook, the Cursor rule text, `policy show`) additionally runs, when
+  `required`: `skillspector scan <dir> --recursive --no-llm --format json` over the client's skill directories
+  (`~/.claude/skills`, `<cwd>/.claude/skills`, `~/.codex/skills` when present; the baseline when the bundle has one
+  and the directory holds one skill), with the local `skillspector` (`uv tool install
+  'git+https://github.com/NVIDIA/SkillSpector.git@v2.13.4'` is the hint when missing). `DO_NOT_INSTALL` for any
+  skill, or no `skillspector` binary → exit 3 with the skills named and `Ramen policy: fix or remove these skills
+  — Ramen cannot be used with them`; `CAUTION` is printed. Results are cached per directory content hash in
+  `~/.ramen/scans/<host>/` for 24 h so hooks stay fast. `--no-client-scan` turns the local scan off (the bundle
+  and the version contract stay).
+
+### 30.4 Verification
+Console: providers part 2 round trip (set/not set, env export, never in logs), group `skillspector` settings,
+deploy with a fake Job (SAFE / CAUTION / DO_NOT_INSTALL gated and reported / error / no skills and no served
+tools / no engine), synthesized `SKILL.md`, report page and RBAC, token answer, policy endpoint. Node: the
+`-32027` gate. Bridge: bundle, version on calls, local scan with a fake `skillspector` on PATH (clean / caution /
+block / missing), cache, `--no-client-scan`. Cloud (GKE, latest, the real image): the demo repo's
+`mcp/skills/*` + the served tools scan → a deploy reports `skillspector: {score, recommendation: SAFE|CAUTION}`
+and the report page renders; `gate` proven on the local stack with a planted malicious `SKILL.md`.
+
+## 31. v1.0.0c Phase 3 — initial LLM configs from the group repo, accepted per user, enforced everywhere (binding, D74)
+
+User's rule (D73/D74): every LLM interface that signs in to Ramen gets the group's configs and telemetry settings;
+enforcement = the client config files the bridge writes + the worker gate on every call from any client. Honest
+limit (documented, unchanged): a client that reads none of the files and never calls Ramen's workers cannot be forced.
+
+### 31.0 Repo layout — `mcp/llm-config/`
+- `manifest.yaml`: `version: 1`, `description`, `targets: [{client, file, path, format, merge}]`. `client` is a free
+  label (`claude-code`, `cursor`, `vscode`, `codex`, `gemini-cli`, `env`, anything); `file` the fragment in the same
+  directory; `path` the file on the user's machine (`~`, `{group}`, `{zone}`, `{host}` expanded); `format`
+  `json | toml | yaml | text | env`; `merge` `deep` (json/toml/yaml: Ramen's keys win, others untouched), `block`
+  (text: one `# ramen:<host>/<group>` … `# /ramen` block replaced in place — `<!-- … -->` in Markdown; the 0.6.0-era
+  `ramen:<group>` form is migrated on the next write), `replace` (whole file, ramen-owned), `keys`
+  (env: `KEY=value` lines replaced by key). The fragment may use `${RAMEN_OTLP_ENDPOINT}`, `${RAMEN_OTLP_HEADERS}`,
+  `${RAMEN_USER}`, `${RAMEN_GROUP}`, `${RAMEN_HOST}` — filled in by the bridge at write time (the token never
+  reaches the repo or the console's answer in clear; the bridge holds it).
+- Allowed content is checked by the console at sync (a violation fails the deploy with the key named): a Claude Code
+  `settings.json` fragment may set `hooks`, `env`, `permissions`, `model`, `otelHeadersHelper`-free telemetry env;
+  never `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `forceLoginMethod`, or any hook command outside
+  `ramen-mcp-bridge …`; a Codex/Gemini/other fragment may not name `*_API_KEY*`, `*_TOKEN*` keys or paths outside
+  `~`; `text` fragments ≤ 32 KiB; the whole directory ≤ 256 KiB. `version` = first 12 hex of sha256 over every file
+  (sorted) + the manifest. Absent directory → no `configs` key anywhere, nothing gated (Phase 3 is not optional for
+  the product, it is optional for a repo).
+
+### 31.1 Acceptance (console)
+- Token answer (§24.3) and `/.well-known/ramen-policy` gain `configs: {version, required: true, accepted: <bool>,
+  manifest, files: {<file>: <text>}}` (the policy endpoint: `{version, required}` only). Acceptance is per user and
+  version: `users/<id>.accepted_configs = {<group>: {version, at}}`; `POST /api/v1/groups/{g}/configs/accept
+  {version}` (any member; audited `configs.accept`); `GET /groups/{g}/configs` (console page) and the OAuth consent
+  page show the manifest and every file verbatim with an Accept control; both are reached on every sign-in path —
+  the OAuth flow redirects to consent as today, a password / magic-link sign-in that lands on a group with
+  unaccepted configs is redirected to `/groups/{g}/configs` before any token or key is handed out; the user token (`POST /oauth/token`, code exchange — a refresh grant is never gated: it answers `configs.accepted:
+  false` so a waiting bridge sees acceptance land) and MCP-key minting for a user answer `403 configs not accepted`
+  (`data: {version, url}`) until then; the accept API answers 200, 409 on a stale version. A group key counts as
+  accepted by the admin who minted it (`mcp_keys[].accepted_configs = version`, recorded; a stale key version is shown
+  on the group page). A new version invalidates acceptance → re-accept at the next sign-in (the worker gate makes
+  "next sign-in" now). The group page lists acceptance per member (admin).
+
+### 31.2 Worker gate (node)
+`_meta["io.ramen/configs"] = {"version"}` (legacy `params.configs`); env `RAMEN_CONFIGS_VERSION` / `_REQUIRED`
+(`1` whenever the repo has the directory) in the deploy secret and `push_config`; missing → `-32028 configs
+required` (HTTP 428, `data.version`), stale → `-32028 configs changed: sign in again`; after the skillspector gate.
+Reasons `configs_required` / `configs_stale`. The gate holds for every client (D73).
+
+### 31.3 Bridge (0.6.0) — apply, verify, OTel
+- Sign-in: if `configs.accepted` is false the bridge opens the consent URL (`/groups/{g}/configs?next=…`) and waits
+  (as the OAuth flow); then writes every target per `merge`, records each in `~/.ramen/clients.json` (path, format,
+  sha256 of the ramen block / keys, version), carries the version on every call, `-32028` → one re-sign-in,
+  `policy remove` reverts every write, `policy show` lists targets and their state.
+- **Telemetry targets** (built in, not from the repo; written when the group requires telemetry, §26.3): for Claude
+  Code `env: {CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_METRICS_EXPORTER: "otlp", OTEL_LOGS_EXPORTER: "otlp",
+  OTEL_TRACES_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf", OTEL_EXPORTER_OTLP_ENDPOINT:
+  "<console>/otlp", OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer <user token>", OTEL_RESOURCE_ATTRIBUTES:
+  "ramen.group=<g>,ramen.user=<email>,ramen.host=<host>"}` in `~/.claude/settings.json`; the same `OTEL_*` lines in
+  `~/.ramen/env.sh` (`format: env`) for any tool that honours the OTel SDK environment (Codex, Gemini CLI, Python /
+  Node SDKs, harnesses), plus a one-line `source ~/.ramen/env.sh` block in `~/.zshrc` / `~/.bashrc` (`merge: block`,
+  only when the user did not pass `--no-shell-rc`). Codex `~/.codex/config.toml` gets Codex's own shape,
+  `otel.exporter = { otlp-http = { endpoint = "<console>/otlp/v1/logs", protocol = "binary", headers = {…} } }`,
+  when `~/.codex` exists. Files that carry the token are 0600 and rewritten on every token refresh; the ledger keeps
+  hashes of Ramen's part only, never the token. `policy remove` restores byte-for-byte when nothing else in the file
+  changed since the write, else removes only Ramen's block/keys and keeps the user's later edits.
+- The bridge keeps one ledger entry per (file, source) so a repo fragment and the built-in telemetry target on the same
+  file restore independently; Claude Code `hooks.*` lists merge by hook command (the bridge's own `policy check` hook is
+  never clobbered); Cursor/VS Code entries get a `-<host>` suffix when another host already owns the plain name;
+  `policy remove --target <host>` touches that host's entries only and never leaves a file empty. Started from a
+  `--token-file` with telemetry required, the bridge fetches a telemetry object before its first gated call, and treats a
+  worker's `-32003 … requires telemetry` like `-32024/-32025`: one re-sign-in, then the retry (P4-B2…B5).
+- `policy check` (the SessionStart hook, Cursor rule, VS Code) verifies every recorded target still holds its block /
+  keys (hash compare) and that the telemetry env is present where written; anything missing → exit 3 `Ramen configs
+  removed or changed: reconnect (sign in) — Ramen cannot be used without them`; the bridge refuses to forward calls
+  while the check fails (same path as a missing bundle).
+
+### 31.4 OTLP ingest on the console
+`POST /otlp/v1/traces | /otlp/v1/metrics | /otlp/v1/logs` (OTLP/HTTP, protobuf or JSON, ≤ 4 MiB, gzip accepted),
+bearer = a user's token (OAuth access token, console session token or MCP key); the console stamps resource attributes
+`ramen.group`, `ramen.user` (email or `key:<name>`), `ramen.zone` when known, `openinference.project.name = <group>`
+(Phoenix: one project per group) and `service.namespace = ramen/<group>` and forwards to `config/otel.endpoint`
+with `config/otel.headers` (one upstream call per request, 10 s, errors answered as `502` with the upstream status;
+`204` when telemetry is off). Rate limit per token: 60 requests/min, else `429`. Nothing is stored on the console;
+an audit line per 1000 requests per token (`telemetry.ingest`). The Config page shows the ingest URL. This is the
+endpoint every pushed telemetry setting points at; §26.3's `client_endpoint` stays for clients that already export
+directly.
+
+### 31.4a Ramen's own clients and the gates (D76)
+The gates of §26.3/§29.3/§30.3/§31.2 are for the people's clients. Ramen's own calls are exempt: the console's golden
+cases (admin key, as before) and the evals Job (§29.2), which authenticates with **`RAMEN_EVALS_KEY`** — a random key
+the deploy generates per run, written into the zone's deploy Secret (so the canary accepts it) and into the Job's
+Secret as `RAMEN_MCP_KEY`; workers accept it as a bearer for MCP methods only (never `Admin/*`), skip every policy
+gate for it (access-log `user = evals`), and forget it with the next deploy (rotated each run). Its caller kind is
+**`evals`** (user decision 2026-11-17, after GKE: demo/dev narrowed `word_count` to group_admin + analyst and the eval
+errored `Tool word_count not found`; as a `key` no rule could admit the Job without every group key):
+`RAMEN_TOOL_ACCESS` applies to it like to any kind — a rule that does not name `evals` hides the tool from the Job (its
+case errors "not found", documented), a rule that names it admits it; `RAMEN_BLOCKED` hides names as for everyone. The
+console offers `evals` in the tool-access lists ("Evals Job", hint "the evals Job before a deploy goes live") and
+reserves the name (no custom role `evals`, like `key`); a worker refuses a token whose `role` is `evals`
+(`token_invalid`). Bare test clients
+(`scripts/cloud_smoke.sh`, the harness) are not exempt: they read `/.well-known/ramen-policy` and carry the required
+`_meta` versions like any client.
+
+### 31.5 Verification
+Console: manifest validation (allowed/forbidden keys, sizes), version, acceptance round trip and RBAC, redirects on
+every sign-in path, 403 on token/key until accepted, group key acceptance, token answer/policy endpoint, consent
+page and configs page render files verbatim, OTLP ingest (auth, stamping, forwarding to a fake collector, size and
+rate limits, off → 204). Node: `-32028` gate. Bridge: every `format`/`merge` in a temp HOME (idempotent, never
+clobbers the user's own keys), telemetry targets, env.sh + rc block, `policy check` detects a removed block, `policy
+remove` restores files byte-for-byte to the pre-ramen state where Ramen owned a block. Cloud (GKE, latest): the demo
+repo's `mcp/llm-config/` accepted in the browser (user), pushed by the bridge on the operator's machine, a Claude
+Code session's native telemetry visible in Phoenix under project `demo` with `ramen.user` set; a stale version
+gated `-32028` live.
+
+## 32. v1.0.0c Phases 4–5 — telemetry by group and user, the independent verifier (binding, D75)
+
+### 32.1 Phase 5 — every span names the group and the user
+- Worker (node) OTel resource gains `openinference.project.name = <group>` and `service.namespace = ramen/<group>`
+  (Phoenix shows one project per group); every call span (tools/call, prompts/get, resources/read, tasks) carries
+  `ramen.user` (the token's email, or `key:<key id>` for a group key — workers know keys by their 8-hex access-log id,
+  the console's ingest and key list name them), `ramen.group`, `ramen.zone`, `ramen.env`, and
+  the client-reported events of §26.3 become child spans (`kind` as `ramen.event.kind`, `name`, `ms`, `ok`, the
+  reasoning text truncated to 4 KiB as `ramen.reasoning`) under the call span, so a user's LLM and tool activity is
+  one trace per call. The console's deploy spans gain `openinference.project.name = <group>` too.
+- The OTLP ingest of §31.4 is how everything a user's client does outside a Ramen call reaches the same project: the
+  bridge's telemetry targets (§31.3) point Claude Code's native telemetry and the OTel SDK env at it; the console stamps
+  `ramen.user` / `ramen.group` on every resource. With that, "all user LLM activity after sign-in" = Ramen call spans
+  (worker) + client-native spans/metrics/logs (ingest), both under the group's project, both naming the user.
+- Config page: a "Telemetry by group" row with the ingest URL and the Phoenix project naming; `telemetry.md` says what
+  lands where.
+
+### 32.2 Phase 4 — the independent verifier
+Not a product feature: a sub-agent that was not part of the build reads §26.3, §29–§31 and this section and proves on
+the live stack (GKE, latest) that (1) a call without each required `_meta` version is refused with its code
+(`-32024/-32025` telemetry, `-32026` evals, `-32027` skillspector, `-32028` configs) through the edge over HTTP and
+gRPC, by a key and by an OAuth token; (2) changing each policy (config/otel save, evals `required`, skillspector
+`required`, a new `mcp/llm-config` version) flips the live workers without a deploy (push_config) and the bridge
+re-signs-in once then carries the new version; (3) the bridge's `policy check` exits 3 when a client file is removed,
+and the SessionStart hook blocks a Claude Code session until re-sign-in; (4) a Claude Code session's native telemetry
+and a Ramen call appear in Phoenix under project `demo` with `ramen.user`; (5) `policy remove` restores the files.
+Its findings go to `reports/test-status-v1.0.0c.md` (Phase 4 section) with the exact requests; anything it cannot
+prove is listed as such, never papered over.
+
+## 33. v1.0.0c Phase 7 — MCP Apps, Skills over MCP, the Iris example, the security pass (binding, D77)
+
+### 33.1 MCP Apps (runtime, `io.modelcontextprotocol/ui`, modern only)
+- A group repo may carry `mcp/apps/<name>/index.html` (+ `app.yaml`: `title`, `description`, optional `csp`
+  allowlist). The runtime serves each as a resource `ui://<group>/<name>` (`resources/list` entry with
+  `mimeType: text/html;profile=mcp-app`, `_meta["ui/csp"]` when set) — `resources/read` returns the HTML text
+  (≤ 512 KiB, read like other resources, access-gated like a resource). A tool package may declare `"ui": "<name>"`
+  in its proto JSON (`<name>.json`; the app must be loaded, else the tool fails to load); the tool then carries
+  `_meta["ui/resourceUri"] = "ui://<group>/<name>"` in `tools/list` and in every tool result (`_meta` on the result,
+  not on a §23.4 round). The load result carries `apps` (name, uri, title, description) and the manifest hash covers
+  them. `server/discover` lists the extension when any app is loaded. The
+  console's Packages card lists apps per zone; the group page links each `ui://` resource to a sandboxed preview
+  (`/groups/{g}/apps/{zone}/{name}`: `<iframe sandbox="allow-scripts" srcdoc=…>` with the app's CSP, no credentials).
+  The bridge passes the resource and `_meta` through unchanged. SkillSpector scans `mcp/apps/*` HTML as part of the
+  synthesized skill text (script-bearing HTML is called out as CAUTION by its rules).
+### 33.2 Skills over MCP (`io.modelcontextprotocol/skills`, modern only)
+- `skills/list` → `{skills: [{name, description, version, files: [<relative path>…]}]}` from `mcp/skills/*/SKILL.md`
+  (frontmatter `name` = the folder, `description`; `version` = sha12 over the folder's files, sorted, paths and
+  contents); `resources/read` of `skill://<name>/SKILL.md` and `skill://<name>/<file>` (every file ≤ 256 KiB,
+  checked at load naming the file and again at read; UTF-8 → `text`, else base64 `blob`; a path outside `files`
+  is not found, `..` or a leading `/` is refused with `-32602`), both gated like tools (tool access `skills:<name>`,
+  the blocked list too; the node applies it); the load result carries `skills` (the `skills/list` entries) and the
+  manifest hash covers them; listed in `server/discover` extensions. The bridge gains `ramen-mcp-bridge skills install <name>`
+  (writes `~/.claude/skills/<name>/…` after a SkillSpector scan when the group requires it, recorded in the ledger,
+  removed by `policy remove`) and `skills list`. The console's Packages card lists skills per zone with the scan
+  recommendation from the last deploy.
+### 33.3 The Iris example (demo repo)
+`mcp/resources/iris_csv` (the 150-row public-domain Iris data, `text/csv`), tools `iris_describe` (per-column
+count/mean/std/min/max via pandas), `iris_outliers {column, z: 2.5}` (rows whose z-score exceeds `z`, ≤ 50 rows),
+`iris_group_means {by: species}`; prompt `iris_analysis` (SKILL.md package guiding the agent through describe → outliers →
+group means, boundaries: never fabricate numbers); app `iris_chart` (an inline SVG histogram built from the tool result
+via MCP Apps); skill `iris-analyst` (Skills over MCP); guardrail: `iris_outliers` post-rail blocks results above 50 rows
+and any output containing a non-numeric cell dump (NeMo rail in `mcp/guardrails.yaml`); evals: three promptfoo tests
+(describe counts 150, outliers for `sepal_width` with z 2.5 ≤ 5 rows, group means for 3 species); SkillSpector
+baseline `mcp/skillspector-baseline.yaml` accepting the app's inline script rule; `mcp/env.yaml` gets
+`IRIS_MAX_ROWS={{$group.IRIS_MAX_ROWS}}` with a group secret so the environment-secrets path is re-proven.
+`mcp/requirements.txt` adds `pandas`; the worker image is built on deploy (§24.2).
+### 33.4 Security pass and the full retest
+A sub-agent that did not build 1.0.0c probes the live GKE stack read-only (auth matrix for every role incl. keys with
+and without acceptance, every gate code, headers, `/otlp` abuse: spoofed resource attributes, oversized and gzip-bomb
+bodies, rate limit; configs page/consent XSS with a hostile fragment; report page with a hostile finding text; the
+scan ConfigMap size bomb; IAM of the builder SA; NetworkPolicies; Secrets at rest) and writes findings with options to
+`reports/test-status-v1.0.0c.md` (Phase 7); clearly safe fixes (headers, escaping, limits, RBAC narrowing) are applied,
+anything else goes to the user (D77). Then the full retest: local (`make up`), GCP, AWS, Azure — `cloud_smoke.sh`,
+`verify` with every `RAMEN_*=1` block, the access matrix, auth + pushed configs through the bridge on the operator's
+machine, Phoenix showing the Iris calls under project `demo` with `ramen.user`; AWS and Azure torn down after, GCP kept.
+### 33.5 Verification
+Runtime: apps/skills listing, read, gating, size limits, `_meta` on tool results, discover extensions; console: cards,
+preview page sandbox and CSP, RBAC; bridge: `skills install/list`, scan-before-install, ledger/remove; demo: the Iris
+tools' unit tests in the repo, evals green on deploy, guardrail block proven (a tool call that returns 150 rows is
+refused), env secret resolved; cloud: as 33.4.
+
+## 34. v1.0.0c Phase 8 — optional engines in the installers, the docs rebuilt (binding, D78)
+
+### 34.1 Installers
+Every install path offers the three optional engines with one switch each: terraform variables `otel_collector`
+(`none|jaeger|phoenix`, default `none`), `evals_engine` (`none|promptfoo`), `skillspector_engine`
+(`none|skillspector`) on `deploy/terraform/{gcp,aws,azure}` (passed to the chart where terraform runs helm; emitted into
+the generated `values-<cloud>.yaml` / the documented `helm install` command where the operator runs helm), the same
+three keys in `deploy/local/docker-compose.yml` profiles (`--profile phoenix`, `--profile promptfoo`; SkillSpector runs
+as a Job image, so compose only needs the image variable), and the kind harness. Defaults stay off; turning one on
+changes only that engine's objects. `terraform validate`/`fmt` in CI; `scripts/check_versions.py` pins the three
+images in one place.
+### 34.2 README and GitHub Pages
+README rewritten from the running 1.0.0c: what Ramen is (one paragraph), the key features list (MCP 2026-07-28, Tasks,
+MCP Apps, Skills over MCP, Streamable HTTP + gRPC, guardrails, evals, SkillSpector, telemetry by group/user, LLM
+configs enforced at sign-in, satellites, three clouds), the roles table (super admin / group admin / analyst / viewer /
+mcp_user / group key — what each can do), architecture (console, node, runtime, environments → zones → workers, home
+and satellite clusters, the bridge), how enforcement works (the gate codes, the policy bundle, acceptance), deploy
+quick start per cloud with the optional engines, screenshots (`make shots`: group page with evals/scan badges, scan
+report, configs page, Phoenix project `demo`, promptfoo run, app preview), the honest limit. GitHub Pages (mkdocs)
+gain: `features.md` refreshed, `architecture/` refreshed with environments/zones/workers and satellites, a roles page,
+"Deploy your first group" walkthrough with screenshots, per-cloud **IAM and network** pages (every role/permission the
+console GSA / IAM role / managed identity needs, the builder SA, Workload Identity/IRSA, firewall / SG / NSG rules,
+CIDRs, the edge), a **Threat model, security and isolation** page (trust boundaries, what a group can and cannot reach,
+secrets at rest, gates, the §33.4 findings and their status), and an **MCP features** page (every MCP capability Ramen
+serves and how a group repo codes it, with examples from the demo repo: tools, resources, templates, prompts as
+skills, tasks, MRTR, subscriptions, apps, skills, guardrails, evals). Images regenerated with the engines on.
+### 34.3 Independent verification
+A sub-agent that did not write the docs checks every claim on the running GKE console (D-docs rule: verify against the
+console, not the code), every command in the deploy pages against the terraform/helm sources, every link
+(`check_docs_links.py`), and fixes what is wrong or marks it as unverified; its list goes to the report. Then AWS and
+Azure are torn down, GCP is kept on the latest build for the user's manual check, and every item of
+`instructions/v1.0.0c.md` is ticked in the report before the user is told Phase 8 is done.
+
+### 33.4a Hardening after the security pass (D79)
+- **Job identity.** The evals and scan Jobs run as ServiceAccount `ramen-evals` (chart `evals.serviceAccount`,
+  default `ramen-evals`): no registry, no bucket, no Secret Manager rights — Workload Identity / IRSA / workload identity
+  federation to a cloud identity `ramen-evals@…` that holds nothing beyond logging; the builder keeps `ramen-builder`.
+  Terraform creates the identity on the three clouds (`evals_gsa` / `evals_role_arn` / `evals_client_id` outputs → chart).
+- **Provider allowlist.** At sync the console parses `mcp/evals/promptfooconfig.yaml`: every `providers[]` id must be
+  `mcp`, `http`/`https`, `websocket`, or one of the configured LLM provider ids (`anthropic:*`, `openai:*`, `azure:*`,
+  `vertex:*`, `bedrock:*`, the compatible server's `openai:` with the configured base URL); `exec:`, `python:`,
+  `javascript:`/`file://`, `golang:`, `webhook:` and any `transform`/`extensions` script fail the deploy at the sync step
+  naming the entry. Assertions of type `javascript`/`python` with inline code are allowed (they run in the Job as the
+  group's own tests do) — the identity makes them harmless.
+- **Scrubbing.** LLM provider key values join `remember_secret` so they never appear in logs, job records or pages.
+- **IAM (terraform).** GCP: worker GSAs already read the groups bucket under the console's IAM condition
+  `resource.name.startsWith("projects/_/buckets/<bucket>/objects/<group>/") || resource.name == <bucket>` (the second
+  clause is what GCS needs for listing; object names of other groups stay visible, contents do not — the residual of
+  S4); a dedicated node SA `ramen-nodes@` (`logging.logWriter`, `monitoring.metricWriter`, `monitoring.viewer`,
+  `stackdriver.resourceMetadata.writer`, `autoscaling.metricsWriter`, `artifactregistry.reader` on the repo) set as the
+  Autopilot node identity for NEW installs — Autopilot refuses the change on a live cluster, so the test cluster keeps
+  the default compute SA until re-created (tfvars `node_service_account = "default"`; S5, sec-gaps: Terraform removes
+  `roles/editor` from the default compute SA — `google_project_iam_member_remove`, variable
+  `remove_default_compute_editor`, default true — after granting it the node roles while a cluster still runs as it,
+  and `gcp-satellite` sets `ramen-nodes@` as its node identity); the console GSA's
+  `iam.serviceAccountUser` is REMOVED (IAM conditions cannot name service accounts, and the console never impersonates).
+  AWS: the worker permissions boundary is keyed on the role tag `group=<group>` (`s3:prefix`, object ARNs and secrets
+  under `<group>/`), so a mis-written inline policy cannot cross groups; the console policy carries no `iam:PassRole`.
+  Azure: ABAC on the worker `Storage Blob Data Reader` assignment (`blobs:path StringStartsWith '<group>/'` and the
+  matching list `prefix` clause) — set by the console's `grant()` with `conditionVersion 2.0`; the storage account is
+  pinned `StorageV2`.
+- **Network.** NetworkPolicies in `ramen-system`: Phoenix, promptfoo, Redis and the console accept ingress only from
+  the console, the collector, the Jobs' pods (`ramen-evals`) and the edge; worker namespaces get an egress policy to
+  the console API (`/otlp` ingest + `Admin/*` callbacks), Redis, DNS and the internet — never to ramen-system's
+  ClusterIP services directly. Redis runs with `requirepass` (chart generates the password into a Secret; workers and
+  the console get it from the deploy/console Secrets).
+- **Preview credential (S8).** The app preview reads `ui://` resources with the deploy's evals key as bearer plus the
+  admin key (the node accepts no bearer-less call), never a stored MCP key. The evals key is therefore derived —
+  `rek_` + HMAC(group session secret, deploy job id)[:32] — rotated per deploy, never stored, recomputable by the console.
+- **Workers and the collector.** Workers export OTel straight to the chart's collector (4318) and reach Redis; those two
+  ports admit the worker namespaces in the ramen-system policies, everything else in ramen-system (Phoenix UI, promptfoo,
+  the console except its own port) is closed to workers. Egress policies need `cluster.serviceCidr`; `redis.enabled`
+  defaults off (the test cluster keeps its hand-applied Redis until re-installed).
+- **Enforcement (S6b amendment).** The IaC enables an engine: EKS managed `vpc-cni` addon with `enableNetworkPolicy`
+  (Terraform home/satellite, CloudFormation), AKS `network_policy = "calico"` (home overlay, satellite node subnet);
+  chart `networkPolicy.awsVpcCidr` also sets the console's `RAMEN_AWS_VPC_CIDR` (comma list), Terraform `network_set`.
+- **EKS pod subnets (D89, amends S6b).** Nodes, ALB interfaces and pods shared the public /24s, so the edge `ipBlock`
+  (the whole VPC) admitted every pod (live, 1.0.0b35: `default` → worker pod 8080 = 200). Terraform home/satellite and
+  CloudFormation add one private pod subnet per AZ (`cidrsubnet(vpc, 4, 4 + i)`: 10.42.64.0/20, 10.42.80.0/20; no public
+  IP, the public route table, no `kubernetes.io/role/elb` tag, no NAT — egress SNATed to the node) and set the
+  `vpc-cni` addon's `env` (`AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG=true`, `ENI_CONFIG_LABEL_DEF=topology.kubernetes.io/zone`)
+  and `eniConfig` (one ENIConfig per AZ: pod subnet + cluster security group) before the node group. The node group is
+  `<name>-podnet` with `create_before_destroy` (replaced once on an existing cluster); max pods per t3.small 8 (EKS
+  computes it, no launch template). Chart `networkPolicy.awsAlbCidrs` (list) is the AWS edge and the console's
+  `RAMEN_AWS_ALB_CIDRS` (comma list); `network_set` / `NetworkSet` emit the public subnet CIDRs, outputs `alb_cidrs`
+  (home, satellite). Deprecated, rendered as before when `awsAlbCidrs` is empty: `networkPolicy.awsVpcCidr`,
+  `console.env.RAMEN_AWS_VPC_CIDR`; the console reads `RAMEN_AWS_ALB_CIDRS`, else `RAMEN_AWS_VPC_CIDR`, else
+  10.0.0.0/16. Still admitted on 8080: node addresses (probes, `hostNetwork`, a home pod's SNATed call to a satellite).
+- **Console source networks (S6, sec-gaps).** `console.sourceCidrs` (`RAMEN_CONSOLE_SOURCE_CIDRS`) is admitted only by
+  the chart's `console` policy (its own port) — never Phoenix / Jaeger, promptfoo or Redis — and, in zone namespaces,
+  only by a satellite zone's `worker` policy, as a separate ingress rule on 8080 (`gcp_k8s.with_console_sources`, applied
+  by the adapter's attach for a zone whose cluster is not home); a home zone admits the console as the `ramen-system`
+  namespace peer only. On EKS / AKS (`ipBlock` matches pod addresses) the value must list node subnets, never a pod
+  range; the chart's NOTES warn when it is set there. Residual: a satellite admits every home pod (GKE pod range;
+  EKS/AKS home node subnets after SNAT) — the console has no fixed address.
+- **Managed Redis.** Chart `redis.externalUrl` (with `redis.enabled: false`) writes a managed instance's URL into Secret
+  `ramen-redis` (`url`, `password`) and runs no Redis; `rediss://` is TLS (the node's client carries rustls + webpki
+  roots — managed instances are TLS-only). The Azure Terraform creates an Azure Managed Redis (`managed_redis`,
+  Balanced_B0, port 10000, access key) and `helm_set` / `redis_url` (sensitive) carry the URL.
+- Verified by: console tests (allowlist accept/refuse matrix, scrub), chart lint + kind (policies applied, Redis auth),
+  terraform validate + a live `terraform apply` on the GKE project followed by the smoke and `verify`.
+
+## 35. v1.0.0c — load tests on the three clouds before the Phase 9 spot check (binding, D80)
+
+- **Harness.** `tests/load/` (pytest, opt-in with `RAMEN_LOAD=1`, same env as the cloud tests): an asyncio load
+  generator over the edge — Streamable HTTP and gRPC, one group key plus one OAuth token, every call carrying the policy
+  `_meta` (telemetry report with 2 events, evals/skillspector/configs versions) — with scenarios `steady` (C=32
+  concurrent clients, 120 s, `tools/call demo_calculator_tool`), `mixed` (tools/list, prompts/get, resources/read
+  `iris_csv`, tools/call iris_describe, tasks round trip, 90 s), `burst` (C=256 for 30 s against a zone whose scope
+  throttle is set to 1000/min — proves 429s, not 5xx), and `scale` (steady ramp 8→64 clients over 4 min on a zone
+  with min 1 / max 4 workers — proves the autoscaler adds workers, p95 stays under the bound, and scaling down after
+  idle). Each scenario records requests, errors by code, p50/p95/p99 latency, worker count before/after
+  (`GET /groups/{g}/zones/{z}/workers`), the access-log reason counts and the Phoenix span count delta for project
+  `demo`; thresholds (fail the test): error rate < 0.5 % excluding expected 429s, p95 < 1.5 s on steady/mixed over
+  the public edge, no 5xx under burst, every call span present in Phoenix (sampled check). Output: a markdown table per
+  cloud appended to `reports/test-status-v1.0.0c.md` ("Load tests") by `scripts/cloud_load.sh <cloud>`.
+- **Where.** GCP (the kept cluster), Azure (Managed Redis, D80) and AWS (rebuilt once for the run, torn down after);
+  satellites are not load-tested in 1.0.0c. Costs: the runs use the group key path only (no LLM spend) and the
+  cheapest worker sizes already deployed.
+- **Done when** the three tables are in the report with every threshold met, or each miss has a filed finding with
+  the evidence and an option list; only then does the Phase 9 spot-check message go to the user.
+
+## 36. v1.0.0c Phase 2.5 — LLM checks in NeMo Guardrails, scoped LLM providers, guardrails as a client policy (binding, D81)
+
+### 36.1 Rails
+- `mcp/guardrails.yaml` (engine `nemo`) may name LLM-backed rails per tool and stage: `self_check_input`,
+  `self_check_output`, `jailbreak_detection`, and the NeMo library rails `fact_checking`, `hallucination`,
+  `topical` (`topics: [...]`), `sensitive_data` (any rail NeMo 0.24 ships; the runtime maps names to NeMo flows and
+  copies the library prompts). The repo's `config.yml` keeps `models: []`; the runtime fills `models:` at load from the
+  credential Ramen hands the worker (36.2) — `engine: openai|azure|anthropic|vertex|bedrock|openai_compatible`,
+  `model: <allowed model>` — and refuses to load (fail closed, clear error on the deploy job) when a rail needs a model
+  and none is available. Rails keep the per-tool `pre`/`post` semantics of §22; LLM rails add latency, so the manifest
+  lists them: `guardrails.tools[<tool>] = {"pre": [...], "post": [...], "llm": [...]}` (static-only tools keep the
+  `["pre","post"]` list) and `guardrails.llm = {provider, model}`. As built (1.0.0c): NeMo 0.24 ships neither the
+  heuristics model for jailbreak detection nor a topic-control model in the worker image, so `jailbreak_detection` and
+  `topical` are self-check variants on the main model with generated prompts (a repo `prompts.yml` task wins);
+  `hallucination` is one deterministic grounded judge call (temperature 0) over the tool's structured result plus the
+  arguments (prose string leaves of the result are the statement, never evidence); `fact_checking` the same evidence
+  with NeMo's entailment prompt; NeMo's sampling check stays available as `self_consistency` (three calls,
+  non-deterministic, not used by the demo); every judge call runs at temperature 0; `sensitive_data` needs
+  presidio (not in the image; fails closed naming it); providers are reached through their OpenAI-compatible endpoints
+  (`RAMEN_LLM_API_VERSION` for Azure). Blocked: `isError`, text `guardrail blocked: <stage>: <message>`,
+  `_meta.ramen.guardrail = {stage, engine: nemo, rail}`.
+### 36.2 Scoped LLM providers and allowed models
+- Config → LLM providers (org scope, super admin, §29.1/§30.1) gains **`allowed_models`** per provider (a list of model
+  ids; empty = the provider's default only). A group gains **its own providers** (`PUT /api/v1/groups/{g}/llm-providers`,
+  group admin, same shape, vaulted under `groups/<g>/llm_providers`, same `allowed_models`): the group scope is used for
+  the group's guardrails, SkillSpector scans and promptfoo evals when it names a provider; else the org scope when it
+  does; else the run fails with `no LLM provider: set one on the group or ask a super admin` — never silently skipped.
+  Group settings `guardrails: {llm: "<provider>", model: "<id>", required: false}` (`model` must be in that provider's
+  `allowed_models`; `PUT /api/v1/groups/{g}/guardrails`). The deploy writes the chosen provider's key into the zone's
+  deploy Secret under group-scoped names (`RAMEN_LLM_PROVIDER`, `RAMEN_LLM_MODEL`, `RAMEN_LLM_API_KEY`,
+  `RAMEN_LLM_BASE_URL`/`_ENDPOINT`/`_DEPLOYMENT` as the provider needs) — only when a rail needs it; `mcp/env.yaml` is
+  not used for this. Keys are `remember_secret`-scrubbed everywhere.
+### 36.3 Guardrails as a client policy
+- Token answer and `/.well-known/ramen-policy` gain `guardrails {version, required, config}` when the repo has
+  `mcp/guardrails.yaml` (+ the `mcp/guardrails/` dir): `config` = the yaml + the rails dir packed (≤ 64 KiB, base64
+  gzip tar with entries `guardrails.yaml`, `guardrails/<rel>`, deterministic headers; `error` instead when larger),
+  `version` = sha12 over the pack + `required` + the group's `guardrails.llm/model`. `client_llm` carries `{provider,
+  model, api_key?, base_url?, endpoint?, deployment?}` (Azure OpenAI and Foundry both as provider `azure`) and is
+  absent, never a sign-in failure, when no provider resolves. Workers: `RAMEN_GUARDRAILS_VERSION`
+  / `_REQUIRED`; gate `-32029 guardrails policy required|changed: sign in again` (HTTP 428, after the configs gate,
+  `_meta["io.ramen/guardrails"]`). Bridge 0.6.0: bundle + version on calls, re-sign-in on `-32029`, client files state the
+  rails in force, `policy check` fails when removed — **and** the bridge runs the same rails locally
+  (`ramen-mcp-bridge[nemo]` extra; `policy rails on|off`, on by default when the bundle carries a config): the input rail
+  on every outgoing gated call, the output rail on every tool result, using the LLM credential the token answer hands it
+  for that purpose (`guardrails.client_llm {provider, model, api_key}` — the group's or the org's, scrubbed from logs);
+  a blocked call/result is answered to the host like the worker does (`isError`, `_meta.ramen.guardrail.stage`,
+  `engine: nemo`, `where: client`). Without the nemo extra installed the bridge warns once and relies on the worker
+  (documented limit).
+- Not bridge-only (user, 2026-11-16, as D73): the guardrails policy is handed out on EVERY sign-in path — group key
+  (the key's deploy carries the rails and the worker enforces them on each call), console password / magic link and
+  OAuth tokens (the token answer carries `guardrails`) — and the worker gate `-32029` applies to every caller; the
+  rails themselves run in the worker for every client, the bridge adds the local run on top.
+### 36.4 Demo and verification
+Demo repo: `iris_outliers` gains `self_check_output`; a new tool `iris_report {question}` (pandas summary as prose)
+gets `self_check_input`, `jailbreak_detection`, `topical (iris, statistics)` and `hallucination`; golden cases for the
+static rails only; evals add a `llm-rubric` test when a provider is set. Local proof with a fake OpenAI-compatible
+server (deterministic answers) for every rail; clouds (GCP, then AWS and Azure rebuilt for the run) with the real
+OpenAI provider at `gpt-4o-mini`-class under the $15 budget: a blocked jailbreak prompt, a passed normal call, the
+`-32029` gate through the edge, the bridge's local rail blocking the same prompt, Phoenix spans for the rail calls.
+
+## 37. v1.0.0c — one LLM providers card with live model lists, every region in the zone picker (binding, D82)
+- Config → **LLM providers** is one card (the §29.1 and §30.1 cards merged): one row per provider (Anthropic, OpenAI,
+  Azure OpenAI, Vertex AI, Bedrock, Azure AI Foundry, OpenAI-compatible) with its `set`/`not set` state, that provider's
+  fields inline, an **Allowed models** control and one "Save changes"; the group page's card (§36.2) uses the same macro.
+- `GET /api/v1/config/llm-providers/{p}/models` (super admin) and `GET /api/v1/groups/{g}/llm-providers/{p}/models`
+  (group admin) answer `{models: [ids], source: live|cached|static|unavailable, error?}` from the provider's own listing
+  (OpenAI/compatible `/models`, Anthropic `/v1/models`, Azure OpenAI/Foundry deployments, Gemini when the console has
+  a Google API key, Bedrock `ListFoundationModels` when it has AWS credentials; else a static list), 5 s timeout, 10 min
+  cache per scope, keys never logged. The control is a multi-select over that list plus a free-text field; the group
+  Guardrails `model` is a select over the resolved scope's allowed models; a model outside the list is refused (422)
+  and would fail at the worker.
+- The zone picker lists **every** non-blocked region of the console's cloud grouped by continent (`regions.json`: GCP
+  42, AWS 34, Azure 44 — Azure regions without availability zones as one logical zone `<region>-1`); regions with a
+  cluster (home, satellites) are selectable, the others are shown disabled with "no cluster yet — register a satellite
+  cluster on the Config page" (D71 unchanged). The Clusters card's region select is grouped the same way.
+
+### 35.1 Capacity findings and D83
+Measured (Azure and GCP, 1.0.0b24): burst passes (≥ 336 rps at the edge, only 429s, no 5xx), the autoscaler adds and
+removes workers (1→3→1, 1→4→1), but one worker serves ~25 rps of a rail-guarded trivial tool: the worker pod of size
+`s` has CPU requests = limits = 250m, the Python runtime serves one request at a time, and a static NeMo rail costs
+~11 ms CPU per call. Runtime fix (1.0.0c): hooks run on one long-lived thread and event loop; tools that name no LLM
+rail run the repo's own rails only (the §36.1 wrapper flows cost ~2 ms per input flow per call under Colang 1.0) —
+rail cost 9.3 → 3.6 ms. D83: worker CPU limits stay at 250m; the autoscaler scales up when the zone's p50 over the
+last minute exceeds `RAMEN_AUTOSCALE_P50_MS` (default 500) or rps/worker exceeds the target, and down only when both
+are low; the runtime executes up to `RAMEN_RUNTIME_CONCURRENCY` (default 4) tool calls at once on a thread pool
+(load, reload and shutdown stay exclusive; tenant tool code must tolerate concurrent calls — documented in the group
+repo contract). The §35 steady/mixed p95 bound stays 1.5 s and is re-measured after D83 lands.
+
+**Per-call cost pass (1.0.0, as built; D80 misses on 1.0.0b34–b36: GKE `scale` p95 1872 ms, EKS `steady` 1927 ms
+at 27 rps, EKS `scale` 2116 ms).** Worker CPU stays 250m (D83). Root causes, measured on the demo's
+`demo_calculator_tool` (static NeMo pre rail) in-process: 4.2 ms CPU per call = NeMo Colang 2.8 + JSON Schema 1.2 +
+the rest; the node is ~0.35 ms (`burst` serves 550–660 rps of node-only 429s on one worker).
+- **Runtime — JSON Schema.** `jsonschema.validate` checked the input and the output schema against the metaschema on
+  every call. Each tool now compiles its validators once per load (`Package.input_validator` / `output_validator`,
+  same draft choice and best-match error text): a rail-free tool 0.89 → 0.04 ms.
+- **Runtime — NeMo library flows.** NeMo appends its whole Colang 1.0 library to every config and tries to start each
+  top-level flow on every event. A top-level flow whose first step runs an action that no kept flow runs, and that no
+  flow calls, can never start and is dropped at load (`guardrails_nemo.drop_idle_flows`, to a fixpoint; a flow that
+  starts on `bot ...` is never dropped; a library flow whose action an LLM rail wrapper runs stays, as before). −0.65 ms.
+- **Runtime — Colang expressions.** Colang's `eval_expression` built a new simpleeval evaluator and re-parsed the text
+  ~90 times per rail call. `guardrails_nemo.cached_simple_eval` replaces the `simple_eval` NeMo looks up per call: one
+  evaluator per thread, parsed trees cached (≤ 4096); any other call shape, or a nested call, goes to simpleeval
+  unchanged. nemoguardrails stays pinned `<0.25`; the swap is skipped if NeMo stops using simpleeval there. −0.7 ms.
+- **Runtime — NeMo usage stats.** NeMo 0.24 posts an anonymous usage event to NVIDIA from a thread at every rails
+  config (two per load) plus a 10-min heartbeat; the engine sets `NEMO_GUARDRAILS_NO_USAGE_STATS=1` unless the deploy
+  set it.
+- **Node — load timeout.** A cold `runtime.load` at 250m (`import nemoguardrails` alone ≈ 8 CPU-s, pandas ≈ 3) can pass
+  the 120 s call timeout; the node killed it and loaded again from scratch, doubling a new worker's time to SERVING.
+  `runtime.load` now waits `max(RAMEN_CALL_TIMEOUT_SECS, 600)` s (`sidecar::LOAD_TIMEOUT_SECS`); other calls keep
+  the call timeout.
+- **Console — latency trigger.** `RAMEN_AUTOSCALE_P50_MS` defaults to 250 (was 500); the rest of the rule is unchanged
+  (down below half the bound, `MIN_RPS` 2). The p50 is a one-minute window and a new worker needs one to two minutes
+  or more to serve behind a cloud LB, so at 500 ms the `scale` ramp asked for help when the first worker was already at
+  its limit.
+
+Local result (Docker `--cpus 0.25`, arm64 worker 1.0.0 + the demo with pandas baked, 32 clients half Streamable HTTP
+h2 / half gRPC, calc, 40 s, Docker HEALTHCHECK off as on Kubernetes): before 29.8 rps, p50/p95/p99 808/2111/7398 ms,
+8.5 ms CPU per call; after 69.3 rps, 404/786/1000 ms, 3.7 ms. Expected on the clouds (to be re-measured, §35): one
+worker serves about 2.3× the calls per second it did on b34–b36 — `steady` (32 clients, one worker) ≈ 60 rps with p95
+≈ 0.8 s on EKS t3.small (was 27 rps / 1927 ms) and lower on GKE and AKS; `mixed` and `burst` unchanged or better;
+`scale` asks for the second worker at about half the load and each worker carries twice the calls, so a fluid model
+fitted to the b34–b36 misses puts its p95 at 0.8–1.2 s on all three (was 1.1–2.1 s).
+
+## 38. v1.0.0c — closing the final security pass (binding, D85)
+
+### 38.1 LLM judge proxy (F1)
+Provider keys never leave the console. `POST /llm/v1/chat/completions` (OpenAI-compatible request/response, streaming
+off) on the console: bearer = a per-zone **judge token** (`rjt_…`, minted per deploy like the evals key, in the zone's
+deploy Secret as `RAMEN_LLM_API_KEY`, bound to `<group>/<zone>`) or a user's token / MCP key of the group; the console
+resolves the group's provider (§36.2 group → org), checks the requested model against `allowed_models` (else 403),
+adds the provider credential, forwards (Azure/Anthropic/Vertex/Bedrock mapped as §36.1 does today), enforces a per-group
+rate limit (`RAMEN_LLM_PROXY_PER_MIN`, default 120) and a per-request token cap, audits `llm.proxy` per 100 calls, and
+answers 502 with the upstream status on failure. Workers get `RAMEN_LLM_PROVIDER=openai_compatible`,
+`RAMEN_LLM_BASE_URL=<console>/llm/v1`, the judge token and the model; the token answer's `client_llm` becomes
+`{provider: openai_compatible, base_url: <console>/llm/v1, model}` and the bridge uses the user's own token as the
+bearer. `RAMEN_LLM_*` names in a repo's `mcp/env.yaml` are refused at sync. Evals/scan Jobs keep provider env (they run
+as `ramen-evals` in ramen-system, not tenant code) but promptfoo inline assertions may not read env — the allowlist
+refuses `process.env`/`os.environ` in inline assertion code.
+### 38.2 Per-group image builds (F2)
+Each group's worker images go to `<registry>/ramen/groups/<group>/worker` (AR / ECR / ACR repository per group, created
+by the console on first build with the group's labels); the build Job runs as a per-group identity
+(`ramen-build-<group>`: GSA / IAM role / managed identity) that may push only to that repository; console, worker base
+and SkillSpector images live in `<registry>/ramen/platform/*`, which no build identity can write; the chart references
+platform images by digest (`image.digest` beside `image.tag`), and deploys pin the group's worker image by digest.
+Terraform creates the platform repository and the permission for the console to create per-group repos/identities;
+`requirements.txt` additionally refuses option lines (`-e`, `--index-url`, `--extra-index-url`, `-f`) and VCS/URL
+requirements unless the group admin sets `build.allow_urls: true`.
+- **As built (§38.2).** GCP: one Artifact Registry repository per group, `ramen-groups-<group>` (AR grants only per
+  repository and repository names cannot hold `/`), image `…/ramen-groups-<group>/worker`; the build identity is the
+  Kubernetes ServiceAccount `ramen-system/ramen-build-<group>` itself through Workload Identity Federation (no GSA, so the
+  console needs no IAM rights on the platform repository). AWS: ECR `ramen/groups/<group>/worker`, role
+  `/ramen/build/ramen-build-<group>` under the boundary `ramen-build-boundary`. Azure: managed identity
+  `ramen-build-<group>` with `Container Registry Repository Writer` conditioned on the group's repository (registry in
+  `AbacRepositoryPermissions` mode). Platform images keep their paths (`…/ramen/{console,worker,skillspector}`) — no build
+  identity can write them; the chart takes `image.digest` / `image.workerDigest`. The group name `build` is reserved.
+  `requirements.txt` refuses every option except `--require-hashes`, `--only-binary`, `--prefer-binary`, `--pre`, and
+  any URL/VCS/path/archive requirement, unless `build.allow_urls: true`. Residual (console compromise, not group
+  code): on Azure the console's RBAC administrator role would let a compromised console grant itself writer on the
+  platform repository; platform images are pinned by digest, so a re-tag there does not reach a pod until an operator
+  changes the digest. On AWS the console's ECR rights are fenced to `ramen/groups/*`.
+- **GCP repository rights by resource tag (sec-gaps, closes the GCP residual).** Artifact Registry ignores IAM
+  Conditions on `resource.name` but every service evaluates resource tags. Terraform creates the project tag key
+  `ramen-repo` with values `platform` and `group`, binds `platform` to the repository `ramen`
+  (`google_tags_location_tag_binding`), and binds `ramenConsoleBuildRepos` (get/update/delete/get+setIamPolicy) under
+  `resource.matchTagId(<key id>, <group value id>)`. `ramenConsoleBuildRepoCreate` (unconditioned: checked before a
+  repository carries a tag) holds `repositories.create`, `repositories.list` and `repositories.createTagBinding`; the
+  console holds `roles/resourcemanager.tagUser` on the `group` value only and no `deleteTagBinding` anywhere. A
+  resource holds one value per key, so the console can neither re-tag `ramen` nor reach it. Console
+  (`gcp_api.Registry`): existence from `list` (get answers 403 for an untagged or missing repository); after create it
+  binds `group` through the regional endpoint `https://<location>-cloudresourcemanager.googleapis.com/v3/tagBindings`
+  (`parent = //artifactregistry.googleapis.com/projects/<project>/locations/<location>/repositories/<repo>`,
+  `tagValueNamespacedName = <project>/ramen-repo/group`, or `tagValue` when `RAMEN_AR_GROUP_TAG` is `tagValues/<id>`;
+  `none` = no tagging), 409 = already bound; then retries 403 on get and on the IAM calls (IAM-condition propagation,
+  Resource Manager: ≤ 2 min, up to 7; 48 tries × 5 × poll) and fails naming the tag. A repository made before the tag
+  (untagged) is tagged on the group's next build or on its deletion. A console from before this change cannot tag:
+  terraform and console are upgraded together.
+- **Judge proxy as built (§38.1).** Judge token `rjt_<b64url(group/zone/job)>.<HMAC>` valid while its deploy runs or is
+  recorded in `last_deploy.judge[zone]` (current + previous); workers call `RAMEN_CONSOLE_INTERNAL_URL/llm/v1` in-cluster;
+  the console identity holds `roles/aiplatform.user` (GCP, `console_vertex`) and Bedrock invoke rights (AWS,
+  `console_bedrock`); the rate limit is per console replica. Local compose sets `RAMEN_CONSOLE_INTERNAL_URL=
+  https://console:8443` (the console leaf names `console`), so the worker's rails reach the proxy there too; CI's compose
+  profile `ci` adds `fake-llm`, a deterministic OpenAI-compatible judge over TLS (compose CA), set as the org's
+  `openai` provider by the harness (`RAMEN_FAKE_LLM_URL`), so CI deploys the real demo repo with no key.
+
+### 38.3 Throttle Redis (F3)
+The chart's Redis (`redis.enabled=true`, generated password, NetworkPolicy) replaces the hand-applied one on GKE; the
+worker egress policy selects the chart's labels; a worker that cannot reach its Redis reports it in `Admin/Metrics`
+(`redis: "unreachable"`), the group page shows "throttling off: Redis unreachable" on the zone, and the deploy log
+warns.
+### 38.4 Injection hardening for LLM rails (F5)
+Judged arguments and results are wrapped in an escaped, delimited block (`<<<ARGS … ARGS>>>`, with any delimiter or
+`Answer:`/`Verdict:`/`Question:` line inside the payload neutralised) and the judge prompt says the block is data, never
+instructions; a static pre-rail refuses arguments that contain judge-format lines; the docs and threat model state that
+LLM rails reduce but cannot eliminate prompt injection.
+
+## 39. v1.0.0c — TLS on every hop (binding, D86)
+The user, 2026-11-17: every hop inside an install is TLS, with certificates from **Ramen's own per-install CA** (no
+cert-manager, no service mesh); plaintext is **refused** on cloud installs, not merely off by default; the bridge
+defaults to TLS; local compose and the kind harness run TLS with the generated CA too. Supersedes §11/§16.1 ("h2c
+inside the cluster"), §24.1's plain-HTTP wake call and §38.1's in-cluster `/llm/v1` exemption.
+
+### 39.1 The install CA
+- EC P-256, `CN=Ramen install CA <id>`, `basicConstraints CA:true pathlen:0`, `keyCertSign|cRLSign`, 10 years. The
+  console creates it the first time it starts and keeps it in store doc `config/install_ca` (`cert`, `ca_key`,
+  `previous`, `created`): `ca_key` is a console secret (`SENSITIVE`), so on a cloud it lives in that cloud's secret
+  manager (vaulted, §24.5) and locally Fernet-encrypted in the store. The key never leaves the console process: only
+  leaf keys are written to Kubernetes Secrets. Two consoles starting together: the doc is written only when absent,
+  the loser re-reads it.
+- `RAMEN_TLS_CA_DIR` (`ca.crt` + `ca.key`) overrides the store: local compose and the kind harness generate the CA
+  with `python -m ramen_console.tls init <dir>` before anything starts.
+- The **bundle** every client trusts is `cert` + `next` + `previous` (PEM concatenation); only `cert` issues.
+  **Rotation** (`POST /api/v1/config/tls/rotate`, super admin, audited `config.tls.rotate`) runs in phases so that no
+  peer ever sees a leaf whose issuer it does not trust (GKE 1.0.0b33: the one-shot rotate switched Redis/Phoenix at
+  once and every worker lost Redis and OTLP until its zone was renewed):
+  1. **Bundle** (in the call): a new CA is staged as `next` (`next_key` vaulted like `ca_key`) and the two-CA bundle
+     is written wherever it is trusted — the console's own trust at once, ConfigMap `ramen-ca` and the `ca.crt` of
+     every `ramen-tls-<svc>` in the release namespace, and every zone's `ramen-tls` `ca.crt` + `ramen-ca` on every
+     cluster. No leaf changes, nothing restarts. Answer: `{fingerprint (new CA), previous: true, stage: "bundle",
+     switch_after: <secs>, zones, system: []}`. A bundle that cannot be written everywhere (a cluster unreachable)
+     unstages the CA again: 409 `…nothing was switched; retry the rotation`. Audited only when accepted.
+  2. **Leaves** (a job the call starts, after `RAMEN_TLS_ROTATE_SETTLE_SECS`, default 180 s — kubelet refreshes a
+     mounted Secret/ConfigMap within ~1–2 min and every reader re-reads it, see §39.5a): the staged CA becomes `cert`,
+     the old one `previous` (its key dropped); the console's own leaf and every zone's leaf are re-issued (nodes
+     reload, no restart), **then** the chart services' leaves (their Deployments restarted). Logged as `tls: CA <fp>
+     issues now; re-issued: …`. With a settle time of 0 both phases run in the call (`stage: "rotated"`). A job lost
+     with its console is finished by any replica's renewal round once the settle time has passed.
+  3. **Retire** (`?retire=1`): refused with **409** while a rotation is staged or while any leaf (the console's, a
+     chart service's, a zone's on any cluster) is not from `cert` — the message names them. Otherwise `previous` is
+     dropped and only the bundles shrink: no leaf is re-issued, nothing restarts. Answer `{fingerprint, previous:
+     false, zones, system: []}`.
+  A second rotate is refused (409) while one is staged or while `previous` is still trusted (retire first: a bundle
+  holds two CAs at most). `GET /api/v1/config/tls` (super admin): `{fingerprint, next, previous, stage:
+  "single"|"bundle"|"rotated", switch_after, leaves: [{name, ca: "current"|"next"|"previous"|"unknown"}]}`. No page.
+
+### 39.2 Leaves
+All leaves: EC P-256, signed by the install CA, EKU serverAuth + clientAuth, **30 days** (`RAMEN_TLS_LEAF_DAYS`),
+renewed when less than a third is left. Names are DNS SANs (plus `127.0.0.1`); no pod IPs.
+- **Zone** (every attach/deploy writes it; the console's scheduler renews it): Secret `ramen-tls` (`tls.crt`,
+  `tls.key`, `ca.crt` = bundle) and ConfigMap `ramen-ca` (`ca.crt`) in the zone namespace. SANs:
+  **`<group>.<zone>.worker.ramen.internal`** (the zone's own name, the one every in-install client verifies, D92
+  §39.2a; `worker.ramen.internal` before D92), `worker`, `worker-direct`, `worker-canary` and their `.<ns>`, `.<ns>.svc`,
+  `.<ns>.svc.cluster.local` forms, `localhost`, `127.0.0.1`. The
+  Secret is mounted (directory, not `subPath`) at `/etc/ramen/tls`; the node re-reads the pair when the files change
+  (checked every 60 s), so a renewal needs no restart. Workers get `RAMEN_TLS_CERT`, `RAMEN_TLS_KEY`,
+  `RAMEN_TLS_CA=/etc/ramen/tls/ca.crt`, `RAMEN_REQUIRE_TLS=1`; the runtime sees `RAMEN_TLS_CA` only (cert and key
+  paths are stripped from its env).
+- **Console**: the launcher (`python -m ramen_console.serve`, the image entrypoint) ensures the CA, issues the
+  console's own leaf into a private temp dir before uvicorn binds, and renews it in-process (`load_cert_chain` on the
+  live context). SANs: `console`, `console.<ns>`, `console.<ns>.svc`, `console.<ns>.svc.cluster.local`, the host of
+  `RAMEN_CONSOLE_INTERNAL_URL`, `localhost`, `127.0.0.1`.
+- **Chart services** (Redis, Phoenix + its collector, Jaeger, promptfoo): Secret `ramen-tls-<service>` and ConfigMap
+  `ramen-ca` in the release namespace, written by the console at start and renewed by its scheduler, which then
+  restarts that Deployment (these servers do not reload). The pods mount them (not optional): they start once the
+  console has run once. SANs: `<svc>`, `<svc>.<ns>`, `<svc>.<ns>.svc`, `<svc>.<ns>.svc.cluster.local`, `localhost`,
+  `127.0.0.1`.
+
+### 39.2a Zone names (D92)
+The user, 2026-11-17 (D92, amends D90/D91): a verified worker proves its **zone**, not just the install.
+- A zone's leaf carries `<group>.<zone>.worker.ramen.internal` (group and zone are DNS labels, `NAME_RE`) instead of
+  `worker.ramen.internal`; the Service names and loopback stay (the node's own health check, `ramen-mcp-bridge
+  --target 127.0.0.1:8080 --ca …` in the image's `HEALTHCHECK`, dials loopback — a peer that cannot be another zone).
+- Every verifier checks the zone it means: the console's gRPC dial to a pod IP (`grpcclient`: `name` is
+  `tls.worker_name(group, zone)` per call, `peer=(group, zone)` required — a zone-derived name without a peer is a
+  `ValueError`, never a guess); the activator (`RAMEN_TLS_SERVER_NAME` in the zone's pod env, inherited from the
+  `worker` Deployment); Envoy's `BackendTLSPolicy` hostname; the evals Job (`RAMEN_MCP_URL` and `hostAliases` name the
+  zone). A leaf of zone A dialled as zone B fails the handshake (`UNAVAILABLE`; health `false`).
+- GKE's front ends, the ALB and kubelet probes encrypt without verifying (§39.3): unchanged, they verify no name.
+- Local compose runs one worker for every group of zone `local`: its leaf names `*.local.worker.ramen.internal`
+  (`tls init --zone worker=local`; `--zone <leaf>=<ns>:<group>.<zone>` names one zone). `tls init` re-issues a leaf
+  whose names changed. `RAMEN_WORKER_TLS_NAME` still pins one name for a console that must (a laptop run).
+
+### 39.3 Hops
+| Hop | TLS | Verified against |
+|---|---|---|
+| Client → edge | the edge's public certificate (unchanged) | client's roots |
+| Bridge → edge | TLS by default; `--insecure` (h2c) is explicit, local only, and an error next to `--tls`/`--ca` | system roots, or `--ca` |
+| Edge → worker | node serves TLS (`ramen-tls`). GKE: Service port `appProtocol: HTTP2`, HealthCheckPolicy `HTTP2` on `/readyz`. AWS: target groups `backend-protocol: HTTPS` (GRPC / HTTP1 versions kept), health checks `HTTPS`. Azure: `BackendTLSPolicy` per zone on Service `worker` (CA ConfigMap `ramen-ca`, hostname `<group>.<zone>.worker.ramen.internal`, D92) | Envoy: the install CA. GFE / ALB encrypt but do not verify backend certificates (the clouds' L7 LBs offer no backend CA on these paths) |
+| Kubelet → worker | `httpGet` `scheme: HTTPS` on the node's new `/readyz` (readiness: `""` SERVING) and `/healthz` (liveness) — kubelet's gRPC probe cannot speak TLS | not verified (kubelet) |
+| Console → worker (`Admin/*`, smoke, golden, metrics, packages) | gRPC over TLS to the pod IP with server name `<group>.<zone>.worker.ramen.internal` of the zone it means (D92) | install CA |
+| Activator → `worker-direct` | TLS, its own zone's name (`RAMEN_TLS_SERVER_NAME`, set by the console, D92) | install CA (`RAMEN_TLS_CA`) |
+| Worker / runtime → console (wake, `/llm/v1` judge proxy, `/otlp`) | `RAMEN_CONSOLE_INTERNAL_URL=https://console.<ns>.svc.cluster.local:443`; the exemption of `/api/v1/internal/` and `/llm/v1/` from `HttpsOnlyMiddleware` is removed | install CA |
+| Edge → console | console Service port **443** (`https`) → pod 8000 serving TLS. GKE `appProtocol: HTTPS` + HealthCheckPolicy `HTTPS`; ALB `backend-protocol: HTTPS`; Envoy `BackendTLSPolicy` (hostname `console.<ns>.svc.cluster.local`) | as edge → worker |
+| Console / workers → chart Redis | `redis-server --port 0 --tls-port 6379 --tls-auth-clients no` (the password stays the client credential), Secret `ramen-redis` `url` = `rediss://…` | install CA (managed Redis: public roots, as before) |
+| Console / workers → collector | Phoenix's collector and Jaeger take OTLP over TLS on 4318 (`https://phoenix.<ns>:4318`); the collector posts to Phoenix over TLS (`PHOENIX_TLS_*`); Jaeger's query UI is TLS too | install CA |
+| Jobs → promptfoo, Jobs → worker | promptfoo listens on loopback behind a TLS sidecar (`python -m ramen_console.tlsproxy`, the console image) on 3443 (Service port 3000 → 3443); the Jobs mount ConfigMap `ramen-ca` (`NODE_EXTRA_CA_CERTS`; whenever they reach the canary by name or the server URL is `https://`) and reach the canary as `https://<group>.<zone>.worker.ramen.internal:8080/mcp` through `hostAliases` → the canary pod IP (D92); the share upload carries the Jobs' upload credential (§39.7) and verifies the server (`PROMPTFOO_INSECURE_SSL=false`) | install CA |
+| Console → satellite workers | as console → worker; the console writes the zone's `ramen-tls` into the satellite cluster | install CA |
+| Node → runtime | stdio inside the pod, no network (unchanged) | — |
+
+### 39.4 Plaintext refused
+`RAMEN_REQUIRE_TLS=1` is set by the chart for every provider (`tls.require: true`; `false` fails the render: "D86:
+plaintext is refused on cloud installs") and written into every zone's pods.
+- **Node**: exits at start without `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY`; refuses (exit at start, warning + off at a
+  reload) an `http://` `RAMEN_CONSOLE_INTERNAL_URL` / `RAMEN_OTEL_ENDPOINT` and a `redis://` Redis URL.
+- **Console**: refuses to start with `RAMEN_WORKER_TLS=0`, a `redis://` `RAMEN_REDIS_URL`, an `http://`
+  `RAMEN_CONSOLE_INTERNAL_URL` / `RAMEN_EVALS_API_URL`, or no serving certificate; answers 422 to an `http://` OTLP
+  endpoint (Config → Telemetry), a `redis://` group/zone Redis URL, and an `http://` LLM provider base URL. Under the
+  flag `RAMEN_WORKER_TLS` defaults to 1 with the install CA and each zone's own name (D92, §39.2a).
+- Without the flag (unit tests, a laptop run outside compose) everything stays as it was, so the old paths keep
+  their tests; local compose and kind set it anyway.
+
+### 39.5 Upgrading an install from before D86 (1.0.0b/c)
+1. `helm upgrade` with the new chart: the console comes up on TLS, creates the CA, writes the chart services'
+   Secrets; Redis and the collectors restart on TLS. Existing zones keep serving clients through the edge (their
+   Services and certs are untouched) but the console can no longer reach them (`Admin/*` now dials TLS), their wake /
+   judge / OTLP calls fail (plain HTTP to a TLS port) and their Redis URL is `redis://` → throttling reports
+   `redis: "unreachable"`.
+2. Redeploy **every zone** of every environment (the group page's Deploy, or `POST
+   /api/v1/groups/<g>/environments/<env>/deploy`): the deploy writes `ramen-tls`/`ramen-ca`, the new manifests
+   (HTTPS probes, backend TLS) and the https/rediss URLs, and rolls both tracks. A zone not redeployed stays
+   unmanageable until it is.
+3. Check: `kubectl -n ramen-<g>-<z> get secret ramen-tls`, the deploy log's `tls: issued ramen-<g>-<z> leaf (CA
+   <fingerprint>)` (the fingerprint `GET /api/v1/config/tls` reports), a `tools/call` through the edge, and the Logs
+   page showing no `tls handshake failed` (a connection that closes before any ClientHello — a load balancer's or
+   kubelet's TCP check — is logged at `debug` as `connection closed before a tls ClientHello`, and one that closes or
+   resets mid-ClientHello as `tls handshake abandoned by peer`; neither is a failure).
+
+### 39.5a As built
+- **Node**: `RAMEN_REQUIRE_TLS` is not a deploy-file key (the deploy Secret cannot switch it off). `http://`
+  `RAMEN_CONSOLE_INTERNAL_URL` / `RAMEN_ACTIVATOR_UPSTREAM` exit at start; `http://` OTLP and `redis://`
+  item/scope URLs exit at start and, at a reload, are dropped with a warning (feature off). The activator dials
+  `worker-direct` over TLS whenever the node has a pair or `RAMEN_TLS_CA`, verifying `RAMEN_TLS_SERVER_NAME`
+  (the console writes the zone's own name since D92; the node's default stays `worker.ramen.internal` for a zone
+  deployed before it). redis 0.27 *replaces* the web roots with a given root, so the install CA is used
+  only for an in-cluster `rediss://` host (an IP, `localhost`, a single label, `*.svc`, `*.svc.cluster.local`, or
+  `<svc>.<ns>` with a hyphenated namespace); a managed Redis keeps the public roots. `RAMEN_TLS_CERT`/`KEY` never
+  reach the runtime; `RAMEN_TLS_CA` and `RAMEN_REQUIRE_TLS` do (the judge client trusts the CA next to the system
+  roots and refuses an `http://` base URL under the flag).
+- **Console**: `RAMEN_WORKER_TLS_NAME` pins one verified name for every zone (instead of each zone's own); the CA dir may hold `ca.crt` only (local
+  compose gives the console a pre-issued leaf via `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY` and keeps `ca.key` out of its
+  reach). The renewal loop (`RAMEN_TLS_RENEW_SECS`) is independent of the scheduler and never creates a zone's leaf:
+  only a deploy does, so a pre-D86 zone is untouched until redeployed. A leaf whose bundle alone is stale gets the
+  new `ca.crt` patched in (no new leaf); a leaf not from `cert` (or due) is re-issued. The deploy log line is written
+  by the adapter right after the zone's manifests are applied.
+- **Chart**: Role `ramen-console-tls` (secrets/configmaps/deployments pinned by name; `create` cannot be). Envoy keeps
+  `appProtocol: kubernetes.io/h2c` on worker Services (its HTTP/2 switch) beside the `BackendTLSPolicy` (v1) — to be
+  proven on AKS. Jaeger: OTLP HTTP + gRPC, query and admin ports TLS; its legacy collector ports stay closed by the
+  NetworkPolicy.
+- **Local**: compose service `certs` (`tls init`) writes `deploy/local/.certs`; `demo-worker.sh` (a bare node, no
+  compose) is the one place that runs plaintext, with the bridge's explicit `--insecure`. Harness: `RAMEN_INSTALL_CA`
+  makes `Node`/`HttpNode`/`Console` default to TLS against that bundle (kind: ConfigMap `ramen-ca`).
+- **Bridge**: `RAMEN_BRIDGE_INSECURE=1` is the env form of `--insecure`; `RAMEN_BRIDGE_TLS` is ignored. Bridge 1.0.0
+  (PyPI) is the bridge for Ramen 1.0.0 and always dials TLS; the console's sign-in card and the docs still print `--tls`
+  so every command states it explicitly.
+- **Satellites** (§28; found by the §34.3 docs verification): `console.<ns>.svc.cluster.local` exists only in the
+  home cluster, so a satellite zone's pods reach the console at its **public URL** (the zone's `RAMEN_OAUTH_ISSUER`):
+  the adapter rewrites a satellite's `RAMEN_LLM_BASE_URL` to `<public>/llm/v1` in the deploy Secret (deploy and
+  push alike) and gives its `worker-activator` `RAMEN_CONSOLE_INTERNAL_URL=<public>`. Both verify with the public
+  roots next to the install CA (node `netc`, runtime judge client), so the console's edge certificate must be
+  publicly trusted for them (GCP managed, Azure Let's Encrypt; an AWS self-signed ACM import or Azure `selfsigned`
+  fails the handshake and the call is logged). The wake route still answers 404 through an edge
+  (`X-Forwarded-For`) except for a zone whose region maps to a satellite (`Services.zone_cluster`); the admin key
+  guards it as before. Not rewritten, documented: the chart's collectors (`RAMEN_OTEL_ENDPOINT`, §28.1) and the
+  chart's Redis (`RAMEN_REDIS_SCOPE_URL` default, §38.3) are home-cluster Services too — a satellite needs an
+  OTLP endpoint and a group scope Redis reachable from every cluster, or its workers log `telemetry export failed`
+  and report `redis: "unreachable"`. The satellite chart's `ramen-console-zone` role carries `configmaps`
+  (`ramen-ca`) and, on Azure, `ramen-console` carries `backendtlspolicies`, as the home chart's do.
+- **CA rotation, every reader** (§39.1, b33): the node re-reads `RAMEN_TLS_CA` for each wake/OTLP request (as
+  before); the activator re-reads it for each new upstream connection and rebuilds its gRPC channel when it changed
+  (a broken file keeps the last good bundle); the throttle's Redis re-check dials again with the file re-read when a
+  PING fails (a `ConnectionManager` keeps the roots it was built with), and the task/consent stores hold the same
+  connection slot, so they follow. The runtime's judge client re-reads the file before each request and, when it
+  changed, builds a fresh context and a fresh connection pool on it (`CaFile` + `CaTransport`), so a retire takes
+  effect without a restart too (adding CAs to a context already in use did not apply on OpenSSL 3.5, Linux CI). The console reads its CA doc at least once a minute (its own leaf loop), so a rotation
+  finished by another replica reaches its trust and its own leaf within the settle time. Chart services: their
+  `ca.crt` only verifies peers inside their own pod (Phoenix's collector), which restart together with the leaf.
+- **Handshake log** (b33, b35): a connection that closes or resets before sending a byte (`peek`) is `debug` `connection
+  closed before a tls ClientHello`; one that started a ClientHello and then hit EOF, a reset, an abort or a broken pipe
+  is `debug` `tls handshake abandoned by peer` (GKE b35: GFE health checkers 35.191.x and 169.254.4.6, 1–4 per new
+  pod); every other handshake error stays `warn` `tls handshake failed` — rustls's own (an alert the peer sent, e.g. it
+  does not trust our leaf; one we sent, e.g. no common version; a record that is not TLS) and a timeout (`tls
+  handshake timed out`, 10 s). Decided by the error kind: a peer that gives up silently says nothing about our TLS; an
+  alert does (a peer on the wrong CA mid-rotation sends one), so it stays visible. A client that distrusts us and
+  closes without an alert is logged at `debug` — accepted.
+- **Redis on the call path** (b35): every operation a call waits for — the throttle's `INCR`, the task store's and the
+  consent store's commands — is bounded by `RAMEN_REDIS_TIMEOUT_MS` (default 500, 50–10000, start-up only), and so is
+  each response and (at least 1 s) each connection attempt of the `ConnectionManager` (two retries, not six with
+  back-off). Past the bound, or on a connection error, the link is reported down (`warn` `redis unreachable: throttling
+  is off for this pod until it answers`, `Admin/Metrics.redis: "unreachable"`, as the 30 s re-check reports it) and the
+  re-check runs at once in the background (PING, else a re-dial with the CA bundle re-read); `info` `redis reachable…`
+  when it is back. The throttle fails open for that call and skips the link until then, so a call waits one bound per
+  Redis at most. The task store answers the bound as an error (`tasks/get` etc. fail fast; tasks are not run from
+  memory instead); the consent gate treats an unreadable store as "not on record" (the caller is asked again, a
+  2025-06-18 caller refused) and a failed write as a warning (§24.3). GKE b35: one `tools/call` per CA switch hung on
+  the replaced chart Redis until the LB's 30 s backend timeout (504; the worker never logged it).
+- **Telemetry across a restart** (b35): a CA switch restarts Phoenix and its collector (~80 s). Phoenix's SQLite is on
+  a PVC (`otel.phoenix.persistence: {enabled: true, size: 5Gi, storageClass: ""}`, RWO, Deployment maxSurge 0;
+  `enabled: false` = the old emptyDir), so its history survives restarts and upgrades. On EKS a PVC needs the EBS CSI
+  driver (as promptfoo's does). Jaeger stays in-memory (`--memory.max-traces`): its history is lost at a restart —
+  documented, not changed. The node keeps what the collector did not take (§24.3: ≤ 8192 spans / 120 s) and logs `info`
+  `telemetry export recovered {sent, lost}` once it answers; the console retries its deploy span; the console's OTLP
+  ingest (§31.4) answers 502 while the collector is away, which OTLP clients retry.
+- **Shown and logged values** (§34.3 N1): `redact.py` masks URL userinfo (`scheme://***@host`) and credential-named
+  query parameters wherever the console shows or logs a value — except a bare user on `ssh://` (`ssh://git@host/…`;
+  scp-like `git@host:…` has no scheme and is never touched), which names an account, not a credential; a group's
+  `repo_url` is masked in the group API (list, get, create, update), the Groups and group pages, and the deploy log
+  (a masked value posted back keeps the stored URL): `GET /api/v1/config` and the Config page's
+  RAMEN_* card (beside the name rule), the telemetry endpoints and LLM base URLs (a masked value posted back keeps
+  the stored one), worker logs (API and Logs page), job records' `error` fields, deploy logs and every log line. At
+  start the console remembers the URL passwords of its RAMEN_* env (the chart Redis') for the log scrubber.
+
+### 39.5b Upgrading to zone names (D92)
+1. The first D92 console start writes `config/tls_zone_names` `{since}` (once per install; every replica reads the
+   same) and re-issues **every zone leaf that lacks its zone name** at once (`tls.startup` → `renew_zone_tls`; the
+   renewal loop treats such a leaf as due too). A leaf that carried the generic name keeps it as a second SAN — a
+   *bridge leaf*: that zone's activator env and Envoy policy (written by its last deploy) still verify the generic
+   name until the zone is redeployed. A leaf re-issued later for the same zone (due, CA rotation) stays a bridge leaf
+   until then; a deploy writes a zone-only leaf, the activator's zone name and the zone-name `BackendTLSPolicy` in the
+   same apply — the old pods already hold the bridge leaf, so the new verifiers accept them during the roll.
+2. Until `since + RAMEN_TLS_ZONE_NAME_GRACE_SECS` (900 s: kubelet's Secret refresh ~1–2 min plus the node's 60 s
+   re-read), the console's dial that fails with `UNAVAILABLE` under the zone name gets **one** second try with
+   `worker.ramen.internal` (a pod still serving its pre-D92 leaf). After the window the generic name is never
+   accepted by the console. A fresh install opens the window too; it has no pre-D92 leaf to accept.
+3. `GET /api/v1/config/tls` marks a leaf that still carries the generic name `generic_name: true`: redeploy those
+   zones (their activator and Envoy accept the generic name, i.e. another not-yet-redeployed zone's leaf, until then).
+
+### 39.6 Verification
+Console: CA create/load/vault/race, rotate + bundle, leaf SANs and lifetime, renewal, the refusals (start and 422),
+zone manifests per cloud carrying the TLS backends and probes, the Jobs' hostAliases and CA, the launcher and the
+TLS proxy. Node: refuses to start under the flag, serves TLS, reloads a renewed pair, `/readyz`/`/healthz`, trusts
+`RAMEN_TLS_CA` for wake/OTLP/activator/Redis. Bridge: TLS default, `--insecure` path, the conflict error. Chart:
+`helm template` shows every service on TLS and fails with `tls.require=false`. Local compose and kind come up TLS.
+
+### 39.7 Authentication in front of the optional engines (D92)
+The user, 2026-11-17 (D92): Phoenix, Jaeger and promptfoo hold every group's traces and evals; reaching their pods
+(a policy that admits too much, a port-forward) must not be enough to read them. Machine ingest keeps working.
+- **Secret `ramen-engines`** (release namespace), generated by the chart whenever an engine runs and kept across
+  upgrades (`lookup`; `engines.existingSecret` names your own with the same keys): `username` (`admin`) + `password`
+  — the operator; `upload-username` (`evals`) + `upload-password` — the evals Jobs; `phoenix-secret`,
+  `phoenix-admin-secret` (≥ 32 characters with a digit and a lowercase letter, distinct). Never printed by the chart,
+  the console or a job; a super admin with cluster access reads one with `kubectl -n ramen-system get secret
+  ramen-engines -o jsonpath='{.data.password}' | base64 -d`. Local compose: `RAMEN_ENGINES_PASSWORD`,
+  `RAMEN_ENGINES_UPLOAD_PASSWORD`, `RAMEN_PHOENIX_SECRET`, `RAMEN_PHOENIX_ADMIN_SECRET` in `deploy/local/.env`
+  (`make env`); a check service stops the engine profiles when they are missing.
+- **Phoenix** (21.1.0's own auth): `PHOENIX_ENABLE_AUTH=true`, `PHOENIX_SECRET`, `PHOENIX_ADMIN_SECRET`,
+  `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` = `password` (applied while the `admin@localhost` account still holds
+  Phoenix's default), `PHOENIX_USE_SECURE_COOKIES=true`. UI, GraphQL, REST and OTLP (HTTP and gRPC 4317) need a
+  sign-in or `Authorization: Bearer <phoenix-admin-secret>`; `/healthz` stays open (the readiness probe). The
+  collector sidecar posts spans to Phoenix with that bearer; its own OTLP receiver on 4318 takes no credential.
+- **Jaeger** (no auth of its own): the query UI/API binds `127.0.0.1:16687` (gRPC query `127.0.0.1:16685`); the pod's
+  TLS front (`python -m ramen_console.tlsproxy`, the console image) on 16686 (Service port `query`) wants the operator's
+  credential. OTLP stays on 4318 (TLS, no credential); the admin port 14269 (health) is the readiness probe.
+- **promptfoo**: its TLS front on 3443 wants a credential on every connection: the operator's (everything) or the
+  upload credential, which may send exactly one request per connection matching `POST ^/api/eval$` or `POST
+  ^/api/eval/[A-Za-z0-9:_-]+/results$` (promptfoo 0.125.1's share upload; Content-Length bodies only, forwarded with
+  `Connection: close`; anything else 403, a chunked body 411) — never a read. The evals Job gets `upload-password` by
+  `secretKeyRef` (`RAMEN_ENGINES_SECRET`, set by the chart) and `PROMPTFOO_REMOTE_API_BASE_URL=https://evals:$(…)@
+  promptfoo.<ns>:3000` (promptfoo turns URL userinfo into Basic auth and strips it from the printed link), plus
+  `PROMPTFOO_INSECURE_SSL=false` (promptfoo skips verification by default). The console never calls promptfoo.
+- **The TLS front** (`tlsproxy`): with `RAMEN_PROXY_PASSWORD` set, the first request of each connection must carry
+  `Authorization: Basic admin:<password>` or `Bearer <password>` (constant-time compares), then the connection is
+  piped as before (a TLS connection is one client); no path is open without a credential (401 with
+  `WWW-Authenticate: Basic`); `--require-auth` exits when the password is missing (chart and compose). Probes are TCP.
+- **NetworkPolicies** (unchanged sources, narrowed ports): the workers reach only the collector's OTLP 4318 (they
+  export directly; `RAMEN_OTEL_ENDPOINT`), never 6006/4317/16686/3443; the edge rule of the collector policy admits the
+  UI port only (it admitted every port). Port-forwards bypass policies by design — hence the credentials.
+- Verification: unit (`test_d92_engines.py`: the proxy's 401/403/411, upload one-shot, chart rendering, policies);
+  GKE: each UI asks for a sign-in, a share upload lands, an upload credential cannot read.

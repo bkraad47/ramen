@@ -142,7 +142,10 @@ async fn health(node: &Node, service: &str) -> ServingStatus {
 
 async fn reload(node: &Node, md: &[(&str, &str)]) -> Result<Value, Status> {
     let mut c = AdminClient::new(channel(node.addr).await);
-    let out = c.reload(with_md(ReloadRequest {}, md)).await?.into_inner();
+    let out = c
+        .reload(with_md(ReloadRequest::default(), md))
+        .await?
+        .into_inner();
     Ok(serde_json::from_slice(&out.json).unwrap())
 }
 
@@ -767,6 +770,10 @@ for line in sys.stdin:
         v["sync"],
         json!({"uri": "gs://groups/demo", "downloaded": 2})
     );
+    assert_eq!(
+        v["redis"], "off",
+        "§38.3: the reload answer carries the throttle Redis status"
+    );
     assert_eq!(health(&n, "").await, ServingStatus::Serving);
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1063,4 +1070,37 @@ for line in sys.stdin:
         .unwrap();
     assert_eq!(v["result"]["called"], "runtime.call_tool");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// §39.4 (D86): under `RAMEN_REQUIRE_TLS=1` the binary refuses to start without its pair, and with an `http://`
+/// collector — exit 2 and a log line naming the key, never the value.
+#[test]
+fn require_tls_refuses_to_start_in_the_clear() {
+    let run = |extra: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ramen-node"));
+        cmd.env_clear()
+            .env("RAMEN_REQUIRE_TLS", "1")
+            .env("RAMEN_NODE_PORT", "0");
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        cmd.output().unwrap()
+    };
+    let out = run(&[]);
+    assert_eq!(out.status.code(), Some(2));
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("RAMEN_TLS_CERT"), "{text}");
+    let out = run(&[
+        ("RAMEN_TLS_CERT", "/c.pem"),
+        ("RAMEN_TLS_KEY", "/k.pem"),
+        ("RAMEN_OTEL_ENDPOINT", "http://collector.example:4318"),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("RAMEN_OTEL_ENDPOINT") && !text.contains("collector.example"),
+        "{text}"
+    );
 }

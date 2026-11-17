@@ -1,6 +1,9 @@
 """Worker namespace manifests (CONTRACTS §7, §11: gRPC h2c, header routing) and a thin apply/wait layer over the
 kubernetes client."""
 
+import ast
+import logging
+import os
 import shutil
 import subprocess
 import time
@@ -10,6 +13,23 @@ import yaml
 from ..errors import ApiError
 from ..util import now
 from .gcp_clients import http_status
+
+
+def log_text(raw) -> str:
+    """A pod log as text. kubernetes-client 36 hands `read_namespaced_pod_log` back as the bytes' repr (`b'...'`)
+    on some responses; bytes and plain text are accepted too."""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", "replace")
+    text = str(raw)
+    if len(text) > 2 and text[0] == "b" and text[1] in "'\"" and text[-1] == text[1]:
+        try:
+            return ast.literal_eval(text).decode("utf-8", "replace")
+        except (ValueError, SyntaxError, AttributeError):
+            return text
+    return text
+
 
 SIZES = {
     "s": {"cpu": "250m", "memory": "512Mi"},
@@ -34,6 +54,16 @@ CANARY_KEEP = ("replicas",)  # never reset canary replicas on re-apply
 GW_GROUP, GW_VERSION, GW_PLURAL = "gateway.networking.k8s.io", "v1", "httproutes"
 GKE_GROUP, GKE_VERSION, HCP_PLURAL = "networking.gke.io", "v1", "healthcheckpolicies"
 ZONE_CLUSTERROLE = "ramen-console-zone"  # unbound ClusterRole from deploy/helm/ramen; bound per zone namespace
+# §24.1: real worker pods carry ROLE=worker, the activator of a sleeping zone ROLE=activator. `Service/worker` (the one
+# every edge points at) ignores the role, so it selects both; `Service/worker-direct` selects real workers only.
+ROLE = "ramen.io/role"
+ACTIVATOR = "worker-activator"
+DIRECT = "worker-direct"
+WORKERS = f"app=worker,{ROLE}!=activator"  # pods that are real workers (pods from before 1.0 carry no role label)
+BUILD_NS = "ramen-system"
+# pinned (gcr.io tag list checked 2026-11-13); RAMEN_BUILDER_IMAGE overrides it
+BUILDER_IMAGE = "gcr.io/kaniko-project/executor:v1.24.0"
+DIGEST_FILE = "/dev/termination-log"  # §38.2: kaniko's --digest-file → the build container's termination message
 
 
 def normalize_size(size) -> str | None:
@@ -48,7 +78,8 @@ def ns_name(group, zone) -> str:
 def _deployment(ns, name, track, group, zone, spec, image, bucket_uri, trust_proxy_hops=2):
     """`trust_proxy_hops`: which `x-forwarded-for` entry, counted from the right, is the client address
     (CONTRACTS §11). 2 on GCP — the external load balancer appends `<client>, <lb>`; AWS passes 1."""
-    labels = {"app": "worker", "ramen.io/track": track, "ramen.io/group": group, "ramen.io/zone": zone}
+    # ROLE is on the pod template only, never in spec.selector (immutable on an existing Deployment)
+    labels = {"app": "worker", "ramen.io/track": track, "ramen.io/group": group, "ramen.io/zone": zone, ROLE: "worker"}
     res = SIZES[normalize_size(spec.get("size")) or "s"]
     pod = {
         "serviceAccountName": "worker",
@@ -182,8 +213,247 @@ def rolebinding(group, zone, ksa_namespace="ramen-system", ksa="console") -> dic
             "labels": {"ramen.io/group": group, "ramen.io/zone": zone},
         },
         "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": ZONE_CLUSTERROLE},
-        "subjects": [{"kind": "ServiceAccount", "name": ksa, "namespace": ksa_namespace}],
+        "subjects": [{"kind": "ServiceAccount", "name": ksa, "namespace": ksa_namespace}, *console_subjects()],
     }
+
+
+def console_subjects() -> list[dict]:
+    """§28.2: on a satellite cluster the console is not a ServiceAccount but the identity its token maps to (GKE:
+    `User <gsa email>`, EKS: `Group ramen-console` via the access entry, AKS: `User <object id>`). The chart hands
+    that list in as `RAMEN_CONSOLE_SUBJECTS` (JSON); the home cluster binds it too, harmlessly."""
+    import json
+
+    raw = os.environ.get("RAMEN_CONSOLE_SUBJECTS", "").strip()
+    if not raw:
+        return []
+    out = []
+    for s in json.loads(raw):
+        if isinstance(s, dict) and s.get("kind") in ("User", "Group", "ServiceAccount") and s.get("name"):
+            out.append({k: v for k, v in s.items() if k in ("kind", "name", "namespace", "apiGroup")})
+    return out
+
+
+def console_source_cidrs() -> list[str]:
+    """§28.1: the networks the console reaches workers from besides its own namespace — the home cluster's pod range
+    (GKE), the home VPC (EKS) or VNet (AKS) — so a satellite zone's NetworkPolicy admits it
+    (`RAMEN_CONSOLE_SOURCE_CIDRS`)."""
+    return [c.strip() for c in os.environ.get("RAMEN_CONSOLE_SOURCE_CIDRS", "").split(",") if c.strip()]
+
+
+def direct_service(group, zone) -> dict:
+    """`Service/worker-direct` (§24.1): real worker pods only. The activator of a sleeping zone forwards to it and
+    polls its health while the zone wakes; no edge object points at it."""
+    return {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": DIRECT,
+            "namespace": ns_name(group, zone),
+            "labels": {"ramen.io/group": group, "ramen.io/zone": zone},
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app": "worker", ROLE: "worker"},
+            "ports": [{"name": PORT_NAME, "port": PORT, "targetPort": PORT_NAME, "appProtocol": "kubernetes.io/h2c"}],
+        },
+    }
+
+
+def console_internal_url() -> str:
+    """Where a pod inside the cluster reaches the console (the chart's `Service/console`: 443 over TLS since D86, 80
+    on an install without RAMEN_REQUIRE_TLS)."""
+    from ..tls import require_tls
+
+    if url := os.environ.get("RAMEN_CONSOLE_INTERNAL_URL"):
+        return url
+    if require_tls():
+        return "https://console.ramen-system.svc.cluster.local:443"
+    return "http://console.ramen-system.svc.cluster.local:80"
+
+
+def activator(worker: dict, service_selector: dict, console_url: str | None = None) -> dict:
+    """`Deployment/worker-activator` (§24.1) derived from the zone's live `worker` Deployment: the same image, the same
+    env and `envFrom` (the zone's whole worker config), the same readiness probe, ServiceAccount and node placement —
+    minus the bucket volume, at 10m / 32Mi. Its pod labels are the live `Service/worker` selector plus
+    ROLE=activator, so whatever the provider's edge selects (GKE NEG, ALB target group, Envoy route, NodePort) keeps
+    selecting it; `worker-direct` (ROLE=worker) never does. On AWS that selector carries `ramen.io/track: stable`, which
+    the `worker` Deployment's selector matches too: harmless, ReplicaSets own their pods by `pod-template-hash`, and
+    every pod query of the adapters excludes ROLE=activator."""
+    meta, tpl = worker["metadata"], worker["spec"]["template"]
+    pod, src = tpl["spec"], tpl["spec"]["containers"][0]
+    zone_labels = {k: v for k, v in (meta.get("labels") or {}).items() if k in ("ramen.io/group", "ramen.io/zone")}
+    labels = {**zone_labels, **(service_selector or {"app": "worker"}), "app": "worker", ROLE: "activator"}
+    env = [e for e in src.get("env") or [] if e["name"] not in ACTIVATOR_ENV]
+    env += [
+        {"name": "RAMEN_ACTIVATOR", "value": "1"},
+        {"name": "RAMEN_CONSOLE_INTERNAL_URL", "value": console_url or console_internal_url()},
+        {"name": "RAMEN_ACTIVATOR_UPSTREAM", "value": f"{DIRECT}:{PORT}"},
+    ]
+    container = {
+        "name": "worker",  # the same container name: log queries by container keep finding it
+        "image": src["image"],
+        "ports": src.get("ports") or [{"name": PORT_NAME, "containerPort": PORT}],
+        "env": env,
+        "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"cpu": "250m", "memory": "128Mi"}},
+        "readinessProbe": src.get("readinessProbe") or {"grpc": {"port": PORT}, "periodSeconds": 5},
+    }
+    for k in ("imagePullPolicy", "securityContext", "envFrom"):
+        if src.get(k) is not None:
+            container[k] = src[k]
+    # D86 (§39.2): the zone's leaf, so the activator serves TLS and dials `worker-direct` over TLS like the workers
+    mounts = [m for m in src.get("volumeMounts") or [] if m.get("name") == "ramen-tls"]
+    if mounts:
+        container["volumeMounts"] = mounts
+    spec = {"containers": [container]}
+    if vols := [v for v in pod.get("volumes") or [] if v.get("name") == "ramen-tls"]:
+        spec["volumes"] = vols
+    for k in ("serviceAccountName", "securityContext", "nodeSelector", "imagePullSecrets", "tolerations"):
+        if pod.get(k) is not None:
+            spec[k] = pod[k]
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": ACTIVATOR, "namespace": meta["namespace"], "labels": {**zone_labels, ROLE: "activator"}},
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"app": "worker", ROLE: "activator"}},
+            "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}},
+            "template": {"metadata": {"labels": labels, "annotations": {SAFE_TO_EVICT: "false"}}, "spec": spec},
+        },
+    }
+
+
+ACTIVATOR_ENV = ("RAMEN_ACTIVATOR", "RAMEN_CONSOLE_INTERNAL_URL", "RAMEN_ACTIVATOR_UPSTREAM")
+
+
+def selects(selector: dict, labels: dict) -> bool:
+    """Does a Service selector (equality map) match these pod labels?"""
+    return bool(selector) and all(labels.get(k) == v for k, v in selector.items())
+
+
+def build_name(tag: str) -> str:
+    import hashlib
+
+    return f"ramen-build-{hashlib.sha256(tag.encode()).hexdigest()[:16]}"
+
+
+def _from_image(dockerfile: str) -> str | None:
+    for line in dockerfile.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].upper() == "FROM":
+            refs = [p for p in parts[1:] if not p.startswith("--")]
+            return refs[0] if refs else None
+    return None
+
+
+def build_objects(
+    group: str,
+    tag: str,
+    image: str,
+    dockerfile: str,
+    files: dict[str, str],
+    *,
+    builder_image: str = BUILDER_IMAGE,
+    init_image: str | None = None,
+    args: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
+    pod_labels: dict[str, str] | None = None,
+    docker_config: dict | None = None,
+    cpu: str = "250m",
+    memory: str = "768Mi",
+    memory_limit: str = "2Gi",
+    service_account: str = "ramen-builder",
+) -> tuple[dict, dict]:
+    """(ConfigMap, Job) of one image build (§24.2), run as `service_account` (§38.2: `ramen-build-<group>`). The
+    ConfigMap is the build context; an init container (the base image of the build: the nodes already pull it and it
+    has `cp`) copies it into an emptyDir, because kaniko copies a ConfigMap volume's symlinks as symlinks. kaniko runs
+    as the image's root but unprivileged (GKE Autopilot refuses privileged pods); the registry credential is the
+    service account's workload identity, nothing is mounted. kaniko writes the pushed digest to the termination
+    message (§38.2: deploys pin it)."""
+    import json
+
+    name = build_name(tag)
+    labels = {"app.kubernetes.io/name": "ramen-build", "ramen.io/group": group}
+    paths = {"Dockerfile": dockerfile, **files}
+    keys = {path: f"f{i}" for i, path in enumerate(sorted(paths))}  # ConfigMap keys cannot hold a `/`
+    data = {keys[p]: paths[p] for p in paths}
+    volumes = [
+        {"name": "context", "configMap": {"name": name, "items": [{"key": k, "path": p} for p, k in keys.items()]}},
+        {"name": "workspace", "emptyDir": {}},
+    ]
+    mounts = [{"name": "workspace", "mountPath": "/workspace"}]
+    if docker_config is not None:
+        data["docker-config"] = json.dumps(docker_config)
+        volumes.append(
+            {"name": "docker", "configMap": {"name": name, "items": [{"key": "docker-config", "path": "config.json"}]}}
+        )
+        mounts.append({"name": "docker", "mountPath": "/kaniko/.docker"})
+    # Requests a small node can place (a 2 GiB node allocates about 1.4 GiB: the first cloud run asked for 2Gi and
+    # no EKS or AKS node could take the Job); the memory limit leaves room for a larger requirements file.
+    requests = {"cpu": cpu, "memory": memory, "ephemeral-storage": "2Gi"}
+    limits = {"cpu": cpu, "memory": memory_limit, "ephemeral-storage": "4Gi"}
+    pod = {
+        "serviceAccountName": service_account,
+        "restartPolicy": "Never",
+        "initContainers": [
+            {
+                "name": "context",
+                "image": init_image or _from_image(dockerfile) or "busybox:1.37.0",
+                "command": ["sh", "-c", "cp -RL /context/. /workspace/"],
+                "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "50m", "memory": "64Mi"}},
+                "volumeMounts": [{"name": "context", "mountPath": "/context"}, *mounts[:1]],
+            }
+        ],
+        "containers": [
+            {
+                "name": "build",
+                "image": builder_image,
+                "args": [
+                    "--context=dir:///workspace",
+                    "--dockerfile=/workspace/Dockerfile",
+                    f"--destination={image}",
+                    "--push-retry=3",
+                    f"--digest-file={DIGEST_FILE}",
+                    *args,
+                ],
+                "env": [{"name": k, "value": v} for k, v in (env or {}).items()],
+                "resources": {"requests": requests, "limits": limits},
+                "volumeMounts": mounts,
+            }
+        ],
+        "volumes": volumes,
+    }
+    meta = {"name": name, "namespace": BUILD_NS, "labels": labels, "annotations": {"ramen.io/image": image}}
+    cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": dict(meta), "data": data}
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": dict(meta),
+        "spec": {
+            "backoffLimit": 0,
+            "ttlSecondsAfterFinished": 600,
+            "template": {
+                "metadata": {
+                    "labels": {**labels, **(pod_labels or {})},
+                    "annotations": {SAFE_TO_EVICT: "false"},
+                },
+                "spec": pod,
+            },
+        },
+    }
+    return cm, job
+
+
+def job_state(job: dict | None) -> str:
+    """`succeeded` | `failed` | `running`."""
+    st = (job or {}).get("status") or {}
+    conds = {c.get("type"): c.get("status") for c in st.get("conditions") or []}
+    if st.get("succeeded", 0) >= 1 or conds.get("Complete") == "True":
+        return "succeeded"
+    if st.get("failed", 0) >= 1 or conds.get("Failed") == "True":
+        return "failed"
+    return "running"
 
 
 def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
@@ -196,7 +466,7 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
     }
     if gsa:
         ksa["metadata"]["annotations"] = {"iam.gke.io/gcp-service-account": gsa}
-    return [
+    docs = [
         {
             "apiVersion": "v1",
             "kind": "Namespace",
@@ -225,7 +495,9 @@ def manifests(group, zone, spec, image, bucket_uri, gsa=None) -> list[dict]:
         _deployment(ns, "worker-canary", "canary", group, zone, spec, image, bucket_uri),
         httproute(group, zone),
         healthcheckpolicy(group, zone),
+        direct_service(group, zone),  # §24.1: real workers only, for the activator of a sleeping zone
     ]
+    return with_egress(docs, group, zone)
 
 
 def helm_available(chart) -> bool:
@@ -261,18 +533,36 @@ def helm_manifests(chart, project, group, zone, spec, image, bucket_uri, gsa=Non
             d["metadata"].setdefault("namespace", ns)
         else:
             d["metadata"].setdefault("labels", {})["ramen.io/routes"] = "true"
+    ensure_direct(docs, group, zone)
     if not any(d["kind"] == "HTTPRoute" for d in docs):
         docs.append(httproute(group, zone))
     if not any(d["kind"] == "HealthCheckPolicy" for d in docs):
         docs.append(healthcheckpolicy(group, zone))
-    return docs
+    return with_egress(docs, group, zone)
+
+
+def ensure_direct(docs: list[dict], group, zone) -> None:
+    """A chart from before 1.0 renders neither `worker-direct` nor the role label: add both (§24.1)."""
+    if not any(d["kind"] == "Service" and d["metadata"]["name"] == DIRECT for d in docs):
+        docs.append(direct_service(group, zone))
+    for d in docs:
+        if d["kind"] == "Deployment" and d["metadata"]["name"] in ("worker", "worker-canary"):
+            d["spec"]["template"].setdefault("metadata", {}).setdefault("labels", {}).setdefault(ROLE, "worker")
+
+
+SAME_ZONE_PEER = {"podSelector": {"matchLabels": {"app": "worker"}}}  # §24.1: the activator reaches worker-direct
+
+
+def same_zone_rule() -> dict:
+    return {"from": [dict(SAME_ZONE_PEER)], "ports": [{"port": PORT, "protocol": "TCP"}]}
 
 
 GCP_LB_CIDRS = ["35.191.0.0/16", "130.211.0.0/22"]  # Google front ends / health checkers
 
 
 def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = None) -> dict:
-    """Workers accept ingress only from the console namespace and the load balancer (SEC-04)."""
+    """Workers accept ingress only from the console namespace, the load balancer (SEC-04) and the zone's own worker
+    pods (§24.1: a sleeping zone's activator forwards to `worker-direct`)."""
     peers = [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "ramen-system"}}}]
     peers += [{"ipBlock": {"cidr": c}} for c in (lb_cidrs if lb_cidrs is not None else GCP_LB_CIDRS)]
     return {
@@ -282,14 +572,111 @@ def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = N
         "spec": {
             "podSelector": {"matchLabels": {"app": "worker"}},
             "policyTypes": ["Ingress"],
-            "ingress": [{"from": peers, "ports": [{"port": PORT, "protocol": "TCP"}]}],
+            "ingress": [
+                {"from": peers, "ports": [{"port": PORT, "protocol": "TCP"}]},
+                same_zone_rule(),  # its own rule: the first one stays "console + load balancer" for every reader
+            ],
         },
     }
 
 
+def with_console_sources(docs: list[dict], satellite: bool) -> list[dict]:
+    """§28.1 / S6: the console reaches a SATELLITE zone's workers from the home cluster's networks
+    (`RAMEN_CONSOLE_SOURCE_CIDRS`: the home pod range on GKE, the home nodes' subnets on EKS/AKS where the cross-VPC
+    hop is SNATed), so only a satellite zone's `worker` policy admits them — as a rule of their own on the worker
+    port. A home zone never does: there the console is the `ramen-system` namespace peer, and an `ipBlock` over the
+    home pod range would admit every home pod on a CNI that matches pod IPs by `ipBlock`. Idempotent."""
+    cidrs = console_source_cidrs()
+    if not satellite or not cidrs:
+        return docs
+    rule = {"from": [{"ipBlock": {"cidr": c}} for c in cidrs], "ports": [{"port": PORT, "protocol": "TCP"}]}
+    for d in docs:
+        if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "worker":
+            ingress = d["spec"].setdefault("ingress", [])
+            if rule not in ingress:
+                ingress.append(rule)
+    return docs
+
+
+EGRESS_ENV, SERVICE_CIDR_ENV = "RAMEN_WORKER_EGRESS", "RAMEN_CLUSTER_SERVICE_CIDR"
+SYSTEM_NS = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "ramen-system"}}}
+
+
+def service_cidrs() -> list[str]:
+    return [c.strip() for c in os.environ.get(SERVICE_CIDR_ENV, "").split(",") if c.strip()]
+
+
+def egress_policy(ns: str, group: str, zone: str) -> dict | None:
+    """§33.4a `worker-egress` (chart `networkPolicy.workerEgress` → `RAMEN_WORKER_EGRESS=1`): a worker pod — the
+    group's own tool code runs there — may reach DNS, the console (`/otlp`, wake and Admin callbacks), Redis, the
+    chart's collector on 4318, the zone's own pods and the internet, never another ClusterIP of the cluster
+    (`RAMEN_CLUSTER_SERVICE_CIDR`, the Service range; without it there is no policy — the chart's NOTES say so)."""
+    cidrs = service_cidrs()
+    if os.environ.get(EGRESS_ENV, "").strip().lower() not in ("1", "true") or not cidrs:
+        return None
+    console_port = int(os.environ.get("RAMEN_CONSOLE_PORT", "8000") or 8000)
+    system = lambda sel: {**SYSTEM_NS, "podSelector": sel}  # noqa: E731
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": "worker-egress",
+            "namespace": ns,
+            "labels": {"ramen.io/group": group, "ramen.io/zone": zone},
+        },
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "worker"}},
+            "policyTypes": ["Egress"],
+            "egress": [
+                {
+                    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+                    "ports": [{"port": 53, "protocol": "UDP"}, {"port": 53, "protocol": "TCP"}],
+                },
+                {
+                    "to": [system({"matchLabels": {"app.kubernetes.io/name": "ramen-console"}})],
+                    "ports": [{"port": console_port, "protocol": "TCP"}],
+                },
+                {  # §38.3: the chart's Redis, and a hand-applied one (`app: redis`) on an install that predates it
+                    "to": [
+                        system({"matchLabels": {"app.kubernetes.io/name": "redis"}}),
+                        system({"matchLabels": {"app": "redis"}}),
+                    ],
+                    "ports": [{"port": 6379, "protocol": "TCP"}],
+                },
+                {
+                    "to": [
+                        system(
+                            {
+                                "matchExpressions": [
+                                    {"key": "app.kubernetes.io/name", "operator": "In", "values": ["phoenix", "jaeger"]}
+                                ]
+                            }
+                        )
+                    ],
+                    "ports": [{"port": 4318, "protocol": "TCP"}],
+                },
+                {"to": [dict(SAME_ZONE_PEER)], "ports": [{"port": PORT, "protocol": "TCP"}]},
+                {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": cidrs}}]},
+            ],
+        },
+    }
+
+
+def with_egress(docs: list[dict], group: str, zone: str) -> list[dict]:
+    """`docs` plus the egress policy when it is on and not already rendered (the worker chart may carry one)."""
+    if (p := egress_policy(ns_name(group, zone), group, zone)) is not None and not any(
+        d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == p["metadata"]["name"] for d in docs
+    ):
+        docs.append(p)
+    return docs
+
+
 class Kube:
-    def __init__(self, clients, poll=2.0, wait_secs=300, rbac_wait=30.0):
+    def __init__(self, clients, poll=2.0, wait_secs=300, rbac_wait=30.0, node_wait_secs=None):
         self.c, self.poll, self.wait_secs, self.rbac_wait = clients, poll, wait_secs, rbac_wait
+        # a rollout whose pods wait for a node (Autopilot / node-pool scale-up for a new zone) gets this deadline
+        env = os.environ.get("RAMEN_NODE_WAIT_SECS")
+        self.node_wait_secs = node_wait_secs if node_wait_secs is not None else (float(env) if env else 1200.0)
 
     def _fns(self, kind):
         c = self.c
@@ -313,7 +700,19 @@ class Kube:
                 c.core.read_namespaced_secret,
                 True,
             ),
-            "Service": (c.core.create_namespaced_service, c.core.patch_namespaced_service, None, True),
+            "Service": (
+                c.core.create_namespaced_service,
+                c.core.patch_namespaced_service,
+                c.core.read_namespaced_service,
+                True,
+            ),
+            "ConfigMap": (
+                c.core.create_namespaced_config_map,
+                c.core.patch_namespaced_config_map,
+                c.core.read_namespaced_config_map,
+                True,
+            ),
+            "Job": (c.batch.create_namespaced_job, c.batch.patch_namespaced_job, c.batch.read_namespaced_job, True),
             "Deployment": (
                 c.apps.create_namespaced_deployment,
                 c.apps.patch_namespaced_deployment,
@@ -395,6 +794,45 @@ class Kube:
             if http_status(e) != 404:
                 raise
 
+    SNEG = ("networking.gke.io", "v1beta1", "servicenetworkendpointgroups")
+
+    def namespace_phase(self, name: str) -> str | None:
+        """`Active`, `Terminating`, or None when the namespace does not exist."""
+        n = self.read("Namespace", None, name)
+        return ((n.get("status") or {}).get("phase") or "Active") if n else None
+
+    def release_namespace(self, name: str, timeout=None) -> bool:
+        """D69: GKE holds a deleted namespace `Terminating` on `networking.gke.io/neg-finalizer` while its Gateway
+        controller garbage-collects the backend service — minutes, sometimes never. The finalizer only guards the
+        zonal NEGs, which `Compute.delete_negs` reaps on its own, so it is cleared here and the namespace goes.
+        True once the namespace is gone, False on timeout. A cluster without the CRD (EKS, AKS) just waits."""
+        deadline, cleared = time.monotonic() + (timeout or self.wait_secs), False
+        while True:
+            phase = self.namespace_phase(name)
+            if phase is None:
+                return True
+            if phase == "Terminating" and not cleared:
+                cleared = True
+                try:
+                    held = self.c.custom.list_namespaced_custom_object(*self.SNEG[:2], name, self.SNEG[2])
+                    for o in held.get("items", []):
+                        if o.get("metadata", {}).get("finalizers"):
+                            self.c.custom.patch_namespaced_custom_object(
+                                *self.SNEG[:2],
+                                name,
+                                self.SNEG[2],
+                                o["metadata"]["name"],
+                                {"metadata": {"finalizers": []}},
+                            )
+                except Exception as e:  # noqa: BLE001 - no such CRD on this cluster, or the object just went
+                    if http_status(e) == 403:  # the chart's ClusterRole grants this; a RoleBinding is gone by now
+                        logging.getLogger("ramen.cloud").warning("%s: cannot clear the NEG finalizer (403)", name)
+                    elif http_status(e) != 404:
+                        raise
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self.poll)
+
     def apply(self, doc: dict, keep: tuple[str, ...] = ()) -> None:
         create, patch, _, namespaced = self._fns(doc["kind"])
         m = doc["metadata"]
@@ -408,11 +846,17 @@ class Kube:
 
     def delete(self, kind, ns, name) -> bool:
         """Delete one object; False when it was not there (404). Used to drop the pre-0.7.5 worker HPA (§21.7)."""
-        fn = {"HorizontalPodAutoscaler": self.c.autoscaling.delete_namespaced_horizontal_pod_autoscaler}.get(kind)
-        if fn is None:
+        fns = {
+            "HorizontalPodAutoscaler": lambda: self.c.autoscaling.delete_namespaced_horizontal_pod_autoscaler(name, ns),
+            "ConfigMap": lambda: self.c.core.delete_namespaced_config_map(name, ns),
+            # Background: the Job object goes at once (a re-run may reuse the name), its pod is collected after
+            "Job": lambda: self.c.batch.delete_namespaced_job(name, ns, propagation_policy="Background"),
+            "ServiceAccount": lambda: self.c.core.delete_namespaced_service_account(name, ns),  # §38.2
+        }
+        if kind not in fns:
             raise ValueError(f"delete not supported for {kind}")
         try:
-            fn(name, ns)
+            fns[kind]()
             return True
         except Exception as e:  # noqa: BLE001
             if http_status(e) == 404:
@@ -464,7 +908,8 @@ class Kube:
         return out
 
     def wait_ready(self, ns, name) -> dict:
-        deadline = time.monotonic() + self.wait_secs
+        start = time.monotonic()
+        deadline, for_node = start + self.wait_secs, False
         while True:
             d = self.read("Deployment", ns, name)
             if d is None:
@@ -479,39 +924,96 @@ class Kube:
             ):
                 return d
             if time.monotonic() >= deadline:
+                if not for_node and self._waiting_for_node(ns, name):
+                    # a new zone's first node takes GKE Autopilot 10–18 min; give the scheduler the node deadline once
+                    deadline, for_node = start + self.node_wait_secs, True
+                    continue
+                waited = (
+                    f"not ready after waiting {self.node_wait_secs:g}s for a node"
+                    if for_node
+                    else f"not ready after {self.wait_secs:g}s"
+                )
                 raise TimeoutError(
-                    f"deployment {ns}/{name} not ready after {self.wait_secs}s "
+                    f"deployment {ns}/{name} {waited} "
                     f"({st.get('readyReplicas', 0)}/{want} ready{self._stuck_pods(ns, name)})"
                 )
+            time.sleep(self.poll)
+
+    def _waiting_for_node(self, ns, name) -> bool:
+        """True when a pod of the rollout is Pending because no node fits it yet (the autoscaler is at work)."""
+        try:
+            return any(
+                (p.get("status") or {}).get("phase") == "Pending"
+                and any(
+                    c.get("type") == "PodScheduled"
+                    and c.get("status") == "False"
+                    and c.get("reason") == "Unschedulable"
+                    for c in (p.get("status") or {}).get("conditions") or []
+                )
+                for p in self.pods(ns, self._rollout_selector(name))
+            )
+        except Exception:  # a diagnostic must never mask the timeout itself
+            return False
+
+    @staticmethod
+    def _rollout_selector(name) -> str:
+        track = "canary" if name.endswith("-canary") else "stable"
+        return f"app=worker,{ROLE}=activator" if name == ACTIVATOR else f"{WORKERS},ramen.io/track={track}"
+
+    def wait_endpoint(self, ns, service, selector, timeout=None) -> bool:
+        """True once a ready address of `Service/<service>` belongs to a pod matching `selector`, False on timeout.
+        §24.1: kube-proxy keeps routing to terminating-but-serving workers until the activator is in the Service's
+        endpoints, so a sleep that scales the workers to 0 before that sends calls to a draining worker, and
+        nothing asks for the wake (1.0.0a P1). A console whose zone role cannot read Endpoints raises (403)."""
+        deadline = time.monotonic() + (timeout or self.wait_secs)
+        while True:
+            ips = {(p.get("status") or {}).get("podIP") for p in self.pods(ns, selector)} - {None}
+            try:
+                ep = self.c.to_dict(self.c.core.read_namespaced_endpoints(service, ns)) or {}
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 404:
+                    raise
+                ep = {}
+            listed = {a.get("ip") for s in ep.get("subsets") or [] for a in s.get("addresses") or []}
+            if ips and ips & listed:
+                return True
+            if time.monotonic() >= deadline:
+                return False
             time.sleep(self.poll)
 
     def _stuck_pods(self, ns, name) -> str:
         """Why the rollout is stuck, from the pods themselves: a Pending pod's scheduler message, a waiting
         container's reason. The replica counts alone said "1/1 ready" while the new pod sat Unschedulable."""
-        notes = []
         try:
-            track = "canary" if name.endswith("-canary") else "stable"
-            for p in self.pods(ns, f"app=worker,ramen.io/track={track}"):
-                st = p.get("status") or {}
-                if st.get("phase") == "Running" and not any(
-                    (c.get("state") or {}).get("waiting") for c in st.get("containerStatuses") or []
-                ):
-                    continue
-                why = [
-                    f"{c.get('reason')}: {c.get('message')}"
-                    for c in st.get("conditions") or []
-                    if c.get("status") == "False" and c.get("reason")
-                ] + [
-                    f"{(c.get('state') or {}).get('waiting', {}).get('reason')}"
-                    for c in st.get("containerStatuses") or []
-                    if (c.get("state") or {}).get("waiting")
-                ]
-                why = list(dict.fromkeys(why))  # Ready and ContainersReady carry the same reason
-                notes.append(f"{p['metadata']['name']} {st.get('phase')}" + (f" ({'; '.join(why)})" if why else ""))
+            return self._stuck_pods_of(self.pods(ns, self._rollout_selector(name)))
         except Exception:  # a diagnostic must never mask the timeout itself
             return ""
+
+    def _stuck_pods_of(self, pods: list[dict]) -> str:
+        notes = []
+        for p in pods:
+            st = p.get("status") or {}
+            if st.get("phase") == "Running" and not any(
+                (c.get("state") or {}).get("waiting") for c in st.get("containerStatuses") or []
+            ):
+                continue
+            why = [
+                f"{c.get('reason')}: {c.get('message')}"
+                for c in st.get("conditions") or []
+                if c.get("status") == "False" and c.get("reason")
+            ] + [
+                f"{(c.get('state') or {}).get('waiting', {}).get('reason')}"
+                for c in [*(st.get("initContainerStatuses") or []), *(st.get("containerStatuses") or [])]
+                if (c.get("state") or {}).get("waiting")
+            ]
+            why = list(dict.fromkeys(why))  # Ready and ContainersReady carry the same reason
+            notes.append(f"{p['metadata']['name']} {st.get('phase')}" + (f" ({'; '.join(why)})" if why else ""))
         return f"; pods: {', '.join(notes)}" if notes else ""
 
-    def pods(self, ns, selector="app=worker") -> list[dict]:
+    def pod_log(self, ns, pod, container=None, tail=40) -> str:
+        kw = {"container": container} if container else {}
+        return log_text(self.c.core.read_namespaced_pod_log(pod, ns, tail_lines=tail, **kw))
+
+    def pods(self, ns, selector=WORKERS) -> list[dict]:
         items = self.c.to_dict(self.c.core.list_namespaced_pod(ns, label_selector=selector)).get("items", [])
         return [p for p in items if not p["metadata"].get("deletionTimestamp")]

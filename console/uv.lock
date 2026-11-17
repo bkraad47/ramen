@@ -1381,6 +1381,18 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-proto"
+version = "1.45.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/9c/1aa4ce60e9bc72af20dc49c92cc0566825092d92b3d6a277439fb5fb7c01/opentelemetry_proto-1.45.2.tar.gz", hash = "sha256:bd8d23cf770605b0af9b7be2071d26a464fea289d35429abfd2a66226114ad64", size = 46486, upload-time = "2026-10-29T17:29:53.007Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/0d/a0b8f2b9efe2ec1abdf639d3696db9b1563ebeb11d91aac08ba7341e9122/opentelemetry_proto-1.45.2-py3-none-any.whl", hash = "sha256:03a7ca1b43f89fd5b965d5975902bb2515c0c86e2428b456836e9a6149c6235a", size = 72484, upload-time = "2026-10-29T17:29:31.403Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1742,7 +1754,7 @@ wheels = [
 
 [[package]]
 name = "ramen-console"
-version = "0.8.0"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
@@ -1757,6 +1769,7 @@ dependencies = [
     { name = "httpx" },
     { name = "itsdangerous" },
     { name = "jinja2" },
+    { name = "opentelemetry-proto" },
     { name = "protobuf" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -1819,6 +1832,7 @@ requires-dist = [
     { name = "kubernetes", marker = "extra == 'azure'", specifier = ">=30" },
     { name = "kubernetes", marker = "extra == 'gcp'", specifier = ">=30" },
     { name = "moto", extras = ["dynamodb"], marker = "extra == 'dev'", specifier = ">=5" },
+    { name = "opentelemetry-proto", specifier = ">=1.45.2" },
     { name = "protobuf", specifier = ">=5.28" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },

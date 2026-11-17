@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}-{{ static_v }}"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
 <body><div class="login card"><img src="{{ base }}/static/logo-mark.png" alt="Project Ramen"><h1 style="text-align:center">Console</h1>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}{% if msg %}<div class="ok">{{ msg }}</div>{% endif %}
 {% if auth.password_login or auth.force_password %}<form class="signin-form" method="post" action="{{ base }}/login"><input type="hidden" name="next" value="{{ next }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">

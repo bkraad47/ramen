@@ -55,7 +55,7 @@
 .md-typeset .ramen-badge-table td { border: 0; padding: .2rem .35rem; text-align: center; vertical-align: middle; }
 .md-typeset .ramen-badge-table img { height: 20px; width: auto; display: block; margin: 0; border-radius: 3px; }
 .md-typeset .ramen-badge-table a { display: inline-block; line-height: 0; }
-.ramen-repos h3 a { color: var(--ramen-coral-light); }
+
 .ramen-cta { text-align: center; margin: 1.2rem 0; }
 .ramen-caption { color: var(--md-default-fg-color--light); font-size: .8rem; line-height: 1.5; margin: .4rem 0 1.2rem; }
 
@@ -68,3 +68,63 @@
 /* U17 architecture diagram: full width, no frame — the SVG carries its own dark background. */
 .ramen-diagram { margin: 1.2rem 0; }
 .ramen-diagram img, .ramen-diagram svg { width: 100%; height: auto; display: block; }
+
+/* Wider pages on wide screens, and type that grows with the window (Material's default is a fixed 61rem column and
+   a 125% root): 1rem = 20px up to 1280px (Material's own size), ~24px at 1920px, capped at 28px. Every Material size is in
+   rem, so the whole page scales with it. */
+html { font-size: clamp(20px, calc(12px + 0.625vw), 28px); }
+.md-grid { max-width: min(96vw, 110rem); }
+
+/* A table inside a box (admonition) spans the box, columns shared evenly, instead of Material's shrink-to-fit block
+   that left a gap on the right (Get started → Quick links). */
+.md-typeset .admonition .md-typeset__scrollwrap,
+.md-typeset .admonition .md-typeset__table { display: block; width: 100%; margin-left: 0; margin-right: 0; }
+.md-typeset .admonition table:not([class]) { display: table; width: 100%; table-layout: fixed; }
+
+/* Home: the three ways in, as numbered path cards (step · icon + title · one line · call to action) instead of three
+   look-alike buttons. One row on wide screens, stacked on a phone; the first path is the highlighted one. */
+.ramen-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin: 1.6rem 0 2rem; }
+.md-typeset .ramen-paths > p { display: contents; }
+.md-typeset a.ramen-path {
+  display: flex; flex-direction: column; gap: .45rem; padding: 1.1rem 1.2rem 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest); border-radius: 12px; background: rgba(255, 255, 255, .03);
+  color: var(--md-default-fg-color); text-decoration: none;
+  transition: border-color .15s, transform .15s, box-shadow .15s, background .15s;
+}
+.md-typeset a.ramen-path:hover, .md-typeset a.ramen-path:focus-visible {
+  border-color: var(--ramen-coral); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  background: rgba(242, 107, 58, .06); color: var(--md-default-fg-color);
+}
+.md-typeset a.ramen-path--primary { border-color: var(--ramen-coral); background: rgba(242, 107, 58, .10); }
+.ramen-path__step { font-size: .62rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ramen-coral-light); }
+.ramen-path__title { display: flex; align-items: center; gap: .45rem; font-size: .95rem; font-weight: 700; line-height: 1.3; }
+.ramen-path__title .twemoji { color: var(--ramen-coral-light); }
+.ramen-path__text { font-size: .72rem; line-height: 1.55; color: var(--md-default-fg-color--light); flex: 1; }
+.ramen-path__go { display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem; font-weight: 700; color: var(--ramen-coral-light); }
+.md-typeset a.ramen-path:hover .ramen-path__go .twemoji { transform: translateX(3px); }
+.ramen-path__go .twemoji { transition: transform .15s; }
+@media (prefers-reduced-motion: reduce) { .md-typeset a.ramen-path, .ramen-path__go .twemoji { transition: none; } .md-typeset a.ramen-path:hover { transform: none; } }
+
+/* Home: the three repositories as one family — a shared frame and lead line say "these are all Ramen"; each card
+   gets its own accent and a role line (server / client bridge / demo group) so they no longer look identical. */
+.ramen-family { margin: 1.6rem 0 .6rem; padding: 1.1rem 1.2rem 1.2rem; border: 1px solid rgba(242, 107, 58, .35);
+  border-radius: 14px; background: linear-gradient(180deg, rgba(242, 107, 58, .07), rgba(242, 107, 58, .015)); }
+.md-typeset .ramen-family__lead { margin: 0 0 .9rem; text-align: center; color: var(--md-default-fg-color--light); }
+.md-typeset .ramen-family__lead strong { color: var(--md-default-fg-color); }
+.ramen-family__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: .9rem; }
+.ramen-repo { --accent: var(--ramen-coral); display: flex; flex-direction: column; padding: .9rem 1.1rem 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest); border-top: 4px solid var(--accent); border-radius: 12px;
+  background: rgba(0, 0, 0, .18); }
+.ramen-repo--server { --accent: #F26B3A; }
+.ramen-repo--bridge { --accent: #E8B04A; }
+.ramen-repo--demo   { --accent: #5FB8A6; }
+.ramen-repo__role { display: flex; align-items: center; gap: .4rem; font-size: .62rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.ramen-repo__role .twemoji { color: var(--accent); }
+.md-typeset .ramen-repo__name { margin: .35rem 0 .45rem; font-size: 1.05rem; font-weight: 700;
+  font-family: var(--md-code-font-family); }
+.md-typeset .ramen-repo__name a { color: var(--md-default-fg-color); }
+.md-typeset .ramen-repo__name a:hover { color: var(--accent); }
+.md-typeset .ramen-repo__text { margin: 0 0 .7rem; font-size: .74rem; line-height: 1.6; color: var(--md-default-fg-color--light); flex: 1; }
+.md-typeset .ramen-repo__links { margin: 0; font-size: .7rem; font-weight: 700; }
+.md-typeset .ramen-repo__links a { color: var(--accent); }

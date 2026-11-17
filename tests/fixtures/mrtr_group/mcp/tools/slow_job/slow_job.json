@@ -1,0 +1,17 @@
+{
+  "type": "tool",
+  "name": "slow_job",
+  "description": "Sleep `seconds`, reporting progress every 100 ms, and answer with `label`. Runs as a task for clients that declare the tasks extension. Guarded pre and post.",
+  "callable": "run",
+  "input": {
+    "seconds": {
+      "type": "integer",
+      "description": "how long to work"
+    },
+    "label": {
+      "type": "string",
+      "description": "echoed in the result"
+    }
+  },
+  "task": true
+}

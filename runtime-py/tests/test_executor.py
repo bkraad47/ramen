@@ -146,3 +146,23 @@ def test_no_output_schema_means_no_structured_content(tmp_path):
     write_pkg(tmp_path, "tools", "t", plain, "def f(a):\n    return {'a': a}\n")
     r = Executor(load(tmp_path)).call_tool("t", {"a": "z"})
     assert r == {"content": [{"type": "text", "text": '{"a": "z"}'}], "isError": False}
+
+
+def test_schemas_are_compiled_once_per_load_not_checked_per_call(demo, monkeypatch):
+    """§35.1 (D80 perf): `jsonschema.validate` re-checked both schemas against the metaschema on every call (~1.2 ms of
+    a ~4 ms rail-guarded call at full speed). A tool's validators are built once; the answers are unchanged."""
+    import jsonschema
+
+    checks = []
+    real = jsonschema.Draft202012Validator.check_schema.__func__
+
+    def counted(cls, schema, *a, **kw):
+        checks.append(schema)
+        return real(cls, schema, *a, **kw)
+
+    monkeypatch.setattr(jsonschema.Draft202012Validator, "check_schema", classmethod(counted))
+    for _ in range(5):
+        assert demo.call_tool("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})["isError"] is False
+    bad = demo.call_tool("demo_calculator_tool", {"var1": "x", "var2": 0, "func": "add"})
+    assert bad["content"][0]["text"] == "invalid arguments: var1: 'x' is not of type 'number'" and bad["isError"]
+    assert len(checks) <= 2  # the input and the output schema, once each

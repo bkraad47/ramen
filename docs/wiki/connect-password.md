@@ -11,9 +11,15 @@ This page covers only the account. The client commands are in [Connect a client 
 1. A super admin creates it on the Users page with an email and a password, or a group admin adds an existing
    account to their group. The role **MCP User** in the group is enough to connect a client.
 2. The person signs in once at `https://<edge>/` to check their access. An MCP user sees a single page there: the
-   groups they may connect to, and the exact client command for one of them.
-3. There is no password form on that page. To change the initial password they use *Forgot your password?* on the
-   sign-in page, or an admin resets it on the Users page.
+   groups they may connect to, and the exact client command for one of them. When a group's repo carries
+   [LLM configs](llm-configs.md) (`mcp/llm-config/`), the sign-in lands first on `/groups/<g>/configs` — the files
+   verbatim and an **Accept** button — and nothing of that group is served until they are accepted; a magic-link
+   sign-in does the same. Each new version of the files asks again. A group whose repo carries
+   [guardrails](guardrails.md) hands every sign-in path, this one included, the same `guardrails` policy: the
+   bridge runs the rails locally and the workers refuse a call without the current version (`-32029`) when the
+   group requires it.
+3. There is no password form on that page. To change the initial password they use *Forgot password?* on the
+   sign-in page (shown when the console can send mail), or an admin resets it on the Users page.
 
 <figure markdown>
 ![The MCP user's page](../img/mcp-user.png){ .ramen-shot }

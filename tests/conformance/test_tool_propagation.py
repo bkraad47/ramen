@@ -89,11 +89,14 @@ async def test_sdk_client_sees_the_change_only_when_it_lists_again(live):
 
 @pytest.mark.skipif(not bridge_command(), reason="ramen-mcp-bridge not found")
 async def test_running_bridge_sees_the_new_tool_on_its_next_list(live):
+    bridge_own = {"ramen_report"}  # §32.1: a 0.6.0+ bridge lists its own client-side report tool next to the node's
     async with bridge_session(live.node) as s:
-        assert names((await s.list_tools()).tools) == {OLD}
+        assert names((await s.list_tools()).tools) - bridge_own == {OLD}
         swap_tools(live.bucket)
         live.node.admin_reload()
-        assert names((await s.list_tools()).tools) == {NEW}, "the bridge is stateless: every list is the node's"
+        assert names((await s.list_tools()).tools) - bridge_own == {NEW}, (
+            "the bridge is stateless: every list is the node's"
+        )
         r = await s.call_tool(NEW, {"ms": 10})
         assert not r.is_error and sdk_text(r) == "slept 10 ms"
         with pytest.raises(Exception, match="-32004|not found|unknown"):

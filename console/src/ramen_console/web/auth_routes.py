@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
+from .. import configs
 from ..audit import note
 from ..auth import csrf
 from ..auth.sessions import COOKIE
@@ -24,8 +25,10 @@ def base_url(request: Request) -> str:
     return public_url(request)
 
 
-def _login_response(request: Request, user: dict, next_: str = "/"):
-    resp = RedirectResponse(link(request, safe_next(next_)), 303)
+async def _login_response(request: Request, user: dict, next_: str = "/"):
+    # §31.1: a group with LLM configs this person has not accepted comes first, whatever the sign-in path
+    target = await configs.signin_target(request.app.state.services, user, safe_next(next_))
+    resp = RedirectResponse(link(request, target), 303)
     kw = {"samesite": "lax", "secure": request.app.state.cookie_secure, "max_age": 12 * 3600}
     session = {"uid": user["id"], "ep": request.app.state.accounts.epoch_of(user)}
     resp.set_cookie(COOKIE, request.app.state.signer.sign(session), httponly=True, **kw)
@@ -65,7 +68,7 @@ async def login(
         return await _login_page(request, 401, error="Invalid email or password", next=next)
     if refused := await _oauth_only(request, user, auth):
         return refused
-    return _login_response(request, user, next)
+    return await _login_response(request, user, next)
 
 
 async def _oauth_only(request: Request, user: dict, auth) -> Response | None:
@@ -161,7 +164,7 @@ async def magic_login(request: Request, token: str):
         raise ApiError(400, "This sign-in link is invalid, expired or already used")
     if refused := await _oauth_only(request, user, await auth_settings(request)):
         return refused
-    return _login_response(request, user)
+    return await _login_response(request, user)
 
 
 # OAuth / OIDC ---------------------------------------------------------------
@@ -234,7 +237,7 @@ async def oauth_callback(request: Request, name: str):
     user = await request.app.state.accounts.upsert_sso_user(
         email, memberships, super_, provider=name, authoritative=authoritative, provider_id=provider_id
     )
-    return _login_response(request, user, request.session.pop("ramen_next", "/"))
+    return await _login_response(request, user, request.session.pop("ramen_next", "/"))
 
 
 def _provider_id(name: str, info: dict) -> str:

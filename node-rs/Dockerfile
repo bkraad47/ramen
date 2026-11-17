@@ -4,7 +4,7 @@
 #   docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .                       # native
 #   docker buildx build --platform linux/amd64 -f node-rs/Dockerfile -t <ar>/worker:<v> --push . # GKE
 # The Rust stage runs on the build host and cross-compiles for TARGETARCH (no QEMU for cargo).
-FROM --platform=$BUILDPLATFORM rust:1.98.1-slim-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1.99-slim AS build
 ARG TARGETARCH
 RUN case "$TARGETARCH" in amd64) echo x86_64-unknown-linux-gnu ;; arm64) echo aarch64-unknown-linux-gnu ;; *) echo "unsupported $TARGETARCH" >&2; exit 1 ;; esac > /target.txt \
  && rustup target add "$(cat /target.txt)" \
@@ -19,17 +19,20 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.12-slim
-ARG VERSION=0.8.0
+ARG VERSION=1.0.0
+# the bridge, used here as the gRPC health-check CLI; a test build may pass a wheel or archive URL instead (Phase 9)
+ARG BRIDGE=ramen-mcp-bridge==1.0.0
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
 COPY --chown=ramen:ramen runtime-py /opt/ramen-runtime
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check '/opt/ramen-runtime[gcp,aws,azure,nemo]' \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check 'ramen-mcp-bridge==0.3.0'
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check "$BRIDGE"
 COPY --from=build /ramen-node /usr/local/bin/ramen-node
 ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bin/python PYTHONUNBUFFERED=1
 EXPOSE 8080
 VOLUME ["/buckets"]
 # Liveness: ramen.v1.Admin is SERVING from process start; readiness (loaded) is the overall "" service.
-HEALTHCHECK --interval=15s --timeout=5s CMD ["/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--health", "ramen.v1.Admin", "--timeout", "3"]
+# D86: a TLS node (RAMEN_TLS_CA set) is probed over TLS against its own CA; the leaf names 127.0.0.1
+HEALTHCHECK --interval=15s --timeout=5s CMD /opt/venv/bin/ramen-mcp-bridge --target 127.0.0.1:8080 ${RAMEN_TLS_CA:+--ca "$RAMEN_TLS_CA"}${RAMEN_TLS_CERT:---insecure} --health ramen.v1.Admin --timeout 3
 ENTRYPOINT ["ramen-node"]

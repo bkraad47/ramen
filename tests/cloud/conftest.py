@@ -71,8 +71,9 @@ def mcp_status(node: Node, key) -> S:
 def world(admin, demo_repo, node_opt):
     """Zone/group/env exist and the env has one successful deploy (so a main worker is serving)."""
     ok(admin.create_zone(ZONE), 201, 409)
-    ok(admin.create_group(GROUP, demo_repo), 201, 409)
-    ok(admin.create_environment(GROUP, ENV, [ZONE]), 201, 409)
+    ref = E.env("RAMEN_DEMO_REF", "main")  # as e2e and test_release_features: the demo ref under test
+    ok(admin.create_group(GROUP, demo_repo, ref=ref), 201, 409)
+    ok(admin.create_environment(GROUP, ENV, [ZONE], ref=ref), 201, 409)
     envs = items(ok(admin.get("environments_all", params={"group": GROUP})))
     e = next(x for x in envs if x["name"] == ENV)
     if (e.get("last_deploy") or {}).get("status") != "ok":
@@ -81,3 +82,21 @@ def world(admin, demo_repo, node_opt):
     if node_opt:
         poll(lambda: node_opt.health_code() == S.OK and node_opt.health() == "SERVING", timeout=180, what="SERVING")
     return {"group": GROUP, "env": ENV, "zone": ZONE}
+
+
+# -- the auth matrix's record (test_auth_matrix.py): one line per sign-in path in the run's own output ---------------
+AUTH_MATRIX: list[tuple[str, str, str]] = []  # (path, PASS | FAIL | SKIP, detail)
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not AUTH_MATRIX:
+        return
+    terminalreporter.section("auth matrix (CONTRACTS §24.4: every sign-in path)")
+    width = max(len(path) for path, _, _ in AUTH_MATRIX)
+    for path, verdict, detail in AUTH_MATRIX:
+        terminalreporter.write_line(f"{verdict:<4}  {path:<{width}}  {detail}".rstrip())
+    out = E.env("RAMEN_AUTH_MATRIX_OUT")
+    if out:
+        with open(out, "w") as f:
+            f.write("| path | result | detail |\n|---|---|---|\n")
+            f.writelines(f"| {p} | {v} | {d} |\n" for p, v, d in AUTH_MATRIX)

@@ -1,0 +1,15 @@
+{
+  "type": "tool",
+  "name": "test_elicitation",
+  "description": "Ask the user for a username and an email with `message` and return them. Uses an MRTR input request, so on the 2025-06-18 wire the official tools-call-elicitation scenario is a baseline entry.",
+  "callable": "run",
+  "input": {
+    "message": {
+      "type": "string",
+      "description": "the question shown to the user"
+    }
+  },
+  "error": {
+    "type": "string"
+  }
+}

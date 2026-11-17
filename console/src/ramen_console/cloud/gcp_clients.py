@@ -1,5 +1,7 @@
 """Lazy real GCP/Kubernetes clients; tests inject a fake bundle with the same attribute names."""
 
+import functools
+
 
 def http_status(e: BaseException) -> int | None:
     """Status of a kubernetes ApiException (.status), google api_core error (.code)
@@ -11,6 +13,40 @@ def http_status(e: BaseException) -> int | None:
     resp = getattr(e, "resp", None)
     v = getattr(resp, "status", None)
     return int(v) if isinstance(v, (int, str)) and str(v).isdigit() else None
+
+
+def _dropped(error) -> bool:
+    """urllib3's `ProtocolError("Connection aborted.", <cause>)` for a connection closed before any answer came back."""
+    import http.client
+
+    import urllib3
+
+    return isinstance(error, urllib3.exceptions.ProtocolError) and any(
+        isinstance(a, (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError)) for a in error.args
+    )
+
+
+@functools.cache
+def retry_class():
+    """`StaleConnectionRetry`, built on first use: urllib3 comes with the kubernetes extra."""
+    from urllib3.util.retry import Retry
+
+    class StaleConnectionRetry(Retry):
+        """urllib3 resends a request after a read error only for idempotent methods. A pooled connection the API server
+        closed while idle (AKS: the first write of a deploy, minutes after the last call) fails the next POST/PATCH with
+        RemoteDisconnected before any answer, so that error is resent for every method; a timeout still never is."""
+
+        def increment(self, method=None, url=None, response=None, error=None, _pool=None, _stacktrace=None):
+            if response is None and _dropped(error):
+                method = "GET"  # unanswered on a dropped connection: urllib3's own rule for a resendable request
+            return super().increment(method, url, response, error, _pool, _stacktrace)
+
+    return StaleConnectionRetry
+
+
+def kube_retry():
+    """The Retry of every Kubernetes client the console builds: urllib3's `Retry(3)`, resending dropped writes."""
+    return retry_class()(3)
 
 
 def _creds():
@@ -42,6 +78,9 @@ class GcpClients:
                 cfg.load_incluster_config()
             except Exception:  # noqa: BLE001 - not in a pod: fall back to KUBECONFIG / ~/.kube/config
                 cfg.load_kube_config()
+            default = client.Configuration.get_default_copy()
+            default.retries = kube_retry()  # every `client.<Api>()` below copies the default configuration
+            client.Configuration.set_default(default)
             self._c["kube"] = client
         return self._c["kube"]
 
@@ -57,6 +96,10 @@ class GcpClients:
     @property
     def apps(self):
         return self._cached("apps", lambda: self._kube().AppsV1Api())
+
+    @property
+    def batch(self):
+        return self._cached("batch", lambda: self._kube().BatchV1Api())
 
     @property
     def autoscaling(self):
@@ -126,6 +169,104 @@ class GcpClients:
     @property
     def crm(self):
         return self._discovery("cloudresourcemanager", "v1")
+
+    @property
+    def artifactregistry(self):  # §38.2: per-group repositories
+        return self._discovery("artifactregistry", "v1")
+
+    def tag_bindings(self, location):
+        """§38.2: Resource Manager v3 for tag bindings on a regional resource (an Artifact Registry repository), which
+        must go through the location's endpoint `<location>-cloudresourcemanager.googleapis.com`."""
+
+        def make():
+            from googleapiclient.discovery import build
+
+            endpoint = f"https://{location}-cloudresourcemanager.googleapis.com/"
+            return build(
+                "cloudresourcemanager",
+                "v3",
+                cache_discovery=False,
+                credentials=_creds(),
+                client_options={"api_endpoint": endpoint},
+            )
+
+        return self._cached(f"tags:{location}", make)
+
+    def for_cluster(self, project, location, name):
+        """§28.2: a satellite GKE cluster's clients — kubernetes bound to its API server, the rest this bundle's."""
+        return GkeClients(self, project, location, name)
+
+
+class _Apis:
+    """`client.<SomeApi>()` bound to one ApiClient, so the inherited `core`/`apps`/... properties work unchanged."""
+
+    def __init__(self, module, api_client):
+        self.m, self.api = module, api_client
+
+    def __getattr__(self, name):
+        cls = getattr(self.m, name)
+        return lambda: cls(self.api)
+
+
+def remote_kube(client, endpoint: str, ca_pem: bytes, token_fn) -> _Apis:
+    """A kubernetes client for a remote API server: its CA, a bearer token from `token_fn` refreshed before calls."""
+    import tempfile
+
+    cfg = client.Configuration()
+    cfg.host = endpoint if endpoint.startswith("https://") else f"https://{endpoint}"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".crt") as f:
+        f.write(ca_pem)
+    cfg.ssl_ca_cert = f.name
+
+    def refresh(c):  # the prefix table is not applied by every client version (36: bare token → 401): store it whole
+        c.api_key["authorization"] = f"Bearer {token_fn()}"
+
+    cfg.refresh_api_key_hook = refresh
+    cfg.retries = kube_retry()
+    refresh(cfg)
+    return _Apis(client, client.ApiClient(cfg))
+
+
+def google_token() -> str:
+    """The console's Google access token (ADC in the pod, `GOOGLE_OAUTH_ACCESS_TOKEN` locally), refreshed when stale."""
+    creds = _adc()
+    if creds is None:
+        raise RuntimeError("no Google credentials for the satellite cluster (ADC or GOOGLE_OAUTH_ACCESS_TOKEN)")
+    if not creds.valid:
+        from google.auth.transport.requests import Request
+
+        creds.refresh(Request())
+    return creds.token
+
+
+class GkeClients(GcpClients):
+    """A satellite GKE cluster's clients (§28.2): endpoint and CA from `container.projects.locations.clusters.get`,
+    the console GSA's token as bearer (the satellite chart binds `User <gsa email>` to the console ClusterRoles)."""
+
+    def __init__(self, home: GcpClients, project: str, location: str, name: str):
+        super().__init__(project)
+        self.home, self.location, self.name = home, location, name
+
+    def cluster_info(self) -> dict:
+        import base64
+
+        path = f"projects/{self.project}/locations/{self.location}/clusters/{self.name}"
+        info = self.home._discovery("container", "v1").projects().locations().clusters().get(name=path).execute()
+        return {"endpoint": info["endpoint"], "ca": base64.b64decode(info["masterAuth"]["clusterCaCertificate"])}
+
+    def _kube(self):
+        if "kube" not in self._c:
+            info = self.cluster_info()
+            self._c["kube"] = remote_kube(self._kube_modules()[1], info["endpoint"], info["ca"], google_token)
+        return self._c["kube"]
+
+    # the project-level planes are the home bundle's (one set of credentials and discovery clients)
+    storage = property(lambda self: self.home.storage)
+    secretmanager = property(lambda self: self.home.secretmanager)
+    logging = property(lambda self: self.home.logging)
+    compute = property(lambda self: self.home.compute)
+    iam = property(lambda self: self.home.iam)
+    crm = property(lambda self: self.home.crm)
 
 
 def fresh_http():

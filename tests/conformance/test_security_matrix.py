@@ -8,6 +8,11 @@ Three axes, every combination checked:
 and the revocation rule (V1.4, folded into U25): a session dies the moment the user behind it is deleted, has
 their role or groups changed, has their password reset, or the auth configuration changes.
 
+Since 1.0.0c (D84) every section of that release — org and group LLM providers with their model lists, the guardrails /
+evals / scans settings, the configs page and accept API, the scan report and app preview pages, the OTLP ingest — is
+walked per caller kind (nobody, an outsider, a viewer, an MCP user, the group's admin, the super admin, both devops
+keys, the agent key) from the one table in `ramen_tests.access_matrix`; the cloud auth matrix walks the same table.
+
 Nothing here needs a cloud: two throwaway groups and four throwaway identities against any console URL.
 The two cases that need a worker (`devops` key refused over gRPC) skip without RAMEN_NODE_URL.
 """
@@ -18,6 +23,7 @@ import grpc
 import pytest
 
 from ramen_tests import env as E
+from ramen_tests.access_matrix import SECTIONS, otlp_rows
 from ramen_tests.console import SESSION_COOKIE, Console
 from ramen_tests.mcp_client import Node
 
@@ -78,6 +84,31 @@ def keys(admin, two_groups, suffix, console_url) -> dict[str, Console]:
     yield made
     for c in made.values():
         c.close()
+
+
+@pytest.fixture(scope="module")
+def callers(admin, people, keys, two_groups, suffix, console_url) -> dict[str, Console]:
+    """D84: one console client per caller kind of `ramen_tests.access_matrix`, for group `a` — nobody, a member of
+    `b` only, `a`'s viewer / MCP user / admin, the super admin, both devops keys and the agent key."""
+    a, _ = two_groups
+    email = f"mcp_a-{suffix}@ramen.test"
+    r = admin.create_user(email, PW, "mcp_user", [a])
+    assert r.status_code in (201, 409), f"{email}: {r.status_code} {r.text[:300]}"
+    mcp, anon = Console(console_url), Console(console_url)
+    assert mcp.login(email, PW).status_code in (200, 303)
+    yield {
+        "anon": anon,
+        "outsider": people["ga_b"],
+        "viewer": people["viewer_a"],
+        "mcp_user": mcp,
+        "group_admin": people["ga_a"],
+        "super_admin": admin,
+        "devops_viewer": keys["devops_viewer_a"],
+        "devops_admin": keys["devops_admin_a"],
+        "agent": keys["agent_a"],
+    }
+    mcp.close()
+    anon.close()
 
 
 def forbidden(r) -> bool:
@@ -202,6 +233,40 @@ def test_an_agent_key_is_refused_by_the_console_api(keys, two_groups, call):
     r = call(keys["agent_a"], a)
     assert r.status_code == 403, f"agent key accepted by the console API: {r.status_code} {r.text[:200]}"
     assert "agent key" in r.text.lower(), f"refusal does not name the reason: {r.text[:200]}"
+
+
+# -- every 1.0.0c section per caller kind (D84) --------------------------------------------------------------------
+@pytest.mark.parametrize("row", SECTIONS, ids=[name for name, _, _ in SECTIONS])
+def test_every_1_0_0c_section_answers_each_caller_kind_as_the_roles_table_says(callers, two_groups, row):
+    """Org providers (+ models), group providers (+ models), guardrails / evals / scans settings, the policy cards'
+    model slot, the group page, a scan report, an app preview, the configs page and accept API: edit = super admin
+    or the group's admin, view = members, MCP users only the configs page and accept, agent keys nowhere."""
+    name, call, expected = row
+    a, _ = two_groups
+    wrong = {}
+    for kind, codes in expected.items():
+        r = call(callers[kind], a)
+        if r.status_code not in codes:
+            wrong[kind] = (r.status_code, r.text[:120], f"expected {codes}")
+    assert not wrong, f"{name}: {wrong}"
+
+
+def test_the_otlp_ingest_takes_a_users_session_or_an_mcp_key_of_the_group(admin, callers, two_groups, suffix):
+    """§31.4: the ingest is for a user token, a console session naming its group, or an MCP key; console API keys and
+    foreign sessions are refused (D84)."""
+    a, _ = two_groups
+    r = admin.create_mcp_key(a, f"secmx-otlp-{suffix}")
+    assert r.status_code == 201, f"mcp key: {r.status_code} {r.text[:300]}"
+    key, kid = r.json()["key"], r.json()["id"]
+    try:
+        wrong = {}
+        for name, kind, call, codes in otlp_rows(key, a):
+            resp = call(callers[kind])
+            if resp.status_code not in codes:
+                wrong[name] = (resp.status_code, resp.text[:120], f"expected {codes}")
+        assert not wrong, wrong
+    finally:
+        admin.delete("mcp_key", group=a, id=kid)
 
 
 TRANSIENT = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED)

@@ -1,0 +1,7 @@
+# Expected failures of the official suite on the 2026-07-28 (stateless) wire, `--requirements 2026-07-28`
+# (CONTRACTS §23.7). Every entry needs a `# reason`. The suite fails the run when an entry here starts passing,
+# so this file cannot go stale. `<scenario>:<check-id>` excuses one check and keeps the scenario's others enforced.
+# Both entries are SHOULD-level warnings (the suite's baseline treats a warning as a failure).
+server:
+  - server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription  # reason: the suite's trigger is a tool call that mutates the tool list; a Ramen tool cannot change the manifest — tools/list_changed follows a deploy (Admin/Reload, §23.6), covered by tests/conformance/test_subscriptions.py
+  - server-stateless:sep-2575-server-sends-prompts-list-changed-on-subscription  # reason: same trigger for the prompt list; prompts/list_changed follows a deploy (§23.6), covered by tests/conformance/test_subscriptions.py

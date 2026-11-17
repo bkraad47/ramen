@@ -35,7 +35,8 @@ def test_notify_list_accepts_what_the_chip_form_sends(demo):
     uid = make_user(demo, "n@x", "viewer", ["demo"])["id"]
     assert demo.put("/api/v1/config/notify", json={"user_ids": ["", uid]}).json()["user_ids"] == [uid]
     page = demo.get("/config").text
-    assert f'<input type="hidden" name="user_ids" value="{uid}">' in page  # the chip carries its id as a field
+    # 1.0.0: a ticked box in the checkbox dropdown (the empty hidden field still posts "none" as [])
+    assert f'name="user_ids" value="{uid}" checked>' in page and 'id="notify-users"' in page
     assert demo.put("/api/v1/config/notify", json={"user_ids": ""}).json()["user_ids"] == []
 
 

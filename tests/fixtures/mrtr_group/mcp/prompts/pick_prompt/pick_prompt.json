@@ -1,0 +1,21 @@
+{
+  "type": "prompt",
+  "name": "pick_prompt",
+  "description": "A callable prompt: order a bowl of the given flavour and size.",
+  "callable": "build",
+  "input": {
+    "flavour": {
+      "enum": [
+        "shoyu",
+        "shio",
+        "miso",
+        "tonkotsu"
+      ],
+      "description": "which bowl"
+    },
+    "size": {
+      "type": "string",
+      "description": "small, regular or large"
+    }
+  }
+}

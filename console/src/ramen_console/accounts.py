@@ -1,5 +1,6 @@
 import hmac
 
+from . import revocation
 from .auth import apikeys
 from .auth.passwords import hash_password, verify_password
 from .errors import conflict, forbidden, invalid, not_found
@@ -24,6 +25,8 @@ from .util import now, public, uid
 class Accounts:
     def __init__(self, store: Store):
         self.store = store
+        # D92 (§16.7): called with the groups whose workers must learn of a revocation (the app pushes them)
+        self.on_revoke = None
 
     # --- session epoch (V1.4) ------------------------------------------------
     @staticmethod
@@ -31,9 +34,16 @@ class Accounts:
         return int(user.get("session_epoch") or 0)
 
     async def bump_epoch(self, user: dict) -> dict:
-        """Invalidate every session this user already holds. Callers pass the doc they are about to write."""
+        """Invalidate every session this user already holds. Callers pass the doc they are about to write. D92: the
+        OAuth access tokens they hold too — a subject cut-off for every group they hold one in, pushed at once."""
         user["session_epoch"] = self.epoch_of(user) + 1
+        if user.get("id"):
+            await self.revoked(await revocation.deny_subject(self.store, user["id"], "sessions_revoked"))
         return user
+
+    async def revoked(self, groups) -> None:
+        if groups and self.on_revoke is not None:
+            self.on_revoke(set(groups))
 
     async def bump_all_epochs(self) -> int:
         """Used when the auth configuration changes: nobody keeps a session minted under the old rules."""

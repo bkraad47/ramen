@@ -76,3 +76,13 @@ def test_a_canary_whose_guardrails_did_not_load_is_refused(demo, ws):
     # a package error that is not the guardrails file stays what it was: reported, not a refusal
     ws["cold"].load_result = manifest(errors=[{"package": "tools/bad", "reason": "SyntaxError"}])
     assert deploy(demo)["status"] == "ok"
+
+
+def test_a_canary_load_warning_is_logged_never_a_refusal(demo, ws):
+    """1.0.0c: the worker's load `warnings` (a repo `models:` in the rails config, deprecated by §36.2) reach the
+    deploy log; the deploy goes on."""
+    w = "guardrails: models: in config.yml is deprecated since 1.0.0c; set the provider on the group or the org"
+    ws["cold"].load_result = manifest(warnings=[w], guardrails=GUARD)
+    job = deploy(demo)
+    assert job["status"] == "ok", job
+    assert any(line.endswith(f"zone zone-a: warning: {w}") for line in job["log"]), job["log"]

@@ -1,8 +1,8 @@
 <p align="center"><img src="docs/img/logo.png" width="380" alt="Project Ramen"></p>
 
-<p align="center">Build your MCP tools in Python, deploy them across zones on <b>GKE, EKS and AKS</b>.<br>
-Rust MCP node + Python 3.12 runtime workers, Streamable HTTP at the edge and gRPC inside, guardrails per tool,<br>
-Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI console.</p>
+<p align="center">Build your MCP tools, apps and skills in Python, deploy them across zones on <b>GKE, EKS and AKS</b>.<br>
+MCP 2026-07-28 over Streamable HTTP and gRPC, canary deploys gated by golden cases, evals and skill scans,<br>
+guardrails, client policies enforced at every sign-in, telemetry per group and user — managed from one console.</p>
 
 <p align="center">
 <a href="https://github.com/bkraad47/ramen/releases"><img height="20" src="https://img.shields.io/github/v/release/bkraad47/ramen?color=F26B3A&label=release&style=flat" alt="release"></a>
@@ -11,169 +11,224 @@ Entra ID and Google Workspace sign-in, autoscaling — managed from one FastAPI 
 <a href="https://hub.docker.com/r/bkraad47/ramen-worker"><img height="20" src="https://img.shields.io/docker/v/bkraad47/ramen-worker?color=F26B3A&label=docker%20hub&sort=semver&style=flat" alt="docker hub"></a>
 <a href="https://pypi.org/project/ramen-mcp-bridge/"><img height="20" src="https://img.shields.io/pypi/v/ramen-mcp-bridge?color=F26B3A&label=ramen-mcp-bridge&style=flat" alt="PyPI bridge"></a>
 <a href="LICENSE"><img height="20" src="https://img.shields.io/badge/license-BSD--3--Clause-F26B3A?style=flat" alt="license"></a>
-<a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a>
+<a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-2026--07--28%20%2B%202025--06--18-2B2622?style=flat" alt="MCP"></a>
 </p>
 
 <p align="center"><a href="https://glama.ai/mcp/servers/bkraad47/ramen"><img width="380" height="200" src="https://glama.ai/mcp/servers/bkraad47/ramen/badge" alt="Ramen on Glama: score, tools and listing"></a></p>
 
-**Docs: https://bkraad47.github.io/ramen/** · [Get started](https://bkraad47.github.io/ramen/get-started/) · [How it works](https://bkraad47.github.io/ramen/how-it-works/) · [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/) · [Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/) · [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/) · [Azure](https://bkraad47.github.io/ramen/wiki/deploy-azure/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
+**Docs: https://bkraad47.github.io/ramen/** · [Get started](https://bkraad47.github.io/ramen/get-started/) · [Deploy your first group](https://bkraad47.github.io/ramen/first-group/) · [MCP features](https://bkraad47.github.io/ramen/wiki/mcp-features/) · [Roles](https://bkraad47.github.io/ramen/roles/) · [Threat model](https://bkraad47.github.io/ramen/threat-model/) · [Contracts](docs/CONTRACTS.md) · [Releases](https://github.com/bkraad47/ramen/releases)
 
-> **Streamable HTTP is the front door.** Every worker serves `POST /mcp` — a URL and a bearer header, nothing to
-> install — next to the gRPC service it has had since 0.3.1, on the same port, through the same guards. The stdio
-> bridge stays for clients that only speak stdio.
+## What it is
 
-**Status.** Current release **0.8.0**, verified live on GKE, EKS and AKS on 2026-10-17 — smoke, the 63-check release suite
-and six load-test scenarios on each cloud — then torn down; CI proves both transports on Linux and Windows. The single
-record of what each run covered, and what is tested only, is
-[Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
+Ramen is a self-hosted, multizone MCP server for teams. Each team (a **group**) keeps a git repo of tools,
+resources, prompts, MCP Apps and skills in plain Python; Ramen deploys it as a fleet of MCP workers behind a cloud
+load balancer, canary first, gated by the repo's golden cases, a promptfoo eval suite and an NVIDIA SkillSpector scan.
+People sign in with a role per group (a Ramen password, Entra ID or Google Workspace), agents use a group key, and
+every call — whichever client sends it — must carry the group's current policy versions: telemetry, evals, scans, LLM
+configs and guardrails. Each worker pairs a **Rust MCP node** (transport, auth, gates, limits) with a **Python 3.12
+runtime** (your code, in its own process); a FastAPI **console** runs everything else. It is a platform for *your*
+tools, not a gateway in front of someone else's.
 
-**Build and deploy your own MCP tools across zones.** Ramen turns a **git repo of tools, resources and prompts**
-into a fleet of MCP workers behind a cloud load balancer, and keeps who-can-call-what, secrets, guardrails, canary
-gates and the audit trail in one console. It is a platform for *your* tools, not a gateway in front of someone else's.
-Each worker pairs a **Rust MCP node** (Streamable HTTP and gRPC on one port, bearer auth, IP allow-lists, health,
-logs) with a **Python 3.12 runtime** that pip-installs and runs your code: user code never runs in the process that
-holds the keys. The shape, the data model and why each piece is where it is:
-[How it works](https://bkraad47.github.io/ramen/how-it-works/).
+## Key features
 
-- **Git → bucket → worker.** Deploy syncs the repo to a bucket; workers load by content hash. No git creds on pods.
-- **Canary by default, gated.** Roll a canary, smoke-test `tools/list`, diff its tool schemas against stable
-  (breaking changes stop unless you say `breaking: true`), run the repo's golden cases, then roll stable. Failure
-  leaves stable untouched.
-- **Multi-zone from day one.** Group → Environment → Zone → Worker; the load balancer routes on `ramen-group` /
-  `ramen-zone`, so one client config works for every zone.
-- **Guardrails inside the worker.** Opt a tool into a check before the call and after the result, run in the Python
-  runtime next to it: [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rails (deterministic or
-  LLM-backed, your model and key) or a `policy.py` of your own. A blocked call is a readable tool error and the access
-  log names the rail. Fail-closed by default.
-- **Your identity provider decides, your admins override.** Add Microsoft Entra ID, Google Workspace or any OIDC
-  provider on the Config page, on any cloud; read a person's groups from Graph or Cloud Identity at sign-in, map them
-  to roles per group, and keep what admins set by hand.
-- **Roles per group, and roles you define.** Group Admin, Viewer, MCP User or a custom role on one of those bases
-  (`analyst` on Viewer), usable in memberships, provider rules and per-tool access; a role can be **OAuth only**.
-  Decide per environment who may see and who may call each tool; a drift signal flags a caller repeating one call.
-- **Autoscaling by Ramen.** Each zone runs between 1 worker and a max that admins set; the console scales up fast
-  under load and back down when quiet, the same on all three clouds, with no HPA and every step in the audit log.
-- **Three clouds.** Terraform and Helm for GKE, EKS and AKS, with the same console and guards on each
-  ([Deploy to the cloud](#deploy-to-the-cloud)).
-- **Enterprise controls.** `rmk_` MCP keys and `rmn_` API keys stored as salted hashes, IP rules per zone at the node
-  and at the cloud edge, secrets that are never displayed, Redis throttles, an audit line for every action.
-- **One Deployment per zone, not one per tool.** A worker loads *every* tool of the group, so thirty tools run on
-  one Deployment per zone (two pods with a canary) behind one load balancer; autoscaling adds pods for load, not for
-  tool count.
+- **MCP 2026-07-28** next to 2025-06-18 on the same endpoint, per request: stateless requests, standard headers,
+  `server/discover`, subscriptions, progress, completion; the official conformance suite runs in CI against checked-in
+  baselines ([MCP features](https://bkraad47.github.io/ramen/wiki/mcp-features/)).
+- **Tasks** for long-running tools, and **multi round-trip requests** (elicitation, sampling, roots) for tools that
+  ask before they act.
+- **MCP Apps** — `mcp/apps/<name>/index.html` served as `ui://<group>/<name>`, previewed in a sandbox on the group
+  page — and **Skills over MCP** — `mcp/skills/<name>/SKILL.md` served by `skills/list` and `skill://`.
+- **Streamable HTTP and gRPC** on one port through one set of guards, and the stdio
+  [bridge](https://pypi.org/project/ramen-mcp-bridge/) for clients that only speak stdio.
+- **Guardrails** in the worker before the call and after the result: NeMo rails, static or **LLM-backed**
+  (self-check, jailbreak, topical, hallucination, fact-checking), or your own `policy.py`; fail-closed.
+- **promptfoo evals** from `mcp/evals/`, run against the canary on every deploy; report or gate per group, runs shared
+  in the optional promptfoo UI.
+- **NVIDIA SkillSpector scans** of the repo's skills and of what the zone serves, on every deploy, with a report page.
+- **Telemetry by group and user**: OpenTelemetry from nodes and the console, one Arize Phoenix project per group,
+  `ramen.user` on every span; clients' own telemetry through the console's OTLP ingest.
+- **LLM configs enforced at every sign-in**: `mcp/llm-config/` fragments for any client, accepted per person and
+  version on every sign-in path, written by the bridge, gated by the workers.
+- **LLM judge proxy**: rails, evals and scans call providers through the console (Anthropic, OpenAI, Azure OpenAI,
+  Vertex AI, Bedrock, Azure AI Foundry, any OpenAI-compatible server), with per-group allowed models; provider keys
+  never leave the console.
+- **Per-group image builds** on deploy from `requirements.txt`, each group pushing only to its own repository, images
+  pinned by digest.
+- **Throttling with Redis** per address and per token, shared across zones; **autoscaling** by Ramen on load and
+  latency (no HPA); **sleeping workers** that scale an idle zone to 0 and wake on the first call.
+- **Satellite clusters** for zones in other regions, driven by the one console.
+- **TLS on every hop** inside an install, with Ramen's own per-install CA (no cert-manager, no mesh); plaintext is
+  refused on cloud installs, and the local stack runs TLS too.
+- **GCP, AWS and Azure** from Terraform and Helm (CloudFormation too on AWS), each optional engine — Phoenix,
+  promptfoo, SkillSpector — one switch.
 
-> **Start here** · the demo group repo **[ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group)**
-> (point a group at it and press Deploy) · the stdio bridge **[ramen-mcp-bridge on PyPI](https://pypi.org/project/ramen-mcp-bridge/)**
-> (`uvx ramen-mcp-bridge@latest`) · the images **[bkraad47/ramen-worker](https://hub.docker.com/r/bkraad47/ramen-worker)**
-> and **[bkraad47/ramen-console](https://hub.docker.com/r/bkraad47/ramen-console)** on Docker Hub and GHCR.
+## Roles
 
-## Quickstart (local, 5 commands)
+| Role | Scope | May |
+|---|---|---|
+| **Super admin** | everything | users, groups, Config (identity providers, roles, org LLM providers, telemetry, regions, satellite clusters), API keys, backups, audit, worker sizes, plus all of the below |
+| **Group admin** | one group | environments and zones wholly within their groups, deploys, worker counts, sleep, IP rules, throttles, secrets, MCP keys, tool access, the Evals / Scans / Guardrails cards, the group's own LLM providers, members below admin |
+| **Viewer** | one group | read the group page, deploy jobs and logs, packages, apps and skills, scan reports, app previews; not secret values |
+| **MCP user** | one group | sign in an MCP client and accept the group's LLM configs; nothing else in the console |
+| **Custom role** (e.g. `analyst`) | one group | what its base (Group admin, Viewer or MCP user) may, optionally OAuth-only, and its own kind in per-tool access |
+| **Group key** (`rmk_`) | one group's workers | call tools for agents and automation; refused by the console |
 
-Needs Docker with compose v2, `uv`, `git` and `make`. `make up` pulls the release's two images from Docker Hub,
-about a minute; `make up BUILD=1` builds them from source instead (three to five minutes).
+Every member may connect a client and call the tools that **tool access** lets their role (or a key) list and call,
+per environment. `devops` API keys (`rmn_`) drive the console API with a role and groups no wider than their
+creator's. Details: [Roles](https://bkraad47.github.io/ramen/roles/).
+
+## Architecture
+
+- **Console** (`console/`, FastAPI + HTMX): the UI and `/api/v1`, the OAuth 2.1 authorization server, deploys,
+  builds, evals and scans, the autoscaler, the OTLP ingest and the LLM judge proxy. State in Firestore, DynamoDB or
+  Table Storage; secrets in the cloud's secret manager.
+- **Node** (`node-rs/`, Rust): one port for Streamable HTTP and gRPC; bearer auth, IP rules, throttle, in-flight cap,
+  tool access, the policy gates, the access log and spans.
+- **Runtime** (`runtime-py/`, Python 3.12): a child process of the node that loads the group's repo from the bucket,
+  renders `env.yaml` from its secrets, runs guardrails and the tool.
+- **Environments → zones → workers.** An environment is a name with a git ref, shared by the groups it lists; a zone
+  names its environments and runs, for each group that yields, a namespace `ramen-<group>-<zone>` with its own cloud
+  identity, route and `worker` + `worker-canary` Deployments. The load balancer routes on the `ramen-group` and
+  `ramen-zone` headers, so one client config reaches any zone.
+- **Home and satellite clusters.** The home cluster runs the console, the optional engines and the Jobs; satellites
+  are worker-only clusters in other regions, joined to the home network.
+
+More: [Architecture](https://bkraad47.github.io/ramen/architecture/) ·
+[IAM and network on GCP](https://bkraad47.github.io/ramen/wiki/iam-network-gcp/),
+[AWS](https://bkraad47.github.io/ramen/wiki/iam-network-aws/),
+[Azure](https://bkraad47.github.io/ramen/wiki/iam-network-azure/).
+
+## How enforcement works
+
+1. **Policy.** A group's settings and repo produce up to five policies, each with a version: telemetry (Config page,
+   plus the group's consent switch), evals (`mcp/evals/`), scans (SkillSpector), LLM configs (`mcp/llm-config/`) and
+   guardrails (`mcp/guardrails.yaml`). Group admins make each **Required** on the group page; LLM configs are required
+   whenever the repo has them.
+2. **Sign-in hands it out.** Every sign-in path — OAuth (Claude Code, the bridge), password or magic link, a group key
+   minted by an admin — answers the same policy bundle. LLM configs must be **accepted** per person and version (the
+   configs page or the OAuth consent page) before a token or key is issued
+   ([Connect a client with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/)).
+3. **Workers check every call.** `tools/call`, `prompts/get` and `resources/read` without the current version are
+   refused, on both transports and both protocol eras: `-32024` / `-32025` telemetry, `-32026` evals, `-32027` scans,
+   `-32028` configs, `-32029` guardrails (HTTP 428 on 2026-07-28). A changed policy is pushed to the running workers
+   without a deploy, so the next call needs the new version.
+4. **The bridge keeps clients in line** (bridge 1.0.0, the bridge for Ramen 1.0.0). It holds the bundle, carries every version, writes the accepted client
+   configs and Ramen's OTel settings into Claude Code, Cursor, VS Code, Codex and any other target the repo names,
+   signs in again once on a stale version, runs `policy check` from a Claude Code `SessionStart` hook (exit 3 when a
+   file was removed), scans local skills with SkillSpector and, with its `nemo` extra, runs the guardrails locally too.
+
+## Quick start (local)
+
+Needs Docker with compose v2, `uv`, `git` and `make`.
 
 ```sh
 git clone https://github.com/bkraad47/ramen && cd ramen
-make up       # Firestore emulator + console https://localhost:8443 + one worker (localhost:8080: Streamable HTTP + gRPC)
-make demo     # zone, group `demo` from the demo repo, an rmk_ key, a canary deploy, then a tools/call
-#   PASS: demo_calculator_tool(2,3,add) -> 5      <- the success line
-open https://localhost:8443    # self-signed cert; admin@ramen.local + the generated password: grep ADMIN_PASSWORD deploy/local/.env
-make down     # stop and remove volumes
+make up                               # Firestore emulator + console https://localhost:8443 + one worker on :8080
+make up ENGINES=phoenix,promptfoo     # optional: the same plus Arize Phoenix (:6006) and promptfoo (:3000)
+make demo                             # zone, group `demo` from the demo repo, a key, a canary deploy, a tools/call
+#   PASS: demo_calculator_tool(2,3,add) -> 5
+make down                             # stop everything, engines included, and remove volumes
 ```
 
-`make demo` is safe to re-run: an existing zone, group or environment answers "exists" and a fresh key is
-generated each time. Nothing in the stack is a static secret: `make up` generates the admin password, Fernet key,
-MCP key, admin key and session secret into `deploy/local/.env` (git-ignored), and `scripts/check_secrets.py` fails CI
-if a literal one ever returns.
-
-## Connect a client
-
-A worker is a URL (`/mcp`) and two routing headers, `ramen-group` and `ramen-zone`. The credential decides whose
-name a call runs under:
-
-- **A group key** (`rmk_`) in `Authorization: Bearer`, for agents and automation. Any HTTP-capable client.
-- **A person's sign-in** through the console (OAuth 2.1, with a Ramen password, Entra ID or Google): Claude Code
-  over HTTP, or any stdio client through the bridge.
-
-Every form, with the pages you will see:
-[Get started → Connect a client](https://bkraad47.github.io/ramen/get-started/#3-connect-a-client) ·
-[Connect with OAuth](https://bkraad47.github.io/ramen/wiki/connect-oauth/) ·
-[Transport → Connecting](https://bkraad47.github.io/ramen/wiki/transport/#connecting). In a cloud, the group page's
-**How MCP users sign in** card prints the exact commands for your install.
-
-## Screenshots
-
-| Login | Dashboard, load per zone and group |
-|---|---|
-| ![login](docs/img/login.png) | ![dashboard](docs/img/dashboard.png) |
-
-| Group: environments, deploy jobs, zones/workers, MCP keys | Deploy job with streamed log |
-|---|---|
-| ![group](docs/img/group.png) | ![deploy job](docs/img/deploy-job.png) |
-
-| Secrets (names only, values never shown) | Logs (one JSON line per MCP call, downloadable) |
-|---|---|
-| ![secrets](docs/img/secrets.png) | ![logs](docs/img/logs.png) |
-
-| Identity providers: Entra ID with group lookup and role rules | Custom roles, one OAuth-only |
-|---|---|
-| ![identity providers](docs/img/config-identity.png) | ![roles](docs/img/config-roles.png) |
-
-| Zone actions: count, max, last autoscale decision | Zones and workers with the max per group |
-|---|---|
-| ![autoscale](docs/img/group-autoscale.png) | ![zones](docs/img/zones.png) |
-
-## Transport and security, in short
-
-Workers speak **Streamable HTTP** (`POST /mcp`, MCP spec 2025-06-18) and **gRPC** (`ramen.v1.Mcp/Call`) on one port
-through one implementation of every guard, so a check is on both transports or on neither. TLS ends at the load
-balancer. The node checks the credential, the source range at the provider's `x-forwarded-for` hop, blocked names
-and the size and in-flight caps. The runtime reaches the bucket as the zone's own cloud identity, and guardrails run
-between the runtime and your tool. Hop by hop, with what protects each and what is verified:
-[Transport](https://bkraad47.github.io/ramen/wiki/transport/). Boundaries and non-goals:
-[Threat model](https://bkraad47.github.io/ramen/threat-model/).
+Sign in at https://localhost:8443 as `admin@ramen.local` with the generated password
+(`grep RAMEN_ADMIN_PASSWORD deploy/local/.env`). Nothing in the stack is a static secret. Compose has no Job
+runner, so evals, scans and image builds run on the clouds, not locally.
 
 ## Deploy to the cloud
 
-| Target | What Terraform and Helm build | Guide |
+Each is `terraform apply` → `helm upgrade --install` with the values Terraform prints → add a zone and a group → Deploy.
+About 35 minutes on GCP, most of it waiting for the cluster and the managed certificate. The optional engines are three Terraform variables, all `none` by default, passed to the chart by
+the `engines_set` output (Azure's `helm_set` includes it):
+
+```hcl
+# deploy/terraform/<cloud>/terraform.tfvars
+otel_collector      = "phoenix"        # none | jaeger | phoenix
+evals_engine        = "promptfoo"      # none | promptfoo
+skillspector_engine = "skillspector"   # none | skillspector
+```
+
+| Cloud | What Terraform and Helm build | Guide |
 |---|---|---|
-| **GCP** | GKE Autopilot, Firestore, GCS, Secret Manager, global HTTPS LB (GKE Gateway, header-routed gRPC **and** Streamable HTTP), Cloud Armor | [docs](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [`deploy/README.md`](deploy/README.md) |
-| **AWS** | EKS, DynamoDB, S3, Secrets Manager, ALB (gRPC and HTTP/1.1 target groups), WAF (Terraform or CloudFormation) | [docs](https://bkraad47.github.io/ramen/wiki/deploy-aws/) |
-| **Azure** | AKS (workload identity), Table Storage, Blob Storage, Key Vault, Envoy Gateway with a Let's Encrypt certificate | [docs](https://bkraad47.github.io/ramen/wiki/deploy-azure/) |
-| **Local** | docker compose: Firestore emulator, console, one worker; CI e2e on every push | [`deploy/local/README.md`](deploy/local/README.md) |
+| **GCP** | GKE Autopilot, Firestore, GCS, Secret Manager, Artifact Registry, global HTTPS load balancer (GKE Gateway) with a Google-managed certificate, Cloud Armor | [Deploy on GCP](https://bkraad47.github.io/ramen/wiki/deploy-gcp/) · [IAM and network](https://bkraad47.github.io/ramen/wiki/iam-network-gcp/) |
+| **AWS** | EKS, DynamoDB, S3, Secrets Manager, ECR, ALB, WAF (Terraform or CloudFormation) | [Deploy on AWS](https://bkraad47.github.io/ramen/wiki/deploy-aws/) · [IAM and network](https://bkraad47.github.io/ramen/wiki/iam-network-aws/) |
+| **Azure** | AKS, Table and Blob Storage, Key Vault, ACR, Azure Managed Redis, Envoy Gateway with Let's Encrypt | [Deploy on Azure](https://bkraad47.github.io/ramen/wiki/deploy-azure/) · [IAM and network](https://bkraad47.github.io/ramen/wiki/iam-network-azure/) |
+| **kind** | a local cluster for the Kubernetes paths; engines via `RAMEN_OTEL_COLLECTOR`, `RAMEN_EVALS_ENGINE`, `RAMEN_SKILLSPECTOR_ENGINE` | `deploy/kind/up.sh` |
 
-Bring-up is the same on each: `terraform apply` → `helm upgrade --install` (the release's public images, or
-`make push` to your own registry) → add a zone and a group in the console → Deploy. About 25 minutes, mostly waiting
-for the cluster and the load balancer. The edge gets a publicly trusted certificate on a free `sslip.io` hostname
-(Let's Encrypt on AKS), so clients use `https://<public_hostname>/mcp` and the bridge points at
-`<public_hostname>:443 --tls` with nothing to import. What each cloud run covered:
-[Transport → What is verified](https://bkraad47.github.io/ramen/wiki/transport/#what-is-verified-and-what-is-not).
+The edge is HTTPS on 443 only, on a free `sslip.io` hostname with a publicly trusted certificate (self-signed on
+AWS). Then follow [Deploy your first group](https://bkraad47.github.io/ramen/first-group/).
 
-## Write your own tools
+## Screenshots
 
-A group repo is any git repo with `mcp/tools/<name>/<name>.py` + `<name>.json` (and `resources/`, `prompts/`,
-`requirements.txt`). Secrets are referenced as `{{$group.NAME}}` or exported through `mcp/env.yaml`; nothing about
-the transport leaks into tool code. Declare `output` and the worker publishes it as `outputSchema` and validates every
-result; add `mcp/tests.yaml` and your cases gate every deploy; add `mcp/guardrails.yaml` and NeMo rails or a
-`policy.py` check the arguments before a tool runs and its result before it leaves the worker. Start from
-[ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group); the contract, local development and heavy
-dependencies: [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/) ·
-[Guardrails](https://bkraad47.github.io/ramen/wiki/guardrails/).
+| Group page: each zone with its last deploy's evals and scan badges | Evals, Scans and Guardrails policy cards |
+|---|---|
+| ![group badges](docs/img/group-badges.png) | ![policy cards](docs/img/group-policies.png) |
+
+| SkillSpector scan report | LLM configs every member accepts |
+|---|---|
+| ![scan report](docs/img/scan-report.png) | ![configs](docs/img/configs.png) |
+
+| Arize Phoenix, project `demo` (live GKE run) | promptfoo, the demo's evals (live GKE run) |
+|---|---|
+| ![phoenix](docs/img/phoenix-demo.png) | ![promptfoo](docs/img/promptfoo-run.png) |
+
+| An MCP App previewed in a sandbox | LLM providers, keys never shown |
+|---|---|
+| ![app preview](docs/img/app-preview.png) | ![LLM providers](docs/img/config-llm-providers.png) |
+
+| Environments, Zones and Workers | A deploy job |
+|---|---|
+| ![environments](docs/img/environments.png) | ![deploy job](docs/img/deploy-job.png) |
+
+Console screenshots come from `make shots` (a throwaway local console with fictional data and canned evals and scan
+Jobs); the Phoenix and promptfoo ones from the live GKE run.
+
+## The honest limits
+
+- **An LLM that never calls Ramen's workers and never reads the files the bridge writes cannot be forced** to report
+  telemetry or keep the group's configs. Enforcement is the worker gate on every Ramen call plus the client files.
+- **A Required policy shuts out clients that do not carry versions.** A plain HTTP client config (Claude Code with a
+  key header, `curl`) is refused on gated calls until it sends the `_meta` versions; the bridge does it for you. A
+  group whose repo has `mcp/llm-config/` always requires its configs version.
+- **LLM rails reduce prompt injection; they do not eliminate it.** Use deterministic rails for what must hold.
+- **NetworkPolicies need an enforcing CNI.** GKE Autopilot enforces them; since 1.0.0c Terraform turns on the VPC
+  CNI's policy agent on EKS (enforcement seen live on 1.0.0b35) and Calico on AKS (not yet checked live)
+  ([threat model](https://bkraad47.github.io/ramen/threat-model/#findings-and-their-status), S6b).
+- **The optional engines are for trying things out**: Phoenix, Jaeger and promptfoo have no edge route and one
+  install-wide sign-in (Secret `ramen-engines`) — whoever holds it sees every group's traces and evals runs.
+- **A compromised console is a compromised platform**; on Azure it could grant itself write on the platform image
+  repository (pin platform images by digest; on GCP its repository rights are fenced by a resource tag, on AWS by
+  repository name). Run one console replica.
+- **Load.** One worker of the smallest size (250m CPU) served about 30–45 calls/s of a guarded trivial tool in the
+  1.0.0b34–b36 runs, and the p95 bound of 1.5 s missed on EKS's small nodes and on the 8→64-client ramp. The 1.0.0
+  per-call fixes (schema checks compiled once, NeMo's unused flows dropped, Colang expressions parsed once) take a
+  worker at 250m from about 30 to about 70 calls/s locally (p95 2.1 → 0.8 s at 32 clients), and the autoscaler asks
+  for another worker at a p50 of 250 ms instead of 500; the cloud tables are re-measured for 1.0.0
+  ([Autoscaling → Load tests](https://bkraad47.github.io/ramen/wiki/autoscaling/#load-tests)).
+- **Local compose** runs no evals, scans or image builds, and its workers cannot reach the judge proxy, so LLM rails
+  are a cloud feature there.
+
+## Write your own group repo
+
+Start from [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group): `mcp/tools/<name>/<name>.py` +
+`<name>.json`, `resources/`, `prompts/`, `apps/`, `skills/`, `tests.yaml`, `guardrails.yaml`, `evals/`, `llm-config/`,
+`env.yaml`, `requirements.txt`. Every feature with the demo's code: [MCP features](https://bkraad47.github.io/ramen/wiki/mcp-features/) ·
+the file contract and local testing: [The MCP repo](https://bkraad47.github.io/ramen/wiki/mcp-repo/).
 
 ## Repository
 
 | Dir | What |
 |---|---|
-| [`console/`](console/) | FastAPI + Jinja2 + HTMX manager UI and `/api/v1`; gRPC client to workers |
-| [`node-rs/`](node-rs/) | Rust MCP server node (tonic: `ramen.v1.Mcp`, `ramen.v1.Admin`, `grpc.health.v1.Health`; auth, CIDRs, sidecar supervisor) |
-| [`runtime-py/`](runtime-py/) | Python 3.12 runtime (loads protos, pip installs, runs calls, resolves secrets, runs guardrails) |
-| [`proto/`](proto/) | `ramen/v1/mcp.proto`, `admin.proto` — the transport contract, single source for Rust and Python stubs |
-| [`deploy/`](deploy/) | compose, Helm charts, Terraform (GCP, AWS, Azure), CloudFormation |
-| [`glama/`](glama/), [`mcpb/`](mcpb/) | the self-contained directory image and the Smithery bundle; both pin the bridge |
-| [`skills/`](skills/) | Cloud-ops agent skills: deploy-gcp, deploy-aws, rotate-keys, backup-restore, scale-zone |
-| [`tests/`](tests/) | Black-box conformance (gRPC + bridge), e2e and cloud suites |
-| [`docs/`](docs/) | This site's sources; [`docs/CONTRACTS.md`](docs/CONTRACTS.md) is binding for every component (§11 = transport) |
+| [`console/`](console/) | FastAPI + Jinja2 + HTMX console and `/api/v1` |
+| [`node-rs/`](node-rs/) | Rust MCP node (`ramen.v1.Mcp`, `ramen.v1.Admin`, health; auth, gates, sidecar supervisor) |
+| [`runtime-py/`](runtime-py/) | Python 3.12 runtime (packages, apps, skills, MRTR, tasks, guardrails) |
+| [`proto/`](proto/) | `ramen/v1/mcp.proto`, `admin.proto` |
+| [`deploy/`](deploy/) | compose, kind, Helm charts (console, worker, satellite), Terraform (GCP, AWS, Azure and satellites), CloudFormation, the SkillSpector image |
+| [`glama/`](glama/), [`mcpb/`](mcpb/) | the directory image and the Smithery bundle; both pin the bridge |
+| [`skills/`](skills/) | cloud-ops agent skills: deploy, rotate keys, backup and restore, scale |
+| [`tests/`](tests/) | conformance, e2e, kind, cloud and load suites |
+| [`docs/`](docs/) | the site's sources; [`docs/CONTRACTS.md`](docs/CONTRACTS.md) is binding for every component |
 
-Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Changes: [CHANGELOG.md](CHANGELOG.md) · Versions: [tracker](https://bkraad47.github.io/ramen/versions/) · Which versions go together: [Releases](https://bkraad47.github.io/ramen/release/)
+Changes: [CHANGELOG.md](CHANGELOG.md) · Versions: [tracker](https://bkraad47.github.io/ramen/versions/) · Which versions go together: [Releases](https://bkraad47.github.io/ramen/release/)
 
 ## Develop
 
@@ -181,8 +236,7 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) · Changes: [CHANGELOG.md](CHAN
 make up BUILD=1      # the compose stack from source instead of the published images
 make test            # runtime-py and console (pytest, 90% coverage gate) plus node-rs (fmt, clippy, test)
 make test-harness    # tests/: conformance + e2e (skips without a running stack)
-make proto           # regenerate Python stubs from proto/ (Rust stubs build via tonic-build)
-make demo-worker     # node + runtime locally without Docker
+make shots           # regenerate the console screenshots in docs/img
 uv run --project docs --group docs mkdocs serve   # docs at http://127.0.0.1:8000
 ```
 

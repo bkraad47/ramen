@@ -1,12 +1,18 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Allow access</title><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Allow access</title><link rel="stylesheet" href="{{ base }}/static/ramen.css?v={{ version }}-{{ static_v }}"><link rel="icon" href="{{ base }}/static/favicon.png" type="image/png"></head>
 <body><div class="login card"><img src="{{ base }}/static/logo-mark.png" alt="Project Ramen"><h1 style="text-align:center">Allow access</h1>
 <p><b>{{ a.client.name }}</b> wants to call the tools of group <b>{{ a.group }}</b> in zone <b>{{ a.zone }}</b> as <b>{{ p.name }}</b>.</p>
 <p class="muted">The client gets a token that is good for one hour and can renew it for thirty days. With it the client can <b>run every tool</b> of this group in this zone — the same access a viewer of the group has here — and every call it makes is logged under your account. You can end this by changing your password or asking a super admin to revoke you.</p>
 <form method="post" action="{{ base }}/oauth/authorize">
 {% for k, v in q.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if a.telemetry is not none %}<p class="telemetry-notice"><b>Telemetry.</b> This Ramen group records telemetry about your calls (tool name, timing, outcome — never arguments or results) at <code>{{ a.telemetry }}</code> and asks your agent to send its telemetry there.</p>
+<p><label class="option"><input type="checkbox" name="telemetry_consent" value="1" required> I accept that telemetry is recorded for this group</label></p>{% endif %}
+{% if a.configs is not none and not a.configs_accepted %}{% set c = a.configs %}<p class="telemetry-notice"><b>LLM configs.</b> Group <b>{{ a.group }}</b> ships settings for your LLM tools (version <code>{{ c.version }}</code>{% if c.manifest.description %}: {{ c.manifest.description }}{% endif %}). The Ramen bridge writes them into the files below on your machine; every file is shown in full.</p>
+{% if c.error %}<p class="error">This version does not validate ({{ c.error }}); the group admin must fix the repo before anyone can accept it.</p>{% else %}
+{% for t in c.manifest.targets %}<details><summary><code>{{ t.path }}</code> ← <code>{{ t.file }}</code> ({{ t.client }}, {{ t.format }}, merge {{ t.merge }})</summary><pre>{{ c.files[t.file]|pre }}</pre></details>{% endfor %}
+<p><label class="option"><input type="checkbox" name="configs_accept" value="{{ c.version }}" required> I accept these LLM configs (version <code>{{ c.version }}</code>)</label></p>{% endif %}{% endif %}
 <button type="submit" name="decision" value="allow">Allow</button>
-<button type="submit" name="decision" value="deny" class="ghost">Deny</button>
+<button type="submit" name="decision" value="deny" class="ghost" formnovalidate>Deny</button>
 </form>
 <p class="muted">Redirects to <code>{{ a.redirect_uri }}</code>, which this client registered with the console.</p>
 </div></body></html>

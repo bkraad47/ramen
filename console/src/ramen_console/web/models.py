@@ -27,12 +27,19 @@ class GroupIn(BaseModel):
     github_app_installation_id: str | None = None
 
 
+class BuildSettings(BaseModel):
+    allow_urls: bool = False  # §38.2: URL / VCS / option lines in mcp/requirements.txt (refused by default)
+
+
 class GroupUpdate(BaseModel):
     repo_url: str | None = None
     ref: str | None = None
     mcp_auth: dict | None = None
     github_token: str | None = None
     github_app_installation_id: str | None = None
+    build_image: bool | None = None  # §24.2: build the group's worker image on deploy (needs a builder)
+    build: BuildSettings | None = None  # §38.2: group admin build settings
+    require_telemetry_consent: bool | None = None  # §24.3: only while telemetry is enabled
 
 
 class Rules(BaseModel):
@@ -58,10 +65,35 @@ class Rules(BaseModel):
         return {"rules": rules}
 
 
-class ZoneIn(BaseModel):
+class ZoneIn(ListFields):
     name: str
     provider: str = "local"
     region: str = ""
+    environments: list[str] = []  # §27.2: the environments the zone serves; its groups are derived
+    groups: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _no_groups(self):
+        if self.groups is not None:
+            raise ValueError("groups is gone (1.0.0b): a zone names environments; its groups follow from them")
+        return self
+
+
+class ZoneUpdate(ListFields):
+    region: str | None = None
+    environments: list[str] | None = None
+    provider: str | None = None  # accepted only unchanged (422 otherwise)
+
+
+class EnvByNameIn(ListFields):
+    name: str
+    ref: str | None = None
+    groups: list[str] = []
+
+
+class EnvByNameUpdate(ListFields):
+    ref: str | None = None
+    groups: list[str] | None = None
 
 
 class EnvIn(ListFields):
@@ -119,6 +151,90 @@ class WorkersIn(ListFields):
     max_count: int | None = None  # §21.7: super admins and group admins; min is always 1
     size: str | None = None
     allowed_sizes: list[str] | None = None
+    sleep_after_secs: int | None = None  # §24.1: 0 = never, otherwise 60 or more
+    sleep_after_minutes: float | None = None  # the group page's form speaks minutes; the API and the record, seconds
+
+    @model_validator(mode="after")
+    def _minutes(self):
+        if self.sleep_after_secs is None and self.sleep_after_minutes is not None:
+            self.sleep_after_secs = round(self.sleep_after_minutes * 60)
+        return self
+
+
+class WakeIn(BaseModel):
+    trigger: str = "call"
+
+
+def _json_map(v):
+    """A header map as an object, or as the JSON text a form field posts; an empty field means "unchanged"."""
+    if isinstance(v, str):
+        if not v.strip():
+            return None
+        try:
+            v = json.loads(v)
+        except ValueError:
+            raise ValueError('must be a JSON object like {"Authorization": "Bearer …"}') from None
+    return v
+
+
+class OtelConfig(BaseModel):
+    enabled: bool | None = None
+    endpoint: str | None = None
+    headers: dict[str, str] | None = None  # what Ramen sends; write-only
+    client_endpoint: str | None = None
+    client_headers: dict[str, str] | None = None  # what connected agents are told to send; write-only
+
+    @field_validator("headers", "client_headers", mode="before")
+    @classmethod
+    def _maps(cls, v):
+        return _json_map(v)
+
+
+class LlmProvidersConfig(BaseModel):
+    """§29.1: `{anthropic: {api_key}, openai: {api_key, base_url}, azure_openai: {api_key, host}}` — None keeps, ""
+    clears; or the Config card's flat `<provider>_<field>` fields, where an empty key field keeps the stored key."""
+
+    providers: dict[str, dict]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data):
+        from ..llm_providers import FIELDS, from_form
+
+        if not isinstance(data, dict):
+            raise ValueError("expected a mapping of provider to fields")
+        if isinstance(data.get("providers"), dict):
+            return {"providers": data["providers"]}
+        if data and not any(isinstance(v, dict) for v in data.values()):  # flat form fields
+            return {"providers": from_form(data)}
+        if any(k not in FIELDS for k in data):
+            raise ValueError(f"unknown provider; one of {', '.join(FIELDS)}")
+        return {"providers": data}
+
+
+class EvalsSettings(BaseModel):
+    """§29.2: a group's evals — `gate` fails the deploy on failures, `required` makes clients carry the version."""
+
+    gate: bool | None = None
+    required: bool | None = None
+
+
+class SkillspectorSettings(BaseModel):
+    """§30.2: a group's scans — `gate` fails the deploy on DO_NOT_INSTALL, `required` makes clients carry the policy
+    version, `llm` names a configured provider for semantic analysis ("" = static only)."""
+
+    gate: bool | None = None
+    required: bool | None = None
+    llm: str | None = None
+
+
+class GuardrailsSettings(BaseModel):
+    """§36.2 / §36.3: a group's guardrails — `llm` names a provider the group or the org configures ("" = the first
+    configured), `model` one of its allowed models ("" = the default), `required` makes clients carry the policy."""
+
+    llm: str | None = None
+    model: str | None = None
+    required: bool | None = None
 
 
 class Cidrs(ListFields):
@@ -269,6 +385,7 @@ class RegionsConfig(ListFields):
     gcp: list[str] | None = None
     aws: list[str] | None = None
     azure: list[str] | None = None  # §21.6
+    clusters: list[dict] | None = None  # §28.1: satellite clusters, replaced whole when sent
 
     @model_validator(mode="before")
     @classmethod
@@ -276,6 +393,19 @@ class RegionsConfig(ListFields):
         if isinstance(data, dict) and isinstance(data.get("blocked"), dict):
             return {**data["blocked"], **{k: v for k, v in data.items() if k != "blocked"}}
         return data
+
+
+class ClusterIn(BaseModel):
+    """§28.1: one satellite cluster — `host` is its edge hostname; the extras name where it lives when not the home
+    project / account / resource group."""
+
+    provider: str
+    region: str
+    name: str
+    host: str
+    project: str | None = None
+    account: str | None = None
+    resource_group: str | None = None
 
 
 class DriftConfig(BaseModel):

@@ -1,0 +1,118 @@
+{{- $engine := .Values.evals.engine | default "none" }}
+{{- if not (has $engine (list "none" "promptfoo")) }}
+{{- fail (printf "evals.engine must be none or promptfoo, not %q" $engine) }}
+{{- end }}
+{{- if eq $engine "promptfoo" }}
+# §29.2: the promptfoo server for trying evals out and for the test runs — UI and API on 3000, its SQLite database and
+# eval results on a small PVC. promptfoo has no auth of its own (D92 §39.7): its TLS front wants a credential from
+# Secret ramen-engines — the operator's (`username`/`password`: everything) or the evals Jobs' (`upload-*`: one share
+# upload per connection, never a read). The console's evals Jobs share every run here (`--share` with
+# PROMPTFOO_REMOTE_API_BASE_URL). Deliberately no Ingress/HTTPRoute (every group's runs; its SPA serves from `/` only,
+# so the console cannot mount it under a path): reach it with
+# `kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443` → https://localhost:3443 (evals.uiUrl; the TLS front,
+# install CA; the browser asks for admin + the password); a deploy's evals badge opens the run's cases in the console
+# itself. Not for production.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: promptfoo
+  labels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with include "ramen.storageClassName" (dict "own" .Values.evals.storageClassName "root" .) }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.evals.storage | quote }} } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: promptfoo
+  labels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # one PVC, one writer
+  selector:
+    matchLabels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+    spec:
+      securityContext: {{- toYaml .Values.evals.podSecurityContext | nindent 8 }}
+      containers:
+        - name: promptfoo
+          image: {{ .Values.evals.image | quote }}
+          env:
+            - { name: PROMPTFOO_CONFIG_DIR, value: /home/promptfoo/.promptfoo }
+            - { name: PROMPTFOO_DISABLE_TELEMETRY, value: "1" }
+            - { name: PROMPTFOO_DISABLE_UPDATE, value: "1" }
+            - { name: PROMPTFOO_REMOTE_APP_BASE_URL, value: {{ .Values.evals.uiUrl | default "https://localhost:3443" | quote }} }
+            # promptfoo's server takes no host option and binds every interface: the preload pins it to 127.0.0.1, so
+            # the plaintext port answers only the TLS front beside it — even where no NetworkPolicy is enforced
+            - { name: NODE_OPTIONS, value: "--require=/ramen/loopback.js" }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          readinessProbe:   # loopback only now: the kubelet cannot reach it on the pod IP, so ask from inside
+            exec: { command: [node, -e, "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"] }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 36
+          resources: {{- toYaml .Values.evals.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /home/promptfoo/.promptfoo }
+            - { name: loopback, mountPath: /ramen, readOnly: true }
+        # D86 §39.3: promptfoo serves plaintext only, so the pod's one reachable port is this TLS front (the console
+        # image); the NetworkPolicy admits 3443 only and promptfoo listens on 127.0.0.1:3000, so plaintext never leaves the pod
+        - name: tls
+          image: {{ include "ramen.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python, -m, ramen_console.tlsproxy, --listen, "0.0.0.0:3443", --upstream, "127.0.0.1:3000",
+                    --cert, /tls/tls.crt, --key, /tls/tls.key, --require-auth,
+                    # D92: what the evals Jobs' upload credential may send — promptfoo's share upload, nothing else
+                    --upload-route, "POST ^/api/eval$", --upload-route, "POST ^/api/eval/[A-Za-z0-9:_-]+/results$"]
+          env:
+            {{- range $env, $key := dict "RAMEN_PROXY_USER" "username" "RAMEN_PROXY_PASSWORD" "password" "RAMEN_PROXY_UPLOAD_USER" "upload-username" "RAMEN_PROXY_UPLOAD_PASSWORD" "upload-password" }}
+            - { name: {{ $env }}, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" $ }}, key: {{ $key }} } } }
+            {{- end }}
+          securityContext: { runAsUser: 10001, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          ports:
+            - { name: https, containerPort: 3443 }
+          readinessProbe: { tcpSocket: { port: https }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }   # every HTTP path wants the credential
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: tls, mountPath: /tls, readOnly: true }]
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: promptfoo } }
+        - { name: tls, secret: { secretName: ramen-tls-promptfoo } }   # written by the console (D86 §39.2)
+        - { name: loopback, configMap: { name: promptfoo-loopback } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promptfoo-loopback
+  labels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+data:
+  loopback.js: |
+    // Ramen: pin promptfoo's server (no host option, every interface) to 127.0.0.1 — the TLS front is its only client.
+    const net = require("net");
+    const listen = net.Server.prototype.listen;
+    net.Server.prototype.listen = function (...args) {
+      if (typeof args[0] === "number" || (typeof args[0] === "string" && /^\d+$/.test(args[0]))) {
+        const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : undefined;
+        return listen.call(this, { port: Number(args[0]), host: "127.0.0.1" }, cb);
+      }
+      if (args[0] && typeof args[0] === "object" && args[0].path === undefined) {
+        args[0] = { ...args[0], host: "127.0.0.1" };
+      }
+      return listen.apply(this, args);
+    };
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: promptfoo
+  labels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: https, port: 3000, targetPort: https }   # D86: the TLS front
+{{- end }}

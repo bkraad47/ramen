@@ -49,7 +49,7 @@ def test_custom_roles_rank_and_label_as_their_base():
 def test_clean_validates_name_base_and_flags():
     assert roles.clean("analyst", {"base": "viewer"}) == {"base": "viewer", "label": "analyst", "oauth_only": False}
     assert roles.clean("ops_1", {"base": "group_admin", "label": "Ops", "oauth_only": True})["oauth_only"] is True
-    for bad in ("Viewer", "1x", "a", "x" * 33, "a-b", "super_admin", "viewer", "key"):
+    for bad in ("Viewer", "1x", "a", "x" * 33, "a-b", "super_admin", "viewer", "key", "evals"):
         with pytest.raises(ValueError):
             roles.clean(bad, {"base": "viewer"})
     with pytest.raises(ValueError, match="base"):
@@ -122,7 +122,7 @@ def test_a_role_a_provider_rule_names_cannot_be_deleted(demo):
 
 def test_custom_role_is_a_membership_a_tool_access_kind_and_a_token_claim(demo):
     demo.put(f"{ROLES_URL}/analyst", json={"base": "mcp_user", "label": "Analyst"})
-    assert toolaccess.kinds() == ("key", "group_admin", "viewer", "mcp_user", "analyst")
+    assert toolaccess.kinds() == ("key", "evals", "group_admin", "viewer", "mcp_user", "analyst")
     assert toolaccess.clean({"calc": {"list": ["analyst", "key"], "call": ["analyst"]}}) == {
         "calc": {"list": ["key", "analyst"], "call": ["analyst"]}
     }

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ramen-satellite
+description: Ramen satellite cluster (CONTRACTS §28) - the worker-only edge in another region of the home install, driven by the console in the home cluster. provider=gcp renders a GKE Gateway (static IP, Google-managed cert), aws an ALB IngressGroup catch-all, azure an Envoy Gateway with cert-manager; each admits the per-zone worker routes the console writes. The console's ClusterRoles are bound to its identity on this cluster (GSA, EKS access-entry group, Entra object id). No console, builder or collector.
+type: application
+icon: https://raw.githubusercontent.com/bkraad47/ramen/main/docs/img/logo.png
+version: 1.0.0
+appVersion: "1.0.0"

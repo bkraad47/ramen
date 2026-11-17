@@ -98,6 +98,8 @@ def test_discovery_metadata(demo):
     assert m["token_endpoint_auth_methods_supported"] == ["none"]
     assert "scopes_supported" not in m  # it would list every group and zone to the internet (review 0.5.0 L7)
     assert demo.app.state.oauth_server is not None
+    with TestClient(demo.app) as anon:  # public by design (RFC 8414): no session, same document
+        assert anon.get("/.well-known/oauth-authorization-server").json() == m
 
 
 def test_clients_are_pre_registered_by_a_super_admin_only(demo):

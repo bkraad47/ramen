@@ -99,7 +99,6 @@ def _pages(c) -> dict[str, str]:
         "/groups",
         "/groups/demo",
         "/environments",
-        "/zones",
         "/secrets",
         "/users",
         "/api-keys",
@@ -142,7 +141,9 @@ def test_every_rendered_page_routes_links_through_the_base(demo, maildir):
         assert len(LINK.findall(html)) > 0 or p.startswith("/ui/"), p
     assert 'href="/ramen/static/ramen.css?v=' in pages["/groups"] and 'href="/ramen/"' in pages["/groups"]
     assert 'href="/ramen/api/v1/groups?format=csv"' in pages["/groups"]
-    assert f'"url":"{BASE}/mcp"' in pages["mcp_user"] and f"--oauth {BASE} " in pages["/groups/demo"]
+    # the MCP user's commands carry the public base: the endpoint and the bridge's --oauth issuer (1.0.0: filled in)
+    assert f"{BASE}/mcp" in pages["mcp_user"] and f"--oauth {BASE} " in pages["mcp_user"]
+    assert f"--oauth {BASE} " in pages["/groups/demo"]
     # unset: today's root paths, untouched
     assert 'href="/static/ramen.css?v=' in unset["/groups"] and 'hx-get="/ui/dashboard"' in unset["/"]
     assert not any("/ramen/" in html for html in unset.values())

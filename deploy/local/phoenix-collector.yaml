@@ -1,0 +1,20 @@
+# --profile phoenix (§24.3 / §34.1): the same collector the chart runs beside Phoenix (deploy/helm/ramen/templates/phoenix.yaml):
+# Ramen's OTLP/JSON in on 4318, traces out as protobuf to Phoenix, metrics dropped (Phoenix has no endpoint for them).
+# D86: TLS in (the collector's own leaf) and out (Phoenix verified against the local CA).
+receivers:
+  otlp:
+    protocols:
+      http: { endpoint: 0.0.0.0:4318, tls: { cert_file: /certs/phoenix-collector/tls.crt, key_file: /certs/phoenix-collector/tls.key } }
+exporters:
+  otlp_http:
+    endpoint: https://phoenix:6006
+    tls: { ca_file: /certs/ca/ca.crt }
+    headers: { authorization: "Bearer ${env:PHOENIX_ADMIN_SECRET}" }   # D92: Phoenix's auth is on
+  nop: {}
+extensions:
+  health_check: { endpoint: 0.0.0.0:13133 }
+service:
+  extensions: [health_check]
+  pipelines:
+    traces: { receivers: [otlp], exporters: [otlp_http] }
+    metrics: { receivers: [otlp], exporters: [nop] }

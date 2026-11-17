@@ -95,7 +95,7 @@ grpcurl -plaintext -H 'x-ramen-admin-key: adm' localhost:8080 ramen.v1.Admin/Met
 ```
 Standard MCP clients use the stdio bridge, its own package/repo since v0.5.7: `ramen-mcp-bridge --target localhost:8080 --key k1 --group demo --zone local`
 (see github.com/bkraad47/ramen-mcp-bridge). Image (context = repo root): `docker build -f node-rs/Dockerfile -t ramen-worker:$(cat VERSION) .`
-→ non-root, `python:3.14-slim` + `ramen_runtime[gcp,aws]` + `ramen-mcp-bridge` in `/opt/venv`, port 8080, entrypoint `ramen-node`,
+→ non-root, `python:3.12-slim` + `ramen_runtime[gcp,aws,azure,nemo]` + `ramen-mcp-bridge` in `/opt/venv`, port 8080, entrypoint `ramen-node`,
 `HEALTHCHECK` = `ramen-mcp-bridge --health ramen.v1.Admin`.
 
 ## Test

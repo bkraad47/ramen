@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_logging_tool",
+  "description": "Answer with a plain text and never emit notifications/message (official suite: server-stateless, no log without logLevel).",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

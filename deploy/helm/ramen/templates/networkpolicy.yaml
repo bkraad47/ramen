@@ -1,0 +1,81 @@
+{{- if .Values.networkPolicy.system }}
+{{- /* §33.4a: who may reach a ramen-system pod. `edge` = the load balancer / gateway (ipBlocks and namespaces by provider);
+`console` = the console pods; `jobs` = the evals and scan Job pods (label ramen.io/job); `workers` = every zone namespace
+(label ramen.io/group). S6: console.sourceCidrs (the home networks a satellite zone's worker policy admits) reaches the
+console's own port only — never Phoenix / Jaeger, promptfoo or Redis: a pod range in an ipBlock admits every pod on a CNI
+that matches pod IPs by ipBlock. The worker pods' own policy (SEC-04) is the console's. */ -}}
+{{- $edge := list }}
+{{- range (include "ramen.edgeCidrs" . | fromJsonArray) }}{{- $edge = append $edge (dict "ipBlock" (dict "cidr" .)) }}{{- end }}
+{{- $sources := list }}
+{{- range .Values.console.sourceCidrs }}{{- $sources = append $sources (dict "ipBlock" (dict "cidr" .)) }}{{- end }}
+{{- range (include "ramen.edgeNamespaces" . | fromJsonArray) }}
+{{- $edge = append $edge (dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" .))) }}
+{{- end }}
+{{- $console := dict "podSelector" (dict "matchLabels" (include "ramen.selector" . | fromYaml)) }}
+{{- $jobs := dict "podSelector" (dict "matchExpressions" (list (dict "key" "ramen.io/job" "operator" "In" "values" (list "evals" "scan")))) }}
+{{- $workers := dict "namespaceSelector" (dict "matchExpressions" (list (dict "key" "ramen.io/group" "operator" "Exists"))) }}
+{{- $collector := .Values.otel.collector | default "none" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "ramen.selector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from: {{- toYaml (concat $edge $sources (list $workers $jobs)) | nindent 8 }}
+      ports: [{ port: {{ .Values.console.port }}, protocol: TCP }]
+{{- if ne $collector "none" }}
+---
+# the collector takes OTLP on 4318 from the console, the workers' own export and the Jobs (writes only); its UI (D92: a
+# sign-in) only from the edge — never from a worker namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $collector }}
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: {{ $collector }}, app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from: {{- toYaml (list $console $workers $jobs) | nindent 8 }}
+      ports: [{ port: 4318, protocol: TCP }]
+    {{- if $edge }}
+    - from: {{- toYaml $edge | nindent 8 }}
+      ports: [{ port: {{ eq $collector "phoenix" | ternary 6006 16686 }}, protocol: TCP }]
+    {{- end }}
+{{- end }}
+{{- if eq (.Values.evals.engine | default "none") "promptfoo" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: promptfoo
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: promptfoo, app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from: {{- toYaml (concat $edge (list $console $jobs)) | nindent 8 }}
+      ports: [{ port: 3443, protocol: TCP }]   # D86: the TLS front only; promptfoo's own 3000 stays pod-local
+{{- end }}
+{{- if include "ramen.redis.enabled" . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: redis, app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from: {{- toYaml (list $console $workers) | nindent 8 }}
+      ports: [{ port: 6379, protocol: TCP }]
+{{- end }}
+{{- end }}

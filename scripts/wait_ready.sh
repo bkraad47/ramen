@@ -2,7 +2,8 @@
 # wait_ready.sh <url|host:port> [timeout_secs=120] [interval_secs=2] [--any]
 #   http(s)://…   poll until HTTP 200 (self-signed TLS accepted)
 #   host:port     poll grpc.health.v1.Health/Check (CONTRACTS §11) until SERVING; with --any, until it answers at all
-#                 (NOT_SERVING is fine: a fresh worker before its first deploy). RAMEN_NODE_TLS=1 → TLS (self-signed ok).
+#                 (NOT_SERVING is fine: a fresh worker before its first deploy). RAMEN_NODE_TLS=1 → TLS, verified
+#                 against RAMEN_NODE_CA (the install CA, D86) when set, else any certificate is accepted.
 # gRPC mode uses grpcurl when installed, else python3 with grpcio (tests/.venv or any interpreter that has grpcio).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -13,19 +14,22 @@ deadline=$(( $(date +%s) + timeout ))
 
 grpc_health() {  # prints SERVING / NOT_SERVING / UNKNOWN / "" (unreachable)
   local t="${target#grpc://}"; t="${t#grpcs://}"
-  local tls=(-plaintext); [ "${RAMEN_NODE_TLS:-0}" = 1 ] && tls=(-insecure)
+  local tls=(-plaintext)
+  if [ "${RAMEN_NODE_TLS:-0}" = 1 ]; then tls=(-insecure); [ -n "${RAMEN_NODE_CA:-}" ] && tls=(-cacert "$RAMEN_NODE_CA"); fi
   if command -v grpcurl >/dev/null; then
     grpcurl "${tls[@]}" -max-time 5 -import-path "$here/../tests/proto" -proto grpc/health/v1/health.proto "$t" grpc.health.v1.Health/Check 2>/dev/null \
       | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status","UNKNOWN"))' 2>/dev/null || true
   else
     local py=python3; [ -x "$here/../tests/.venv/bin/python" ] && py="$here/../tests/.venv/bin/python"
-    RAMEN_NODE_TLS="${RAMEN_NODE_TLS:-0}" "$py" - "$t" <<'PY' 2>/dev/null || true
+    RAMEN_NODE_TLS="${RAMEN_NODE_TLS:-0}" RAMEN_NODE_CA="${RAMEN_NODE_CA:-}" "$py" - "$t" <<'PY' 2>/dev/null || true
 import os, ssl, sys, grpc
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 t = sys.argv[1]
 if os.environ.get("RAMEN_NODE_TLS") == "1":
     h, _, p = t.rpartition(":")
-    ch = grpc.secure_channel(t, grpc.ssl_channel_credentials(ssl.get_server_certificate((h, int(p))).encode()))
+    ca = os.environ.get("RAMEN_NODE_CA")
+    root = open(ca, "rb").read() if ca else ssl.get_server_certificate((h, int(p))).encode()
+    ch = grpc.secure_channel(t, grpc.ssl_channel_credentials(root))
 else:
     ch = grpc.insecure_channel(t)
 r = health_pb2_grpc.HealthStub(ch).Check(health_pb2.HealthCheckRequest(), timeout=5)

@@ -1,0 +1,13 @@
+# cp terraform.tfvars.example terraform.tfvars && edit. Same account and credentials as deploy/terraform/aws.
+region      = "eu-west-1"
+home_region = "us-east-1"
+home_vpc_id = "vpc-0123456789abcdef0" # terraform -chdir=../aws output -raw vpc_id
+# home_vpc_cidr        = "10.42.0.0/16"   # terraform -chdir=../aws output -raw vpc_cidr (default)
+# home_route_table_ids = ["rtb-..."]      # terraform -chdir=../aws output -json route_table_ids; empty = all of the home VPC's
+# vpc_cidr             = "10.43.0.0/16"   # must not overlap the home VPC
+# name               = "ramen-eu-west-1"   # default: ramen-<region>
+# console_role_arn   = ""                  # default: arn:aws:iam::<account>:role/ramen/ramen-console (home output console_role_arn)
+# node_instance_type = "t3.small"
+# node_count         = 2                   # one per AZ; a zone with its canary needs two t3.small in its AZ
+# node_max           = 4
+# install_addons     = true                # LB controller + Fluent Bit via Helm from Terraform

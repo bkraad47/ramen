@@ -7,7 +7,12 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-export RAMEN_CONSOLE_URL=${RAMEN_CONSOLE_URL:-http://localhost:18000}
+export RAMEN_CONSOLE_URL=${RAMEN_CONSOLE_URL:-https://localhost:18000}
+# D86: every hop is TLS on kind too — the harness trusts the install CA the console wrote (ConfigMap ramen-ca)
+if [ -z "${RAMEN_INSTALL_CA:-}" ]; then
+  kubectl --context "kind-${KIND_CLUSTER:-ramen}" -n ramen-system get configmap ramen-ca -o jsonpath='{.data.ca\.crt}' > "$HERE/.ca.crt"
+  export RAMEN_INSTALL_CA="$HERE/.ca.crt"
+fi
 export RAMEN_ADMIN_EMAIL=${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
 [ -f "$HERE/.secrets.env" ] && { set -a; . "$HERE/.secrets.env"; set +a; }   # written by up.sh
 export RAMEN_ADMIN_PASSWORD=${RAMEN_ADMIN_PASSWORD:?run deploy/kind/up.sh first (it writes deploy/kind/.secrets.env)}

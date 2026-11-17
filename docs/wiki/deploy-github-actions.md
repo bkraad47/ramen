@@ -10,8 +10,8 @@ fails. The [demo repo](https://github.com/bkraad47/ramen-demo-mcp-group) carries
 Use a **devops** key (`rmn_`) with the least it needs: role **Group Admin**, one group. A group admin of `demo` may
 deploy `demo` and nothing else. Only a super admin can create API keys.
 
-**On the API keys page**: Name `ci-demo`, Client type *Devops — console API*, Role *Group Admin*, pick the group
-`demo` and press **Add**, then **Generate key**. Name the group explicitly: a key with no group takes the creator's
+**On the API keys page**: Name `ci-demo`, Client type *Devops — console API*, Role *Group Admin*, tick `demo` under
+**Groups**, then press **Generate key**. Name the group explicitly: a key with no group takes the creator's
 groups, and a super admin has none of their own, so that key could deploy nothing (`403`). The key appears once,
 under the form.
 
@@ -151,7 +151,7 @@ jobs:
             status=unknown
             if [ "$code" = 200 ]; then status=$(jq -r '.status // "unknown"' "$OUT" 2>/dev/null || echo unknown); fi
             if [ "$code" = 404 ]; then
-              echo "::error::job $JOB is gone: jobs live in the console's memory, so it restarted. See the group page."
+              echo "::error::job $JOB is gone: the console keeps the last 50 jobs per environment, so newer ones replaced it. See the group page."
               exit 1
             fi
             case "$status" in
@@ -174,8 +174,11 @@ What it does, in order:
 - `GET $RAMEN_URL/api/v1/jobs/<id>` every five seconds until `status` is `ok` or `error`, then prints the job log.
   `error` fails the run with the job's error line, and so does no answer within `DEPLOY_TIMEOUT_SECS`.
 - A `503` or a non-JSON answer while it polls (a load balancer blip during a console restart) is ridden out. A
-  `404` for the job is not: jobs live in the console's memory, so the console restarted (or another console replica
-  answered) and the outcome is on the group page's environment row.
+  `404` for the job is not: the job record is gone (the console's store keeps the last 50 jobs per environment), and
+  the outcome is on the group page's environment row. Jobs are kept in the store, so a console restart does not lose
+  the record; a deploy cut off by a restart ends as `error` (`lost (console restarted)`) after
+  `RAMEN_JOB_STALE_SECS` (1800 s), usually after the run's own `DEPLOY_TIMEOUT_SECS` has already failed it. A `404`
+  means the job was pruned: the console keeps the last 50 jobs per environment.
 - `concurrency` queues a second run for the same environment behind the first instead of starting two deploys.
 
 A successful run ends like this (the local compose stack, zone `local`):

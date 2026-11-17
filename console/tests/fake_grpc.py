@@ -1,6 +1,8 @@
 """In-process gRPC worker double (CONTRACTS §11): ramen.v1.Mcp, ramen.v1.Admin, grpc.health.v1.Health on 127.0.0.1."""
 
+import hashlib
 import json
+import time
 from concurrent import futures
 
 import grpc
@@ -14,17 +16,21 @@ DOWN = "127.0.0.1:1"  # nothing listens here: UNAVAILABLE fast
 class FakeWorker:
     """Records every call as (rpc, metadata dict, body); behaviour is driven by the public attributes."""
 
-    def __init__(self, admin_key="adm", mcp_keys=("rmk_1",), serving=True):
+    def __init__(self, admin_key="adm", mcp_keys=("rmk_1",), serving=True, tls=None):
         self.admin_key = admin_key
         self.mcp_keys = set(mcp_keys) if mcp_keys is not None else None  # None = any bearer key is accepted
         self.calls: list[tuple[str, dict, dict]] = []
         self.smoke_ok, self.reload_ok = True, True
+        self.reload_delay = 0.0  # seconds a Reload sleeps before answering; past the deadline → DEADLINE_EXCEEDED
         self.forbid: list[str] = []  # strings that must never show up in metadata (secret values)
         self.load_result = {"tools": [{"name": "calc"}], "errors": []}
         # tools/call answers: by tool name, else the arguments echoed back as text (golden-case tests, C4)
         self.tool_results: dict[str, dict] = {}
+        # §33.1/§33.2: resources/read answers by uri — {uri: {"text" | "blob", "mimeType", "_meta"?}}, else -32002
+        self.resources: dict[str, dict] = {}
         self.metrics = {"inflight": 2, "total": 9, "errors": 0, "load": "even"}
         self.load_fn = None  # (n-th metrics call) -> load string
+        self.revoked: list[str] = []  # D92: every Reload's `revoked` overlay, in order
         self._n = 0
         self._health = health.HealthServicer()
         self.set_serving(serving)
@@ -32,7 +38,11 @@ class FakeWorker:
         mcp_pb2_grpc.add_McpServicer_to_server(_Mcp(self), self._server)
         admin_pb2_grpc.add_AdminServicer_to_server(_Admin(self), self._server)
         health_pb2_grpc.add_HealthServicer_to_server(self._health, self._server)
-        port = self._server.add_insecure_port("127.0.0.1:0")
+        if tls:  # D86: (cert pem, key pem) — serve TLS like a deployed node
+            creds = grpc.ssl_server_credentials([(tls[1].encode(), tls[0].encode())])
+            port = self._server.add_secure_port("127.0.0.1:0", creds)
+        else:
+            port = self._server.add_insecure_port("127.0.0.1:0")
         self.target = f"127.0.0.1:{port}"
 
     def set_serving(self, serving: bool):
@@ -79,6 +89,16 @@ class _Mcp(mcp_pb2_grpc.McpServicer):
             result = self.w.tool_results.get(
                 params.get("name"), {"content": [{"type": "text", "text": json.dumps(params.get("arguments") or {})}]}
             )
+            if callable(result):  # §23.4: a tool whose answer depends on the round (MRTR)
+                result = result(params)
+        elif body.get("method") == "resources/list":
+            result = {"resources": self.w.load_result.get("resources") or []}
+        elif body.get("method") == "resources/read":
+            uri = (body.get("params") or {}).get("uri")
+            if uri not in self.w.resources:
+                err = {"code": -32002, "message": f"resource not found: {uri}"}
+                return mcp_pb2.JsonRpc(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "error": err}).encode())
+            result = {"contents": [{"uri": uri, **self.w.resources[uri]}]}
         else:
             result = {"ok": True}
         return mcp_pb2.JsonRpc(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())
@@ -96,6 +116,13 @@ class _Admin(admin_pb2_grpc.AdminServicer):
 
     def Reload(self, request, context):
         self._auth(context, "Admin/Reload")
+        if request.revoked:  # D92 (§16.7): like the node, a listed key is refused from this reload on
+            self.w.revoked.append(request.revoked.decode())
+            gone = set(json.loads(request.revoked).get("keys") or [])
+            if self.w.mcp_keys is not None:
+                self.w.mcp_keys = {k for k in self.w.mcp_keys if hashlib.sha256(k.encode()).hexdigest() not in gone}
+        if self.w.reload_delay:
+            time.sleep(self.w.reload_delay)
         if not self.w.reload_ok:
             context.abort(grpc.StatusCode.INTERNAL, "pip failed")
         return admin_pb2.LoadResult(json=json.dumps(self.w.load_result).encode())

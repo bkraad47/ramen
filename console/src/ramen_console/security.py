@@ -1,6 +1,8 @@
 """Cross-cutting hardening: password and key strength, signing-secret resolution, security headers, login rate
 limiting, log redaction."""
 
+import contextlib
+import json
 import logging
 import os
 import re
@@ -14,6 +16,7 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from .clientip import client_ip
 from .errors import invalid
+from .redact import redact, url_secrets
 
 log = logging.getLogger("ramen.security")
 _EPHEMERAL: list[str] = []
@@ -125,6 +128,8 @@ class HttpsOnlyMiddleware(BaseHTTPMiddleware):
         proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip().lower()
         if proto == "https" or request.url.path in self.EXEMPT:
             return await call_next(request)
+        # D86 (§39.3): the wake call and the workers' judge calls reach the console over TLS like everything else —
+        # the plain-http exemption of /api/v1/internal/ and /llm/v1/ is gone
         if request.method in ("GET", "HEAD"):
             from .baseuri import base_of
 
@@ -139,7 +144,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Fixed-window per-IP limit on *failed* credential attempts (login, reset, magic link). Default 20/minute;
     successful requests are never counted, so automation and test harnesses are unaffected. 0 disables."""
 
-    PATHS = ("/login", "/auth/reset", "/auth/magic", "/oauth/token")  # token: code and refresh guessing (L5)
+    PATHS = ("/login", "/auth/reset", "/auth/magic", "/oauth/token", "/oauth/revoke")  # guessing (L5); D92 revoke
 
     def __init__(self, app, limit: int | None = None, window: float = 60.0):
         super().__init__(app)
@@ -188,6 +193,75 @@ class _RedactTokens(logging.Filter):
             record.args = tuple(_redact(a) if isinstance(a, str) else a for a in record.args)
         record.msg = _redact(record.msg) if isinstance(record.msg, str) else record.msg
         return True
+
+
+_KNOWN: set[str] = set()
+
+
+def remember_secret(value) -> None:
+    """1.0.0: every secret the console reads or writes is scrubbed from any log line and deploy log afterwards."""
+    if not isinstance(value, str):
+        return
+    if value.startswith("{"):  # telemetry headers: a JSON object whose values are the secrets
+        with contextlib.suppress(ValueError):
+            for v in json.loads(value).values():
+                remember_secret(v)
+    if len(value) >= 8:
+        _KNOWN.add(value)
+    for v in url_secrets(value):  # N1 (§34.3): a URL's password alone (a Redis error may print just that)
+        if v != value:
+            remember_secret(v)
+
+
+def remember_env_secrets() -> None:
+    """At start: every URL password in the console's RAMEN_* env (the chart Redis' `RAMEN_REDIS_URL`) is scrubbed from
+    then on. Not every secret-named value: `RAMEN_TLS_KEY` is a path and `RAMEN_AZURE_KEY_VAULT` a name."""
+    for k, v in os.environ.items():
+        if k.startswith("RAMEN_"):
+            for secret in url_secrets(v):
+                remember_secret(secret)
+
+
+def scrub(text: str) -> str:
+    """Credentials in URLs (`scheme://user:pass@`, secret query params) and every remembered secret become `***`."""
+    text = redact(_redact(text))
+    for v in sorted((v for v in _KNOWN if v in text), key=len, reverse=True):
+        text = text.replace(v, "***")
+    return text
+
+
+class ScrubbedLog(list):
+    """A deploy job's log: each line is scrubbed as it is written."""
+
+    def append(self, line) -> None:
+        super().append(scrub(line) if isinstance(line, str) else line)
+
+
+class _ScrubSecrets(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # `args` stay in place: uvicorn's access formatter unpacks them (dropping them printed a TypeError stack
+        # on every access line); each string argument and the template are scrubbed on their own.
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        elif isinstance(record.args, dict):
+            record.args = {k: scrub(v) if isinstance(v, str) else v for k, v in record.args.items()}
+            if isinstance(record.msg, str):
+                record.msg = scrub(record.msg)
+        else:
+            record.msg, record.args = scrub(record.getMessage()), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = scrub(logging.Formatter().formatException(record.exc_info))
+        return True
+
+
+def scrub_all_logs() -> None:
+    """On every handler the process logs through, so no logger can bypass it."""
+    for name in (None, "uvicorn", "uvicorn.error", "uvicorn.access"):
+        for h in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _ScrubSecrets) for f in h.filters):
+                h.addFilter(_ScrubSecrets())
 
 
 def redact_tokens_in_access_log() -> None:

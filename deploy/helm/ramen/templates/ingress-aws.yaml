@@ -15,6 +15,8 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/certificate-arn: {{ .Values.aws.certificateArn | quote }}
     alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS        # D86 §39.3: the console serves TLS
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300   # IAM/WAF calls exceed 60s
 spec:
   ingressClassName: alb
@@ -23,5 +25,5 @@ spec:
         paths:
           - path: /
             pathType: Prefix
-            backend: { service: { name: console, port: { number: 80 } } }
+            backend: { service: { name: console, port: { number: 443 } } }
 {{- end }}

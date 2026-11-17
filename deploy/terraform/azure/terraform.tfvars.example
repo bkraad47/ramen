@@ -7,3 +7,7 @@ location        = "eastus"
 # node_max       = 3
 # node_zones     = ["1"]            # a Ramen zone eastus-<n> needs "<n>" here
 # acme_email     = "you@example.com"
+# otel_collector      = "none"   # §34.1 optional engines: none | jaeger | phoenix
+# evals_engine        = "none"   # none | promptfoo
+# skillspector_engine = "none"   # none | skillspector
+# managed_redis       = true    # 1.0.0c: Azure Managed Redis (Balanced_B0, no HA) as the shared Redis; false = none

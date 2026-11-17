@@ -1,0 +1,12 @@
+{
+  "type": "tool",
+  "name": "ask_field",
+  "description": "Ask for one form field whose property name is `field` \u2014 a credential-like name must be refused by the runtime (use elicit_url).",
+  "callable": "run",
+  "input": {
+    "field": {
+      "type": "string",
+      "description": "the property name to ask for"
+    }
+  }
+}

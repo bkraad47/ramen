@@ -214,11 +214,10 @@ def mint_as(con: LocalConsole, user: Console, client_id: str, group="demo", zone
     page = user.http.get(f"{con.url}/oauth/authorize", params=q, follow_redirects=False)
     if page.status_code != 200:
         return page.status_code
-    r = user.http.post(
-        f"{con.url}/oauth/authorize",
-        data={**q, "decision": "allow", "csrf_token": user.http.cookies.get("ramen_csrf", "")},
-        follow_redirects=False,
-    )
+    form = {**q, "decision": "allow", "csrf_token": user.http.cookies.get("ramen_csrf", "")}
+    if version := user.configs_version(group, zone):  # §31.1: the consent page is also the configs page — tick Accept
+        form["configs_accept"] = version
+    r = user.http.post(f"{con.url}/oauth/authorize", data=form, follow_redirects=False)
     if r.status_code != 303:
         return r.status_code
     code = parse_qs(urlsplit(r.headers["location"]).query)["code"][0]
@@ -354,7 +353,7 @@ async def test_the_bridge_with_oauth_carries_the_custom_role_to_the_worker(confi
     err = open(tmp_path / "bridge.err", "w+")  # noqa: SIM115 - Popen needs a real fileno
     async with asyncio.timeout(90):
         async with bridge_session(node.node, args=args, timeout=30, errlog=err) as s:
-            assert {t.name for t in (await s.list_tools()).tools} == {CALC}
+            assert {t.name for t in (await s.list_tools()).tools} - {"ramen_report"} == {CALC}  # §32.1 bridge tool
             r = await s.call_tool(CALC, ARGS)
             assert not r.is_error and float(sdk_text(r)) == 5
     err.close()

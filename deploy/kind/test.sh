@@ -18,13 +18,13 @@ export RAMEN_ADMIN_EMAIL=${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
 export RAMEN_ADMIN_PASSWORD=${RAMEN_ADMIN_PASSWORD:?run deploy/kind/up.sh first (it writes deploy/kind/.secrets.env)}
 export RAMEN_ADMIN_KEY=${RAMEN_ADMIN_KEY:?run deploy/kind/up.sh first}
 export RAMEN_KIND_ZONES=${RAMEN_KIND_ZONES:-a=localhost:18081,b=localhost:18082}
-export RAMEN_KIND_NODE_ZONES=${RAMEN_KIND_NODE_ZONES:-a=kind-a,b=kind-b}
+export RAMEN_KIND_NODE_ZONES=${RAMEN_KIND_NODE_ZONES:-a=us-central1-a,b=us-central1-b}
 export RAMEN_KIND_STABLE_ZONES=${RAMEN_KIND_STABLE_ZONES:-a=localhost:18084,b=localhost:18085}
 export RAMEN_E2E_GROUP=${RAMEN_E2E_GROUP:-demo}
 export RAMEN_E2E_ENV=${RAMEN_E2E_ENV:-dev}
 export RAMEN_E2E_ZONE=${RAMEN_E2E_ZONE:-a}
 export RAMEN_ZONE_PROVIDER=${RAMEN_ZONE_PROVIDER:-gcp}
-export RAMEN_ZONE_REGION=${RAMEN_ZONE_REGION:-kind-a}
+export RAMEN_ZONE_REGION=${RAMEN_ZONE_REGION:-us-central1-a}
 export RAMEN_NODE_URL=${RAMEN_NODE_URL:-localhost:18081}
 export KIND_CLUSTER=${KIND_CLUSTER:-ramen}
 export RAMEN_NO_CLOUD=${RAMEN_NO_CLOUD:-iam,logs,armor}

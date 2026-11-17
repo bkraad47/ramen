@@ -114,8 +114,8 @@ done
 say "ready"
 cat <<TXT
 console   https://localhost:18000           (admin@ramen.local / password in deploy/kind/.secrets.env; CA: ConfigMap ramen-ca)
-zone a    localhost:18081  (gRPC over TLS)  namespace ramen-demo-a, node label topology.kubernetes.io/zone=kind-a
-zone b    localhost:18082  (gRPC over TLS)  namespace ramen-demo-b, node label topology.kubernetes.io/zone=kind-b
+zone a    localhost:18081  (gRPC over TLS)  namespace ramen-demo-a, node label topology.kubernetes.io/zone=us-central1-a
+zone b    localhost:18082  (gRPC over TLS)  namespace ramen-demo-b, node label topology.kubernetes.io/zone=us-central1-b
 stable    localhost:18084 / 18085          the same zones, stable track only (see zones.yaml)
 fake GCS  http://localhost:18083/storage/v1/b/ramen-kind-groups/o
 registry  localhost:$REGISTRY_HOST_PORT (host) = $REGISTRY (cluster)   built images: $REGISTRY/ramen/groups/<group>/worker:b-<group>-<hash>

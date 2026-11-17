@@ -634,10 +634,10 @@ def test_a_zones_groups_are_derived_from_its_environments(admin, v1, console_url
     assert admin.put("group_zones", {"zones": []}, group=group).status_code in (404, 405), "PUT on it is gone"
     unbound = f"unb{secrets.token_hex(2)}"
     r = admin.http.post(
-        "/api/v1/zones", json={"name": unbound, "provider": "gcp", "region": "kind-a", "groups": [group]}
+        "/api/v1/zones", json={"name": unbound, "provider": "gcp", "region": "us-central1-a", "groups": [group]}
     )
     assert r.status_code == 422, f"`groups` on POST /zones is gone (§27.2): {r.status_code} {r.text[:200]}"
-    r = admin.create_zone(unbound, provider="gcp", region="kind-a")
+    r = admin.create_zone(unbound, provider="gcp", region="us-central1-a")
     assert r.status_code == 201 and r.json()["groups"] == [] and r.json()["environments"] == [], r.text
     assert admin.http.put(f"/api/v1/zones/{unbound}/groups", json={"groups": [group]}).status_code == 404
     pw = secrets.token_hex(8) + "Aa1!"

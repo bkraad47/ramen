@@ -21,6 +21,6 @@ nodes:
       - { containerPort: 30085, hostPort: 18085, protocol: TCP }   # zone b, stable track only (autoscale load)
       - { containerPort: 30086, hostPort: 18086, protocol: TCP }   # Jaeger query API (§24.3 telemetry proofs)
   - role: worker
-    labels: { topology.kubernetes.io/zone: kind-a }
+    labels: { topology.kubernetes.io/zone: us-central1-a }
   - role: worker
-    labels: { topology.kubernetes.io/zone: kind-b }
+    labels: { topology.kubernetes.io/zone: us-central1-b }

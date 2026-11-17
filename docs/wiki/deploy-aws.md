@@ -88,6 +88,7 @@ or push a new tag.
 
 ```sh
 REGION=$(terraform -chdir=deploy/terraform/aws output -raw region); ACCOUNT=$(terraform -chdir=deploy/terraform/aws output -raw account)
+export KUBECONFIG=~/.kube/ramen-aws            # this install's own kubeconfig (teardown relies on it)
 aws eks update-kubeconfig --name ramen --region $REGION
 CERT=$(terraform -chdir=deploy/terraform/aws output -raw certificate_arn)
 TABLE=$(terraform -chdir=deploy/terraform/aws output -raw dynamodb_table)
@@ -393,6 +394,7 @@ Caveats:
 
 ```sh
 # in the console: delete the group first, which removes its namespaces, IAM roles, ECR repository and WAF IP sets
+export KUBECONFIG=~/.kube/ramen-aws            # the install's own kubeconfig, never a shared one
 CTX=$(kubectl config current-context)                # check it is this install's cluster first
 helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # releases the load balancer and the PVCs' EBS volumes
 terraform -chdir=deploy/terraform/aws destroy

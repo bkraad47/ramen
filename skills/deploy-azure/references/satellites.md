@@ -6,10 +6,10 @@ own static IP and Envoy Gateway edge, and Calico. One Terraform state per satell
 
 ## Bring-up
 ```sh
-SAT=westeurope; TF="terraform -chdir=deploy/terraform/azure"; HOME_RG=$($TF output -raw resource_group)
+SAT=westeurope; tf() { terraform -chdir=deploy/terraform/azure "$@"; }; HOME_RG=$(tf output -raw resource_group)
 az identity show -g $HOME_RG -n ramen-console --query principalId -o tsv               # console_principal_id
-az acr show -n $($TF output -raw acr | cut -d. -f1) --query id -o tsv                   # acr_id
-for o in vnet_id vnet_name vnet_resource_group; do $TF output -raw $o; echo; done      # home_vnet_*
+az acr show -n $(tf output -raw acr | cut -d. -f1) --query id -o tsv                   # acr_id
+for o in vnet_id vnet_name vnet_resource_group; do tf output -raw $o; echo; done      # home_vnet_*
 cd deploy/terraform/azure-satellite && cp terraform.tfvars.example terraform.tfvars    # subscription_id, location = $SAT, the values above
 terraform init && terraform apply
 $(terraform output -raw kubeconfig_command) --file "$KUBECONFIG"; SCTX=$(kubectl config current-context)    # admin credentials

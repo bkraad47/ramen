@@ -41,18 +41,20 @@ judge early.
    `node_service_account = "default"`.
 3. **Images.** Default: the release's public images (step 4 flags). Own build instead: `make push PROJECT=$PROJECT
    REGION=$REGION` and drop the three image flags.
+   With your own registry, push SkillSpector too and set `skillspector.image` (the chart's default is
+   `ghcr.io/bkraad47/ramen-skillspector`, which must be pullable anonymously).
 4. **Console.**
    ```sh
    gcloud container clusters get-credentials ramen --region $REGION --project $PROJECT
-   CTX=$(kubectl config current-context); TF="terraform -chdir=deploy/terraform/gcp"; V=$(cat VERSION)
-   HOSTNAME=$($TF output -raw public_hostname)
+   CTX=$(kubectl config current-context); tf() { terraform -chdir=deploy/terraform/gcp "$@"; }; V=$(cat VERSION)
+   EDGE=$(tf output -raw public_hostname)
    kubectl --context "$CTX" create ns ramen-system
    kubectl --context "$CTX" label ns ramen-system ramen.io/routes=true
    helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system \
-     --set project=$PROJECT,region=$REGION --set gateway.certificateMap=$($TF output -raw certificate_map) \
-     $($TF output -raw builder_set) --set evals.gsa=$($TF output -raw evals_gsa) $($TF output -raw engines_set) \
+     --set project=$PROJECT,region=$REGION --set gateway.certificateMap=$(tf output -raw certificate_map) \
+     $(tf output -raw builder_set) --set evals.gsa=$(tf output -raw evals_gsa) $(tf output -raw engines_set) \
      --set cluster.serviceCidr=$(gcloud container clusters describe ramen --region $REGION --format='value(servicesIpv4Cidr)') \
-     --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
+     --set console.env.RAMEN_PUBLIC_URL=https://$EDGE \
      --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
      --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V \
      --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
@@ -63,7 +65,7 @@ judge early.
    `worker-egress` NetworkPolicy (GKE Dataplane V2 enforces it).
 5. **Wait.** `kubectl --context "$CTX" -n ramen-system rollout status deploy/console`; poll
    `kubectl --context "$CTX" -n ramen-system get gateway ramen` until `PROGRAMMED=True`; then
-   `curl -s https://$HOSTNAME/readyz` until `{"ok":true,"store":"firestore","version":"<V>"}` (no `-k`). A `503
+   `curl -s https://$EDGE/readyz` until `{"ok":true,"store":"firestore","version":"<V>"}` (no `-k`). A `503
    unconditional drop overload` for a minute after a restart is normal.
 6. **LLM provider, only if the group needs one.** A repo whose `mcp/guardrails.yaml` names LLM rails fails its
    deploy before any zone without a provider. Ask the human to add the key on **Config → LLM providers** (keys are
@@ -71,7 +73,7 @@ judge early.
    The demo repo needs none.
 7. **First group** through the API: follow [references/first-group.md](references/first-group.md) with
    `PROVIDER=gcp`, `LOCATION=us-central1-a`. Shortcut on a fresh console, the repo's
-   `RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$HOSTNAME admin@ramen.local "$PW" "$AK" $HOSTNAME:443` with `PW`
+   `RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$EDGE admin@ramen.local "$PW" "$AK" $EDGE:443` with `PW`
    and `AK` read from Secret `ramen-console` (keys `RAMEN_ADMIN_PASSWORD`, `RAMEN_ADMIN_KEY`).
 8. **Record** for the human: project, region, console URL, zone, group, the Helm values used (no secrets), and the
    teardown pointer below.

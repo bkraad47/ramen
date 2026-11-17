@@ -40,13 +40,16 @@ About 30 minutes; Terraform about fifteen.
    and push `ramen/console`, `ramen/worker`. The registry runs with repository permissions (ABAC): `AcrPush` given
    by hand does not count, and Terraform grants *Container Registry Repository Writer* on the platform repositories
    to the principal that ran it only — push as that principal (a `401` otherwise).
+   crane: `az acr login --name <acr> --expose-token --query accessToken -o tsv | crane auth login <acr>.azurecr.io -u 00000000-0000-0000-0000-000000000000 --password-stdin`.
+   With your own registry, push SkillSpector too and set `skillspector.image` (the chart's default is
+   `ghcr.io/bkraad47/ramen-skillspector`, which must be pullable anonymously).
 4. **Console.**
    ```sh
-   TF="terraform -chdir=deploy/terraform/azure"; V=$(cat VERSION)
-   $($TF output -raw kubeconfig_command) --file "$KUBECONFIG"; CTX=$(kubectl config current-context)
+   tf() { terraform -chdir=deploy/terraform/azure "$@"; }; V=$(cat VERSION)
+   $(tf output -raw kubeconfig_command) --file "$KUBECONFIG"; CTX=$(kubectl config current-context)
    kubectl --context "$CTX" create ns ramen-system
    kubectl --context "$CTX" label ns ramen-system ramen.io/routes=true
-   helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system $($TF output -raw helm_set) \
+   helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system $(tf output -raw helm_set) \
      --set cluster.serviceCidr=10.0.0.0/16 \
      --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
      --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V \
@@ -59,7 +62,7 @@ About 30 minutes; Terraform about fifteen.
    and is what gives each zone its `worker-egress` policy (Calico enforces it). `tls.require` is always true (D86).
 5. **Wait.** `kubectl --context "$CTX" -n ramen-system rollout status deploy/console`;
    `kubectl --context "$CTX" -n ramen-system get certificate console` until `READY True` (a few minutes);
-   `HOSTNAME=$($TF output -raw public_hostname); curl -s https://$HOSTNAME/readyz` → `"store":"azuretables"`.
+   `EDGE=$(tf output -raw public_hostname); curl -s https://$EDGE/readyz` → `"store":"azuretables"`.
    A certificate stuck `False`: `kubectl -n ramen-system describe challenge` (Let's Encrypt cannot reach port 80);
    `--set azure.tls=selfsigned` is the fallback (clients then need `--ca`).
 6. **LLM provider, only if the group needs one** (LLM rails): the human adds Azure OpenAI or AI Foundry (key-based)
@@ -77,7 +80,7 @@ Read-only sub-agent with `U=https://<public_hostname>`, `CTX`, a viewer `rmn_` k
 - V1 `curl -s $U/readyz` → 200, `"store":"azuretables"`, `"version":"1.0.0"`; no `-k` (Let's Encrypt).
 - V2 `GET $U/api/v1/groups/demo/zones/<zone>/workers` (viewer key) → ≥ 1 live `stable` worker.
 - V3 `tools/call` 2 + 3 through `$U/mcp` with the headers, key and configs `_meta` → `5`; without the key → 401.
-- V4 `kubectl --context $CTX -n ramen-demo-<zone> get secret ramen-tls networkpolicy backendtlspolicy` → present
+- V4 `kubectl --context $CTX -n ramen-demo-<zone> get secret/ramen-tls networkpolicy/worker networkpolicy/worker-egress backendtlspolicy/worker` → present
   (Envoy verifies the workers against the install CA as `demo.<zone>.worker.ramen.internal`).
 - V5 With `managed_redis` on: `kubectl --context $CTX -n ramen-system get secret ramen-redis` exists (the Managed
   Redis URL; never read it).

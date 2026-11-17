@@ -69,8 +69,9 @@ and push it with `crane`.
 ## 4. The console
 
 ```sh
+export KUBECONFIG=~/.kube/ramen-gcp            # this install's own kubeconfig (teardown relies on it)
 gcloud container clusters get-credentials ramen --region $REGION
-HOSTNAME=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
+EDGE=$(terraform -chdir=deploy/terraform/gcp output -raw public_hostname)
 CERTMAP=$(terraform -chdir=deploy/terraform/gcp output -raw certificate_map)
 EVALS=$(terraform -chdir=deploy/terraform/gcp output -raw evals_gsa)
 kubectl create ns ramen-system
@@ -81,12 +82,12 @@ helm upgrade --install ramen deploy/helm/ramen -n ramen-system \
   $(terraform -chdir=deploy/terraform/gcp output -raw builder_set) --set evals.gsa=$EVALS \
   $(terraform -chdir=deploy/terraform/gcp output -raw engines_set) \
   --set cluster.serviceCidr=$(gcloud container clusters describe ramen --region $REGION --format='value(servicesIpv4Cidr)') \
-  --set console.env.RAMEN_PUBLIC_URL=https://$HOSTNAME \
+  --set console.env.RAMEN_PUBLIC_URL=https://$EDGE \
   --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
   --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
   --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
 kubectl -n ramen-system rollout status deploy/console
-curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
+curl https://$EDGE/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
 ```
 
 The three values are generated on the command line and never printed. Read them back from the chart's Secret
@@ -144,7 +145,7 @@ certificate is publicly trusted, so there is no warning.
 The route takes a few minutes to appear (see Gotchas). Then:
 
 ```sh
-curl -s https://$HOSTNAME/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
+curl -s https://$EDGE/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
   -H 'ramen-group: demo' -H 'ramen-zone: a' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 ```
@@ -154,7 +155,7 @@ version (`-32028 configs required`): add `"_meta": {"io.ramen/configs": {"versio
 `/.well-known/ramen-policy?group=demo&zone=<zone>` ([Deploy your first group → Call a tool](../first-group.md#8-call-a-tool)). The bridge
 does this by itself.
 
-`RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$HOSTNAME admin@ramen.local '<password>' '<admin key>' $HOSTNAME:443`
+`RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$EDGE admin@ramen.local '<password>' '<admin key>' $EDGE:443`
 runs the same steps (zone `a`, environment `dev`) and prints PASS or FAIL for each. The last argument is the gRPC
 target; `RAMEN_NODE_TLS=1` makes it speak TLS to the load balancer (without it `grpcurl` dials port 443 in plaintext
 and fails). The script needs `grpcurl`.
@@ -310,6 +311,7 @@ Caveats:
 
 ```sh
 # in the console: delete the group, which removes its namespaces, service accounts, routes, Cloud Armor policy and image repository
+export KUBECONFIG=~/.kube/ramen-gcp            # the install's own kubeconfig, never a shared one
 CTX=$(kubectl config current-context)                # check it is this install's cluster first
 helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # releases the Gateway's forwarding rule and the static IP
 terraform -chdir=deploy/terraform/gcp destroy

@@ -346,8 +346,9 @@ file first. `scripts/gcp_cost_check.sh` lists anything billable that is left.
   `ReplacePrefixMatch`. A rejected route stops every route on the Gateway from reconciling, the worker routes the
   console writes included, until it is fixed or deleted.
 - A dropped zone's namespace would sit in `Terminating` for ten minutes or more while the Gateway controller
-  garbage-collects its backend service. Since 1.0.0b the console clears the NEG finalizer itself, so the namespace
-  goes at once and the same zone can be created again straight away; the zone's network endpoint groups are
+  garbage-collects its backend service. Since 1.0.0b the console clears the NEG finalizer itself when a **zone** is
+  deleted, so that namespace goes at once and the same zone can be created again straight away (deleting a whole
+  **group** does not yet: its namespaces wait up to about fifteen minutes; 1.0.1); the zone's network endpoint groups are
   deleted in the background once the controller lets go of them (up to fifteen minutes; the console log says
   `network endpoint groups reaped`). If a backend service never clears, find it with
   `gcloud compute backend-services list --filter=ramen-<group>-<zone>` and delete it by hand.

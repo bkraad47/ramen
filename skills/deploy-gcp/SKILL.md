@@ -35,10 +35,13 @@ judge early.
    `RAMEN_BILLING_ACCOUNT=<id> scripts/gcp_test_project.sh create` (a deleted id stays reserved 30 days).
    `PROJECT=$RAMEN_GCP_PROJECT; gcloud config set project $PROJECT; gcloud auth application-default login`.
 2. **Infrastructure.** `cd deploy/terraform/gcp && cp terraform.tfvars.example terraform.tfvars`; set `project`,
-   `region`, and optionally `otel_collector` (`jaeger`|`phoenix`), `evals_engine = "promptfoo"`,
-   `skillspector_engine = "skillspector"`. `terraform init && terraform plan -out=ramen.plan`, summarise, then
-   `terraform apply ramen.plan`; `cd ../../..`. A cluster created before 1.0.0c keeps
-   `node_service_account = "default"`.
+   `region`, and optionally `otel_collector` (`jaeger`|`phoenix`; spans flow only once **Config → Telemetry** points
+   at it), `evals_engine = "promptfoo"`,
+   `skillspector_engine = "skillspector"`. `terraform init && terraform plan -out="${TMPDIR:-/tmp}/ramen-gcp.plan"`, summarise, then
+   `terraform apply "${TMPDIR:-/tmp}/ramen-gcp.plan"`; `cd ../../..`. With a token instead of ADC,
+   `export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)` lasts an hour: refresh it before a long
+   apply or destroy. Only a cluster created before 1.0.0c keeps `node_service_account = "default"`; drop that line
+   for a fresh one (the nodes then run as `ramen-nodes@`).
 3. **Images.** Default: the release's public images (step 4 flags). Own build instead: `make push PROJECT=$PROJECT
    REGION=$REGION` and drop the three image flags.
    With your own registry, push SkillSpector too and set `skillspector.image` (the chart's default is
@@ -70,7 +73,7 @@ judge early.
 6. **LLM provider, only if the group needs one.** A repo whose `mcp/guardrails.yaml` names LLM rails fails its
    deploy before any zone without a provider. Ask the human to add the key on **Config → LLM providers** (keys are
    write-only; never handle the key yourself unless they hand it to you for `PUT /api/v1/config/llm-providers`).
-   The demo repo needs none.
+   The demo repo needs one: its `mcp/guardrails.yaml` names LLM rails.
 7. **First group** through the API: follow [references/first-group.md](references/first-group.md) with
    `PROVIDER=gcp`, `LOCATION=us-central1-a`. Shortcut on a fresh console, the repo's
    `RAMEN_NODE_TLS=1 scripts/cloud_smoke.sh https://$EDGE admin@ramen.local "$PW" "$AK" $EDGE:443` with `PW`
@@ -89,7 +92,7 @@ group's `rmk_` key (`RMK`). It may run only `curl` GETs/MCP calls and `kubectl g
 - V3 `tools/call` of `demo_calculator_tool` (2 + 3) on `$U/mcp` with `ramen-group`/`ramen-zone` headers, the key and
   the configs `_meta` ([references/first-group.md](references/first-group.md) step 6) → text `5`; the same without
   `Authorization` → HTTP 401.
-- V4 `kubectl --context $CTX -n ramen-demo-a get secret ramen-tls configmap ramen-ca networkpolicy` → all present
+- V4 `kubectl --context $CTX -n ramen-demo-a get secret/ramen-tls configmap/ramen-ca networkpolicy/worker networkpolicy/worker-egress` → all present
   (`worker`, and `worker-egress` when `cluster.serviceCidr` was set).
 - V5 With an engine on: `kubectl --context $CTX -n ramen-system get secret ramen-engines` exists (never read it).
 

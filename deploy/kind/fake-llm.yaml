@@ -1,0 +1,41 @@
+# CI's deterministic LLM judge on kind (CONTRACTS §36.4), the same `ramen_tests.fakes.FakeOpenAI` the compose profile
+# `ci` runs: the demo repo's guardrails name LLM rails, so a deploy needs an org LLM provider. Run by the console image
+# (stdlib only), TLS with an install-CA leaf the console issues into Secret ramen-tls-fake-llm (values.yaml
+# tls.extraServices). test.sh points Config → LLM providers → openai at it (RAMEN_FAKE_LLM_URL). Tests only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-llm
+  namespace: ramen-system
+spec:
+  selector: { app: fake-llm }
+  ports: [{ name: https, port: 8443, targetPort: 8443 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-llm
+  namespace: ramen-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: fake-llm }
+  template:
+    metadata:
+      labels: { app: fake-llm }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: fake-llm
+          image: ramen-console:__VERSION__       # side-loaded by up.sh
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/opt/ramen-ci/fakes.py", "--listen", "0.0.0.0:8443",
+                    "--cert", "/tls/tls.crt", "--key", "/tls/tls.key"]
+          ports: [{ containerPort: 8443 }]
+          resources: { requests: { cpu: 20m, memory: 64Mi } }
+          volumeMounts:
+            - { name: code, mountPath: /opt/ramen-ci, readOnly: true }
+            - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+        - { name: code, configMap: { name: fake-llm-code } }
+        - { name: tls, secret: { secretName: ramen-tls-fake-llm } }   # waits until the console has issued it

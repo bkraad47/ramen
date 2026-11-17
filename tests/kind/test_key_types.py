@@ -59,7 +59,8 @@ def test_another_groups_mcp_key_is_refused_by_this_groups_workers(admin, stack, 
         with Node(target, foreign, group=group, zone=zone) as n:
             code = n.status({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
         assert code == grpc.StatusCode.UNAUTHENTICATED, f"{zone} accepted another group's key: {code.name}"
-    admin.delete("group", group=other)
+    if not E.no_cloud("iam"):  # deleting a group purges its cloud IAM, which kind has not: the run's sweep reports it
+        admin.delete("group", group=other)
 
 
 def test_deleting_an_agent_key_stops_it_reaching_the_workers(admin, stack, zone_targets, group, env_name, suffix):

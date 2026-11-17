@@ -121,3 +121,14 @@ def test_every_edge_reaches_the_console_over_tls(provider):
         assert by_kind(docs, "HTTPRoute", "console")["spec"]["rules"][0]["backendRefs"][0]["port"] == 443
         rules = by_kind(docs, "ClusterRole", "ramen-console")["rules"]
         assert any("backendtlspolicies" in r["resources"] for r in rules)
+
+
+def test_extra_tls_services_get_a_leaf_too():
+    """kind's fake LLM judge (1.0.0): an in-cluster service outside the chart gets an install-CA leaf
+    (`Secret ramen-tls-<name>`) by naming it in `tls.extraServices`."""
+    rc, err, docs = template("redis.enabled=true", "tls.extraServices={fake-llm}")
+    assert rc == 0, err
+    assert console_env(docs)["RAMEN_TLS_SERVICES"] == "redis,fake-llm"
+    role = next(d for d in docs if d.get("kind") == "Role" and d["metadata"]["name"] == "ramen-console-tls")
+    names = [n for r in role["rules"] for n in r.get("resourceNames", [])]
+    assert "ramen-tls-fake-llm" in names and "fake-llm" in names, "the console may write its leaf and restart it"

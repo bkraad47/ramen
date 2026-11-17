@@ -228,6 +228,12 @@ def worker_pods(ns: str) -> list[dict]:
     return kube.pods(ns, "app=worker,ramen.io/role=worker")
 
 
+def draining_worker_pods(ns: str) -> list[str]:
+    """Worker pods still terminating (`kube.pods` leaves them out): they serve until their drain ends."""
+    out = json.loads(kube.kubectl("get", "pods", "-n", ns, "-l", "app=worker,ramen.io/role=worker", "-o", "json"))
+    return [p["metadata"]["name"] for p in out.get("items", []) if p["metadata"].get("deletionTimestamp")]
+
+
 def activator_pods(ns: str) -> list[dict]:
     return kube.pods(ns, "app=worker,ramen.io/role=activator")
 
@@ -248,6 +254,25 @@ def wait_for(fn, timeout: float, what: str, every: float = 3):
 
 def zone_state(admin, group, zone) -> str:
     return admin.get("workers", group=group, zone=zone).json().get("state", "awake")
+
+
+def awake_or_explain(admin, group, zone, ns, timeout: float = 300) -> None:
+    """The zone reads `awake` within `timeout` (the console's own stale-wake limit, sleeping.WAKE_STALE): the wake
+    finishes once every worker and the canary are Ready. On failure: the states seen, the pods, the worker record."""
+    seen: list[str] = []
+
+    def awake() -> bool:
+        seen.append(zone_state(admin, group, zone))
+        return seen[-1] == "awake"
+
+    try:
+        wait_for(awake, timeout, f"{zone} awake")
+    except AssertionError as e:
+        pods = [
+            (p["metadata"]["name"], (p.get("status") or {}).get("phase"), ready(p)) for p in kube.pods(ns, "app=worker")
+        ]
+        w = admin.get("workers", group=group, zone=zone).json()
+        raise AssertionError(f"{e}; states {sorted(set(seen))}, last {seen[-1:]}; pods {pods}; workers {w}") from None
 
 
 def audited(admin, action: str, zone: str, trigger: str, since: float) -> list[dict]:
@@ -436,7 +461,8 @@ def test_jaeger_holds_the_consoles_deploy_span(v1, jaeger, group, env_name):
     last = max(mine, key=lambda s: s["startTime"])
     assert tag(last, "ramen.outcome") == "ok", last["tags"]
     if "image" in v1:
-        assert v1["image"]["tag"] in str(tag(last, "ramen.image")), tag(last, "ramen.image")
+        ran = str(tag(last, "ramen.image"))  # §38.2: the deploy pins the digest, so the span names repo@sha256:…
+        assert ran == v1["image"]["ref"] or v1["image"]["tag"] in ran, (ran, v1["image"])
 
 
 def test_discover_tells_an_agent_where_to_send_its_telemetry(v1, zone_targets, group):
@@ -634,10 +660,10 @@ def test_a_zones_groups_are_derived_from_its_environments(admin, v1, console_url
     assert admin.put("group_zones", {"zones": []}, group=group).status_code in (404, 405), "PUT on it is gone"
     unbound = f"unb{secrets.token_hex(2)}"
     r = admin.http.post(
-        "/api/v1/zones", json={"name": unbound, "provider": "gcp", "region": "kind-a", "groups": [group]}
+        "/api/v1/zones", json={"name": unbound, "provider": "gcp", "region": "us-central1-a", "groups": [group]}
     )
     assert r.status_code == 422, f"`groups` on POST /zones is gone (§27.2): {r.status_code} {r.text[:200]}"
-    r = admin.create_zone(unbound, provider="gcp", region="kind-a")
+    r = admin.create_zone(unbound, provider="gcp", region="us-central1-a")
     assert r.status_code == 201 and r.json()["groups"] == [] and r.json()["environments"] == [], r.text
     assert admin.http.put(f"/api/v1/zones/{unbound}/groups", json={"groups": [group]}).status_code == 404
     pw = secrets.token_hex(8) + "Aa1!"
@@ -819,11 +845,34 @@ def test_the_other_zone_did_not_sleep(admin, sleepy, zone_targets, group):
         assert text_of(Modern(h).call("plain_tool", {"text": "awake"})) == "awake"
 
 
+def wake_logs(ns: str) -> str:
+    """The zone's worker logs (every container, previous ones too) and the console's revocation/reload lines of the
+    last minutes: what a call that fails during a wake needs explained (a runtime restart mid-call, 1.0.1)."""
+    out = []
+    for args in (
+        ("logs", "-n", ns, "-l", "app=worker", "--all-containers", "--prefix", "--since=6m", "--tail=150"),
+        ("logs", "-n", ns, "-l", "app=worker", "--all-containers", "--prefix", "--previous", "--tail=60"),
+        ("logs", "-n", "ramen-system", "deploy/console", "--since=6m", "--tail=400"),
+    ):
+        try:
+            text = kube.kubectl(*args)
+        except Exception as e:  # noqa: BLE001 - diagnostics only
+            text = f"({e})"
+        if args[2] == "ramen-system":
+            text = "\n".join(line for line in text.splitlines() if any(w in line for w in ("revoc", "reload", ns)))
+        out.append(f"--- kubectl {' '.join(args)}\n{text}")
+    return "\n".join(out)
+
+
 def test_a_call_through_the_edge_wakes_the_zone_and_is_answered(admin, sleepy, zone_targets, group):
     zone, ns = sleepy["zone"], sleepy["ns"]
     began, t0 = time.time(), time.monotonic()
     with http_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as h:
-        result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
+        try:
+            result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
+        except Exception as e:  # 1.0.0 known issue (1.0.1): keep the evidence of a runtime restart during the wake
+            took = time.monotonic() - t0
+            raise AssertionError(f"the waking call failed after {took:.0f}s: {e}\n{wake_logs(ns)}") from e
     took = time.monotonic() - t0
     assert text_of(result) == "good morning", result
     assert took <= WAKE_TIMEOUT + 5, f"answered within the wake timeout: {took:.0f}s"
@@ -846,6 +895,9 @@ def test_sleep_by_hand_and_wake_by_a_grpc_call(admin, sleepy, zone_targets, grou
     assert r.status_code == 200, r.text
     assert zone_state(admin, group, zone) == "asleep"
     wait_for(lambda: not worker_pods(ns), 120, "the worker pods are gone")
+    # only the activator may take the call: a worker still draining (20 s) would answer it without a wake
+    wait_for(lambda: [p for p in activator_pods(ns) if ready(p)], 60, "a Ready activator pod")
+    wait_for(lambda: not draining_worker_pods(ns), 120, "the draining worker pods are gone")
     assert audited(admin, "workers.sleep", zone, "manual", began)
     t0 = time.monotonic()
     with grpc_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as n:
@@ -854,7 +906,7 @@ def test_sleep_by_hand_and_wake_by_a_grpc_call(admin, sleepy, zone_targets, grou
         except grpc.RpcError as e:
             raise AssertionError(f"the waking call failed after {time.monotonic() - t0:.0f}s: {e.code()}") from None
     assert text_of(result) == "grpc morning" and time.monotonic() - t0 <= WAKE_TIMEOUT + 5
-    wait_for(lambda: zone_state(admin, group, zone) == "awake", 180, f"{zone} awake")
+    awake_or_explain(admin, group, zone, ns)
     wait_for(lambda: not activator_pods(ns), 120, "the activator is gone")
     assert audited(admin, "workers.wake", zone, "call", began)
 

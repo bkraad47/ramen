@@ -76,6 +76,8 @@ tls:
   require: true              # always true (D86); kept so a values file that names it still renders
   leafDays: 30               # RAMEN_TLS_LEAF_DAYS
   renewSecs: 3600            # RAMEN_TLS_RENEW_SECS: how often due leaves are re-issued
+  extraServices: []          # more in-namespace Services that get an install-CA leaf (Secret ramen-tls-<name>), e.g. kind's
+                             # fake-llm judge; the chart's own (redis, phoenix/jaeger, promptfoo) are added for you
 
 gateway:                     # GKE Gateway API (gcp only; aws uses the ALB Ingress in templates/ingress-aws.yaml, azure the Envoy Gateway in templates/gateway-azure.yaml)
   enabled: true

@@ -1,6 +1,17 @@
 {
   "captured_from": "seeded local console, 2026-11-14 (1.0.0b: the page set changed, so the seeded captures replace the 2026-10-04 live GCP set)",
   "live": {
+    "compose": {
+      "captured_for": "1.0.0",
+      "date": "2026-11-18",
+      "screenshots": {
+        "guardrail-blocked.png": "Logs: a word_count call with an injection phrase, denied by the demo's NeMo rail (reason guardrail_pre)",
+        "local-deploy-job.png": "A deploy job on the local stack: sync, golden cases, LLM configs, guardrails through the judge proxy, evals and scan skipped",
+        "local-group.png": "The demo group on the local stack after make demo: zone local awake, evals and scan skipped (no engine on compose)",
+        "mcp-user.png": "What an MCP user sees: each of their groups' deployed zones with ready-to-paste connect commands (local stack: the commands name the console's address)",
+        "phoenix-trace.png": "Arize Phoenix on the local stack: project demo, one tools/call trace with ramen.user, ramen.group and ramen.zone"
+      }
+    },
     "gke": {
       "captured_for": "1.0.0",
       "date": "2026-11-17",
@@ -66,6 +77,10 @@
       "captured_for": "1.0.0",
       "page": "Environments, Zones and Workers: environments and groups, zones and environments, workers per pair"
     },
+    "evals-report.png": {
+      "captured_for": "1.0.0",
+      "page": "Evals run: every promptfoo case of one zone's deploy with what it sent, what came back and its verdict"
+    },
     "group-apps-skills.png": {
       "captured_for": "1.0.0",
       "page": "Group page: the Apps and skills table of a zone, the scan verdict per skill, the install command"
@@ -90,9 +105,28 @@
       "captured_for": "1.0.0",
       "page": "A group: environments with their zones and workers, packages, permissions"
     },
+    "guardrail-blocked.png": {
+      "captured_for": "1.0.0",
+      "live": "compose",
+      "page": "Logs: a word_count call with an injection phrase, denied by the demo's NeMo rail (reason guardrail_pre)"
+    },
+    "how-ramen-governs.png": {
+      "captured_for": "1.0.0",
+      "page": "Illustration (not a capture): how Ramen governs MCP tools, from docs/img/how-ramen-governs.svg rendered at 1200x627"
+    },
     "key-shown.png": {
       "captured_for": "1.0.0",
       "page": "The one-time display of a new agent key"
+    },
+    "local-deploy-job.png": {
+      "captured_for": "1.0.0",
+      "live": "compose",
+      "page": "A deploy job on the local stack: sync, golden cases, LLM configs, guardrails through the judge proxy, evals and scan skipped"
+    },
+    "local-group.png": {
+      "captured_for": "1.0.0",
+      "live": "compose",
+      "page": "The demo group on the local stack after make demo: zone local awake, evals and scan skipped (no engine on compose)"
     },
     "login.png": {
       "captured_for": "1.0.0",
@@ -104,7 +138,8 @@
     },
     "mcp-user.png": {
       "captured_for": "1.0.0",
-      "page": "What an MCP user sees: the groups they may connect to and the client command"
+      "live": "compose",
+      "page": "What an MCP user sees: each of their groups' deployed zones with ready-to-paste connect commands (local stack: the commands name the console's address)"
     },
     "oauth-consent.png": {
       "captured_for": "1.0.0",
@@ -114,6 +149,11 @@
       "captured_for": "1.0.0",
       "live": "gke",
       "page": "Arize Phoenix: project demo, one trace per Ramen call, ramen.user on every span"
+    },
+    "phoenix-trace.png": {
+      "captured_for": "1.0.0",
+      "live": "compose",
+      "page": "Arize Phoenix on the local stack: project demo, one tools/call trace with ramen.user, ramen.group and ramen.zone"
     },
     "promptfoo-run.png": {
       "captured_for": "1.0.0",

@@ -591,7 +591,7 @@ def test_after_a_deploy_the_worker_exports_with_ramens_headers_and_tells_agents_
     """§24.3 "Workers get RAMEN_OTEL_ENDPOINT / RAMEN_OTEL_HEADERS on their next deploy" and discover "carries the
     same object" as the token answer — observed at the worker itself, however the adapter delivers the settings."""
     con, node, collector, key = wired
-    m = Modern(node.http, ALL_INPUT, key=key)
+    m = Modern(node.http, ALL_INPUT, key=key, policy=con.admin.policy("demo", "local"))  # §31.4a: bare clients carry it
     assert "io.ramen/telemetry" not in m.discover()["_meta"], "telemetry is off: nothing to tell"
     r = con.admin.put(
         "config_otel",
@@ -627,12 +627,17 @@ def test_after_a_deploy_the_worker_asks_for_consent_when_the_group_requires_it(w
     assert require_consent(con).status_code == 200
     job = con.admin.wait_job(con.admin.deploy("demo", "dev").json()["id"], timeout=300)
     assert job["status"] == "ok", f"the console's own golden calls must pass the gate: {job.get('error')}"
-    first = Modern(node.http, ALL_INPUT, key=key).call("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
+    pol = con.admin.policy("demo", "local")  # §31.4a: the demo repo's LLM configs gate every bare call
+    first = Modern(node.http, ALL_INPUT, key=key, policy=pol).call(
+        "demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"}
+    )
     assert first["resultType"] == "input_required" and list(first["inputRequests"]) == ["ramen_telemetry_consent"]
     assert "otel.example:4318" in first["inputRequests"]["ramen_telemetry_consent"]["params"]["message"]
     assert require_consent(con, False).status_code == 200
     con.admin.wait_job(con.admin.deploy("demo", "dev").json()["id"], timeout=300)
-    done = Modern(node.http, {}, key=key).call("demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"})
+    done = Modern(node.http, {}, key=key, policy=pol).call(
+        "demo_calculator_tool", {"var1": 2, "var2": 3, "func": "add"}
+    )
     assert done["resultType"] == "complete", "the requirement is lifted by the next deploy"
 
 

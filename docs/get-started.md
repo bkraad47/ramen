@@ -36,6 +36,12 @@ machine; nothing in the repository is a usable password or key.
 <figcaption>The sign-in page. The password is the generated one in deploy/local/.env; `make env` rotates a stale one.</figcaption>
 </figure>
 
+Before the first deploy of the demo, add an LLM key on **Config → LLM providers** (OpenAI, Anthropic, Azure OpenAI,
+… with at least one allowed model). The demo's guardrails judge `iris_report` and `iris_outliers` with that model
+and its evals use it; without a provider the deploy stops with `no LLM provider: set one on the group or ask a super
+admin`. The key stays on the console: workers reach the model through the console's LLM proxy. For a try-out without
+a key, deploy the demo's `v0.8.0` tag instead (no LLM rails, no LLM configs): `RAMEN_DEMO_REF=v0.8.0 make demo`.
+
 Then prove the whole path with one command:
 
 ```sh
@@ -145,7 +151,7 @@ curl -s --cacert deploy/local/.certs/ca/ca.crt https://localhost:8080/mcp -H "Au
 The demo repo ships `mcp/llm-config/`, so the workers refuse a call that does not carry the accepted configs
 version (`-32028 configs required`): add `"_meta": {"io.ramen/configs": {"version": "<v>"}}` to `params`, with `<v>` from
 `/.well-known/ramen-policy?group=demo&zone=<zone>` ([Deploy your first group → Call a tool](first-group.md#8-call-a-tool)). The bridge
-(0.6.0 or later) does this by itself.
+(1.0.0, the bridge for Ramen 1.0.0) does this by itself.
 
 ### As yourself (Claude Code, with OAuth)
 
@@ -179,7 +185,7 @@ claude mcp add ramen-demo-stdio -- uvx ramen-mcp-bridge@latest --target localhos
 ```
 
 `uvx …@latest` runs the newest release without installing it (`pip install ramen-mcp-bridge` also works). Ramen
-1.0.0's policy versions (LLM configs, guardrails, evals, scans) need bridge 0.6.0 or later; an older bridge's gated
+1.0.0's policy versions (LLM configs, guardrails, evals, scans) need bridge 1.0.0; an older bridge's gated
 calls are refused (`-32028` against the demo group). In any
 other client, put the command in an `mcpServers` entry as `command: "uvx"` and `args`.
 

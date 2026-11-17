@@ -6,10 +6,12 @@ venv exists: RAMEN_CONSOLE_PYTHON, else ../console/.venv.
 so a node started with `RAMEN_SESSION_SECRET` = that value and `RAMEN_OAUTH_ISSUER` = this console's URL verifies
 every token it issues."""
 
+import atexit
 import base64
 import hashlib
 import os
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -20,7 +22,9 @@ import httpx
 import pytest
 
 from . import env as E
+from . import ledger
 from .console import Console
+from .fakes import FakeOpenAI, judge_provider
 from .localnode import free_port
 from .sidecar import venv_bin
 
@@ -63,6 +67,29 @@ def pkce() -> tuple[str, str]:
     return verifier, b64url(hashlib.sha256(verifier.encode()).digest())
 
 
+_JUDGE: list[tuple[FakeOpenAI, str]] = []
+
+
+def fake_judge(python: str) -> tuple[FakeOpenAI, str]:
+    """The process's CI judge (§36.4): `FakeOpenAI` over TLS with a leaf of a CA made by the console's own tool
+    (`ramen_console.tls init`, as compose's `certs` service), started once. Returns the judge and a PEM bundle (the
+    public roots + that CA) a console process trusts through `SSL_CERT_FILE`."""
+    if _JUDGE:
+        return _JUDGE[0]
+    d = Path(tempfile.mkdtemp(prefix="ramen-judge-"))
+    atexit.register(shutil.rmtree, d, True)
+    cmd = [python, "-m", "ramen_console.tls", "init", str(d), "--leaf", "fake-llm=localhost,127.0.0.1"]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=60)  # noqa: S603
+    import certifi
+
+    bundle = d / "trust.pem"
+    bundle.write_text(Path(certifi.where()).read_text() + "\n" + (d / "ca" / "ca.crt").read_text())
+    judge = FakeOpenAI("judge", cert=str(d / "fake-llm" / "tls.crt"), key=str(d / "fake-llm" / "tls.key"))
+    atexit.register(judge.close)
+    _JUDGE.append((judge, str(bundle)))
+    return _JUDGE[0]
+
+
 # One secret per test process: a LocalNode and a LocalConsole that must verify each other's tokens share it.
 # Generated, never a literal (scripts/check_secrets.py).
 SESSION_SECRET = secrets.token_hex(32)
@@ -79,6 +106,7 @@ class LocalConsole:
         admin: tuple[str, str] = ("admin@ramen.local", ADMIN_PASSWORD),
     ):
         self.python = require_console()
+        self.judge, trust = fake_judge(self.python)
         self.port = free_port()
         self.dir = Path(tempfile.mkdtemp(prefix="ramen-console-"))
         self.url = f"http://127.0.0.1:{self.port}"
@@ -97,6 +125,7 @@ class LocalConsole:
             "RAMEN_SMTP_HOST": f"file://{self.dir / 'mail'}",
             "RAMEN_LOGIN_RATE_LIMIT": "0",
             "RAMEN_LOG_LEVEL": "WARNING",
+            "SSL_CERT_FILE": trust,  # the console's HTTPS clients verify the judge's leaf (public roots kept)
         }
         for k in (
             "RAMEN_TLS",
@@ -127,6 +156,7 @@ class LocalConsole:
         return self
 
     def __exit__(self, *_):
+        ledger.forget(self.url)  # S7: the process and its memory store go with it
         if self.admin:
             self.admin.close()
         if self.proc and self.proc.poll() is None:
@@ -155,8 +185,11 @@ class LocalConsole:
     # --- world ---------------------------------------------------------------------------------------------------
     def seed_group(self, group: str = "demo", zone: str = "local", env: str = "dev") -> None:
         """What a token's scope `mcp:<group>:<zone>` needs on the console side: the zone, the group, an environment
-        binding them (nothing is deployed — the node under test is a LocalNode)."""
+        binding them (nothing is deployed — the node under test is a LocalNode). The org's LLM provider is the TLS
+        fake judge first: the demo repo's LLM rails (§36.2) fail the attach deploy without one."""
         a = self.admin
+        r = a.set_llm_providers(judge_provider(self.judge.url))
+        assert r.status_code == 200, f"config/llm-providers: {r.status_code} {r.text[:300]}"
         assert a.create_zone(zone, provider="local", region="local").status_code in (201, 409)
         assert a.create_group(group, E.DEMO_REPO).status_code in (201, 409)
         assert a.create_environment(group, env, [zone]).status_code in (201, 409)  # §27.3: the attach deploy is awaited

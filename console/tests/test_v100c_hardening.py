@@ -303,7 +303,8 @@ def test_system_network_policies_by_default_and_who_they_admit():
     phoenix = netpol(docs, "phoenix")
     assert phoenix["spec"]["ingress"][0]["ports"] == [{"port": 4318, "protocol": "TCP"}]
     assert "ramen-console" in peers(phoenix) and "ramen.io/group" in peers(phoenix) and "ramen.io/job" in peers(phoenix)
-    assert "ports" not in phoenix["spec"]["ingress"][1] and "35.191.0.0/16" in peers(phoenix, 1)  # the UI: edge only
+    assert phoenix["spec"]["ingress"][1]["ports"] == [{"port": 6006, "protocol": "TCP"}]  # D92: the UI port only
+    assert "35.191.0.0/16" in peers(phoenix, 1)  # the UI: edge only
     promptfoo = netpol(docs, "promptfoo")
     assert promptfoo["spec"]["ingress"][0]["ports"] == [{"port": 3443, "protocol": "TCP"}]  # D86: the TLS front
     assert "ramen.io/job" in peers(promptfoo) and "ramen.io/group" not in peers(promptfoo)  # never the workers
@@ -347,7 +348,7 @@ def test_redis_runs_with_a_generated_password_the_console_reads_from_the_secret(
     assert len(pw) == 32 and secret["stringData"]["url"] == f"rediss://:{pw}@redis.ramen-system.svc.cluster.local:6379"
     dep = by_kind(docs, "Deployment", "redis")
     c = dep["spec"]["template"]["spec"]["containers"][0]
-    assert c["image"] == "redis:7.4.2-alpine" and c["args"][:2] == ["--requirepass", "$(REDIS_PASSWORD)"]
+    assert c["image"] == "redis:7.4-alpine" and c["args"][:2] == ["--requirepass", "$(REDIS_PASSWORD)"]
     assert c["env"] == [
         {"name": "REDIS_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "ramen-redis", "key": "password"}}}
     ]

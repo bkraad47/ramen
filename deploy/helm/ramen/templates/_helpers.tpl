@@ -85,6 +85,13 @@ console.env.RAMEN_AWS_VPC_CIDR, then networkPolicy.awsVpcCidr (both deprecated, 
 {{- end -}}
 {{- if or .Values.redis.enabled .Values.redis.externalUrl -}}true{{- end -}}
 {{- end -}}
+{{/* D92: Secret ramen-engines (the optional engines' credentials) exists when any engine runs */}}
+{{- define "ramen.engines.enabled" -}}
+{{- if or (has (.Values.otel.collector | default "none") (list "phoenix" "jaeger")) (eq (.Values.evals.engine | default "none") "promptfoo") }}1{{ end -}}
+{{- end -}}
+{{- define "ramen.engines.secretName" -}}
+{{ default "ramen-engines" .Values.engines.existingSecret }}
+{{- end -}}
 {{- define "ramen.redis.secretName" -}}
 {{ default "ramen-redis" .Values.redis.auth.existingSecret }}
 {{- end -}}

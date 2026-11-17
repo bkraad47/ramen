@@ -13,6 +13,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, RwLock, oneshot};
 
+/// §35.1 (D80 perf): `runtime.load` waits this long (or the call timeout, if longer). A cold load of a NeMo repo at
+/// 250m CPU took over two minutes; cutting it at the 120 s call timeout restarted it from scratch.
+pub const LOAD_TIMEOUT_SECS: u64 = 600;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RpcErr {
     pub code: i64,
@@ -210,7 +214,12 @@ impl Sidecar {
             }
         }
         *self.last_used.lock().await = Instant::now();
-        let timeout = Duration::from_secs(self.cfg.read().await.call_timeout_secs);
+        let call_timeout = self.cfg.read().await.call_timeout_secs;
+        let timeout = Duration::from_secs(if method == "runtime.load" {
+            call_timeout.max(LOAD_TIMEOUT_SECS)
+        } else {
+            call_timeout
+        });
         let resp = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => return Err(RpcErr::internal("sidecar exited during call")),
@@ -482,6 +491,41 @@ mod tests {
         ] {
             assert!(!hidden_from_runtime(kept), "{kept}");
         }
+    }
+
+    /// §35.1 (D80 perf): at 250m CPU a cold `runtime.load` of a NeMo repo (imports, two rails configs, the tools'
+    /// packages) took longer than the 120 s call timeout; the node killed it and started over, so a new worker took
+    /// twice as long to serve. A load waits `LOAD_TIMEOUT_SECS` (at least the call timeout); other calls keep theirs.
+    #[tokio::test]
+    async fn a_slow_load_is_not_cut_off_by_the_call_timeout() {
+        let dir = std::env::temp_dir().join(format!("ramen-slow-load-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("python");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nwhile read -r line; do\n  id=$(printf '%s' \"$line\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/')\n  \
+             sleep 2\n  printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":[]}}\\n' \"$id\"\ndone\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let m: std::collections::HashMap<_, _> = [
+            ("RAMEN_PYTHON", fake.display().to_string()),
+            ("RAMEN_CALL_TIMEOUT_SECS", "1".to_string()),
+            ("RAMEN_BUCKET", dir.display().to_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let sc = Sidecar::new(Config::from_map(&m).unwrap());
+        assert!(
+            sc.load().await.is_ok(),
+            "a 2 s load outlives a 1 s call timeout"
+        );
+        let e = sc.call("runtime.ping", json!({})).await.unwrap_err();
+        assert!(e.message.contains("timed out after 1s"), "{}", e.message);
+        sc.kill("test").await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// §36.2: the deploy file's `RAMEN_LLM_*` and cloud region reach the child's environment (the child only

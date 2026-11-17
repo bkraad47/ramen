@@ -140,3 +140,19 @@ async def token(request: Request):
     action = "oauth.refresh" if grant == "refresh_token" else "oauth.token"
     note(request, action, out["scope"], tags + [f"group:{group}", f"zone:{zone}"])
     return JSONResponse(out, 200, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
+@r.post("/oauth/revoke")
+async def revoke(request: Request):
+    """RFC 7009 (D92, §16.7): a public client revokes its access or refresh token; `200` whatever the token was, the
+    workers refuse it within seconds of the push."""
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    tags = [f"client:{form.get('client_id') or '-'}", f"hint:{form.get('token_type_hint') or '-'}"]
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    try:
+        await server(request).revoke(form)
+    except OAuthError as e:
+        note(request, "oauth.revoke", "-", tags + [f"reason:{e.reason}", f"error:{e.error}"])
+        return JSONResponse(e.body(), e.status_code, headers=headers)
+    note(request, "oauth.revoke", "-", tags)
+    return JSONResponse({}, 200, headers=headers)

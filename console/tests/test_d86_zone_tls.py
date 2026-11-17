@@ -60,7 +60,7 @@ def test_tls_objects_hold_the_leaf_and_the_bundle(_ca):
     c = x509.load_pem_x509_certificate(data["tls.crt"].encode())
     c.verify_directly_issued_by(x509.load_pem_x509_certificate(_ca.cert.encode()))
     sans = c.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    assert tls.WORKER_NAME in sans and f"worker.{NS}.svc.cluster.local" in sans
+    assert tls.worker_name("demo", "a") in sans and f"worker.{NS}.svc.cluster.local" in sans  # D92: the zone's name
 
 
 def test_objects_need_a_loaded_ca():
@@ -109,7 +109,7 @@ def test_envoy_verifies_the_worker_with_a_backend_tls_policy():
     assert p["spec"]["targetRefs"] == [{"group": "", "kind": "Service", "name": "worker"}]
     assert p["spec"]["validation"] == {
         "caCertificateRefs": [{"group": "", "kind": "ConfigMap", "name": "ramen-ca"}],
-        "hostname": tls.WORKER_NAME,
+        "hostname": tls.worker_name("demo", "a"),
     }
 
 
@@ -213,13 +213,13 @@ def test_evals_job_reaches_the_canary_by_the_worker_name(monkeypatch):
     monkeypatch.setenv("RAMEN_EVALS_SA", "ramen-evals")
     spec = evals.job_spec("demo", "a", "tests: []", {"RAMEN_MCP_URL": "x"}, image="pf", worker_ip="10.4.0.7")
     pod = spec["job"]["spec"]["template"]["spec"]
-    assert pod["hostAliases"] == [{"ip": "10.4.0.7", "hostnames": [tls.WORKER_NAME]}]
+    assert pod["hostAliases"] == [{"ip": "10.4.0.7", "hostnames": [tls.worker_name("demo", "a")]}]
     c = pod["containers"][0]
     assert {"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/ramen/ca/ca.crt"} in c["env"]
     assert {"name": "ramen-ca", "mountPath": "/etc/ramen/ca", "readOnly": True} in c["volumeMounts"]
     assert {"name": "ramen-ca", "configMap": {"name": "ramen-ca"}} in pod["volumes"]
     plain = evals.job_spec("demo", "a", "tests: []", {}, image="pf")["job"]["spec"]["template"]["spec"]
     assert "hostAliases" not in plain
-    assert evals.mcp_url("10.4.0.7:8080") == f"https://{tls.WORKER_NAME}:8080/mcp"
+    assert evals.mcp_url("10.4.0.7:8080", "demo", "a") == f"https://{tls.worker_name('demo', 'a')}:8080/mcp"
     monkeypatch.delenv("RAMEN_REQUIRE_TLS")
-    assert evals.mcp_url("10.4.0.7:8080") == "http://10.4.0.7:8080/mcp"
+    assert evals.mcp_url("10.4.0.7:8080", "demo", "a") == "http://10.4.0.7:8080/mcp"

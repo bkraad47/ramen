@@ -13,6 +13,7 @@ from .. import (
     otel,
     rbac,
     regions,
+    revocation,
     roles,
     scheduler,
 )
@@ -22,7 +23,7 @@ from .. import mail as mail_mod
 from ..audit import client_ip, note, write_audit
 from ..auth import providers
 from ..config import apply_config
-from ..errors import forbidden, invalid
+from ..errors import forbidden, invalid, not_found
 from ..mail import invite_mail
 from ..policy import permissions as perm
 from ..rbac import Principal, require
@@ -91,6 +92,25 @@ async def set_password(request: Request, uid: str, body: m.Password, p: Principa
     return await _reissue_session(request, resp, p) if uid == p.id else resp
 
 
+@r.post("/users/{uid}/sign-out")
+async def sign_out_everywhere(request: Request, uid: str, p: Principal = Depends(require("mcp_user"))):
+    """D92 (§16.7): end every console session of the person and revoke every OAuth access token they hold, pushed to
+    the groups' workers at once. Yourself (`me`), or anyone whose account you may manage."""
+    a = accounts(request)
+    uid = p.id if uid == "me" else uid
+    target = await a.store.get("users", uid)
+    if not target:
+        raise not_found("user")
+    if uid != p.id and not await a.can_manage(p, target):
+        raise forbidden("You may sign out members of groups you administer (never a super admin)")
+    note(request, "user.sign_out", uid, [f"user:{uid}"])
+    groups = await revocation.subject_groups(a.store, uid)
+    await a.store.put("users", uid, await a.bump_epoch(target))
+    if uid == p.id:
+        request.session.clear()
+    return respond(request, {"ok": True, "revoked_groups": sorted(groups)})
+
+
 @r.get("/api-keys")
 async def keys(request: Request, format: str | None = None, p: Principal = Depends(super_)):
     return tabular(await accounts(request).list_keys(p), format, "api-keys")
@@ -115,6 +135,7 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(super
         except Exception:
             await a.store.delete("api_keys", doc["id"])  # never leave a key that can never reach a worker
             raise
+        doc.update(await _push_groups(request, doc["groups"]))  # D92: usable at once, like a group key
     return respond(request, doc, 201, hx_html=_once("API key", doc["key"]))
 
 
@@ -122,8 +143,20 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(super
 async def delete_key(request: Request, kid: str, p: Principal = Depends(super_)):
     note(request, "api_key.delete", kid, [f"key:{kid}"])
     await accounts(request).delete_key(p, kid)
-    await svc(request).revoke_agent_key(kid)  # an agent key must stop reaching workers on the next deploy
-    return respond(request, {"ok": True})
+    groups = await svc(request).revoke_agent_key(kid)  # D92 (§16.7): an agent key is refused by the workers at once
+    return respond(request, {"ok": True, **await _push_groups(request, groups)})
+
+
+async def _push_groups(request: Request, groups) -> dict:
+    """D92: the scoped push for each group a key reaches; `pushed` / `warning` / `pending` merged over the groups."""
+    out: dict = {"pushed": {}}
+    for g in sorted(set(groups or ())):
+        pushed, warnings = await request.app.state.revocation.push(g)
+        a = revocation.answer(pushed, warnings, g)
+        out["pushed"].update(a["pushed"])
+        out.setdefault("warning", {}).update(a.get("warning") or {})
+        out["pending"] = sorted(set(out.get("pending", [])) | set(a.get("pending", [])))
+    return {k: v for k, v in out.items() if v or k == "pushed"}
 
 
 @r.post("/requests", status_code=201)

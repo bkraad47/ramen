@@ -79,6 +79,7 @@
 {{- if eq (.Values.evals.engine | default "none") "promptfoo" }}
 {{- $_ := set $v1 "RAMEN_EVALS_API_URL" (printf "https://promptfoo.%s:3000" .Release.Namespace) }}
 {{- $_ := set $v1 "RAMEN_EVALS_UI_URL" (.Values.evals.uiUrl | default "https://localhost:3443") }}
+{{- $_ := set $v1 "RAMEN_ENGINES_SECRET" (include "ramen.engines.secretName" .) }}{{- /* D92: the Jobs' upload credential */ -}}
 {{- end }}
 {{- if eq (.Values.skillspector.engine | default "none") "skillspector" }}{{- /* §30.0: the scan Jobs' image and size */ -}}
 {{- $_ := set $v1 "RAMEN_SKILLSPECTOR_IMAGE" .Values.skillspector.image }}

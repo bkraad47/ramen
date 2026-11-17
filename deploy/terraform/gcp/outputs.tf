@@ -15,3 +15,6 @@ output "engines_set" { value = local.engines_set }
 locals {
   engines_set = "--set otel.collector=${var.otel_collector},evals.engine=${var.evals_engine},skillspector.engine=${var.skillspector_engine}"
 }
+# §38.2: the tag value the console binds to each group repository (its default, `<project>/ramen-repo/group`;
+# chart console.env.RAMEN_AR_GROUP_TAG overrides it)
+output "ar_group_tag" { value = "${var.project}/${google_tags_tag_key.repo.short_name}/${google_tags_tag_value.group.short_name}" }

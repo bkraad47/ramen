@@ -1,5 +1,6 @@
 """In-process gRPC worker double (CONTRACTS §11): ramen.v1.Mcp, ramen.v1.Admin, grpc.health.v1.Health on 127.0.0.1."""
 
+import hashlib
 import json
 import time
 from concurrent import futures
@@ -29,6 +30,7 @@ class FakeWorker:
         self.resources: dict[str, dict] = {}
         self.metrics = {"inflight": 2, "total": 9, "errors": 0, "load": "even"}
         self.load_fn = None  # (n-th metrics call) -> load string
+        self.revoked: list[str] = []  # D92: every Reload's `revoked` overlay, in order
         self._n = 0
         self._health = health.HealthServicer()
         self.set_serving(serving)
@@ -114,6 +116,11 @@ class _Admin(admin_pb2_grpc.AdminServicer):
 
     def Reload(self, request, context):
         self._auth(context, "Admin/Reload")
+        if request.revoked:  # D92 (§16.7): like the node, a listed key is refused from this reload on
+            self.w.revoked.append(request.revoked.decode())
+            gone = set(json.loads(request.revoked).get("keys") or [])
+            if self.w.mcp_keys is not None:
+                self.w.mcp_keys = {k for k in self.w.mcp_keys if hashlib.sha256(k.encode()).hexdigest() not in gone}
         if self.w.reload_delay:
             time.sleep(self.w.reload_delay)
         if not self.w.reload_ok:

@@ -87,7 +87,7 @@ only be placed in a region that has a cluster ([Where a zone can be](../wiki/gro
   against `allowed_models`, adds the key, rate-limits per group and audits. Provider keys never leave the console
   ([Configuration → The LLM judge proxy](../wiki/configuration.md#the-llm-judge-proxy-100c-d85)).
 - **TLS.** Every in-cluster hop (edge → worker and console, console → worker, worker → console, Redis, collectors,
-  promptfoo) is TLS with leaves from the console's per-install CA (`worker.ramen.internal` for every worker);
+  promptfoo) is TLS with leaves from the console's per-install CA (each zone's leaf names its zone, `<group>.<zone>.worker.ramen.internal`, D92);
   `RAMEN_REQUIRE_TLS=1` refuses plaintext on cloud installs ([Transport](../wiki/transport.md), CONTRACTS §39).
 - **Client policy.** Every sign-in path (OAuth, password, magic link, a group key) answers the same policy: telemetry,
   evals, scan, configs and guardrails versions. The bridge keeps them as a bundle, writes the accepted client files and
@@ -151,7 +151,7 @@ Only decisions that still shape the code are listed; the full record is in the p
 | D76 | Ramen's own calls (golden cases, the evals Job) are exempt from the client-policy gates. |
 | D77, D81 | MCP Apps and Skills over MCP in the runtime; LLM rails in NeMo with providers scoped to the group or the org; guardrails as a client policy. |
 | D79, D85 | Hardening after the security passes: Job identity, provider allowlist, NetworkPolicies, Redis auth; the LLM judge proxy, per-group image builds, visible Redis status, injection-hardened judge prompts. |
-| D86 | TLS on every hop with Ramen's own per-install CA; plaintext refused on cloud installs; the bridge (0.6.0) defaults to TLS. |
+| D86 | TLS on every hop with Ramen's own per-install CA; plaintext refused on cloud installs; the bridge (1.0.0) defaults to TLS. |
 
 ## Version history
 

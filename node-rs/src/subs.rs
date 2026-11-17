@@ -125,7 +125,7 @@ impl Subs {
     ) -> Option<mpsc::UnboundedReceiver<String>> {
         if self
             .open
-            .fetch_update(Relaxed, Relaxed, |n| (n < max).then_some(n + 1))
+            .try_update(Relaxed, Relaxed, |n| (n < max).then_some(n + 1))
             .is_err()
         {
             return None;

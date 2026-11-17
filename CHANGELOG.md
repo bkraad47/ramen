@@ -3,6 +3,85 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+- **A worker at 250m serves about twice the calls (D80 load bound).** The b34–b36 load runs missed p95 < 1.5 s on EKS
+  `steady` (27 rps, 1927 ms) and on the GKE and EKS `scale` ramps; worker CPU stays 250m (D83). The runtime spent
+  4.2 ms CPU on a call to a tool with a static NeMo rail and the node 0.35 ms. Fixed: each tool's JSON Schemas are
+  compiled once per load instead of re-checked against the metaschema on every call (a rail-free tool 0.89 → 0.04 ms);
+  NeMo library flows that can never start (their first step runs an action nothing else runs) are dropped from the
+  rails runtime; Colang's `if`/`set` expressions use one evaluator per thread and are parsed once; NeMo's anonymous
+  usage events to NVIDIA are off unless the deploy sets `NEMO_GUARDRAILS_NO_USAGE_STATS`. The node lets
+  `runtime.load` run up to 600 s (or the call timeout, if longer): a cold load at 250m could pass 120 s and was
+  killed and restarted. The autoscaler's latency trigger `RAMEN_AUTOSCALE_P50_MS` defaults to 250 ms (was 500), so a
+  zone asks for a worker while the first one still has headroom. Locally (Docker `--cpus 0.25`, 32 clients, the
+  demo's guarded calculator): 29.8 → 69.3 rps, p95 2111 → 786 ms. Docs: CONTRACTS §35.1, Autoscaling, Configuration.
+
+- **Revocation takes effect at once (D92).** A revoked or deleted MCP key (a group key, or an agent API key in every
+  group it reached) is refused by the group's running workers within seconds, no deploy needed: the console pushes the
+  group's key set and a revocation list (`RAMEN_REVOKED`: revoked keys' SHA-256, OAuth token ids, people with a
+  cut-off time) through the scoped config push, and `Admin/Reload` now carries the list (`ReloadRequest.revoked`), so a
+  pod applies it before its restart. OAuth access tokens can be revoked before they expire: a person's live tokens end
+  when a membership is removed, a role changes, a password is set, the user is deleted, or on the new **sign out
+  everywhere** (`POST /api/v1/users/{me|id}/sign-out`); clients revoke with RFC 7009 `POST /oauth/revoke` (named in
+  the metadata); refresh-token reuse and deleting an OAuth client end the grants' access tokens too. Entries live only
+  as long as what they cover. A zone the push cannot reach is a `warning` / `pending` on the answer and **Revocation
+  pending** on the group page, retried every `RAMEN_REVOKE_RETRY_SECS` (30). `RAMEN_OAUTH_ACCESS_TTL` (default 3600)
+  documented as the fallback window. Minting a key pushes too, so a rotation needs no deploy. Docs: Threat model
+  (both residuals moved to "Fixed in 1.0.0"), API keys, Users and access, Configuration, CONTRACTS §16.7.
+- **The optional engines ask for a sign-in (D92).** The chart generates Secret `ramen-engines` (kept across upgrades,
+  never printed; `engines.existingSecret` for your own) whenever Phoenix, Jaeger or promptfoo runs. Phoenix runs its
+  own auth (`admin@localhost`; its collector posts spans with Phoenix's admin secret as a bearer, `/healthz` stays the
+  probe). Jaeger's query UI/API listens on loopback behind Ramen's TLS front on 16686, and promptfoo's front now wants a
+  credential too: Basic `admin:<password>` or `Bearer <password>` on every connection, no open path (probes are TCP).
+  The evals Jobs get an upload-only credential by Secret reference — one share upload per connection, never a read —
+  and verify the server (`PROMPTFOO_INSECURE_SSL=false`; promptfoo skipped verification by default). The collector
+  policy's edge rule admits the UI port only; workers reach only OTLP 4318. Compose: four new generated `.env` keys
+  (`make env`), the engine profiles refuse to start without them. Read the password with `kubectl -n ramen-system get
+  secret ramen-engines -o jsonpath='{.data.password}' | base64 -d`. CONTRACTS §39.7.
+- **A worker's TLS name is its zone (D92).** Each zone's leaf carries `<group>.<zone>.worker.ramen.internal` instead
+  of `worker.ramen.internal`, and the console (per call), the activator (`RAMEN_TLS_SERVER_NAME`), Envoy's
+  `BackendTLSPolicy` and the evals Job verify the zone they mean: another zone's leaf is refused. Upgrading: the first
+  start re-issues every zone's leaf with its name (keeping the old name beside it until the zone is redeployed) and
+  accepts the old name for 15 minutes (`RAMEN_TLS_ZONE_NAME_GRACE_SECS`) on pods that have not reloaded;
+  `GET /api/v1/config/tls` marks leaves still carrying it (`generic_name`) — redeploy those zones. Compose's one worker
+  names `*.local.worker.ramen.internal`. Docs: Threat model (both residuals moved to "Fixed in 1.0.0"), Transport,
+  Telemetry, Evals, Trust the install CA, First group; CONTRACTS §39.2a, §39.5b.
+- **CI deploys the real 1.0.0 demo repo; LLM rails work on the compose stack.** The demo's `main` now names LLM rails
+  (`iris_report`, `iris_outliers`) and LLM configs, so a deploy needs an LLM provider. Compose gives the console
+  `RAMEN_CONSOLE_INTERNAL_URL=https://console:8443`, so the worker's rails reach the judge proxy locally (they were
+  cloud-only). A new compose profile `ci` runs `fake-llm`, a deterministic OpenAI-compatible judge over TLS (a
+  `fake-llm` leaf of the compose CA, not published); the `e2e` job starts it and the harness sets it as the org's
+  provider. The real-node suites start their own TLS judge, the identity-federation consent ticks the configs
+  acceptance, and `make demo` takes `RAMEN_DEMO_REF` and names why a deploy failed. Docs: Get started and
+  `deploy/local/README.md` (add an LLM key on Config → LLM providers before the first demo deploy, or
+  `RAMEN_DEMO_REF=v0.8.0 make demo` without a key), Contributing, `tests/README.md`, CONTRACTS §38.2.
+- **Security gaps closed before 1.0.0 (S5, S6, S7, the §38.2 GCP residual).** GCP Terraform removes `roles/editor`
+  from the project's default compute service account (`remove_default_compute_editor`, default on; a cluster still
+  running as that account first gets the node roles, `default_compute_runs_nodes` for an old satellite), and
+  satellites run as `ramen-nodes@`. The console's Artifact Registry rights are conditioned on the resource tag
+  `ramen-repo=group`: Terraform tags the platform repository `ramen-repo=platform`, the console tags each
+  `ramen-groups-<group>` it creates (regional Resource Manager endpoint) and waits for IAM to see it, so it can no
+  longer reach the platform repository. Apply Terraform and upgrade the console together. `console.sourceCidrs` now
+  reaches only the console's own port in `ramen-system` and only satellite zones' worker policies (home zones no
+  longer admit it); the chart warns on EKS/AKS, where it must list node subnets. The test harness deletes the users,
+  keys, OAuth clients, groups and tracked branches a run creates. Docs: Threat model, IAM and network on GCP, Deploy
+  on GCP, CONTRACTS §33.4a / §38.2.
+- **Base images.** Every image Ramen builds names its base by language minor + `-slim`, no patch and no digest, so
+  the upstream security rebuilds of that line reach the next build: worker, SkillSpector and both Glama Dockerfiles
+  `python:3.12-slim` (SkillSpector was pinned to `python:3.12-slim-bookworm`), console `python:3.14-slim` with `uv`
+  `0.12` (was `0.12.19`), Rust build stages `rust:1.99-slim` (was `rust:1.98.1-slim-bookworm`). These tags are Debian
+  13 (trixie) today. The Rust toolchain moves to 1.99.1 (`rust-toolchain.toml`, CI, release; `AtomicUsize::fetch_update`
+  → `try_update`, its 1.99 name). Third-party: Redis `7.4-alpine` (was `7.4.2-alpine`; 7.4.12 is the 2026-10-26 security
+  release), kind's fake-gcs-server 1.52.3 (was 1.52.2); Phoenix, its collector, promptfoo, Jaeger, kaniko and busybox
+  keep their version tags. `.github/dependabot.yml` proposes docker, GitHub Actions, uv and cargo updates weekly with a
+  14-day cooldown (Python and Rust minors stay manual). Docs: Worker images → "What the release images are built on",
+  CONTRACTS §6.
+- **Report pages show their title once; docs claims checked against sources.** The scan report and evals report pages
+  printed their heading twice (the base template's and their own); the screenshot is regenerated. Docs: cost figures
+  carry their source and date (the Azure node line was off by half; GCP rates now link to Google's pricing), install
+  timings come from the measured runs (GCP about 35 minutes), the conformance counts match the CI artifact (9 failures
+  plus 2 baseline warnings on 2026-07-28), the deploy pages say how to read the generated admin password back, the
+  satellite caveats name the console's public URL for the judge proxy and the wake, and every page names bridge 1.0.0
+  as the bridge for Ramen 1.0.0.
 - **promptfoo links open the right run.** `--share` stores a run under a new id on the server; the console kept the
   Job's local id, so promptfoo answered "404 Eval not found". The run id now comes from the share URL. Docs: the
   first-group walkthrough shows promptfoo over HTTPS (new screenshot of a real run), pages are wider and their

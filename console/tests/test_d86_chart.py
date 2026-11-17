@@ -76,7 +76,7 @@ def test_jaeger_speaks_tls():
     rc, err, docs = template("otel.collector=jaeger")
     assert rc == 0, err
     args = _c(docs, "jaeger")["args"]
-    for flag in ("collector.otlp.http.tls", "collector.otlp.grpc.tls", "query.http.tls", "admin.http.tls"):
+    for flag in ("collector.otlp.http.tls", "collector.otlp.grpc.tls", "admin.http.tls"):  # D92: query → its TLS front
         assert f"--{flag}.enabled=true" in args and f"--{flag}.cert=/tls/tls.crt" in args
     assert console_env(docs)["RAMEN_TLS_SERVICES"] == "jaeger"
 
@@ -87,7 +87,7 @@ def test_promptfoo_sits_behind_the_tls_proxy():
     proxy = _c(docs, "promptfoo", 1)
     assert proxy["command"][:3] == ["python", "-m", "ramen_console.tlsproxy"]
     assert "--upstream" in proxy["command"] and "127.0.0.1:3000" in proxy["command"]
-    assert proxy["readinessProbe"]["httpGet"]["scheme"] == "HTTPS"
+    assert proxy["readinessProbe"]["tcpSocket"]["port"] == "https"  # D92: every HTTP path wants the credential
     svc = by_kind(docs, "Service", "promptfoo")["spec"]["ports"][0]
     assert svc["port"] == 3000 and svc["targetPort"] == "https"
     np = by_kind(docs, "NetworkPolicy", "promptfoo")["spec"]["ingress"][0]["ports"]

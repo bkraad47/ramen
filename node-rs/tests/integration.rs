@@ -142,7 +142,10 @@ async fn health(node: &Node, service: &str) -> ServingStatus {
 
 async fn reload(node: &Node, md: &[(&str, &str)]) -> Result<Value, Status> {
     let mut c = AdminClient::new(channel(node.addr).await);
-    let out = c.reload(with_md(ReloadRequest {}, md)).await?.into_inner();
+    let out = c
+        .reload(with_md(ReloadRequest::default(), md))
+        .await?
+        .into_inner();
     Ok(serde_json::from_slice(&out.json).unwrap())
 }
 

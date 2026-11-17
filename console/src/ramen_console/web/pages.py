@@ -17,6 +17,7 @@ from .. import (
     oauth_server,
     otel,
     regions,
+    revocation,
     toolaccess,
 )
 from .. import deploy as dep
@@ -177,6 +178,7 @@ async def group_detail(request: Request, group: str, p: Principal = Depends(requ
         limits=autoscale.limits(),  # §35.1: the bounds next to the last decision
         apps_by={e["name"]: await apps.per_zone(request.app.state.jobs, e) for e in envs},  # §33.1 / §33.2
         mcp_keys=mcp_keys,
+        revocation_pending=(await revocation.pending(s.store)).get(group),  # D92 §16.7: zones not reached yet
         configs=lc,
         acceptance=await configs.acceptance(accounts(request), s, group, lc) if lc and can_admin else [],
         images=await s.images(group),

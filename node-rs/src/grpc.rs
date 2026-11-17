@@ -96,6 +96,8 @@ pub struct App {
     pub consent: tasks::Store,
     /// §24.1: `activator_proof` for this group and zone; startup-fixed like `sessions`.
     pub activator_proof: String,
+    /// D92 (§16.7): every `revoked` an `Admin/Reload` carried, merged over each config this pod reads until it restarts.
+    pub revoked: std::sync::Mutex<crate::revoke::Revoked>,
 }
 
 /// §24.1: hex HMAC-SHA256 over `activator:<group>:<zone>` with a key derived from the session secret (label
@@ -217,6 +219,7 @@ pub async fn app_with(cfg: Config, config_source: ConfigSource) -> Shared {
         otel,
         consent,
         activator_proof,
+        revoked: Default::default(),
     })
 }
 
@@ -493,6 +496,9 @@ pub fn credential(app: &App, cfg: &Config, md: &MetadataMap) -> Result<Caller, &
         token::Reject::Expired => "token_expired",
         _ => "token_invalid",
     })?;
+    if cfg.revoked.token_revoked(&p.sub, p.jti.as_deref(), p.iat) {
+        return Err("token_revoked"); // D92 (§16.7): signed out, removed, or revoked before it expired
+    }
     if p.role.as_deref() == Some(mcp::RAMEN_EVALS) {
         return Err("token_invalid"); // §31.4a: the evals key's kind, never a person's role
     }
@@ -1159,8 +1165,18 @@ impl Admin for AdminSvc {
                 "this is the zone's activator: the workers are asleep",
             ));
         }
+        // D92 (§16.7): the console's revocations, applied before anything else (a bad list changes nothing)
+        let pushed =
+            crate::revoke::Revoked::parse(&String::from_utf8_lossy(&req.get_ref().revoked))
+                .map_err(Status::invalid_argument)?;
+        let overlay = {
+            let mut o = app.revoked.lock().unwrap_or_else(|e| e.into_inner());
+            o.merge(&pushed);
+            o.clone()
+        };
         match (app.config_source)() {
-            Ok(fresh) => {
+            Ok(mut fresh) => {
+                fresh.revoke(&overlay);
                 if let Some(e) = fresh.startup_error() {
                     // §39.4: a running node keeps serving; the plaintext feature stays off until a deploy fixes it
                     emit("warn", "plaintext refused at reload", json!({"error": e}));
@@ -1170,11 +1186,14 @@ impl Admin for AdminSvc {
                 app.sidecar.set_config(fresh.clone()).await;
                 *app.cfg.write().await = fresh;
             }
-            Err(e) => emit(
-                "warn",
-                "config reload failed, keeping current",
-                json!({"error": e}),
-            ),
+            Err(e) => {
+                emit(
+                    "warn",
+                    "config reload failed, keeping current",
+                    json!({"error": e}),
+                );
+                app.cfg.write().await.revoke(&overlay);
+            }
         }
         let mut v = app.load().await.map_err(|e| Status::internal(e.message))?;
         emit(

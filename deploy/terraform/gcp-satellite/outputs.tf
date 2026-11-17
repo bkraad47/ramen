@@ -18,3 +18,4 @@ output "helm_set" {
     "--set gateway.staticIpName=${google_compute_global_address.edge.name},gateway.certificateMap=${google_certificate_manager_certificate_map.edge.name}",
   ])
 }
+output "node_service_account" { value = local.node_service_account }

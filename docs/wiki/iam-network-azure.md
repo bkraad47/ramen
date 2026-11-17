@@ -75,11 +75,11 @@ Services User — [service-account permissions](users-access.md#service-account-
 | Path | From → to | Port | Control |
 |---|---|---|---|
 | Clients → edge | internet → static public IP `ramen-edge` (node resource group) → Envoy Gateway in `envoy-gateway-system` | 443; 80 only for the Let's Encrypt HTTP-01 challenge and a redirect to https | certificate from Let's Encrypt via cert-manager (or `azure.tls=selfsigned`); the Envoy Service keeps the client address (`externalTrafficPolicy: Local`) |
-| Edge → console, workers | Envoy pods → console 8000, worker pods 8080 | 8000, 8080 | TLS (D86): `BackendTLSPolicy` `console` (hostname `console.ramen-system.svc.cluster.local`) and one per zone on Service `worker` (hostname `worker.ramen.internal`), both verifying against ConfigMap `ramen-ca`; HTTPRoutes matching `ramen-group` + `ramen-zone`; an Envoy `SecurityPolicy` per zone for IP rules; NetworkPolicy `worker` admits the `envoy-gateway-system` namespace |
-| Console → workers | console pod → worker pod IPs | 8080 | gRPC over TLS verified as `worker.ramen.internal` against the install CA; admin key; NetworkPolicy `worker` |
+| Edge → console, workers | Envoy pods → console 8000, worker pods 8080 | 8000, 8080 | TLS (D86): `BackendTLSPolicy` `console` (hostname `console.ramen-system.svc.cluster.local`) and one per zone on Service `worker` (hostname `<group>.<zone>.worker.ramen.internal`, D92), both verifying against ConfigMap `ramen-ca`; HTTPRoutes matching `ramen-group` + `ramen-zone`; an Envoy `SecurityPolicy` per zone for IP rules; NetworkPolicy `worker` admits the `envoy-gateway-system` namespace |
+| Console → workers | console pod → worker pod IPs | 8080 | gRPC over TLS verified as the zone's `<group>.<zone>.worker.ramen.internal` against the install CA; admin key; NetworkPolicy `worker` |
 | Workers → console, Redis, collector, internet | as on GCP | 8000, 6379/10000, 4318, any | TLS to each; `worker-egress` (written only with `cluster.serviceCidr`, which `helm_set` does not carry; AKS default `10.0.0.0/16`) |
 | Workers, console → Azure Managed Redis | → the instance's public endpoint | 10000 (TLS) | access key in Secret `ramen-redis` (`rediss://`); `managed_redis = true` by default |
-| Home → satellite | home VNet → satellite nodes and pods | 8080 | VNet peering both ways; NSG rule `ramen-home-to-workers` |
+| Home → satellite | home VNet → satellite nodes and pods | 8080 | VNet peering both ways; NSG rule `ramen-home-to-workers`; the satellite zone's NetworkPolicy `worker` admits `console.sourceCidrs` (the home node subnet the overlay SNATs the console's calls to — never a pod range: Calico matches pod addresses by `ipBlock`), a home zone never does |
 
 - **Cluster network.** Azure CNI in overlay mode, standard load balancer, `network_policy = "calico"` (since
   1.0.0c; the satellite module too, on its node-subnet Azure CNI). AKS enforces Kubernetes NetworkPolicies only with

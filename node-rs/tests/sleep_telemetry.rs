@@ -470,7 +470,7 @@ async fn an_activator_is_healthy_reports_asleep_and_refuses_reload() {
         json!({"asleep": true, "last_call_at": 0, "woken": 0})
     );
     let mut admin = AdminClient::new(ch);
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     let st = admin.reload(req).await.unwrap_err();
@@ -2269,7 +2269,7 @@ async fn a_reload_makes_a_pushed_telemetry_config_live() {
     let mut admin = AdminClient::connect(format!("http://{}", n.addr))
         .await
         .unwrap();
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     admin.reload(req).await.unwrap();
@@ -2589,7 +2589,7 @@ async fn a_reload_makes_a_pushed_evals_config_live() {
     let mut admin = AdminClient::connect(format!("http://{}", n.addr))
         .await
         .unwrap();
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     admin.reload(req).await.unwrap();
@@ -2802,7 +2802,7 @@ async fn a_reload_makes_a_pushed_skillspector_policy_live() {
     let mut admin = AdminClient::connect(format!("http://{}", n.addr))
         .await
         .unwrap();
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     admin.reload(req).await.unwrap();
@@ -3010,7 +3010,7 @@ async fn a_reload_makes_a_pushed_configs_version_live() {
     let mut admin = AdminClient::connect(format!("http://{}", n.addr))
         .await
         .unwrap();
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     admin.reload(req).await.unwrap();
@@ -3233,7 +3233,7 @@ async fn a_reload_makes_a_pushed_guardrails_version_live() {
     let mut admin = AdminClient::connect(format!("http://{}", n.addr))
         .await
         .unwrap();
-    let mut req = tonic::Request::new(ReloadRequest {});
+    let mut req = tonic::Request::new(ReloadRequest::default());
     req.metadata_mut()
         .insert("x-ramen-admin-key", ADMIN_KEY.parse().unwrap());
     admin.reload(req).await.unwrap();
@@ -3335,7 +3335,7 @@ async fn the_evals_key_skips_every_gate_but_is_not_an_admin() {
         .await
         .unwrap();
     for header in ["authorization", "x-ramen-admin-key"] {
-        let mut req = tonic::Request::new(ReloadRequest {});
+        let mut req = tonic::Request::new(ReloadRequest::default());
         let v = if header == "authorization" {
             bearer.clone()
         } else {

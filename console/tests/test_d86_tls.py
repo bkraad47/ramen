@@ -81,8 +81,8 @@ def test_renewal_after_two_thirds_or_another_ca_or_garbage():
 
 
 def test_names():
-    zone = tls.zone_names("ramen-demo-a")
-    assert zone[0] == tls.WORKER_NAME == "worker.ramen.internal"
+    zone = tls.zone_names("ramen-demo-a", tls.worker_name("demo", "a"))
+    assert zone[0] == "demo.a.worker.ramen.internal" and tls.WORKER_NAME not in zone  # D92: the zone's own name
     for svc in ("worker", "worker-direct", "worker-canary"):
         assert {svc, f"{svc}.ramen-demo-a", f"{svc}.ramen-demo-a.svc", f"{svc}.ramen-demo-a.svc.cluster.local"} <= set(
             zone
@@ -176,7 +176,8 @@ async def test_rotate_on_an_empty_store_creates_then_stages():
 
 
 def test_init_dir_writes_the_ca_and_leaves_and_is_idempotent(tmp_path):
-    out = tls.init_dir(tmp_path, {"worker": tls.zone_names("local"), "redis": ["redis", "localhost"]})
+    worker = tls.zone_names("local", "*.local.worker.ramen.internal")
+    out = tls.init_dir(tmp_path, {"worker": worker, "redis": ["redis", "localhost"]})
     ca = (tmp_path / "ca" / "ca.crt").read_text()
     assert set(out) == {"worker", "redis"}
     for name in ("worker", "redis"):
@@ -186,15 +187,17 @@ def test_init_dir_writes_the_ca_and_leaves_and_is_idempotent(tmp_path):
     assert (tmp_path / "ca" / "ca.key").stat().st_mode & 0o077 == 0
     assert (tmp_path / "worker" / "tls.key").stat().st_mode & 0o004  # read by containers running as other users
     first = (tmp_path / "worker" / "tls.crt").read_text()
-    tls.init_dir(tmp_path, {"worker": tls.zone_names("local")})
+    tls.init_dir(tmp_path, {"worker": worker})
     assert (tmp_path / "worker" / "tls.crt").read_text() == first  # fresh leaves are kept
+    tls.init_dir(tmp_path, {"worker": tls.zone_names("local", tls.WORKER_NAME)})  # D92: names changed → re-issued
+    assert (tmp_path / "worker" / "tls.crt").read_text() != first
     assert (tmp_path / "ca" / "ca.crt").read_text() == ca
 
 
 def test_cli_init(tmp_path):
     tls.main(["init", str(tmp_path), "--leaf", "console=console,localhost,127.0.0.1", "--zone", "worker=local"])
     assert _sans((tmp_path / "console" / "tls.crt").read_text()) == {"console", "localhost", "127.0.0.1"}
-    assert tls.WORKER_NAME in _sans((tmp_path / "worker" / "tls.crt").read_text())
+    assert "*.local.worker.ramen.internal" in _sans((tmp_path / "worker" / "tls.crt").read_text())  # D92
 
 
 def test_cli_legacy_self_signed(tmp_path):

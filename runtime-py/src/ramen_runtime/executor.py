@@ -6,7 +6,7 @@ import jsonschema
 
 from . import context, envfile, guardrails, prompts, secrets, skills
 from .content import Block, b64, blocks, text
-from .loader import Package, Registry
+from .loader import Package, Registry, check
 from .proto import wraps_output
 
 _META_UI = "ui/resourceUri"
@@ -41,7 +41,7 @@ class Executor:
         # §23.4: on a retry the engine sees the client's answers next to the arguments
         seen = arguments | {"$inputResponses": responses} if responses else arguments
         try:
-            jsonschema.validate(arguments, tool.schema)
+            check(tool.input_validator, arguments)
             args = secrets.substitute_args(arguments, used)
             # §21.2 pre hook: after validation and substitution, before the tool; it sees the arguments as written
             # (`{{$group.VAR}}` text), never the substituted values
@@ -56,7 +56,7 @@ class Executor:
             if content is None and tool.output is not None:  # B5: the declared output schema is enforced on the way out
                 structured = {"result": result} if wraps_output(tool.proto["output"]) else result
                 try:
-                    jsonschema.validate(structured, tool.output)
+                    check(tool.output_validator, structured)
                 except jsonschema.ValidationError as e:
                     where = "/".join(str(p) for p in e.absolute_path) or "output"
                     raise _OutputError(f"invalid output: {where}: {e.message}") from None

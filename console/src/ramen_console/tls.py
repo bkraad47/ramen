@@ -1,9 +1,10 @@
 """D86 (CONTRACTS §39): Ramen's per-install CA and the leaf certificates it issues.
 
-`python -m ramen_console.tls init <dir> [--leaf name=san,san …] [--zone name=<namespace>]` writes
-`<dir>/ca/ca.{crt,key}` (kept when present) and one `<dir>/<name>/{tls.crt,tls.key,ca.crt}` per leaf (re-issued only
-when due) — local compose and the kind harness. `python -m ramen_console.tls <dir> [hostname]` still writes a plain
-self-signed pair.
+`python -m ramen_console.tls init <dir> [--leaf name=san,san …] [--zone name=<namespace>[:<group>.<zone>]]`
+writes `<dir>/ca/ca.{crt,key}` (kept when present) and one `<dir>/<name>/{tls.crt,tls.key,ca.crt}` per leaf
+(re-issued only when due or when its names changed) — local compose and the kind harness. A `--zone` leaf without
+`:<group>.<zone>` names `*.<namespace>.worker.ramen.internal` (compose: one worker serves every group of zone
+`local`). `python -m ramen_console.tls <dir> [hostname]` still writes a plain self-signed pair.
 """
 
 import argparse
@@ -13,6 +14,7 @@ import logging
 import os
 import ssl
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,7 +25,11 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-WORKER_NAME = "worker.ramen.internal"  # §39.2: the one name every in-install client verifies on a worker
+WORKER_DOMAIN = "worker.ramen.internal"
+# §39.2 before D92: the one name every worker leaf carried. Since D92 (§39.2a) a leaf names its zone and no verifier
+# accepts this name except the console inside the upgrade's transition window (§39.5b) and verifiers of a zone not yet
+# redeployed (its activator env, its Envoy BackendTLSPolicy), which renewals keep serving with a bridge leaf.
+WORKER_NAME = WORKER_DOMAIN
 CA_DOC = ("config", "install_ca")
 CA_YEARS = 10
 log = logging.getLogger("ramen.tls")
@@ -80,6 +86,10 @@ def _san(name: str):
         return x509.IPAddress(ipaddress.ip_address(name))
     except ValueError:
         return x509.DNSName(name)
+
+
+def _is_ip(name: str) -> bool:
+    return isinstance(_san(name), x509.IPAddress)
 
 
 @dataclass
@@ -186,11 +196,75 @@ def service_names(svc: str, ns: str) -> list[str]:
     return [svc, f"{svc}.{ns}", f"{svc}.{ns}.svc", f"{svc}.{ns}.svc.cluster.local", "localhost", "127.0.0.1"]
 
 
-def zone_names(ns: str) -> list[str]:
-    out = [WORKER_NAME]
+def worker_name(group: str, zone: str) -> str:
+    """D92 (§39.2a): the name a zone's worker leaf carries and every verifier of that zone checks."""
+    return f"{group}.{zone}.{WORKER_DOMAIN}"
+
+
+def zone_names(ns: str, name: str, legacy: bool = False) -> list[str]:
+    """A zone leaf's SANs: its zone name, the zone's Service names, loopback (the node's own health check dials
+    127.0.0.1 — a loopback peer cannot be another zone). `legacy`: also the pre-D92 generic name (a bridge leaf, for a
+    zone whose activator/Envoy were deployed before D92)."""
+    out = [name, *([WORKER_NAME] if legacy else [])]
     for svc in ZONE_SERVICES:
         out += service_names(svc, ns)[:4]
     return [*out, "localhost", "127.0.0.1"]
+
+
+def dns_names(cert_pem: str) -> set[str]:
+    try:
+        c = x509.load_pem_x509_certificate((cert_pem or "").encode())
+        san = c.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except Exception:  # noqa: BLE001 - unreadable or no SAN: no names
+        return set()
+    return set(san.get_values_for_type(x509.DNSName))
+
+
+def has_name(cert_pem: str, name: str) -> bool:
+    return name in dns_names(cert_pem)
+
+
+# ---- D92 transition (§39.5b): the generic name, accepted by the console only for a short window after the switch ----
+ZONE_NAMES_DOC = ("config", "tls_zone_names")
+GRACE_SECS = 900
+_GENERIC_UNTIL = [0.0]
+
+
+def zone_name_grace() -> float:
+    try:
+        return max(0.0, float(os.environ.get("RAMEN_TLS_ZONE_NAME_GRACE_SECS", GRACE_SECS)))
+    except ValueError:
+        return GRACE_SECS
+
+
+def set_generic_until(epoch: float) -> None:
+    _GENERIC_UNTIL[0] = epoch
+
+
+def generic_accepted(now: float | None = None) -> bool:
+    return (now if now is not None else time.time()) < _GENERIC_UNTIL[0]
+
+
+def legacy_worker_name() -> str | None:
+    """The generic name while the transition window is open (the console's second try on a pod IP), else None."""
+    return WORKER_NAME if generic_accepted() else None
+
+
+async def open_zone_names(store) -> str:
+    """The install's D92 switch time (written once: the first D92 console start; every replica reads the same one);
+    the console accepts a worker's generic-name leaf until switch + `RAMEN_TLS_ZONE_NAME_GRACE_SECS` (900 s) — enough
+    for the zone leaves re-issued at that start to reach every pod (kubelet ~1–2 min, the node's 60 s re-read)."""
+    async with store.transaction() as tx:
+        doc = await tx.get(*ZONE_NAMES_DOC)
+        if not (doc and doc.get("since")):
+            doc = {"since": _now()}
+            await tx.put(*ZONE_NAMES_DOC, doc)
+    try:
+        since = datetime.fromisoformat(doc["since"]).timestamp()
+    except ValueError:
+        since = 0.0
+    set_generic_until(since + zone_name_grace())
+    return doc["since"]
 
 
 def console_names(ns: str) -> list[str]:
@@ -471,7 +545,10 @@ async def status(store, cloud) -> dict:
         "previous": fingerprint(ca.previous) if ca.previous else None,
         "stage": "bundle" if ca.next else ("rotated" if ca.previous else "single"),
         "switch_after": _switch_at(doc).removeprefix("at ") if ca.next else None,
-        "leaves": [{"name": n, "ca": ca.which(pem)} for n, pem in await leaves(cloud)],
+        "leaves": [
+            {"name": n, "ca": ca.which(pem), **({"generic_name": True} if has_name(pem, WORKER_NAME) else {})}
+            for n, pem in await leaves(cloud)
+        ],
     }
 
 
@@ -498,6 +575,12 @@ async def startup(store, cloud) -> None:
         await cloud.ensure_system_tls()
     except Exception as e:  # noqa: BLE001 - the renewal loop retries; the console itself serves on its own leaf
         log.warning("tls: chart service certificates not written (%s: %s)", type(e).__name__, str(e)[:200])
+    await open_zone_names(store)
+    try:  # D92 §39.5b: a zone leaf without its zone name is due — re-issued now, not at the next renewal round
+        if zones := await cloud.renew_zone_tls():
+            log.info("tls: zone leaves re-issued with their zone names: %s", ", ".join(zones))
+    except Exception as e:  # noqa: BLE001 - the renewal loop retries
+        log.warning("tls: zone leaves not re-issued (%s: %s)", type(e).__name__, str(e)[:200])
 
 
 async def renew_forever(store, cloud, every: float) -> None:
@@ -551,7 +634,8 @@ def init_dir(out: Path, leaves: dict[str, list[str]]) -> list[str]:
         d = out / name
         crt = d / "tls.crt"
         if crt.exists() and not needs_renewal(crt.read_text(), ca) and (d / "tls.key").exists():
-            continue
+            if dns_names(crt.read_text()) == {n for n in sans if not _is_ip(n)}:
+                continue
         leaf = ca.issue(sans)
         _write(d / "tls.key", leaf.key, 0o644)
         _write(crt, leaf.cert, 0o644)
@@ -589,10 +673,12 @@ def main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog="python -m ramen_console.tls init")
     ap.add_argument("dir")
     ap.add_argument("--leaf", action="append", default=[], help="name=san,san,…")
-    ap.add_argument("--zone", action="append", default=[], help="name=<namespace>: a worker leaf (§39.2 names)")
+    ap.add_argument("--zone", action="append", default=[], help="name=<namespace>[:<group>.<zone>]: a worker leaf")
     a = ap.parse_args(argv[1:])
     leaves = {n: s.split(",") for n, s in (x.split("=", 1) for x in a.leaf)}
-    leaves |= {n: zone_names(ns) for n, ns in (x.split("=", 1) for x in a.zone)}
+    for n, v in (x.split("=", 1) for x in a.zone):
+        ns, _, gz = v.partition(":")
+        leaves[n] = zone_names(ns, f"{gz or '*.' + ns}.{WORKER_DOMAIN}")
     print(" ".join(init_dir(Path(a.dir), leaves)))
 
 

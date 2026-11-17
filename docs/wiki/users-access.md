@@ -93,6 +93,20 @@ login needs another way in first, or the break-glass `RAMEN_ADMIN_FORCE_PASSWORD
 Every role, group and password change bumps the person's session epoch, so open sessions and refresh tokens end
 at once and an open tab never keeps a permission it just lost.
 
+Since 1.0.0 (D92) their MCP access tokens end at once too. Workers check a token offline, so the console pushes a
+revocation to the workers of every group the person holds a token for: tokens issued before that moment are refused
+within seconds, and the client signs in again (only if the person still may). The triggers:
+
+- removing a membership, changing a role, setting a password, deleting the user, revoking an approved request;
+- **Sign out everywhere**: `POST /api/v1/users/me/sign-out` for yourself, or `/api/v1/users/<id>/sign-out` for anyone
+  whose account you manage — it ends console sessions and OAuth tokens alike;
+- a client revoking its own token (RFC 7009 `POST /oauth/revoke`), a replayed refresh token (the whole grant), and
+  deleting an OAuth client on the Config page.
+
+A token's life is `RAMEN_OAUTH_ACCESS_TTL` (default one hour); revocation entries are kept no longer than that. A zone
+the console cannot reach keeps accepting the token until the retried push lands (the group page says
+**Revocation pending**), or until the token expires.
+
 ## What an MCP user gets
 
 An MCP user who signs in sees one page: which groups they may connect to and how. Claude Code over HTTP, and Claude Desktop,

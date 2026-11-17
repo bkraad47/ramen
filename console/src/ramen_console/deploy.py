@@ -18,6 +18,7 @@ from . import (
     llm_scope,
     otel,
     regions,
+    revocation,
     roles,
     sleeping,
     toolaccess,
@@ -222,6 +223,7 @@ async def zone_config(
     cfg.update(evals.worker_env(await evals.load(svc, group), g))  # §29.3: the evals version gated calls must name
     cfg.update(sk.worker_env(await sk.load_baseline(svc, group), g))  # §30.3: the same for the scan policy
     cfg.update(configs.worker_env(await configs.load(svc, group)))  # §31.2: the LLM configs version, always required
+    cfg.update(await revocation.worker_env(svc.store, group))  # D92 §16.7: revoked keys and tokens, every deploy/push
     gr = await guardrails.load(svc, group)
     cfg.update(guardrails.worker_env(gr, g))  # §36.3: the guardrails policy version
     # §36.2 / §38.1: RAMEN_LLM_* only when a rail needs a model — the console's judge proxy, never a provider key
@@ -620,7 +622,7 @@ async def _evals(svc, job, group, zone, g, ev, call, evals_key, info):
         info["evals"] = {"skipped": "no MCP key"}
         return
     env = {
-        "RAMEN_MCP_URL": evals.mcp_url(target),
+        "RAMEN_MCP_URL": evals.mcp_url(target, group, zone),
         "RAMEN_MCP_KEY": evals_key,
         "RAMEN_GROUP": group,
         "RAMEN_ENV": ev["env"],

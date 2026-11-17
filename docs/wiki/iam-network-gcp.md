@@ -28,24 +28,35 @@ Project roles on `ramen-console@`:
 | `roles/compute.securityAdmin`, `roles/compute.loadBalancerAdmin` | Cloud Armor policies for IP rules, backend services for rebalance |
 | `roles/datastore.user` | Firestore, the console's state |
 | custom `ramenConsoleSaIam` | `iam.serviceAccounts.getIamPolicy`, `setIamPolicy`, `get`, `list`, `resourcemanager.projects.get`: the Workload Identity binding on a worker GSA |
-| custom `ramenConsoleBuildRepoCreate` | `artifactregistry.repositories.create`: a group's image repository |
-| custom `ramenConsoleBuildRepos` | `artifactregistry.repositories.get`, `update`, `delete`, `getIamPolicy`, `setIamPolicy` on the group repositories |
+| custom `ramenConsoleBuildRepoCreate` | `artifactregistry.repositories.create`, `list`, `createTagBinding`: make a group's image repository and attach the tag `ramen-repo=group` to it |
+| custom `ramenConsoleBuildRepos` | `artifactregistry.repositories.get`, `update`, `delete`, `getIamPolicy`, `setIamPolicy`, under the IAM condition `resource.matchTagId(<ramen-repo key>, <group value>)`: only repositories tagged `ramen-repo=group` |
 | `roles/aiplatform.user` | only with `console_vertex = true` (the default): the judge proxy calls Vertex for LLM rails and evals |
 | `roles/resourcemanager.projectIamAdmin` | only with `console_project_iam = true` (default off): bind project-wide roles from approved permission requests |
 
 On one resource: `roles/storage.admin` on the groups bucket `ramen-<project>-groups` (sync the repos, and bind each
-worker's prefix-conditioned read). The console holds **no** `iam.serviceAccountUser` (it never acts as another
+worker's prefix-conditioned read), and `roles/resourcemanager.tagUser` on the tag value `ramen-repo/group` alone (it
+may attach that value, no other). The console holds **no** `iam.serviceAccountUser` (it never acts as another
 account; IAM conditions cannot name service accounts, so the role would cover every account in the project) and no
 Artifact Registry upload permission.
 
-Two limits are enforced by the console, not by IAM, and are worth knowing:
+**Repository tags (§38.2).** Artifact Registry ignores IAM Conditions on `resource.name` (a `ramen-groups-*`
+condition never matched on GKE), but every Google Cloud service evaluates resource **tags** in conditions. Terraform
+creates the project tag key `ramen-repo` with the values `platform` and `group`, binds `platform` to the platform
+repository `ramen` (`google_tags_location_tag_binding`), and conditions the console's repository role on `group`.
+When the console creates `ramen-groups-<group>` it binds `group` to it through the regional Resource Manager endpoint
+(`<location>-cloudresourcemanager.googleapis.com`, parent
+`//artifactregistry.googleapis.com/projects/<project>/locations/<location>/repositories/ramen-groups-<group>`), then
+waits until IAM sees the tag (Resource Manager: within 2 minutes, up to 7) before it binds the build principal. A
+resource holds one value per key, the console may attach only `group` and holds no `deleteTagBinding`, so it can
+neither re-tag `ramen` nor reach it through the conditioned role. A repository made before the tag existed is tagged
+on the group's next build (or on its deletion). Chart value `console.env.RAMEN_AR_GROUP_TAG` names another value
+(`tagValues/<id>` or a namespaced name; default `<project>/ramen-repo/group`, terraform output `ar_group_tag`), `none`
+turns tagging off.
 
-- `ramenConsoleSaIam` is project-wide: the console only ever addresses `ramen-<group>-<zone>@` accounts, but IAM
-  would let it set the policy of any service account in the project.
-- The two Artifact Registry roles are project-wide too. Artifact Registry ignores IAM Conditions on `resource.name`
-  (a `ramen-groups-*` condition never matched on GKE), so a compromised console could grant itself writer on the
-  platform repository `ramen`. Platform images can be pinned by digest (`image.digest`, `image.workerDigest`), so a
-  re-tag there does not reach a pod until an operator changes the digest.
+One limit is enforced by the console, not by IAM, and is worth knowing: `ramenConsoleSaIam` is project-wide — the
+console only ever addresses `ramen-<group>-<zone>@` accounts, but IAM would let it set the policy of any service
+account in the project. Since S5 no service account in the project holds `roles/editor` (see Nodes), so that reaches
+the node, evals and worker identities, each least-privilege, not a project editor.
 
 Inside the cluster (chart `rbac.create`):
 
@@ -89,9 +100,17 @@ console's judge proxy.
 `ramen-nodes@` holds `roles/logging.logWriter`, `monitoring.metricWriter`, `monitoring.viewer`,
 `stackdriver.resourceMetadata.writer`, `autoscaling.metricsWriter` (what `roles/container.defaultNodeServiceAccount`
 bundles) and `roles/artifactregistry.reader` project-wide (platform and group repositories). Autopilot takes the node
-account only at cluster creation; a cluster made before 1.0.0c keeps the default compute account (which Google
-creates with `roles/editor`) until re-created — set `node_service_account = "default"` for it, and remove `editor`
-from that account once the nodes run as `ramen-nodes@` ([Deploy on GCP](deploy-gcp.md#the-consoles-service-account-and-access-controls)).
+account only at cluster creation; satellites (`deploy/terraform/gcp-satellite`) run as `ramen-nodes@` too.
+
+**The default compute account (S5).** Google creates `<number>-compute@developer.gserviceaccount.com` with
+`roles/editor` when the Compute API is enabled. Terraform removes that grant (`google_project_iam_member_remove`,
+variable `remove_default_compute_editor`, default `true`): otherwise a compromised console could use its
+service-account `setIamPolicy` to act as a project editor. A cluster that still runs as the default account (made
+before 1.0.0c: `node_service_account = "default"`; a satellite made before this change: `default_compute_runs_nodes =
+true`) first gets the node roles above on that account, so it keeps logging and pulling images. Turn the variable off
+in a project where something else relies on the default account's `editor` (Compute Engine VMs, legacy Cloud Build,
+Cloud Functions or App Engine). Destroying the module does not give `editor` back
+([Deploy on GCP](deploy-gcp.md#the-consoles-service-account-and-access-controls)).
 
 ## Network
 
@@ -100,25 +119,30 @@ from that account once the nodes run as `ramen-nodes@` ([Deploy on GCP](deploy-g
 | Clients → edge | internet → global external HTTPS load balancer (GKE Gateway `gke-l7-global-external-managed`) | 443 only | Google-managed certificate on `<ip>.sslip.io` (or your hostname); plain http is not served |
 | Edge → console | Google front ends `35.191.0.0/16`, `130.211.0.0/22` → console pods | 8000 | TLS (D86): Service `console` port 443 `appProtocol: HTTPS` → pod 8000, HealthCheckPolicy `HTTPS` on `/healthz` (the load balancer encrypts but does not verify the backend certificate); NetworkPolicy `console` |
 | Edge → workers | the same ranges → worker pods (NEG) | 8080 | TLS: Service `worker` `appProtocol: HTTP2`, HealthCheckPolicy `HTTP2` on `/readyz`; per-zone HTTPRoute matching `ramen-group` + `ramen-zone`; Cloud Armor policy `ramen-<group>` (IP rules); NetworkPolicy `worker` |
-| Console → workers | `ramen-system` → worker pod IPs | 8080 | gRPC over TLS, verified against the install CA as `worker.ramen.internal`; NetworkPolicy `worker` admits the `ramen-system` namespace; admin key |
+| Console → workers | `ramen-system` → worker pod IPs | 8080 | gRPC over TLS, verified against the install CA as the zone's `<group>.<zone>.worker.ramen.internal` (D92); NetworkPolicy `worker` admits the `ramen-system` namespace; admin key |
 | Workers → console | worker pods → `https://console.ramen-system.svc.cluster.local:443` → console pods | 8000 | TLS (install CA); `worker-egress`: `/otlp`, wake, `/llm/v1` judge proxy |
 | Workers → Redis | → `ramen-system` Redis (`redis.enabled`) | 6379 | TLS only (`rediss://`); `worker-egress`; NetworkPolicy `redis` (console + workers); password |
 | Workers → collector | → Phoenix / Jaeger | 4318 | OTLP over TLS; `worker-egress`; collector policy (console, workers, Jobs) |
 | Workers → internet | → anything but the cluster's Service range | any | `worker-egress` `0.0.0.0/0 except cluster.serviceCidr` |
 | Activator → workers | same zone | 8080 | NetworkPolicy `worker`, second rule |
-| Home → satellite | home pod range → satellite nodes | 8080 | firewall `ramen-home-to-satellite-<region>` (`home_pod_cidr`, target tag `node_tag`) |
+| Home → satellite | home pod range → satellite nodes | 8080 | firewall `ramen-home-to-satellite-<region>` (`home_pod_cidr`, target tag `node_tag`); the satellite zone's NetworkPolicy `worker`, third rule (`console.sourceCidrs`) |
 
-- **ramen-system policies** (`networkPolicy.system`, default on): the console accepts its port from the edge, the
-  worker namespaces and the evals/scan Job pods; the collector takes 4318 from the console, workers and Jobs and its
+- **ramen-system policies** (`networkPolicy.system`, default on): the console accepts its port from the edge,
+  `console.sourceCidrs`, the worker namespaces and the evals/scan Job pods; the collector takes 4318 from the console, workers and Jobs and its
   UI only from the edge ranges (it has no route, so in practice a port-forward); promptfoo takes its TLS front on pod
   port 3443 (Service port 3000) from the edge, the console and the Jobs; Redis takes 6379 from the console and workers.
+  `console.sourceCidrs` reaches the console's port only, never the collector, promptfoo or Redis (S6).
 - **Worker policies** are written by the console into each zone namespace: `worker` (ingress on 8080 from
-  `ramen-system`, the load balancer ranges, `console.sourceCidrs`, and the zone's own pods) and `worker-egress`
+  `ramen-system` and the load balancer ranges, from the zone's own pods, and — in a **satellite** zone only — from
+  `console.sourceCidrs` in a rule of its own; a home zone never admits them) and `worker-egress`
   (`networkPolicy.workerEgress`, default on; needs `cluster.serviceCidr` = `gcloud container clusters describe … --format='value(servicesIpv4Cidr)'`,
   without it there is no egress policy and the chart's NOTES say so).
-- GKE Autopilot enforces NetworkPolicies (Dataplane V2). It does not admit pod sources through `ipBlock` rules, which
-  is why the console's pod range in `console.sourceCidrs` does not open the `ramen-system` pods to every pod here; on a
-  CNI that does match pod IPs by `ipBlock` it would ([Threat model](../threat-model.md#findings-and-their-status)).
+- GKE Autopilot enforces NetworkPolicies (Dataplane V2, which cannot be turned off there). It does not admit pod sources
+  through `ipBlock` rules ([GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/network-policy): "Pod traffic is
+  never covered by an `ipBlock` rule"), which
+  is why the console's pod range in `console.sourceCidrs` does not open the console port to every pod here; on a
+  CNI that does match pod IPs by `ipBlock` (EKS VPC CNI, Calico on AKS) it would, so there the value lists node
+  subnets, never a pod range, and the chart's NOTES warn ([Threat model](../threat-model.md#findings-and-their-status)).
 - **IP rules** per zone are enforced twice: by the node (`RAMEN_ALLOWED_CIDRS`, checked against the address the load
   balancer appended) and by Cloud Armor at the edge (one policy per group on its zones' backend services). Include the
   console's own range or a redeploy's canary smoke is refused.
@@ -126,7 +150,10 @@ from that account once the nodes run as `ramen-nodes@` ([Deploy on GCP](deploy-g
 - **Satellites** sit on the same default VPC; pod ranges route, and the firewall rule above lets the console reach
   satellite workers by pod IP. The satellite chart binds the ClusterRole `ramen-console` to the console GSA as a
   Kubernetes `User`; the console binds `ramen-console-zone` per zone namespace to the subjects in the home chart's
-  `console.k8sSubjects`, and every worker NetworkPolicy admits the home pod range from `console.sourceCidrs`. Telemetry from a satellite reaches the chart's collector only if you expose one
+  `console.k8sSubjects`, and every satellite zone's worker NetworkPolicy admits the home pod range from
+  `console.sourceCidrs`. That range is every home pod, not the console alone: GKE keeps pod addresses across the VPC
+  and Autopilot gives the console no fixed one, so it cannot be narrowed further (the worker's own gates — admin key,
+  MCP key or token, IP rules — still apply). Telemetry from a satellite reaches the chart's collector only if you expose one
   ([Deploy on GCP → Satellite clusters](deploy-gcp.md#satellite-clusters-other-regions)).
 
 ## Terraform switches that change IAM
@@ -135,5 +162,7 @@ from that account once the nodes run as `ramen-nodes@` ([Deploy on GCP](deploy-g
 |---|---|---|
 | `console_project_iam` | `false` | grants the console `roles/resourcemanager.projectIamAdmin` so approved project-wide permissions can be bound |
 | `console_vertex` | `true` | grants the console `roles/aiplatform.user` for the judge proxy |
-| `node_service_account` | `""` (= `ramen-nodes@`) | `"default"` keeps the default compute account on a pre-1.0.0c cluster |
+| `node_service_account` | `""` (= `ramen-nodes@`) | `"default"` keeps the default compute account on a pre-1.0.0c cluster (it then gets the node roles when `editor` is removed) |
+| `remove_default_compute_editor` | `true` | removes `roles/editor` from the default compute account (S5); off in a project that relies on it |
+| `default_compute_runs_nodes` | `false` | `true` while a satellite still runs as the default compute account: it keeps the node roles |
 | `otel_collector`, `evals_engine`, `skillspector_engine` | `none` | the optional engines (no IAM of their own) |

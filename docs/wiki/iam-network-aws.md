@@ -93,7 +93,7 @@ satellites run no PVCs and get no driver. The cluster's access mode is `API_AND_
 | Clients → edge | internet → internet-facing ALB (IngressGroup `ramen`, `target-type: ip`) | 443 only | ACM certificate (self-signed import, SAN `*.<region>.elb.amazonaws.com`); WAF web ACL `ramen` |
 | Edge → console | ALB → console pods | 8000 | Ingress `console` on `/`; HTTPS to the pod and HTTPS health check on `/healthz` (D86; the ALB does not verify the certificate) |
 | Edge → workers | ALB → worker pods | 8080 | per-zone Ingresses `worker` (gRPC paths, `GRPC` target group) and `worker-http` (`/mcp`, OAuth metadata, `HTTP1` target group), both matching `ramen-group` + `ramen-zone`, both `backend-protocol: HTTPS` with HTTPS health checks (D86); IP rules = a WAF IP set per group and a web ACL rule blocking that group's header from other sources |
-| Console → workers | console pod → worker pod IPs (pod subnets, D89) | 8080 | gRPC over TLS verified against the install CA as `worker.ramen.internal` (D86); admin key; NetworkPolicy `worker` (see below) |
+| Console → workers | console pod → worker pod IPs (pod subnets, D89) | 8080 | gRPC over TLS verified against the install CA as the zone's `<group>.<zone>.worker.ramen.internal` (D86, D92); admin key; NetworkPolicy `worker` (see below) |
 | Workers → console, Redis, collector, internet | as on GCP | 8000, 6379, 4318, any | TLS on each (D86); `worker-egress` (needs `cluster.serviceCidr`: `aws eks describe-cluster --name ramen --query cluster.kubernetesNetworkConfig.serviceIpv4Cidr --output text`; EKS picks `172.20.0.0/16` when the VPC is in `10.0.0.0/8`, as the default `10.42.0.0/16` is, else `10.100.0.0/16`). The install command in [Deploy on AWS](deploy-aws.md#3-the-console) does not set it, so there is no `worker-egress` policy until you add `--set cluster.serviceCidr=…` |
 | Home → satellite | home VPC (as the home node's address) → satellite worker pods | 8080 | VPC peering with routes both ways; ingress rule on the satellite's cluster security group (which the pod interfaces carry) from `home_vpc_cidr`; the satellite zone's `worker` policy admits the home public subnets |
 
@@ -128,7 +128,9 @@ satellites run no PVCs and get no driver. The cluster's access mode is `API_AND_
 
   Who can reach a worker pod on 8080, then: the ALB (public subnets), the console (namespace `ramen-system`), the
   zone's own pods, and anything using a node's address — kubelet probes, `hostNetwork` pods, and on a satellite the
-  home cluster's pods, whose cross-VPC traffic carries the home node's address. A pod in any other namespace has a
+  home cluster's pods, whose cross-VPC traffic carries the home node's address (the console has no fixed address of
+  its own to narrow this to; the worker's own gates still apply). The console's ALB list is one for every zone, so a
+  home zone likewise admits each satellite's public subnets. A pod in any other namespace has a
   pod-subnet address and is dropped ([Threat model](../threat-model.md#findings-and-their-status), S6b). The
   network-policy agent lets the kubelet's probes through as well (Redis, whose policy has no `ipBlock`, passes its
   `tcpSocket` probe on EKS).

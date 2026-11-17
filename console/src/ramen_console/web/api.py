@@ -185,14 +185,24 @@ async def mint_mcp_key(request: Request, group: str, body: m.Named, p: Principal
     # §31.1: a group key counts as accepted by the admin who minted it, so the admin must have accepted first
     accepted = await configs.require_accepted(svc(request), group, p, public_url(request))
     doc = await svc(request).mint_mcp_key(group, body.name, p.name, accepted_configs=accepted)
+    doc.update(await _push_keys(request, group))  # D92: a new key (a rotation's first half) works without a deploy
     return respond(request, doc, 201, hx_html=_once("MCP key", doc["key"]))
 
 
 @r.delete("/groups/{group}/mcp-keys/{sid}")
 async def delete_mcp_key(request: Request, group: str, sid: str, p: Principal = Depends(admin_g)):
+    """D92 (§16.7): the group's workers drop the key at once; a zone the push cannot reach is a `warning` and is
+    retried in the background."""
     note(request, "mcp_key.delete", f"{group}/{sid}", [f"group:{group}"])
     await svc(request).delete_secret(group, sid, kind="mcp_key")
-    return respond(request, {"ok": True})
+    return respond(request, {"ok": True, **await _push_keys(request, group)})
+
+
+async def _push_keys(request: Request, group: str) -> dict:
+    from .. import revocation
+
+    pushed, warnings = await request.app.state.revocation.push(group)
+    return revocation.answer(pushed, warnings, group)
 
 
 @r.get("/zones")

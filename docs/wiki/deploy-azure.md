@@ -12,9 +12,11 @@ AWS: one cluster per install, and a namespace plus a managed identity per group 
     groups lookup worked through the consent link, and the autoscaling load tests passed with no 5xx
     ([Autoscaling](autoscaling.md#load-tests)). Torn down afterwards.
 
-Cost while it runs, cheap first: the AKS control plane is free (free tier), two `Standard_B2s_v2` nodes (about
-$0.08 an hour together), a Standard public IP and load balancer rule (about $0.03 an hour), ACR Basic (about $0.17 a
-day), and storage and Key Vault at cents. Tear it down when you are done.
+Cost while it runs, cheap first (Linux pay-as-you-go list prices, 2026-11, from the
+[Azure retail prices API](https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices)):
+the AKS control plane is free (free tier), two `Standard_B2s_v2` nodes (about $0.08 an hour each, $0.17 together),
+a Standard public IP and load balancer rule (about $0.03 an hour), ACR Basic (about $0.17 a day), and storage and Key
+Vault at cents. Tear it down when you are done.
 
 ## Prerequisites
 
@@ -104,6 +106,18 @@ kubectl -n ramen-system get certificate console      # READY True within a minut
 curl https://$HOSTNAME/readyz                        # {"ok":true,"store":"azuretables","version":"…"}
 ```
 
+The three values are generated on the command line and never printed. Read them back from the chart's Secret
+when you need them (the sign-in below, `cloud_smoke.sh`):
+
+```sh
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_PASSWORD}' | base64 -d; echo
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_KEY}' | base64 -d; echo
+```
+
+The console re-applies `RAMEN_ADMIN_PASSWORD` to `admin@ramen.local` on every start, so the Secret stays the
+password of record: change it with `helm upgrade … --reuse-values --set console.secrets.RAMEN_ADMIN_PASSWORD=…`
+(a password changed in the console is reset at the next start). Keep `RAMEN_FERNET_KEY`: it encrypts the store ([rotate-keys skill](skills.md) to rotate it).
+
 The chart sets `RAMEN_CLOUD=azure`, `RAMEN_STORE=azuretables` and `RAMEN_SECRETS_BACKEND=azure`, points the console
 at the storage account and Key Vault, gives it the workload identity, and sets `RAMEN_PUBLIC_URL` to
 `https://<public_hostname>`, the OAuth issuer the workers trust. The certificate comes from Let's Encrypt through an
@@ -129,7 +143,7 @@ range; Terraform sets no other) to get it.
 `otel.collector`, `evals.engine` and `skillspector.engine`; `helm_set` carries them (also on their own as
 `terraform output -raw engines_set`): a try-out trace UI ([Telemetry](telemetry.md)), the promptfoo server every
 evals run is shared with ([Evals](evals.md)), and SkillSpector scans of every group's skills
-([SkillSpector](skillspector.md)). Each lives in `ramen-system` without auth or an edge route (`kubectl port-forward`);
+([SkillSpector](skillspector.md)). Each lives in `ramen-system` without an edge route (`kubectl port-forward`), behind the install's engines sign-in (Secret `ramen-engines`, D92);
 turning one on changes only that engine's objects.
 
 ## 4. The first zone, group and deploy
@@ -143,7 +157,7 @@ canary deploy. Creating the environment makes the namespace `ramen-demo-<zone>`,
 (blob reader on the `groups` container, Key Vault Secrets User on exactly the group's secrets), and an HTTPRoute on
 the Gateway matching the two headers. Each deploy also writes the zone's TLS leaf (Secret `ramen-tls`, ConfigMap
 `ramen-ca`) and a `BackendTLSPolicy` on Service `worker`, so Envoy verifies the workers against the install CA as
-`worker.ramen.internal` (D86).
+the zone's own name `<group>.<zone>.worker.ramen.internal` (D86, D92).
 
 ```sh
 curl https://$HOSTNAME/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
@@ -210,8 +224,10 @@ a registry role — the console is the platform's crown jewel on every cloud ([T
   `network_policy = "calico"` (home and satellite), so AKS enforces the policies Ramen writes. On a cluster created
   without it, run `terraform plan` first: if it shows the cluster `must be replaced`, either accept a new cluster
   (the state, groups, secrets and images live outside it: re-run step 3 and redeploy every zone) or turn Calico on in
-  place first where your AKS version offers it (`az aks update -g <rg> -n ramen --network-policy calico`), after
-  which the plan shows no change to the cluster.
+  place first with `az aks update -g <rg> -n ramen --network-policy calico` (supported on an existing cluster per
+  [AKS network policies](https://learn.microsoft.com/azure/aks/use-network-policies): it reimages every node pool
+  at once, with surge nodes, like a node-image upgrade; a cluster on another engine goes to `none` first), after
+  which the plan should show no change to the cluster.
 - **Scaling**: set a max per zone on the group page and turn on the scheduler on the Config page; Ramen scales the
   workers between 1 and the max, and the AKS cluster autoscaler (`node_max`) adds nodes for them
   ([Autoscaling](autoscaling.md)).
@@ -241,7 +257,7 @@ az identity show -g $HOME_RG -n ramen-console --query principalId -o tsv     # c
 az acr show -n $(terraform -chdir=deploy/terraform/azure output -raw acr | cut -d. -f1) --query id -o tsv   # acr_id
 for o in vnet_id vnet_name vnet_resource_group; do terraform -chdir=deploy/terraform/azure output -raw $o; echo; done  # home_vnet_id, home_vnet_name, home_vnet_resource_group
 cd deploy/terraform/azure-satellite && cp terraform.tfvars.example terraform.tfvars   # subscription_id, location=$SAT, the ids and names above
-terraform init && terraform apply                  # about fifteen minutes
+terraform init && terraform apply
 $(terraform output -raw kubeconfig_command)        # kubectl now points at the satellite (admin credentials)
 cd ../../..
 kubectl create ns ramen-system
@@ -266,6 +282,9 @@ per zone.
 
 Caveats:
 
+- **The console at its public URL.** A satellite cannot resolve the home cluster's `console` Service, so a satellite
+  zone's LLM judge proxy calls and a sleeping zone's wake go to the console's public URL (the zone's OAuth issuer:
+  the base URI or `RAMEN_PUBLIC_URL`), verified against the public roots next to the install CA.
 - **Telemetry.** The Config page's one OTLP endpoint must be reachable from every cluster. The chart's try-out
   collectors (Jaeger, Phoenix) live in the home cluster and are cluster-local, so a satellite's workers log
   `telemetry export failed` until you point the endpoint at a collector they can reach.

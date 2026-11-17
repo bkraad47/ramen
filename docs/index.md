@@ -109,7 +109,8 @@ Terraform for GCP, AWS and Azure. Releases are tagged and built by CI.</p>
 <h3 class="ramen-repo__name"><a href="https://github.com/bkraad47/ramen-mcp-bridge">ramen-mcp-bridge</a></h3>
 <p class="ramen-repo__text">What your people run: <code>pip install ramen-mcp-bridge</code>, a stdio MCP server for
 clients that cannot speak HTTP. Signs in through the console or carries a group key, keeps the group's policy and
-writes its client configs.</p>
+writes its client configs. Bridge 1.0.0 is the bridge for Ramen 1.0.0: TLS by default, plaintext only with an
+explicit <code>--insecure</code> for local development.</p>
 <p class="ramen-repo__links"><a href="https://github.com/bkraad47/ramen-mcp-bridge">GitHub</a> · <a href="https://pypi.org/project/ramen-mcp-bridge/">PyPI</a> · <a href="wiki/connect-oauth/">Connect a client</a></p>
 </div>
 

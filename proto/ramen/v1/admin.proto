@@ -7,7 +7,9 @@ service Admin {
   rpc Metrics(MetricsRequest) returns (MetricsReply);
 }
 
-message ReloadRequest {}
+// D92 (CONTRACTS §16.7): `revoked` = the console's `RAMEN_REVOKED` JSON, merged over every config source at once
+// (a revoked key or token is refused from this reload on, before any restart); empty = nothing new.
+message ReloadRequest { bytes revoked = 1; }
 message LoadResult { bytes json = 1; }     // the runtime.load result (tools/resources/prompts/errors/sync) as JSON
 message MetricsRequest {}
 message MetricsReply { bytes json = 1; }   // same fields as the former GET /metrics

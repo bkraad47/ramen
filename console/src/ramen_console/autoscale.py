@@ -17,9 +17,10 @@ from the node's `total` counter between two rebalances.
 - A `count` above `max_count` (the max was lowered) is clamped down at once, cooldown or not.
 - **Latency (§35.1, D83, 1.0.0c)**: a node reports `latency_p50_ms` / `latency_p95_ms` / `latency_n` over its last
   60 s; the zone p50 is the sample-weighted mean of the ready pods' p50s and the window rate is `Σ latency_n / 60`.
-  Up also when the zone p50 ≥ `RAMEN_AUTOSCALE_P50_MS` (500) with at least `RAMEN_AUTOSCALE_MIN_RPS` (2) rps in the
-  window (an idle zone's one slow call is noise); down only when the p50 is under half the bound too. Older nodes
-  (no latency fields) keep the rps-only rules and strings.
+  Up also when the zone p50 ≥ `RAMEN_AUTOSCALE_P50_MS` (250; 500 before the 1.0.0 perf pass, §35.1 — a new worker
+  takes 1–2.5 min to serve behind a cloud LB, so the zone asks while the first one still has headroom) with at least
+  `RAMEN_AUTOSCALE_MIN_RPS` (2) rps in the window (an idle zone's one slow call is noise); down only when the p50 is
+  under half the bound too. Older nodes (no latency fields) keep the rps-only rules and strings.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ def target_rps() -> float:
 
 
 def p50_bound_ms() -> float:
-    return float(os.environ.get("RAMEN_AUTOSCALE_P50_MS", "500"))
+    return float(os.environ.get("RAMEN_AUTOSCALE_P50_MS", "250"))
 
 
 def min_rps() -> float:

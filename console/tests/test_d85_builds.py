@@ -189,6 +189,8 @@ async def test_gcp_registry_helper_edges():
     fk = FakeClients()
     reg = gcp_api.Registry(fk.artifactregistry, "p1", "us-central1", attempts=2, delay=0)
     assert reg.ensure("r1", {}, "d") is True and reg.ensure("r1", {}, "d") is False
+    fk.ar_state["repos"]["projects/p1/locations/us-central1/repositories/r2"] = {"name": "r2"}
+    fk.ar_state["fail"]["list"] = 403  # no list right (pre-tag terraform): get decides
     fk.ar_state["fail"]["get"] = 404  # created between our read and our create: someone else made it
     fk.ar_state["fail"]["create"] = 409
     assert reg.ensure("r2", {}, "d") is False

@@ -522,7 +522,7 @@ def test_spans_of_a_call_and_of_the_deploy_are_in_jaeger(v24, world):
         m.call_raw(CALC, {"var1": 2, "var2": 2, "func": "add"}, headers={"traceparent": f"00-{trace_id}-{parent}-01"})
 
     def trace():
-        r = httpx.get(f"{jaeger}/api/traces/{trace_id}", timeout=15)
+        r = httpx.get(f"{jaeger}/api/traces/{trace_id}", timeout=15, auth=E.engines_auth())
         data = r.json().get("data") if r.status_code == 200 else None
         return data[0] if data and data[0].get("spans") else None
 
@@ -537,7 +537,7 @@ def test_spans_of_a_call_and_of_the_deploy_are_in_jaeger(v24, world):
 
     def deploys():
         q = {"service": "ramen-console", "operation": "ramen.deploy", "lookback": "2h", "limit": 20}
-        r = httpx.get(f"{jaeger}/api/traces", params=q, timeout=15)
+        r = httpx.get(f"{jaeger}/api/traces", params=q, timeout=15, auth=E.engines_auth())
         return (r.json().get("data") or None) if r.status_code == 200 else None
 
     spans = [s for t in poll(deploys, timeout=120, every=5, what="a ramen.deploy span") for s in t["spans"]]

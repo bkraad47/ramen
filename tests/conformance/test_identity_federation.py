@@ -214,11 +214,10 @@ def mint_as(con: LocalConsole, user: Console, client_id: str, group="demo", zone
     page = user.http.get(f"{con.url}/oauth/authorize", params=q, follow_redirects=False)
     if page.status_code != 200:
         return page.status_code
-    r = user.http.post(
-        f"{con.url}/oauth/authorize",
-        data={**q, "decision": "allow", "csrf_token": user.http.cookies.get("ramen_csrf", "")},
-        follow_redirects=False,
-    )
+    form = {**q, "decision": "allow", "csrf_token": user.http.cookies.get("ramen_csrf", "")}
+    if version := user.configs_version(group, zone):  # §31.1: the consent page is also the configs page — tick Accept
+        form["configs_accept"] = version
+    r = user.http.post(f"{con.url}/oauth/authorize", data=form, follow_redirects=False)
     if r.status_code != 303:
         return r.status_code
     code = parse_qs(urlsplit(r.headers["location"]).query)["code"][0]

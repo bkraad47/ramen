@@ -93,12 +93,14 @@ Each zone row then carries the deploy's results: `evals: 6 passed` (linked to th
 ### View the run in promptfoo
 
 The evals badge opens the run in the console: every case with what it sent, what came back and why it failed. With
-`evals.engine: promptfoo`, the same run is also in the chart's promptfoo server, which has its own UI (no sign-in, so
-it is never routed through the edge). Open it through a port-forward to its TLS front:
+`evals.engine: promptfoo`, the same run is also in the chart's promptfoo server, which has its own UI (it shows every
+group's runs, so it is never routed through the edge). Open it through a port-forward to its TLS front, which asks
+for user `admin` and the install's engines password (a super admin with cluster access reads it):
 
 ```bash
 kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443
 # then https://localhost:3443/eval/<run>  — <run> is the promptfoo id the console's run page names
+kubectl -n ramen-system get secret ramen-engines -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
 promptfoo serves HTTPS signed by the install CA, like Phoenix: accept the browser's warning once, or trust the CA
@@ -144,7 +146,7 @@ press **Deploy (canary)** once more.
 
 ## 8. Call a tool
 
-Because the group requires its configs, every call carries the version (bridge 0.6.0 or later does this by itself). Read it
+Because the group requires its configs, every call carries the version (bridge 1.0.0 does this by itself). Read it
 from the public policy and call:
 
 ```sh
@@ -171,8 +173,8 @@ keeps the policy bundle, writes the accepted configs and carries every version o
 ## 9. See it in Phoenix
 
 With `otel.collector=phoenix`, port-forward the UI (`kubectl -n ramen-system port-forward svc/phoenix 6006:6006`, then
-https://localhost:6006 — the same install CA as promptfoo) and
-open project `demo`: one trace per Ramen call, `ramen.user` on every span, and the client's own telemetry next to it
+https://localhost:6006 — the same install CA as promptfoo; sign in as `admin@localhost` with the same engines password)
+and open project `demo`: one trace per Ramen call, `ramen.user` on every span, and the client's own telemetry next to it
 when the bridge wrote the OTel settings.
 
 <figure markdown>

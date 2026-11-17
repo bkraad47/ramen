@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod modern;
 pub mod netc;
 pub mod otel;
+pub mod revoke;
 pub mod server;
 pub mod session;
 pub mod sidecar;

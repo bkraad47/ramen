@@ -163,6 +163,7 @@ every zone below. Redis URL is stored encrypted and never shown again.</p>
 {% if can_admin %}<form class="inline" hx-post="{{ base }}/api/v1/groups/{{ group.id }}/mcp-keys" hx-ext="json" hx-target="#mcp-once" hx-swap="innerHTML"><label>Key name<input name="name" required></label><button>Generate key</button></form><div id="mcp-once"></div>
 <p class="muted">A group MCP key is an agent key: language models present it to this group's workers. It is never accepted by the console API.</p>{% endif %}
 {% macro mact(r) %}{% if can_admin %}<button class="sm danger" hx-delete="{{ base }}/api/v1/groups/{{ group.id }}/mcp-keys/{{ r.id }}" hx-swap="none">Revoke</button>{% endif %}{% endmacro %}
+{% if revocation_pending %}<p class="badge warn" role="status">Revocation pending on {{ revocation_pending.zones | dictsort | map('first') | join(', ') }} since {{ revocation_pending.since }}: those workers still accept what was revoked until the console reaches them (retried in the background; a sleeping zone takes it when it wakes).</p>{% endif %}
 {{ table(mcp_keys, ['name', 'env', 'zone', 'created', 'created_by'] + (['configs'] if configs else []), u('/api/v1/groups/' ~ group.id ~ '/mcp-keys'), 'MCP keys (values never shown)', mact) }}
 
 {% if configs %}<h2>LLM configs</h2>

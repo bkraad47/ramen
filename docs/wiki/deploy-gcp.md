@@ -1,12 +1,15 @@
 # Deploy on GCP
 
 A regional GKE Autopilot cluster, Firestore, a bucket, Secret Manager and a global HTTPS load balancer with a
-Google-managed certificate on a free `sslip.io` hostname. About 25 minutes, most of it waiting for GKE and the
-load balancer. Each release's cloud pass runs this way on a throwaway project and tears it down afterwards ([the record](transport.md#what-is-verified-and-what-is-not)).
+Google-managed certificate on a free `sslip.io` hostname. About 35 minutes, most of it waiting: Terraform
+about ten (the Autopilot cluster), then the Google-managed certificate turns active 22–25 minutes after the apply
+(measured on the 0.7.5 and 0.8.0 cloud passes). Each release's cloud pass runs this way on a throwaway project and tears it down afterwards ([the record](transport.md#what-is-verified-and-what-is-not)).
 
-Cost while it runs: the Autopilot pods (around $0.05 an hour for the console and two small workers, plus the
-control-plane fee after the free tier), the load balancer forwarding rule (around $0.025 an hour), a static IP
-and Artifact Registry storage.
+Cost while it runs: the Autopilot pods, billed by their CPU and memory requests (the console, Redis, the optional
+engines and the workers), the cluster management fee once the billing account's GKE free tier is used, the load
+balancer's forwarding rule, the static IP and Artifact Registry storage. Current rates:
+[GKE pricing](https://cloud.google.com/kubernetes-engine/pricing) and
+[network pricing](https://cloud.google.com/vpc/network-pricing); `scripts/gcp_cost_check.sh` lists what is billable.
 
 ## Prerequisites
 
@@ -86,15 +89,28 @@ kubectl -n ramen-system rollout status deploy/console
 curl https://$HOSTNAME/readyz        # {"ok":true,"store":"firestore","version":"<version>"} once the certificate is active
 ```
 
-Keep the three generated values in a password manager. `RAMEN_PUBLIC_URL` is the address people use and the OAuth
+The three values are generated on the command line and never printed. Read them back from the chart's Secret
+when you need them (the sign-in below, `cloud_smoke.sh`):
+
+```sh
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_PASSWORD}' | base64 -d; echo
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_KEY}' | base64 -d; echo
+```
+
+The console re-applies `RAMEN_ADMIN_PASSWORD` to `admin@ramen.local` on every start, so the Secret stays the
+password of record: change it with `helm upgrade … --reuse-values --set console.secrets.RAMEN_ADMIN_PASSWORD=…`
+(a password changed in the console is reset at the next start). Keep `RAMEN_FERNET_KEY`: it encrypts the store ([rotate-keys skill](skills.md) to rotate it).
+
+`RAMEN_PUBLIC_URL` is the address people use and the OAuth
 issuer the workers trust. `builder_set` (`--set builder.enabled=true`) is what lets a deploy build a group's worker
 image from its `requirements.txt` into the group's own repository ([Worker images](worker-images.md)); leave it out
 and no image is ever built, workers install requirements when they load. Add `--set image.digest=sha256:…` and
 `image.workerDigest=sha256:…` to run the platform images by digest. `evals.gsa` is the identity the evals and scan Jobs run as: it can write logs and
 nothing else, so a group's promptfoo config cannot reach the registry, the bucket or any secret. `cluster.serviceCidr`
 is what lets the console write the `worker-egress` policy into every zone; without it there is none and the chart's
-NOTES say so ([IAM and network on GCP](iam-network-gcp.md#network)). The Gateway reports `PROGRAMMED` after about five minutes and the managed certificate
-turns `ACTIVE` a few minutes later.
+NOTES say so ([IAM and network on GCP](iam-network-gcp.md#network)). The Gateway reports `PROGRAMMED` after a few minutes; the managed certificate
+turned `ACTIVE` 22–25 minutes after the Terraform apply on the measured runs, and the forwarding path answers a
+little later still: poll, do not judge early.
 
 **Optional engines.** `otel_collector = "jaeger" | "phoenix"`, `evals_engine = "promptfoo"` and
 `skillspector_engine = "skillspector"` in `terraform.tfvars` (all `none` by default) become the chart's
@@ -157,7 +173,7 @@ Terraform gives the console's identity `ramen-console@<project>` the least it ne
 | Program the load balancer and Cloud Armor | `roles/compute.loadBalancerAdmin`, `roles/compute.securityAdmin` |
 | Reach the cluster API | `roles/container.developer` project-wide; inside the cluster a ClusterRole for namespaces, network policies and routes, and a RoleBinding to the ClusterRole `ramen-console-zone` in every zone it attaches |
 | Call Vertex AI for LLM rails and evals (§38.1) | `roles/aiplatform.user` project-wide, Terraform variable `console_vertex` (default `true`). Rails reach a provider only through the console's judge proxy, so no worker holds an AI role unless an `ai.user` request is approved for tool code |
-| Create the per-group image repositories (D85) | custom role `ramenConsoleBuildRepoCreate` (`artifactregistry.repositories.create`, checked on the location) and `ramenConsoleBuildRepos` (get, update, delete, get/setIamPolicy) bound project-wide: Artifact Registry ignores IAM Conditions on `resource.name`, so a `ramen-groups-*` condition cannot fence them, and a compromised console could grant itself writer on the platform repository `ramen` (pin platform images by digest). It holds no upload right: it makes `ramen-groups-<group>` and binds `roles/artifactregistry.writer` on it to the KSA principal `ramen-system/ramen-build-<group>` |
+| Create the per-group image repositories (D85) | custom role `ramenConsoleBuildRepoCreate` (`artifactregistry.repositories.create`, `list`, `createTagBinding`, checked before a repository carries a tag) and `ramenConsoleBuildRepos` (get, update, delete, get/setIamPolicy) under an IAM condition on the resource tag `ramen-repo=group`, plus Tag User on that tag value only. Artifact Registry ignores conditions on `resource.name` but evaluates tags: Terraform tags the platform repository `ramen` with `ramen-repo=platform`, and a resource holds one value per key, so the console cannot bring `ramen` under its rights. It holds no upload right: it makes `ramen-groups-<group>`, tags it `group`, waits for IAM to see the tag (up to ~7 minutes on a group's first build) and binds `roles/artifactregistry.writer` on it to the KSA principal `ramen-system/ramen-build-<group>` |
 
 It cannot grant project-wide roles. A permission request that needs one, such as `logs.write`, is recorded with a
 note unless you set `console_project_iam = true` in Terraform.
@@ -179,20 +195,30 @@ The other identities Terraform creates:
 | `ramen-evals@<project>` — evals and scan Jobs | `roles/logging.logWriter` |
 
 Nodes used to run as the project's default compute service account, which Google creates with `roles/editor`. A
-cluster created from 1.0.0c on gets `ramen-nodes@` at creation. GKE refuses to change the node account of an
-existing Autopilot cluster (`400 Overriding Autopilot autoscaling settings is not allowed`), so a cluster made
-earlier keeps the default account until it is re-created: put `node_service_account = "default"` in
+cluster created from 1.0.0c on gets `ramen-nodes@` at creation (satellites too). GKE refuses to change the node
+account of an existing Autopilot cluster (`400 Overriding Autopilot autoscaling settings is not allowed`), so a
+cluster made earlier keeps the default account until it is re-created: put `node_service_account = "default"` in
 `terraform.tfvars` (what the live test cluster does), or plan a re-create (`terraform destroy` of the cluster, the
-groups and secrets survive in the bucket and Secret Manager, zones are re-attached from the console). Once
-`gcloud container clusters describe ramen --region $REGION
---format='value(autoscaling.autoprovisioningNodePoolDefaults.serviceAccount)'` shows `ramen-nodes@`, take the
-default account's editor role away — Terraform never granted it, so it does not remove it:
+groups and secrets survive in the bucket and Secret Manager, zones are re-attached from the console).
+
+Terraform removes `roles/editor` from the default compute account (S5; `remove_default_compute_editor`, default
+`true`), because a compromised console could otherwise use its service-account `setIamPolicy` to act as a project
+editor. A cluster still running as that account keeps working: with `node_service_account = "default"` (or
+`default_compute_runs_nodes = true` for a satellite made before this change) the account first gets the node roles
+listed above. Set `remove_default_compute_editor = false` only when something else in the project relies on the
+default account's `editor` grant (Compute Engine VMs, legacy Cloud Build, Cloud Functions, App Engine).
+`terraform destroy` does not give `editor` back. Check after the apply:
 
 ```sh
-gcloud projects remove-iam-policy-binding $PROJECT \
-  --member=serviceAccount:$(gcloud projects describe $PROJECT --format='value(projectNumber)')-compute@developer.gserviceaccount.com \
-  --role=roles/editor
+gcloud projects get-iam-policy $PROJECT --flatten=bindings --filter="bindings.role=roles/editor" \
+  --format='value(bindings.members)' | tr ';' '\n' | grep -c compute@developer || true   # 0
 ```
+
+**Upgrading an install from before this change** (1.0.0c): `terraform apply` adds the `ramen-repo` tag key and its
+values, tags `ramen`, conditions the console's repository role and removes `editor`; the console of the same release
+tags each existing `ramen-groups-<group>` on the group's next build. Apply terraform and upgrade the console together:
+an older console cannot tag, so after the apply it no longer reaches the group repositories (a build fails with
+`403` until the console is upgraded). Run `terraform plan` again after the apply: it must show no changes.
 
 ## Day 2
 
@@ -248,7 +274,8 @@ server with the `roles/container.developer` the home apply already gave it.
 Keep one Terraform state per satellite (a copy of the directory per region). Switch `kubectl` back to the home
 cluster afterwards (`gcloud container clusters get-credentials ramen --region $REGION`) and tell the home chart about
 the satellite: the console's identity there goes into every zone RoleBinding, and its home pod range into every
-worker NetworkPolicy.
+satellite zone's worker NetworkPolicy (a home zone never admits it; in `ramen-system` it reaches the console port
+only).
 
 ```sh
 helm upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values \
@@ -264,11 +291,14 @@ sign-in guide name the right host per zone.
 
 Caveats:
 
+- **The console at its public URL.** A satellite cannot resolve the home cluster's `console` Service, so a satellite
+  zone's LLM judge proxy calls and a sleeping zone's wake go to the console's public URL (the zone's OAuth issuer:
+  the base URI or `RAMEN_PUBLIC_URL`), verified against the public roots next to the install CA.
 - **Telemetry.** The Config page's one OTLP endpoint must be reachable from every cluster. The chart's try-out
   collectors (Jaeger, Phoenix) live in the home cluster and are cluster-local, so a satellite's workers log
   `telemetry export failed` until you point the endpoint at a collector they can reach.
 - **Cost.** A second Autopilot cluster (its control-plane fee after the free tier and its pods) and a second global
-  load balancer forwarding rule and static IP, at the rates above.
+  load balancer forwarding rule and static IP.
 - **Clean-up order.** Delete the satellite's zones in the console first (that frees their namespaces and network
   endpoint groups and lets the Clusters card drop the satellite), then `helm uninstall ramen-satellite -n ramen-system`
   on the satellite, then `terraform -chdir=deploy/terraform/gcp-satellite destroy`. The Clusters card refuses to

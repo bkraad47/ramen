@@ -57,7 +57,9 @@ console:
     #                                                 # accept rmk_ keys only and the deploy job log says so
   # §28 satellite clusters: how the console appears to a satellite API server (GKE: User <gsa email>, EKS: Group
   # ramen-console from the access entry, AKS: User <object id>) and the home networks its traffic comes from (the home
-  # pod range / VPC / VNet) — bound in every zone namespace and admitted by every worker NetworkPolicy.
+  # pod range on GKE; the home node subnets on EKS/AKS, where the cross-VPC hop is SNATed) — bound in every zone
+  # namespace; admitted only by SATELLITE zones' worker NetworkPolicies and the console's own port (S6), never by a home
+  # zone or the other ramen-system services.
   k8sSubjects: []            # e.g. [{kind: Group, name: ramen-console}]   (--set-json 'console.k8sSubjects=[...]')
   sourceCidrs: []            # e.g. [10.7.128.0/17]
   secrets:                   # rendered into Secret ramen-console; set via --set or a values file kept out of git
@@ -68,10 +70,10 @@ console:
 
 # D86 (CONTRACTS §39): TLS on every hop with Ramen's own per-install CA — no cert-manager, no mesh. The console creates
 # the CA once (its key stays in the console's secret store), issues 30-day leaves to itself, to every zone at deploy and
-# to the services below (Secrets ramen-tls-<svc>, ConfigMap ramen-ca), and renews them. `require: false` does not
-# render: plaintext is refused on cloud installs.
+# to the services below (Secrets ramen-tls-<svc>, ConfigMap ramen-ca), and renews them. `require` is always true — it
+# is not a setting: `--set tls.require=false` fails the render, and every pod gets RAMEN_REQUIRE_TLS=1 regardless.
 tls:
-  require: true
+  require: true              # always true (D86); kept so a values file that names it still renders
   leafDays: 30               # RAMEN_TLS_LEAF_DAYS
   renewSecs: 3600            # RAMEN_TLS_RENEW_SECS: how often due leaves are re-issued
 
@@ -128,7 +130,7 @@ storage:
 redis:
   enabled: false
   externalUrl: ""            # e.g. terraform output -raw redis_url on azure (--set-string redis.externalUrl=...)
-  image: redis:7.4.2-alpine
+  image: redis:7.4-alpine
   resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
   auth:
     generate: true
@@ -154,8 +156,10 @@ builder:
 # `phoenix` adds Arize Phoenix (UI 6006, SQLite on a PVC) behind an OpenTelemetry Collector sidecar on 4318
 # that turns Ramen's OTLP/JSON into the protobuf Phoenix takes and drops the metrics Phoenix has no endpoint for.
 # Jaeger keeps its traces in memory: a restart (an upgrade, a CA switch, §39.1) empties it.
-# Both: no auth, no route from any edge — for trying telemetry out and for the test runs, NOT for production.
-# Point Config → Telemetry at http://jaeger.<namespace>:4318 or http://phoenix.<namespace>:4318.
+# Both: no route from any edge — for trying telemetry out and for the test runs, NOT for production. D92: both UIs want
+# a sign-in (Phoenix's own auth; Jaeger's query behind a TLS front) — credentials in Secret ramen-engines (see `engines`).
+# Point Config → Telemetry at https://jaeger.<namespace>:4318 or https://phoenix.<namespace>:4318 (OTLP needs no credential;
+# the NetworkPolicy admits the console, the workers and the Jobs).
 otel:
   collector: none            # none | jaeger | phoenix
   jaeger:
@@ -170,10 +174,19 @@ otel:
     # Deployment rolls with maxSurge 0 (old pod first). false = an emptyDir, emptied on every restart.
     persistence: { enabled: true, size: 5Gi, storageClass: "" }   # "" = the cluster default
 
+# D92 (CONTRACTS §39.7): the optional engines' credentials. Secret `ramen-engines` is generated at install (kept across
+# upgrades) whenever Phoenix, Jaeger or promptfoo runs: `username`/`password` (the operator: Phoenix's UI as
+# admin@localhost, Jaeger's and promptfoo's TLS fronts), `upload-username`/`upload-password` (the evals Jobs: promptfoo's
+# share upload only), `phoenix-secret`, `phoenix-admin-secret`. Read one: `kubectl -n <ns> get secret ramen-engines -o
+# jsonpath='{.data.password}' | base64 -d`. `existingSecret` names your own Secret with the same keys instead.
+engines:
+  existingSecret: ""
+
 # §29.2 evals. With `image` set the console runs a group repo's mcp/evals/promptfooconfig.yaml as a promptfoo Job
 # (RAMEN_EVALS_IMAGE; `--no-write`, results in the deploy job only) after each zone's golden cases; empty = no evals
-# engine. `engine: promptfoo` adds a promptfoo server (UI + API on 3000, its data on a PVC) to this namespace, no auth,
-# no edge route — try-out and test runs, like Jaeger/Phoenix — and every run is shared there (RAMEN_EVALS_API_URL =
+# engine. `engine: promptfoo` adds a promptfoo server (UI + API on 3000, its data on a PVC) to this namespace behind an
+# authenticated TLS front (D92, Secret ramen-engines), no edge route — try-out and test runs, like Jaeger/Phoenix — and
+# every run is shared there with the Jobs' upload-only credential (RAMEN_EVALS_API_URL =
 # https://promptfoo.<namespace>:3000, behind its TLS front). The group page's evals badge opens the run's cases in the
 # console; `uiUrl` is where a person opens promptfoo's own UI (RAMEN_EVALS_UI_URL, named on the Config page and the
 # run page): `kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443` → https://localhost:3443 (the pod's TLS front, signed by the install CA — trust ramen-ca's ca.crt).

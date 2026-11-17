@@ -13,6 +13,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -330,10 +331,34 @@ def test_the_baked_package_is_importable_through_the_edge(v1, zone_targets, grou
 # --- §24.3 spans in Jaeger --------------------------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def jaeger():
-    """The chart's Jaeger query API: the kind NodePort, else `RAMEN_JAEGER_URL`, else a port-forward."""
+    """The chart's Jaeger query API: the kind NodePort, else `RAMEN_JAEGER_URL`, else a port-forward. D92: behind its
+    TLS front, with the operator's credential (`RAMEN_ENGINES_PASSWORD`, else read from Secret ramen-engines)."""
+    if not E.engines_auth():
+        out = subprocess.run(  # noqa: S603
+            [
+                "kubectl",
+                "--context",
+                kube.kind_context(),
+                "-n",
+                "ramen-system",
+                "get",
+                "secret",
+                "ramen-engines",
+                "-o",
+                "jsonpath={.data.password}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if out.returncode == 0 and out.stdout:
+            os.environ["RAMEN_ENGINES_PASSWORD"] = base64.b64decode(out.stdout).decode()
     url = E.env("RAMEN_JAEGER_URL", "https://localhost:18086")
     try:
-        if httpx.get(f"{url}/api/services", timeout=5, verify=E.console_verify()).status_code == 200:
+        if (
+            httpx.get(f"{url}/api/services", timeout=5, verify=E.console_verify(), auth=E.engines_auth()).status_code
+            == 200
+        ):
             yield url
             return
     except httpx.HTTPError:
@@ -351,7 +376,10 @@ def jaeger():
 
 def _up(url: str) -> bool:
     try:
-        return httpx.get(f"{url}/api/services", timeout=3, verify=E.console_verify()).status_code == 200
+        return (
+            httpx.get(f"{url}/api/services", timeout=3, verify=E.console_verify(), auth=E.engines_auth()).status_code
+            == 200
+        )
     except httpx.HTTPError:
         return False
 
@@ -370,7 +398,7 @@ def test_jaeger_holds_the_node_span_of_a_call_with_its_runtime_child(v1, jaeger,
         assert got.result and got.result.get("resultType") in ("complete", "input_required"), got.message
 
     def fetch():
-        r = httpx.get(f"{jaeger}/api/traces/{trace_id}", timeout=10, verify=E.console_verify())
+        r = httpx.get(f"{jaeger}/api/traces/{trace_id}", timeout=10, verify=E.console_verify(), auth=E.engines_auth())
         data = r.json().get("data") if r.status_code == 200 else None
         return data[0] if data and len(data[0].get("spans", [])) >= 1 else None
 
@@ -396,6 +424,8 @@ def test_jaeger_holds_the_consoles_deploy_span(v1, jaeger, group, env_name):
             f"{jaeger}/api/traces",
             params={"service": "ramen-console", "operation": "ramen.deploy", "lookback": "1h", "limit": 20},
             timeout=10,
+            verify=E.console_verify(),
+            auth=E.engines_auth(),
         )
         return (r.json().get("data") or None) if r.status_code == 200 else None
 

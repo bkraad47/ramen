@@ -6,7 +6,10 @@ receivers:
     protocols:
       http: { endpoint: 0.0.0.0:4318, tls: { cert_file: /certs/phoenix-collector/tls.crt, key_file: /certs/phoenix-collector/tls.key } }
 exporters:
-  otlp_http: { endpoint: https://phoenix:6006, tls: { ca_file: /certs/ca/ca.crt } }
+  otlp_http:
+    endpoint: https://phoenix:6006
+    tls: { ca_file: /certs/ca/ca.crt }
+    headers: { authorization: "Bearer ${env:PHOENIX_ADMIN_SECRET}" }   # D92: Phoenix's auth is on
   nop: {}
 extensions:
   health_check: { endpoint: 0.0.0.0:13133 }

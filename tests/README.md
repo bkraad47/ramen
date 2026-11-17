@@ -81,14 +81,25 @@ cd tests && uv sync
 uv run pytest                                   # no env: fixtures run, everything else skips (CI "tests" job)
 uv run pytest conformance/test_sidecar_protocol.py   # after `uv sync` in ../runtime-py
 ```
-Local compose stack (`deploy/local/docker-compose.yml`):
+Local compose stack (`deploy/local/docker-compose.yml`), as the CI `e2e` job runs it:
 ```sh
-docker compose -f deploy/local/docker-compose.yml up -d --build
+docker compose -f deploy/local/docker-compose.yml --profile ci up -d --build
 scripts/wait_ready.sh https://localhost:8443/login && scripts/wait_ready.sh localhost:8080 120 2 --any
 cd tests && RAMEN_CONSOLE_URL=https://localhost:8443 RAMEN_NODE_URL=localhost:8080 RAMEN_ADMIN_KEY=$(sed -n 's/^RAMEN_ADMIN_KEY=//p' ../deploy/local/.env) \
-  RAMEN_ADMIN_EMAIL=admin@ramen.local RAMEN_ADMIN_PASSWORD=$(sed -n 's/^RAMEN_ADMIN_PASSWORD=//p' ../deploy/local/.env) RAMEN_TLS_INSECURE=1 \
+  RAMEN_ADMIN_EMAIL=admin@ramen.local RAMEN_ADMIN_PASSWORD=$(sed -n 's/^RAMEN_ADMIN_PASSWORD=//p' ../deploy/local/.env) \
+  RAMEN_INSTALL_CA=$PWD/../deploy/local/.certs/ca/ca.crt RAMEN_FAKE_LLM_URL=https://fake-llm:8443/v1 \
   uv run pytest -rs e2e conformance cloud --cov --cov-report=xml
 ```
+**The CI judge.** The demo repo's `main` (1.0.0) names LLM rails (`iris_report`, `iris_outliers`, CONTRACTS §36), so a
+deploy needs an LLM provider. Profile `ci` adds service `fake-llm`: `ramen_tests.fakes.FakeOpenAI` run by the console
+image (`python fakes.py --listen … --cert … --key …`, stdlib only), TLS with the `fake-llm` leaf of the compose CA,
+not published. It answers every judge question so that a normal call passes ("No" to "should this be blocked?", "yes"
+to "is it entailed?"; the reverse when the prompt carries `fakes.JAILBREAK_MARKER`) and lists `fake-mini` on
+`GET /v1/models`. With `RAMEN_FAKE_LLM_URL` set, the `admin` fixture puts it on Config → LLM providers (`openai`,
+`base_url` that URL, allowed model `fake-mini`, a dummy key); the console reaches it trusting the compose CA, and the
+worker's rails reach it through the console's judge proxy (`RAMEN_CONSOLE_INTERNAL_URL=https://console:8443`). The
+real-node suites need no compose: `LocalConsole` starts one TLS judge per process (CA from `ramen_console.tls init`,
+trusted through `SSL_CERT_FILE`) and `seed_group` sets it as the org provider (`conformance/test_fake_judge.py`).
 `RAMEN_NODE_URL` is a gRPC target `host:port`: a worker directly (compose `localhost:8080`, h2c) or the cloud LB (`RAMEN_NODE_TLS=1`);
 there is no path — the LB routes on the `ramen-group`/`ramen-zone` metadata the harness always sends. `Admin/*` cases skip
 with a reason when `RAMEN_ADMIN_KEY` is unset or the worker's `RAMEN_ADMIN_CIDRS` exclude the caller (typical through an LB).

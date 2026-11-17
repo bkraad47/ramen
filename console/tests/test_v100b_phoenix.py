@@ -37,8 +37,8 @@ def test_phoenix_is_a_collector_choice_with_otlp_and_ui_on_one_port():
     by = {c["name"]: c for c in dep["spec"]["template"]["spec"]["containers"]}
     assert by["phoenix"]["image"].startswith("arizephoenix/phoenix:")
     assert {p["containerPort"] for p in by["phoenix"]["ports"]} >= {6006, 4317}
-    env = {e["name"]: e["value"] for e in by["phoenix"]["env"]}
-    assert env["PHOENIX_ENABLE_AUTH"] == "false"  # a non-loopback bind would switch auth on and 401 every OTLP post
+    env = {e["name"]: e.get("value") for e in by["phoenix"]["env"]}
+    assert env["PHOENIX_ENABLE_AUTH"] == "true"  # D92: the collector posts with the admin secret (test_d92_engines)
     assert dep["spec"]["template"]["spec"]["securityContext"]["runAsNonRoot"] is True
     # Phoenix takes protobuf only (415 on Ramen's OTLP/JSON) and has no /v1/metrics (405): a collector sidecar on
     # 4318 converts the traces and drops the metrics, so the endpoint is the same port as the chart's Jaeger
@@ -83,7 +83,7 @@ def test_phoenix_keeps_its_span_history_on_a_volume_across_restarts():
     vols = {v["name"]: v for v in pod["volumes"]}
     assert vols["data"] == {"name": "data", "persistentVolumeClaim": {"claimName": "phoenix"}}
     by = {c["name"]: c for c in pod["containers"]}
-    env = {e["name"]: e["value"] for e in by["phoenix"]["env"]}
+    env = {e["name"]: e.get("value") for e in by["phoenix"]["env"]}
     assert {"name": "data", "mountPath": env["PHOENIX_WORKING_DIR"]} in by["phoenix"]["volumeMounts"]
     assert pod["securityContext"]["fsGroup"] == 65532  # the volume is writable by the nonroot image
     rc, _, docs = template(

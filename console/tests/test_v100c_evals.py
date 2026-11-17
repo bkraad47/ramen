@@ -498,6 +498,7 @@ def test_the_evals_report_page(demo, runner, tmp_path, monkeypatch):
     for text in ("case 0", "counts &lt;words&gt;", "expected 6", "provider exploded", "five", "eval-abc"):
         assert text in r.text, text
     assert "1 passed, 1 failed, 1 errors" in r.text
+    assert r.text.count("<h1") == 1 and "<h1>Evals — demo / zone-a</h1>" in r.text  # N10: the title once
     assert "https://localhost:3443/eval/eval-abc" in r.text and evals.PORT_FORWARD in r.text
     assert "promptfoo.ramen-system" not in r.text
     assert demo.get(f"/groups/demo/evals/{job['id']}/zone-b").status_code == 404

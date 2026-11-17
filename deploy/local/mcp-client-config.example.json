@@ -46,7 +46,7 @@
     "_notes": [
       "The bridge reads the key from RAMEN_MCP_KEY (or RAMEN_BRIDGE_KEY, or --key); nothing in the args.",
       "Add --ca /path/to/lb-ca.pem when the load balancer's certificate is not in the system store.",
-      "The bridge is TLS by default (0.6.0); --insecure is for a bare local node only and is an error next to --ca."
+      "The bridge is TLS by default (1.0.0); --insecure is for a bare local node only and is an error next to --ca."
     ]
   },
   "mcpServers": {

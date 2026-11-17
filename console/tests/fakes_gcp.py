@@ -749,34 +749,73 @@ def iam_handler(state):
     return h
 
 
-def ar_handler(state):
-    """§38.2 Artifact Registry: state {'repos': {name: repo}, 'policies': {name: policy}, 'fail': {method: status}}."""
+def ar_handler(state, tags=None):
+    """§38.2 Artifact Registry: state {'repos': {name: repo}, 'policies': {name: policy}, 'fail': {method: status}}.
+    `conditioned` = the tag value the console's repository rights need (terraform's matchTag condition): get, update,
+    delete and IAM answer 403 on a repository without it (also on a missing one, as AR does), and `propagation` more
+    403s once it is bound. `page_size` pages `list`."""
+    tags = tags if tags is not None else {}
 
     def h(coll, method, kw):
         assert coll == "projects.locations.repositories", coll
         repos, pols = state.setdefault("repos", {}), state.setdefault("policies", {})
         if status := state.setdefault("fail", {}).pop(method, None):
             raise FakeApiError(status, f"injected {method}")
+        if method == "list":
+            names = sorted(n for n in repos if n.startswith(kw["parent"] + "/"))
+            size, start = state.get("page_size", 1000), int(kw.get("pageToken") or 0)
+            page = {"repositories": [copy.deepcopy(repos[n]) for n in names[start : start + size]]}
+            if start + size < len(names):
+                page["nextPageToken"] = str(start + size)
+            return page
         if method == "create":
             name = f"{kw['parent']}/repositories/{kw['repositoryId']}"
             if name in repos:
                 raise FakeApiError(409, "exists")
             repos[name] = {"name": name, **copy.deepcopy(kw["body"])}
             return {"name": f"{kw['parent']}/operations/op1", "done": False}
+        name = kw.get("name") or kw.get("resource")
+        if want := state.get("conditioned"):
+            if tags.setdefault("bindings", {}).get(f"//artifactregistry.googleapis.com/{name}") != want:
+                raise FakeApiError(403, f"Permission denied on {name} (condition)")
+            if state.get("propagation", 0) > 0:
+                state["propagation"] -= 1
+                raise FakeApiError(403, f"Permission denied on {name} (propagating)")
         if method in ("get", "delete"):
-            if kw["name"] not in repos:
+            if name not in repos:
                 raise FakeApiError(404, "no repository")
             if method == "delete":
-                del repos[kw["name"]]
-                pols.pop(kw["name"], None)
+                del repos[name]
+                pols.pop(name, None)
+                tags.setdefault("bindings", {}).pop(f"//artifactregistry.googleapis.com/{name}", None)
                 return {"done": True}
-            return copy.deepcopy(repos[kw["name"]])
+            return copy.deepcopy(repos[name])
         if method == "getIamPolicy":
-            return copy.deepcopy(pols.get(kw["resource"], {"bindings": []}))
+            return copy.deepcopy(pols.get(name, {"bindings": []}))
         if method == "setIamPolicy":
-            pols[kw["resource"]] = copy.deepcopy(kw["body"]["policy"])
+            pols[name] = copy.deepcopy(kw["body"]["policy"])
             return kw["body"]["policy"]
         raise AssertionError(f"unexpected {coll}.{method}")
+
+    return h
+
+
+def tags_handler(state):
+    """Resource Manager v3 TagBindings (regional endpoint): state {'bindings': {parent: value}, 'fail': [status, …]}.
+    One value per key: a second, different value on the same resource is refused (400), the same one is 409."""
+
+    def h(coll, method, kw):
+        assert (coll, method) == ("tagBindings", "create"), (coll, method)
+        if state.setdefault("fail", []):
+            raise FakeApiError(state["fail"].pop(0), "injected tagBindings.create")
+        body, bindings = kw["body"], state.setdefault("bindings", {})
+        value = body.get("tagValue") or body["tagValueNamespacedName"]
+        if (had := bindings.get(body["parent"])) is not None:
+            if had == value:
+                raise FakeApiError(409, "tag binding exists")
+            raise FakeApiError(400, "FAILED_PRECONDITION: a value of this key is already attached")
+        bindings[body["parent"]] = value
+        return {"name": "operations/rctb.1", "done": True}
 
     return h
 
@@ -793,8 +832,18 @@ class FakeClients:
         self.iam = FakeDiscovery(iam_handler(self.iam_state))
         self.crm = self.iam
         self.ar_state: dict = {}
-        self.artifactregistry = FakeDiscovery(ar_handler(self.ar_state))
+        self.tag_state: dict = {"bindings": {}, "locations": []}
+        self.artifactregistry = FakeDiscovery(ar_handler(self.ar_state, self.tag_state))
+        self._tags = FakeDiscovery(tags_handler(self.tag_state))
         self.satellites: dict[str, FakeClients] = {}  # §28.2: name → the second cluster's bundle
+
+    def tag_bindings(self, location):
+        if location not in self.tag_state["locations"]:
+            self.tag_state["locations"].append(location)
+        return self._tags
+
+    def tag_calls(self):
+        return self._tags.calls
 
     def for_cluster(self, project, location, name):
         """A satellite bundle: its own FakeK8s; the project-level planes (storage, SM, logging, compute, IAM) shared."""

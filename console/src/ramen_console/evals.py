@@ -19,6 +19,7 @@ import yaml
 
 PATH = "mcp/evals/promptfooconfig.yaml"
 NS = "ramen-system"
+UPLOAD_USER = "evals"  # Secret ramen-engines `upload-username` (D92)
 SA_ENV, DEFAULT_SA = "RAMEN_EVALS_SA", "ramen-evals"
 JOB_LABEL = "ramen.io/job"  # the ramen-system NetworkPolicies select Job pods on it: evals | scan
 IMAGE_ENV, API_ENV, UI_ENV, TIMEOUT_ENV = (
@@ -379,13 +380,13 @@ def stored_report(parsed: dict) -> dict:
     return out
 
 
-def mcp_url(target: str) -> str:
-    """The canary's Streamable HTTP URL for the Job: `https://worker.ramen.internal:8080/mcp` on a TLS install (D86
-    §39.3: the name the zone's leaf carries, aliased to the pod IP by `job_spec`), else the pod address."""
-    from .tls import WORKER_NAME, require_tls
+def mcp_url(target: str, group: str, zone: str) -> str:
+    """The canary's Streamable HTTP URL for the Job: `https://<group>.<zone>.worker.ramen.internal:8080/mcp` on a TLS
+    install (D86 §39.3, D92 §39.2a: the zone's own name, aliased to the pod IP by `job_spec`), else the pod address."""
+    from .tls import require_tls, worker_name
 
     if require_tls():
-        return f"https://{WORKER_NAME}:{target.rsplit(':', 1)[-1]}/mcp"
+        return f"https://{worker_name(group, zone)}:{target.rsplit(':', 1)[-1]}/mcp"
     return f"http://{target}/mcp"
 
 
@@ -422,6 +423,13 @@ def job_spec(
         {"name": "PROMPTFOO_DISABLE_UPDATE", "value": "1"},
     ]
     if api_url:  # the upload goes to the server; promptfoo's own share link names where a person opens the UI
+        if secret := os.environ.get("RAMEN_ENGINES_SECRET", "").strip():
+            # D92 §39.7: the server's TLS front takes the Jobs' upload-only credential (a share upload, never a read);
+            # promptfoo turns URL userinfo into Basic auth and strips it from the request and the printed link
+            ref = {"secretKeyRef": {"name": secret, "key": "upload-password"}}
+            pod_env.append({"name": "RAMEN_PROMPTFOO_UPLOAD_PASSWORD", "valueFrom": ref})
+            scheme, _, rest = api_url.partition("://")
+            api_url = f"{scheme}://{UPLOAD_USER}:$(RAMEN_PROMPTFOO_UPLOAD_PASSWORD)@{rest}"
         pod_env += [
             {"name": "PROMPTFOO_REMOTE_API_BASE_URL", "value": api_url},
             {"name": "PROMPTFOO_REMOTE_APP_BASE_URL", "value": ui_url() or DEFAULT_UI},
@@ -452,14 +460,16 @@ def job_spec(
         "containers": [container],
         "volumes": [{"name": "config", "configMap": {"name": name}}, {"name": "out", "emptyDir": {}}],
     }
-    if worker_ip:  # D86 §39.3: the canary by the name its leaf carries
-        from .tls import WORKER_NAME
+    if worker_ip:  # D86 §39.3 / D92: the canary by its zone's name, the one its leaf carries
+        from .tls import worker_name
 
-        pod["hostAliases"] = [{"ip": worker_ip, "hostnames": [WORKER_NAME]}]
+        pod["hostAliases"] = [{"ip": worker_ip, "hostnames": [worker_name(group, zone)]}]
     if worker_ip or (api_url or "").startswith("https://"):  # the canary's and the server's leaves: the install CA
         pod["volumes"].append({"name": "ramen-ca", "configMap": {"name": "ramen-ca"}})
         container["volumeMounts"].append({"name": "ramen-ca", "mountPath": "/etc/ramen/ca", "readOnly": True})
         container["env"].append({"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/ramen/ca/ca.crt"})
+        # D92: promptfoo's own fetch skips certificate checks unless told (PROMPTFOO_INSECURE_SSL defaults to true)
+        container["env"].append({"name": "PROMPTFOO_INSECURE_SSL", "value": "false"})
     job = {
         "apiVersion": "batch/v1",
         "kind": "Job",

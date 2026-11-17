@@ -20,7 +20,7 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n4ramen_console/proto/ramen_proto/ramen/v1/admin.proto\x12\x08ramen.v1"\x0f\n\rReloadRequest"\x1a\n\nLoadResult\x12\x0c\n\x04json\x18\x01 \x01(\x0c"\x10\n\x0eMetricsRequest"\x1c\n\x0cMetricsReply\x12\x0c\n\x04json\x18\x01 \x01(\x0c\x32}\n\x05\x41\x64min\x12\x37\n\x06Reload\x12\x17.ramen.v1.ReloadRequest\x1a\x14.ramen.v1.LoadResult\x12;\n\x07Metrics\x12\x18.ramen.v1.MetricsRequest\x1a\x16.ramen.v1.MetricsReplyb\x06proto3'
+    b'\n4ramen_console/proto/ramen_proto/ramen/v1/admin.proto\x12\x08ramen.v1" \n\rReloadRequest\x12\x0f\n\x07revoked\x18\x01 \x01(\x0c"\x1a\n\nLoadResult\x12\x0c\n\x04json\x18\x01 \x01(\x0c"\x10\n\x0eMetricsRequest"\x1c\n\x0cMetricsReply\x12\x0c\n\x04json\x18\x01 \x01(\x0c\x32}\n\x05\x41\x64min\x12\x37\n\x06Reload\x12\x17.ramen.v1.ReloadRequest\x1a\x14.ramen.v1.LoadResult\x12;\n\x07Metrics\x12\x18.ramen.v1.MetricsRequest\x1a\x16.ramen.v1.MetricsReplyb\x06proto3'
 )
 
 _globals = globals()
@@ -29,13 +29,13 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "ramen_console.proto.ramen_p
 if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
     _globals["_RELOADREQUEST"]._serialized_start = 66
-    _globals["_RELOADREQUEST"]._serialized_end = 81
-    _globals["_LOADRESULT"]._serialized_start = 83
-    _globals["_LOADRESULT"]._serialized_end = 109
-    _globals["_METRICSREQUEST"]._serialized_start = 111
-    _globals["_METRICSREQUEST"]._serialized_end = 127
-    _globals["_METRICSREPLY"]._serialized_start = 129
-    _globals["_METRICSREPLY"]._serialized_end = 157
-    _globals["_ADMIN"]._serialized_start = 159
-    _globals["_ADMIN"]._serialized_end = 284
+    _globals["_RELOADREQUEST"]._serialized_end = 98
+    _globals["_LOADRESULT"]._serialized_start = 100
+    _globals["_LOADRESULT"]._serialized_end = 126
+    _globals["_METRICSREQUEST"]._serialized_start = 128
+    _globals["_METRICSREQUEST"]._serialized_end = 144
+    _globals["_METRICSREPLY"]._serialized_start = 146
+    _globals["_METRICSREPLY"]._serialized_end = 174
+    _globals["_ADMIN"]._serialized_start = 176
+    _globals["_ADMIN"]._serialized_end = 301
 # @@protoc_insertion_point(module_scope)

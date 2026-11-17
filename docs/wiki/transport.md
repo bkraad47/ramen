@@ -38,21 +38,21 @@ costs one respawn, not the pod that holds the keys.
 | Hop | What it is | What protects it |
 |---|---|---|
 | Client → edge (HTTP) | `POST https://<edge>/mcp` | TLS at the load balancer (its public certificate); the credential in `Authorization: Bearer`; a browser `Origin` must be on the zone's allowlist (see [Origin](#origin)); a session id is signed and bound to the credential (see [Sessions](#sessions)). The local compose worker is `https://localhost:8080` with the local CA |
-| Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; TLS (system roots, or `--ca <pem>`): **the default from bridge 0.6.0**, which is not on PyPI yet — the published 0.3.0 needs `--tls` (or `--ca`); plaintext only with an explicit `--insecure`, for local development. The credential is a group key (`--key`, `RAMEN_BRIDGE_KEY` or `RAMEN_MCP_KEY`) or the person's own sign-in (`--oauth`) |
-| Edge → node | GKE Gateway, an AWS ALB, or Envoy Gateway on AKS → the zone's pods | **TLS to the pod**: the node serves its zone's leaf from Ramen's install CA. GKE backends speak HTTP/2 over TLS (`appProtocol: HTTP2`, health check `HTTP2` on `/readyz`); ALB target groups are `HTTPS`; Envoy verifies the pod against the install CA (`BackendTLSPolicy`, name `worker.ramen.internal`). Google's front ends and the ALB encrypt this hop but do not verify the certificate. Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group; on AKS an Envoy `SecurityPolicy` per zone route |
+| Client → bridge → edge (stdio) | a child process on the client's own machine, speaking gRPC over HTTP/2 to the edge | process boundary on the client; TLS (system roots, or `--ca <pem>`): **the default in bridge 1.0.0**, the bridge for Ramen 1.0.0 (0.3.x needs `--tls` or `--ca`, which the printed commands keep); plaintext only with an explicit `--insecure`, for local development. The credential is a group key (`--key`, `RAMEN_BRIDGE_KEY` or `RAMEN_MCP_KEY`) or the person's own sign-in (`--oauth`) |
+| Edge → node | GKE Gateway, an AWS ALB, or Envoy Gateway on AKS → the zone's pods | **TLS to the pod**: the node serves its zone's leaf from Ramen's install CA. GKE backends speak HTTP/2 over TLS (`appProtocol: HTTP2`, health check `HTTP2` on `/readyz`); ALB target groups are `HTTPS`; Envoy verifies the pod against the install CA (`BackendTLSPolicy`, the zone's own name `<group>.<zone>.worker.ramen.internal`). Google's front ends and the ALB encrypt this hop but do not verify the certificate. Cloud Armor IP rules apply here on GCP — **one policy per group**, not per zone; on AWS a WAFv2 IP set and a web-ACL rule per group; on AKS an Envoy `SecurityPolicy` per zone route |
 | Edge → node, without a key | `grpc.health.v1.Health`, the OAuth resource metadata, and gRPC reflection where it is enabled | not key-checked or source-range-checked, by design; reflection is off on deployed workers ([the unauthenticated surface](#the-unauthenticated-surface)) |
 | Kubelet → node | readiness `/readyz`, liveness `/healthz` | HTTPS probes on the node's port (kubelet's gRPC probe cannot speak TLS); no data, no key |
 | Anything else → the pod, directly | other pods, or the cluster network | the worker `NetworkPolicy` and the hardened container context ([what bounds direct access](#what-bounds-direct-access-to-a-pod)); the port speaks TLS only |
 | Node (every `Mcp/Call`) | the guard in front of your code | the bearer key in constant time ([the bearer key](#the-bearer-key)); source range against `RAMEN_ALLOWED_CIDRS`; blocked names filtered; 4 MiB message cap; `RAMEN_MAX_INFLIGHT` cap |
 | Node → runtime | JSON-RPC on stdio inside the pod | no network surface; the runtime is a child process of the node |
 | Runtime → bucket | read of the group's prefix, by content hash | HTTPS to the cloud API with the zone's own cloud identity, scoped to that group's bucket prefix and that group's secrets (IRSA on AWS, workload identity on AKS, which can read the whole `groups` container — see below) |
-| Console → node | `Admin/Reload`, `Admin/Metrics`, `Health/Check`, smoke and golden calls on the pod IP | gRPC over TLS, verified against the install CA as `worker.ramen.internal`; `Admin/*` additionally needs `x-ramen-admin-key` and `RAMEN_ADMIN_CIDRS`, and is not routed through the load balancer at all |
-| Activator → `worker-direct` | a sleeping zone's activator forwarding to the real workers | TLS, verified against the install CA |
+| Console → node | `Admin/Reload`, `Admin/Metrics`, `Health/Check`, smoke and golden calls on the pod IP | gRPC over TLS, verified against the install CA as the zone's own name `<group>.<zone>.worker.ramen.internal` (a leaf of another zone is refused); `Admin/*` additionally needs `x-ramen-admin-key` and `RAMEN_ADMIN_CIDRS`, and is not routed through the load balancer at all |
+| Activator → `worker-direct` | a sleeping zone's activator forwarding to the real workers | TLS, verified against the install CA as its own zone's name |
 | Node / runtime → console | the wake call, the LLM judge proxy (`/llm/v1`), `/otlp` | `https://console.<ns>.svc.cluster.local`, verified against the install CA; plain HTTP is refused |
 | Edge → console | the console's own pods | TLS to the pod (port 443 → 8000), the same backend settings as edge → node |
 | Console / node → Redis | the chart's Redis (scope throttle, tasks, consent) | `rediss://`, TLS only (no plaintext port), verified against the install CA; the password is the client credential. A managed Redis keeps its public certificate |
-| Console / node → collector | OTLP to the chart's Phoenix collector or Jaeger | `https://…:4318`, verified against the install CA; the collector → Phoenix hop is TLS too |
-| Evals Jobs → promptfoo, → the canary | the promptfoo server and the zone under test | promptfoo behind a TLS front in its pod; the Jobs trust the install CA and reach the canary as `worker.ramen.internal` |
+| Console / node → collector | OTLP to the chart's Phoenix collector or Jaeger | `https://…:4318`, verified against the install CA; the collector → Phoenix hop is TLS too and carries Phoenix's admin secret as a bearer (D92) |
+| Evals Jobs → promptfoo, → the canary | the promptfoo server and the zone under test | promptfoo behind a TLS front in its pod that wants a credential — the Jobs hold an upload-only one (one share upload per connection, never a read); the Jobs trust the install CA and reach the canary as `<group>.<zone>.worker.ramen.internal` |
 
 **Plaintext is refused on cloud installs** (CONTRACTS §39.4): the chart sets `RAMEN_REQUIRE_TLS=1`, under which the
 node will not start without its certificate, the console will not start with a `redis://`, `http://` internal or
@@ -126,9 +126,16 @@ every way HTTPS is enforced, see [Trust the install CA and enforce HTTPS](trust-
   bundle) at every deploy; the node re-reads its pair when the files change, so a renewal needs no restart. The
   console issues its own leaf at start and swaps it in place. The chart's Redis, Phoenix and its collector, Jaeger and
   promptfoo get `ramen-tls-<service>`; those servers do not reload, so the console restarts them after a renewal.
-- **Names.** Every worker leaf carries `worker.ramen.internal`, and that is the name the console, the activator, Envoy
-  and the evals Jobs verify. Pod IPs are in no certificate: the console dials a pod IP and verifies that name, so TLS
-  proves "a worker of this install", not which zone — the admin key it sends is install-wide anyway.
+- **Names** (D92). Each zone's leaf carries its own name, `<group>.<zone>.worker.ramen.internal`, and the console,
+  the activator, Envoy and the evals Jobs verify the zone they mean. Pod IPs are in no certificate: the console dials
+  a pod IP and verifies the zone's name, so a leaf taken from zone A is refused when dialled as zone B. The node's own
+  health check dials `127.0.0.1` (a loopback peer cannot be another zone); GKE's front ends, the ALB and kubelet
+  verify no name. Local compose runs one worker for every group of zone `local`, so its leaf names
+  `*.local.worker.ramen.internal`. Before D92 every leaf carried `worker.ramen.internal`: the first D92 console start
+  re-issues each zone's leaf with its name (keeping the old one beside it until the zone is redeployed, because that
+  zone's activator and Envoy policy still check it) and, for 15 minutes, still accepts the old name on a pod that has
+  not reloaded yet (CONTRACTS §39.5b). Redeploy every zone after upgrading; `GET /api/v1/config/tls` marks the ones
+  that still carry the old name (`generic_name`).
 - **Rotation.** `POST /api/v1/config/tls/rotate` (super admin) works in phases so every hop keeps verifying: it
   stages a new CA and publishes the two-CA bundle everywhere it is trusted (zones, chart services, the console) at
   once; about three minutes later (`RAMEN_TLS_ROTATE_SETTLE_SECS`, once every pod has re-read the bundle) the new CA
@@ -147,9 +154,9 @@ every way HTTPS is enforced, see [Trust the install CA and enforce HTTPS](trust-
 - **What does not verify.** Google's front ends and the AWS ALB encrypt the hop to the pod but accept any certificate
   (neither offers a backend CA on these paths); kubelet probes do not verify either. Envoy on AKS does.
 
-`ramen-mcp-bridge` is TLS by default from 0.6.0. 0.6.0 is not published yet: PyPI (`uvx ramen-mcp-bridge@latest`,
-`pip install ramen-mcp-bridge`) serves 0.3.0, which dials plaintext unless given `--tls` or `--ca` — so pass `--tls`
-against an edge; 0.6.0 accepts it. Two details of 0.6.0:
+`ramen-mcp-bridge` 1.0.0, the bridge for Ramen 1.0.0, is TLS by default (`uvx ramen-mcp-bridge@latest`,
+`pip install ramen-mcp-bridge==1.0.0`). The printed commands keep `--tls`: 1.0.0 accepts it, and a 0.3.x bridge,
+which dials plaintext without it, then still uses TLS. Two details of 1.0.0:
 
 - **`--insecure` is explicit and local-only.** It turns TLS off, prints a warning, and is an error next to `--tls` or
   `--ca` instead of silently overriding them. `--tls` is still accepted and does nothing.
@@ -203,7 +210,9 @@ zone to send it to. Details and what the console checks before minting: [the thr
 ### The unauthenticated surface
 Three things run ahead of every guard — no key, no source-range check: `grpc.health.v1.Health`, deliberately, so
 that load balancers and Kubernetes can probe it; `GET /.well-known/oauth-protected-resource`, which is public
-metadata by design (RFC 9728) and names only the console's URL and the resource identifier; and gRPC **server
+metadata by design (RFC 9728) and names only the console's URL, the resource identifier and the zone's one scope
+(`mcp:<group>:<zone>`, which the request's routing headers already carry), or answers `404` when no console issues
+tokens; and gRPC **server
 reflection** (`v1` and `v1alpha`), so that `grpcurl` works without a local copy of the proto.
 
 Reflection is convenient on a laptop and a disclosure at an edge: anyone who reached it could list the services and
@@ -585,16 +594,17 @@ on a listed entry that starts passing, so the lists cannot go stale.
 | `resources-unsubscribe` | `resources/unsubscribe` is not offered |
 | `server-session-lifecycle:server-session-terminated-returns-404` | session ids are signed, not stored: `DELETE` answers, but a deleted id still verifies until it expires |
 
-**2026-07-28** (`--requirements 2026-07-28`, 50 scenarios): 184 checks passed, 9 did not. Two are the baseline, both
-"should" level warnings:
+**2026-07-28** (`--requirements 2026-07-28`, 50 scenarios): 184 checks passed, 9 failed, and 2 more warned. The two
+warnings are the baseline ("should" level):
 
 | Baseline entry | Why Ramen does not do this |
 |---|---|
 | `server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription` | the suite triggers the change by calling a tool that alters the tool list; a Ramen tool cannot change the manifest. `list_changed` follows a deploy, which `test_subscriptions.py` covers |
 | `server-stateless:sep-2575-server-sends-prompts-list-changed-on-subscription` | the same trigger for the prompt list |
 
-The other seven are failures in scenarios that the suite's baseline check did not count in that run. They are real
-differences, listed here so that "passes" is not read as more than it is:
+The nine failures are in scenarios that the suite's baseline check does not count (it still reports "all failures are
+expected"). They are real differences, listed here so that "passes" is not read as more than it is (CI run of
+2026-11-17, `conformance-suite-results` artifact):
 
 | Check | What Ramen does |
 |---|---|
@@ -602,7 +612,7 @@ differences, listed here so that "passes" is not read as more than it is:
 | `tasks-lifecycle:sep-2663-tasks-get-status-failed` | a tool that raises ends its task `completed` with an `isError` result; `failed` is a lost worker, a runtime fault or a missing capability |
 | `tasks-required-task-error:sep-2663-server-returns-missing-capability-when-required` | there is no task-required tool: a client that did not declare the extension gets the synchronous call |
 | `tasks-mrtr-composition:sep-2663-mrtr-synchronous-before-task-creation` | a task tool does not ask for input before the task is created; it asks through the task |
-| `tasks-mrtr-input:tasks-mrtr-partial-fulfillment` | failed in that run: the answered request was still listed by the next `tasks/get`. A `tasks/update` is queued for the pod that owns the task and applied on its next poll, not before the update returns |
+| `tasks-mrtr-input:tasks-mrtr-partial-fulfillment` | the answered request was still listed by the next `tasks/get`. A `tasks/update` is queued for the pod that owns the task and applied on its next poll, not before the update returns |
 
 Those numbers are from the local run of 2026-11-13.
 
@@ -613,7 +623,7 @@ Two ways in, and both reach the same pods through the same guards:
 | | Streamable HTTP | The bridge (`ramen-mcp-bridge`) |
 |---|---|---|
 | What runs on the client | nothing: a URL and headers | a small stdio MCP server the client starts |
-| Wire to the edge | HTTPS, `POST /mcp` | gRPC over TLS to `<edge>:443` (`--tls`; the default from bridge 0.6.0, not yet on PyPI) |
+| Wire to the edge | HTTPS, `POST /mcp` | gRPC over TLS to `<edge>:443` (`--tls`; the default in bridge 1.0.0) |
 | Group key (`rmk_`) | `Authorization: Bearer` header | `--key`, or `RAMEN_MCP_KEY` |
 | A person's sign-in (OAuth) | Claude Code (`oauth.clientId` in its config) | every stdio client: `--oauth https://<edge> --client-id <id>` |
 | Use it for | Claude Code, Cursor, VS Code / GitHub Copilot, phones, hosted agents, `curl` | clients that only speak stdio, and a person's sign-in in Cursor, VS Code and Claude Desktop (no dynamic client registration in Ramen) |

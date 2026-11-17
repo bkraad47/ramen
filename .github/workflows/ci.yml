@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
-        with: { toolchain: "1.98.1", components: "clippy,rustfmt,llvm-tools-preview" }
+        with: { toolchain: "1.99.1", components: "clippy,rustfmt,llvm-tools-preview" }
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: protoc (tonic-prost-build compiles proto/ramen/v1)
         run: sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler && protoc --version
@@ -114,7 +114,7 @@ jobs:
           echo "RAMEN_DEMO_DIR=$PWD/.demo" >> "$GITHUB_ENV"
       - name: both transports on real nodes (§16.5), tool propagation (R2), token expiry (A1/A2/A4/D2), 0.7.2 tool access (C10) / rollout notice (C11) / args hash (C12), 0.7.5 guardrails / custom roles / identity federation / golden gate / demo repo rails (§21), scripts
         working-directory: tests
-        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_tool_access.py conformance/test_rollout_notify.py conformance/test_call_args_hash.py conformance/test_guardrails.py conformance/test_custom_roles.py conformance/test_identity_federation.py conformance/test_golden_guardrails.py conformance/test_demo_repo_guardrails.py conformance/test_scripts.py
+        run: uv sync && uv run pytest -q -rs conformance/test_mcp_node_local.py conformance/test_transports_local.py conformance/test_sidecar_protocol.py conformance/test_numpy_deps.py conformance/test_tool_propagation.py conformance/test_auth_expiry.py conformance/test_output_schema.py conformance/test_tool_access.py conformance/test_rollout_notify.py conformance/test_call_args_hash.py conformance/test_guardrails.py conformance/test_custom_roles.py conformance/test_identity_federation.py conformance/test_golden_guardrails.py conformance/test_demo_repo_guardrails.py conformance/test_scripts.py conformance/test_fake_judge.py
       - name: "1.0.0 (§23): golden regression vs 0.8.0, stateless core, standard headers, MRTR (+ guardrails), tasks, subscriptions, modern bodies through the bridge"
         working-directory: tests
         run: uv run pytest -q -rs conformance/test_golden_regression.py conformance/test_stateless_core.py conformance/test_standard_headers.py conformance/test_mrtr.py conformance/test_mrtr_guardrails.py conformance/test_tasks.py conformance/test_subscriptions.py conformance/test_bridge_modern.py
@@ -160,7 +160,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
-        with: { toolchain: "1.98.1" }
+        with: { toolchain: "1.99.1" }
       - uses: arduino/setup-protoc@v3
         with: { version: "28.x", repo-token: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: astral-sh/setup-uv@v5
@@ -249,6 +249,8 @@ jobs:
       # RAMEN_MCP_KEY(S), RAMEN_ADMIN_KEY, RAMEN_ADMIN_PASSWORD, RAMEN_FERNET_KEY, RAMEN_SESSION_SECRET: generated below
       RAMEN_TLS_INSECURE: "1"
       RAMEN_DEMO_REPO: https://github.com/bkraad47/ramen-demo-mcp-group
+      # §36.4: the demo's LLM rails judged by the `ci` profile's fake (TLS, compose CA); the harness sets the org provider
+      RAMEN_FAKE_LLM_URL: https://fake-llm:8443/v1
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -277,8 +279,8 @@ jobs:
           for v in RAMEN_ADMIN_KEY RAMEN_SESSION_SECRET RAMEN_REDIS_PASSWORD; do s=$(openssl rand -hex 24); echo "::add-mask::$s"; echo "$v=$s" >> "$GITHUB_ENV"; done
           p="$(openssl rand -hex 10)Aa1!"; echo "::add-mask::$p"; echo "RAMEN_ADMIN_PASSWORD=$p" >> "$GITHUB_ENV"
           f=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())'); echo "::add-mask::$f"; echo "RAMEN_FERNET_KEY=$f" >> "$GITHUB_ENV"
-      - name: Compose up
-        run: docker compose -f deploy/local/docker-compose.yml up -d --build
+      - name: Compose up (+ profile ci, the fake LLM judge)
+        run: docker compose -f deploy/local/docker-compose.yml --profile ci up -d --build
       - name: Wait ready
         run: |
           scripts/wait_ready.sh "$RAMEN_CONSOLE_URL/login" 180
@@ -293,7 +295,7 @@ jobs:
         env: { RAMEN_SMOKE_ZONE: local, RAMEN_ZONE_PROVIDER: local, RAMEN_ZONE_REGION: local, RAMEN_SMOKE_ADMIN: "1", RAMEN_SMOKE_INSECURE: "1", RAMEN_SMOKE_CA: "${{ github.workspace }}/deploy/local/.certs/ca/ca.crt" }
       - name: Compose logs
         if: failure()
-        run: docker compose -f deploy/local/docker-compose.yml logs --no-color --tail=300
+        run: docker compose -f deploy/local/docker-compose.yml --profile ci logs --no-color --tail=300
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: coverage-tests, path: tests/coverage.xml, if-no-files-found: ignore }
@@ -305,7 +307,7 @@ jobs:
         with: { name: coverage-report, path: coverage-report.md, if-no-files-found: ignore }
       - name: Compose down
         if: always()
-        run: docker compose -f deploy/local/docker-compose.yml down -v
+        run: docker compose -f deploy/local/docker-compose.yml --profile ci down -v
 
   kind:
     # CONTRACTS §12.3: the multi-zone proofs on a real Kubernetes cluster — two zones serving independently, an HPA

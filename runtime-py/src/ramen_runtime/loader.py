@@ -8,7 +8,12 @@ import sys
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
+
+from jsonschema.exceptions import best_match
+from jsonschema.protocols import Validator
+from jsonschema.validators import validator_for
 
 from .apps import App, load_app
 from .log import log
@@ -35,6 +40,29 @@ class Package:
     @property
     def output(self) -> dict | None:
         return output_schema(self.proto["output"]) if "output" in self.proto else None
+
+    # §35.1 (D80 perf): built once per load — `jsonschema.validate` checked the schema against the metaschema on every
+    # call. A schema that fails the check raises here each time (nothing is cached), as before.
+    @cached_property
+    def input_validator(self) -> Validator:
+        return compiled(self.schema)
+
+    @cached_property
+    def output_validator(self) -> Validator | None:
+        return None if self.output is None else compiled(self.output)
+
+
+def compiled(schema: dict) -> Validator:
+    """What `jsonschema.validate` builds per call: the schema's draft, checked once."""
+    cls = validator_for(schema)
+    cls.check_schema(schema)
+    return cls(schema)
+
+
+def check(validator: Validator, instance) -> None:
+    """`jsonschema.validate`'s error choice (the best match) on a compiled validator."""
+    if (error := best_match(validator.iter_errors(instance))) is not None:
+        raise error
 
 
 @dataclass

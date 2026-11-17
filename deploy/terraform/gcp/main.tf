@@ -121,6 +121,35 @@ resource "google_project_iam_member" "nodes_ar_read" {
   member  = "serviceAccount:${google_service_account.nodes.email}"
 }
 
+# S5 (sec-gaps): the project's default compute SA gets roles/editor when the Compute API is enabled. Nothing of Ramen
+# runs as it on a new install (nodes: ramen-nodes@ above; satellites: the same SA), so the module removes that grant —
+# a compromised console could otherwise set token-creator on the default SA (ramenConsoleSaIam carries project-wide
+# setIamPolicy on service accounts) and act as a project editor. Only safe when nothing else in the project relies on
+# the default SA (Compute Engine VMs, legacy Cloud Build/Functions/App Engine set up in the same project): turn
+# var.remove_default_compute_editor off for a shared project. A cluster still running as the default SA (a pre-1.0.0c
+# cluster, node_service_account = "default", or a satellite: default_compute_runs_nodes) first gets the node roles
+# here, so its nodes keep logging and pulling images once editor is gone.
+locals {
+  default_compute_sa    = "${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+  default_sa_runs_nodes = var.node_service_account == "default" || var.node_service_account == local.default_compute_sa || var.default_compute_runs_nodes
+  node_roles_all        = concat(local.node_roles, ["roles/artifactregistry.reader"])
+}
+
+resource "google_project_iam_member" "default_compute_node" {
+  for_each = var.remove_default_compute_editor && local.default_sa_runs_nodes ? toset(local.node_roles_all) : toset([])
+  project  = var.project
+  role     = each.value
+  member   = "serviceAccount:${local.default_compute_sa}"
+}
+
+resource "google_project_iam_member_remove" "default_compute_editor" {
+  count      = var.remove_default_compute_editor ? 1 : 0
+  project    = var.project
+  role       = "roles/editor"
+  member     = "serviceAccount:${local.default_compute_sa}"
+  depends_on = [google_project_service.apis, google_project_iam_member.default_compute_node]
+}
+
 resource "google_firestore_database" "state" {
   name                    = "(default)"
   location_id             = var.region
@@ -205,24 +234,64 @@ resource "google_artifact_registry_repository_iam_member" "builds_read_platform"
   depends_on = [google_container_cluster.ramen] # the WI pool exists only once the cluster does
 }
 
-# The console creates, labels, binds and deletes the per-group repositories. It holds no upload/write permission, so it
-# pushes nowhere itself. Artifact Registry does not evaluate IAM Conditions on resource.name (it is not among the
-# services with resource attributes; a `ramen-groups-*` condition never matched on GKE, 1.0.0c), so these rights are
-# project-wide: a compromised console could grant itself writer on the platform repository — the residual CONTRACTS
-# §38.2 records; platform images are pinned by digest (chart `image.digest`), so a re-tag there never reaches a pod.
-# What F2 was about holds regardless: a group's build identity can write only its own repository.
+# The console creates, labels, binds and deletes the per-group repositories; it holds no upload/write permission, so it
+# pushes nowhere itself. Artifact Registry does not evaluate IAM Conditions on resource.name (not among the services
+# with resource attributes; a `ramen-groups-*` condition never matched on GKE, 1.0.0c), but every service evaluates
+# resource TAGS. So (sec-gaps, closes the §38.2 GCP residual): a project tag key `ramen-repo` with the values
+# `platform` (bound here to the platform repository) and `group` (bound by the console to each repository it creates);
+# the console's repository rights are conditioned on `group`. A resource holds exactly one value per key, the console
+# may attach only `group` (Tag User on that value alone) and holds no deleteTagBinding anywhere, so it can neither
+# re-tag the platform repository nor reach it through the conditioned role. Create, list and createTagBinding are
+# checked before a repository carries the tag (create/list on the location, the binding on the new repository) and
+# stay unconditioned; none of them reads, writes or re-binds IAM on an existing repository.
+resource "google_tags_tag_key" "repo" {
+  parent      = "projects/${var.project}"
+  short_name  = "ramen-repo"
+  description = "Ramen image repositories: platform (no console rights) or group (console-managed), CONTRACTS §38.2"
+  depends_on  = [google_project_service.apis]
+}
+
+resource "google_tags_tag_value" "platform" {
+  parent      = google_tags_tag_key.repo.id
+  short_name  = "platform"
+  description = "the platform repository: console, worker base, SkillSpector"
+}
+
+resource "google_tags_tag_value" "group" {
+  parent      = google_tags_tag_key.repo.id
+  short_name  = "group"
+  description = "a per-group repository ramen-groups-<group> (the console binds it at creation)"
+}
+
+# Regional resource → the location binding (regional Resource Manager endpoint). The parent uses the project number,
+# the canonical form Resource Manager answers in (keeps `terraform plan` clean).
+resource "google_tags_location_tag_binding" "platform_repo" {
+  parent    = "//artifactregistry.googleapis.com/projects/${data.google_project.this.number}/locations/${google_artifact_registry_repository.ramen.location}/repositories/${google_artifact_registry_repository.ramen.repository_id}"
+  tag_value = google_tags_tag_value.platform.id
+  location  = google_artifact_registry_repository.ramen.location
+}
+
+resource "google_tags_tag_value_iam_member" "console_group_tag_user" {
+  tag_value = google_tags_tag_value.group.name
+  role      = "roles/resourcemanager.tagUser"
+  member    = "serviceAccount:${google_service_account.console.email}"
+}
+
 resource "google_project_iam_custom_role" "console_build_create" {
   role_id     = "ramenConsoleBuildRepoCreate"
   title       = "Ramen console: create group image repositories"
-  description = "artifactregistry.repositories.create (§38.2)"
-  permissions = ["artifactregistry.repositories.create"]
-  depends_on  = [google_project_service.apis]
+  description = "create/list repositories and attach the ramen-repo tag to a new one (§38.2)"
+  permissions = [
+    "artifactregistry.repositories.create", "artifactregistry.repositories.list",
+    "artifactregistry.repositories.createTagBinding", # with Tag User on ramen-repo/group only: no other value
+  ]
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_custom_role" "console_build_repos" {
   role_id     = "ramenConsoleBuildRepos"
   title       = "Ramen console: manage group image repositories"
-  description = "get/update/delete and IAM on the per-group image repositories (§38.2)"
+  description = "get/update/delete and IAM on the per-group image repositories (ramen-repo=group, §38.2)"
   permissions = [
     "artifactregistry.repositories.get", "artifactregistry.repositories.update", "artifactregistry.repositories.delete",
     "artifactregistry.repositories.getIamPolicy", "artifactregistry.repositories.setIamPolicy",
@@ -240,6 +309,11 @@ resource "google_project_iam_member" "console_build_repos" {
   project = var.project
   role    = google_project_iam_custom_role.console_build_repos.id
   member  = "serviceAccount:${google_service_account.console.email}"
+  condition {
+    title       = "ramen-repo-group"
+    description = "only repositories tagged ramen-repo=group (§38.2)"
+    expression  = "resource.matchTagId(\"${google_tags_tag_key.repo.id}\", \"${google_tags_tag_value.group.id}\")"
+  }
 }
 
 # §33.4a (D79): the identity the evals and SkillSpector scan Jobs run as (KSA ramen-system/ramen-evals). They execute

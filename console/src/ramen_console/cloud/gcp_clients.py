@@ -174,6 +174,24 @@ class GcpClients:
     def artifactregistry(self):  # §38.2: per-group repositories
         return self._discovery("artifactregistry", "v1")
 
+    def tag_bindings(self, location):
+        """§38.2: Resource Manager v3 for tag bindings on a regional resource (an Artifact Registry repository), which
+        must go through the location's endpoint `<location>-cloudresourcemanager.googleapis.com`."""
+
+        def make():
+            from googleapiclient.discovery import build
+
+            endpoint = f"https://{location}-cloudresourcemanager.googleapis.com/"
+            return build(
+                "cloudresourcemanager",
+                "v3",
+                cache_discovery=False,
+                credentials=_creds(),
+                client_options={"api_endpoint": endpoint},
+            )
+
+        return self._cached(f"tags:{location}", make)
+
     def for_cluster(self, project, location, name):
         """§28.2: a satellite GKE cluster's clients — kubernetes bound to its API server, the rest this bundle's."""
         return GkeClients(self, project, location, name)

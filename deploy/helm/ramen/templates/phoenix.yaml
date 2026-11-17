@@ -1,6 +1,8 @@
 {{- if eq (.Values.otel.collector | default "none") "phoenix" }}
 # §24.3: Arize Phoenix for trying telemetry out and for the test runs — SQLite on a PVC (otel.phoenix.persistence; an
-# emptyDir lost the span history at every restart, b35), no authentication.
+# emptyDir lost the span history at every restart, b35). D92 (§39.7): Phoenix's own auth is on — the UI, GraphQL and
+# REST need a sign-in (admin@localhost, Secret ramen-engines `password`) or the admin secret as a bearer; the collector
+# sidecar posts spans with that bearer (`phoenix-admin-secret`).
 # Phoenix takes OTLP protobuf only and has no metrics endpoint, while Ramen posts OTLP/JSON traces and metrics; an
 # OpenTelemetry Collector sidecar on 4318 (the same port as the chart's Jaeger) turns the traces into protobuf for
 # Phoenix and discards the metrics. The UI is 6006. Not for production: point Config → Telemetry at your own
@@ -17,7 +19,10 @@ data:
         protocols:
           http: { endpoint: 0.0.0.0:4318, tls: { cert_file: /tls/tls.crt, key_file: /tls/tls.key } }
     exporters:
-      otlp_http: { endpoint: https://127.0.0.1:6006, tls: { ca_file: /tls/ca.crt } }
+      otlp_http:
+        endpoint: https://127.0.0.1:6006
+        tls: { ca_file: /tls/ca.crt }
+        headers: { authorization: "Bearer ${env:PHOENIX_ADMIN_SECRET}" }   # D92: Phoenix's auth is on
       nop: {}
     extensions:
       health_check: { endpoint: 0.0.0.0:13133, tls: { cert_file: /tls/tls.crt, key_file: /tls/tls.key } }
@@ -65,8 +70,13 @@ spec:
         - name: phoenix
           image: {{ .Values.otel.phoenix.image | quote }}
           env:
-            # Phoenix switches auth on by itself when it binds a non-loopback address; off here, like Jaeger — no edge reaches it
-            - { name: PHOENIX_ENABLE_AUTH, value: "false" }
+            # D92 §39.7: sign-in on the UI, GraphQL, REST and OTLP; the admin's first password and both secrets from
+            # Secret ramen-engines (the initial password applies while the account still holds Phoenix's default)
+            - { name: PHOENIX_ENABLE_AUTH, value: "true" }
+            - { name: PHOENIX_USE_SECURE_COOKIES, value: "true" }
+            - { name: PHOENIX_SECRET, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" . }}, key: phoenix-secret } } }
+            - { name: PHOENIX_ADMIN_SECRET, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" . }}, key: phoenix-admin-secret } } }
+            - { name: PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" . }}, key: password } } }
             - { name: PHOENIX_PORT, value: "6006" }
             - { name: PHOENIX_GRPC_PORT, value: "4317" }
             - { name: PHOENIX_WORKING_DIR, value: /data }
@@ -78,12 +88,14 @@ spec:
           ports:
             - { name: http, containerPort: 6006 }
             - { name: otlp-grpc, containerPort: 4317 }
-          readinessProbe: { httpGet: { path: /, port: http, scheme: HTTPS }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }
+          readinessProbe: { httpGet: { path: /healthz, port: http, scheme: HTTPS }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }
           resources: {{- toYaml .Values.otel.phoenix.resources | nindent 12 }}
           volumeMounts: [{ name: data, mountPath: /data }, { name: tls, mountPath: /tls, readOnly: true }]
         - name: collector
           image: {{ .Values.otel.phoenix.collectorImage | quote }}
           args: ["--config", "/etc/otelcol/config.yaml"]
+          env:
+            - { name: PHOENIX_ADMIN_SECRET, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" . }}, key: phoenix-admin-secret } } }
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
           ports:
             - { name: otlp-http, containerPort: 4318 }

@@ -4,9 +4,11 @@ EKS, DynamoDB, S3, Secrets Manager, ECR and an application load balancer with gR
 pass applies this on a real account and tears it down ([the record](transport.md#what-is-verified-and-what-is-not)). Least exercised so far: WAF blocking under repeated rule changes, rebalance weights under real load and
 Fluent Bit at volume. If a step breaks on your account, open an issue with the step and the error.
 
-Cost while it runs: the EKS control plane (about $0.10 an hour while its Kubernetes version is in standard
-support, six times that in extended support), four `t3.small` nodes (about $0.08 an hour), the load balancer
-(about $0.025 an hour plus traffic) and CloudWatch logs.
+Cost while it runs (us-east-1 on-demand list prices, 2026-11): the EKS control plane ($0.10 an hour while its
+Kubernetes version is in standard support, $0.60 in extended support), four `t3.small` nodes (about $0.08 an hour
+together), the application load balancer ($0.0225 an hour plus its LCUs) and CloudWatch logs. Current rates:
+[EKS](https://aws.amazon.com/eks/pricing/), [EC2](https://aws.amazon.com/ec2/pricing/on-demand/),
+[Elastic Load Balancing](https://aws.amazon.com/elasticloadbalancing/pricing/).
 
 ## Prerequisites
 
@@ -41,12 +43,12 @@ into the kubeconfig, so pass `--profile` there if you switch.
 
 ```sh
 cd deploy/terraform/aws && cp terraform.tfvars.example terraform.tfvars   # region, node size
-terraform init && terraform apply        # about 20 minutes, nearly all of it EKS
+terraform init && terraform apply        # most of the wait is the EKS control plane and node group
 cd ../../..
 ```
 
 Terraform creates the cluster (Kubernetes 1.35 by default, in standard support until 2027-03-27; an older version
-in extended support bills the control plane at about $0.60 an hour instead of $0.10) and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role (which may create each group's own ECR repository and build role, D85),
+in extended support bills the control plane at $0.60 an hour instead of $0.10) and node group, the DynamoDB table, the bucket, ECR repos, the console's IAM role (which may create each group's own ECR repository and build role, D85),
 permissions boundaries for the zone roles and the build roles, a self-signed certificate imported into ACM, the
 managed `vpc-cni` and `aws-ebs-csi-driver` addons (the EBS CSI driver runs as its own role `ramen-ebs-csi`), the AWS
 Load Balancer Controller and Fluent Bit. A CloudFormation template with the same base resources is in `deploy/cloudformation`.
@@ -105,6 +107,18 @@ aws acm get-certificate --certificate-arn $CERT --region $REGION --query Certifi
 ALB=<that address>
 curl --cacert ramen-lb.pem https://$ALB/readyz      # {"ok":true,"store":"dynamodb","version":"<version>"}
 ```
+
+The three values are generated on the command line and never printed. Read them back from the chart's Secret
+when you need them (the sign-in below, `cloud_smoke.sh`):
+
+```sh
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_PASSWORD}' | base64 -d; echo
+kubectl -n ramen-system get secret ramen-console -o jsonpath='{.data.RAMEN_ADMIN_KEY}' | base64 -d; echo
+```
+
+The console re-applies `RAMEN_ADMIN_PASSWORD` to `admin@ramen.local` on every start, so the Secret stays the
+password of record: change it with `helm upgrade … --reuse-values --set console.secrets.RAMEN_ADMIN_PASSWORD=…`
+(a password changed in the console is reset at the next start). Keep `RAMEN_FERNET_KEY`: it encrypts the store ([rotate-keys skill](skills.md) to rotate it).
 
 Then set the public address, which is the OAuth issuer the workers trust, and upgrade again:
 
@@ -310,7 +324,7 @@ the defaults hold `home_vpc_cidr` (10.42.0.0/16) and `home_route_table_ids`; the
 SAT=eu-west-1
 terraform -chdir=deploy/terraform/aws output -raw vpc_id                            # home_vpc_id
 cd deploy/terraform/aws-satellite && cp terraform.tfvars.example terraform.tfvars   # region = $SAT, home_region, home_vpc_id; same AWS_PROFILE as the home apply
-terraform init && terraform apply                  # about 20 minutes, nearly all of it EKS
+terraform init && terraform apply                  # most of the wait is the EKS control plane and node group
 $(terraform output -raw kubeconfig_command)        # kubectl now points at the satellite
 cd ../../..
 kubectl create ns ramen-system
@@ -354,10 +368,15 @@ Caveats:
   (the home `alb_cidrs` output, then each satellite's). The home console's calls to a satellite worker leave the
   home VPC, so the VPC CNI rewrites their source to the home node's address, which is in the home public subnets.
   A pre-D89 `console.env.RAMEN_AWS_VPC_CIDR` still works but admits whole VPCs.
+- **The console at its public URL.** A satellite cannot resolve the home cluster's `console` Service, so a satellite
+  zone's LLM judge proxy calls and a sleeping zone's wake go to the console's public URL (the zone's OAuth issuer:
+  the base URI or `RAMEN_PUBLIC_URL`), verified against the public roots next to the install CA. The default
+  self-signed ALB certificate is in neither, so on AWS that needs a publicly trusted certificate on the console's
+  load balancer (source reading; not run live).
 - **Telemetry.** The Config page's one OTLP endpoint must be reachable from every cluster. The chart's try-out
   collectors (Jaeger, Phoenix) live in the home cluster and are cluster-local, so a satellite's workers log
   `telemetry export failed` until you point the endpoint at a collector they can reach.
-- **Cost.** A second EKS control plane (about $0.10 an hour), its nodes (`node_count = 2` `t3.small` by default,
+- **Cost.** A second EKS control plane ($0.10 an hour), its nodes (`node_count = 2` `t3.small` by default,
   one per availability zone; a zone with its canary needs two in its zone), a second load balancer, its
   CloudWatch log group `/aws/containerinsights/ramen-<region>/application`, and inter-region data transfer over
   the peering for the console's calls (cents).

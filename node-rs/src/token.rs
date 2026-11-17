@@ -22,6 +22,8 @@ pub struct Principal {
     /// §24.3 (1.0.0): the person accepted the telemetry notice on the console's OAuth consent page (`tel: true`).
     /// Only the boolean `true` counts.
     pub tel: bool,
+    /// D92 (§16.7): `iat`, what a subject's revocation cut-off is compared with.
+    pub iat: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -114,6 +116,7 @@ pub fn verify(
             .filter(|r| !r.is_empty())
             .map(String::from),
         tel: claims.get("tel") == Some(&Value::Bool(true)),
+        iat: claims.get("iat").and_then(Value::as_u64),
     })
 }
 

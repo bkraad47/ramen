@@ -19,6 +19,10 @@ kubectl create ns ramen-system && kubectl label ns ramen-system ramen.io/routes=
 helm upgrade --install ramen-satellite ../../helm/ramen-satellite -n ramen-system $(terraform output -raw helm_set)
 ```
 
+The satellite's nodes run as the home apply's `ramen-nodes@` (S5), never the project's default compute account, whose
+`roles/editor` the home apply removes; a satellite created before that change keeps the default account until
+re-created (`node_service_account = "default"` here, `default_compute_runs_nodes = true` in the home apply).
+
 Then register it on the console: **Config → Clusters → Add satellite**, provider `gcp`, the `region`, `cluster_name` and
 `host` outputs. Full walk-through: `docs/wiki/deploy-gcp.md`, "Satellite clusters". Keep one state per satellite
 (one directory copy or workspace per region).

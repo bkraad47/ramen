@@ -27,6 +27,9 @@ locals {
   # sslip.io hostname of the static IP by default (see the home module); `public_hostname` overrides it.
   public_hostname = coalesce(var.public_hostname, "${replace(google_compute_global_address.edge.address, ".", "-")}.sslip.io")
   console_gsa     = coalesce(var.console_gsa, "ramen-console@${var.project}.iam.gserviceaccount.com")
+  # S5: nodes run as the home apply's least-privilege ramen-nodes@ (project-wide AR reader + logging/monitoring), never
+  # the default compute SA, whose roles/editor the home apply removes. Honoured at creation only (Autopilot).
+  node_service_account = coalesce(var.node_service_account, "ramen-nodes@${var.project}.iam.gserviceaccount.com")
 }
 
 resource "google_project_service" "apis" {
@@ -42,6 +45,11 @@ resource "google_container_cluster" "satellite" {
   deletion_protection = false
   release_channel { channel = "REGULAR" }
   ip_allocation_policy {}
+  cluster_autoscaling {
+    auto_provisioning_defaults {
+      service_account = local.node_service_account
+    }
+  }
   depends_on = [google_project_service.apis]
 }
 

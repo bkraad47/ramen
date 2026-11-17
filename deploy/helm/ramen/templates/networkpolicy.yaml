@@ -1,10 +1,13 @@
 {{- if .Values.networkPolicy.system }}
-{{- /* §33.4a: who may reach a ramen-system pod. `edge` = the load balancer / gateway (ipBlocks and namespaces by provider,
-plus console.sourceCidrs); `console` = the console pods; `jobs` = the evals and scan Job pods (label ramen.io/job);
-`workers` = every zone namespace (label ramen.io/group). The worker pods' own policy (SEC-04) is the console's. */ -}}
+{{- /* §33.4a: who may reach a ramen-system pod. `edge` = the load balancer / gateway (ipBlocks and namespaces by provider);
+`console` = the console pods; `jobs` = the evals and scan Job pods (label ramen.io/job); `workers` = every zone namespace
+(label ramen.io/group). S6: console.sourceCidrs (the home networks a satellite zone's worker policy admits) reaches the
+console's own port only — never Phoenix / Jaeger, promptfoo or Redis: a pod range in an ipBlock admits every pod on a CNI
+that matches pod IPs by ipBlock. The worker pods' own policy (SEC-04) is the console's. */ -}}
 {{- $edge := list }}
 {{- range (include "ramen.edgeCidrs" . | fromJsonArray) }}{{- $edge = append $edge (dict "ipBlock" (dict "cidr" .)) }}{{- end }}
-{{- range .Values.console.sourceCidrs }}{{- $edge = append $edge (dict "ipBlock" (dict "cidr" .)) }}{{- end }}
+{{- $sources := list }}
+{{- range .Values.console.sourceCidrs }}{{- $sources = append $sources (dict "ipBlock" (dict "cidr" .)) }}{{- end }}
 {{- range (include "ramen.edgeNamespaces" . | fromJsonArray) }}
 {{- $edge = append $edge (dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" .))) }}
 {{- end }}
@@ -22,11 +25,12 @@ spec:
     matchLabels: {{- include "ramen.selector" . | nindent 6 }}
   policyTypes: [Ingress]
   ingress:
-    - from: {{- toYaml (concat $edge (list $workers $jobs)) | nindent 8 }}
+    - from: {{- toYaml (concat $edge $sources (list $workers $jobs)) | nindent 8 }}
       ports: [{ port: {{ .Values.console.port }}, protocol: TCP }]
 {{- if ne $collector "none" }}
 ---
-# the collector takes OTLP on 4318 from the console, the workers' own export and the Jobs; its UI only from the edge
+# the collector takes OTLP on 4318 from the console, the workers' own export and the Jobs (writes only); its UI (D92: a
+# sign-in) only from the edge — never from a worker namespace
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -41,6 +45,7 @@ spec:
       ports: [{ port: 4318, protocol: TCP }]
     {{- if $edge }}
     - from: {{- toYaml $edge | nindent 8 }}
+      ports: [{ port: {{ eq $collector "phoenix" | ternary 6006 16686 }}, protocol: TCP }]
     {{- end }}
 {{- end }}
 {{- if eq (.Values.evals.engine | default "none") "promptfoo" }}

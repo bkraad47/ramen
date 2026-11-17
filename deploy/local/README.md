@@ -25,6 +25,12 @@ Locally you do **not** need to add a zone or a group by hand: `make demo` create
 (repo https://github.com/bkraad47/ramen-demo-mcp-group) and environment `dev`, and is safe to re-run
 (existing objects answer `… exists`; a new key is minted every time).
 
+Before the first deploy of the demo, add an LLM key on **Config → LLM providers** (with an allowed model): the
+demo's guardrails (`iris_report`, `iris_outliers`) and evals use it, and a deploy without one fails with `no LLM
+provider`. Workers reach the model through the console's LLM proxy (`RAMEN_CONSOLE_INTERNAL_URL=https://console:8443`);
+the key never leaves the console. Key-free try-out: `RAMEN_DEMO_REF=v0.8.0 make demo` deploys the demo's `v0.8.0`
+tag (no LLM rails).
+
 ## Mint a worker key and call the tool
 ```sh
 # Console: Groups → demo → MCP auth keys → name → Mint MCP key (shown once) → Deploy (canary).  Or:
@@ -37,7 +43,7 @@ sleep 5
 curl -s --cacert deploy/local/.certs/ca/ca.crt https://localhost:8080/mcp -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -H 'ramen-group: demo' -H 'ramen-zone: local' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 # {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"5"}],"isError":false}}
-# Stdio-only clients: the bridge over gRPC (`uv tool install ramen-mcp-bridge` — its own package since 0.5.7), key from the environment
+# Stdio-only clients: the bridge over gRPC (`uv tool install ramen-mcp-bridge`; 1.0.0 is the bridge for Ramen 1.0.0, TLS by default), key from the environment
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' \
   | RAMEN_MCP_KEY="$KEY" ramen-mcp-bridge --target localhost:8080 --ca deploy/local/.certs/ca/ca.crt --group demo --zone local
 # Or raw gRPC with grpcurl (bytes are base64 in its JSON; the node serves reflection locally):
@@ -51,7 +57,7 @@ key from `RAMEN_MCP_KEY`, plus the deployed and stdio forms spelled out.
 **That example is local-only.** It trusts the local CA (`NODE_EXTRA_CA_CERTS`); for a real deployment use the
 `_DEPLOYED` block in the same file: `--target <lb-host>:443`, plus `--ca <pem>` only if the load balancer's
 certificate is not in your system trust store, and a group MCP key minted on the group page rather than the `.env`
-dev fallback. The bridge is TLS by default (0.6.0); `--insecure` is for a bare node outside compose only.
+dev fallback. The bridge is TLS by default (1.0.0); `--insecure` is for a bare node outside compose only.
 
 ## Optional engines (§34.1)
 `make up ENGINES=phoenix,promptfoo` (or `docker compose --profile phoenix --profile promptfoo up -d` with
@@ -59,7 +65,9 @@ dev fallback. The bridge is TLS by default (0.6.0); `--insecure` is for a bare n
 does: **Phoenix** at https://localhost:6006 behind an OpenTelemetry Collector on `https://phoenix-collector:4318` (set
 that as the endpoint under **Config → Telemetry**), and the **promptfoo** server at https://localhost:3000 (behind its
 TLS front). All TLS with the local CA. Both are
-off by default and have no auth. The local adapter has no Job runner, so evals and SkillSpector scans do not run on
+off by default and ask for a sign-in (D92): Phoenix as `admin@localhost`, promptfoo as `admin`, both with
+`RAMEN_ENGINES_PASSWORD` from `.env` (`make env` generates it with the other secrets; the engine profiles refuse to
+start without it). The local adapter has no Job runner, so evals and SkillSpector scans do not run on
 compose (a deploy says `skipped, no evals engine`); `RAMEN_EVALS_IMAGE` and `RAMEN_SKILLSPECTOR_IMAGE` are accepted
 with the chart's meaning and stay empty here. `make down` removes the engines too.
 

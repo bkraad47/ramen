@@ -112,7 +112,7 @@ More: [Architecture](https://bkraad47.github.io/ramen/architecture/) ·
    refused, on both transports and both protocol eras: `-32024` / `-32025` telemetry, `-32026` evals, `-32027` scans,
    `-32028` configs, `-32029` guardrails (HTTP 428 on 2026-07-28). A changed policy is pushed to the running workers
    without a deploy, so the next call needs the new version.
-4. **The bridge keeps clients in line** (0.6.0 or later). It holds the bundle, carries every version, writes the accepted client
+4. **The bridge keeps clients in line** (bridge 1.0.0, the bridge for Ramen 1.0.0). It holds the bundle, carries every version, writes the accepted client
    configs and Ramen's OTel settings into Claude Code, Cursor, VS Code, Codex and any other target the repo names,
    signs in again once on a stale version, runs `policy check` from a Claude Code `SessionStart` hook (exit 3 when a
    file was removed), scans local skills with SkillSpector and, with its `nemo` extra, runs the guardrails locally too.
@@ -137,7 +137,7 @@ runner, so evals, scans and image builds run on the clouds, not locally.
 ## Deploy to the cloud
 
 Each is `terraform apply` → `helm upgrade --install` with the values Terraform prints → add a zone and a group → Deploy.
-About 25 minutes. The optional engines are three Terraform variables, all `none` by default, passed to the chart by
+About 35 minutes on GCP, most of it waiting for the cluster and the managed certificate. The optional engines are three Terraform variables, all `none` by default, passed to the chart by
 the `engines_set` output (Azure's `helm_set` includes it):
 
 ```hcl
@@ -191,15 +191,18 @@ Jobs); the Phoenix and promptfoo ones from the live GKE run.
   group whose repo has `mcp/llm-config/` always requires its configs version.
 - **LLM rails reduce prompt injection; they do not eliminate it.** Use deterministic rails for what must hold.
 - **NetworkPolicies need an enforcing CNI.** GKE Autopilot enforces them; since 1.0.0c Terraform turns on the VPC
-  CNI's policy agent on EKS and Calico on AKS, not yet checked live on those clouds
+  CNI's policy agent on EKS (enforcement seen live on 1.0.0b35) and Calico on AKS (not yet checked live)
   ([threat model](https://bkraad47.github.io/ramen/threat-model/#findings-and-their-status), S6b).
-- **The optional engines are for trying things out**: Phoenix, Jaeger and promptfoo run without authentication and
-  without an edge route; every group's evals runs land in one promptfoo server.
-- **A compromised console is a compromised platform**; on GCP and Azure it could grant itself write on the platform
-  image repository (pin platform images by digest). Run one console replica.
-- **Load.** One worker of the smallest size served about 30–45 calls/s of a guarded trivial tool in the final runs;
-  the p95 bound of 1.5 s held on GKE and AKS under steady load and missed on EKS's small nodes and on GKE's
-  8→64-client ramp
+- **The optional engines are for trying things out**: Phoenix, Jaeger and promptfoo have no edge route and one
+  install-wide sign-in (Secret `ramen-engines`) — whoever holds it sees every group's traces and evals runs.
+- **A compromised console is a compromised platform**; on Azure it could grant itself write on the platform image
+  repository (pin platform images by digest; on GCP its repository rights are fenced by a resource tag, on AWS by
+  repository name). Run one console replica.
+- **Load.** One worker of the smallest size (250m CPU) served about 30–45 calls/s of a guarded trivial tool in the
+  1.0.0b34–b36 runs, and the p95 bound of 1.5 s missed on EKS's small nodes and on the 8→64-client ramp. The 1.0.0
+  per-call fixes (schema checks compiled once, NeMo's unused flows dropped, Colang expressions parsed once) take a
+  worker at 250m from about 30 to about 70 calls/s locally (p95 2.1 → 0.8 s at 32 clients), and the autoscaler asks
+  for another worker at a p50 of 250 ms instead of 500; the cloud tables are re-measured for 1.0.0
   ([Autoscaling → Load tests](https://bkraad47.github.io/ramen/wiki/autoscaling/#load-tests)).
 - **Local compose** runs no evals, scans or image builds, and its workers cannot reach the judge proxy, so LLM rails
   are a cloud feature there.

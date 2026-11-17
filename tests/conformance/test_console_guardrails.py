@@ -307,25 +307,27 @@ def test_group_providers_and_guardrails_are_the_group_admins_call_and_the_model_
     assert rows and GROUP_KEY not in json.dumps(rows), rows[:2]
 
 
+def judge_env(env) -> bool:
+    """D85: the zone's LLM env names the console's judge proxy and a judge token, never a provider key."""
+    key, url = env.get("RAMEN_LLM_API_KEY") or "", env.get("RAMEN_LLM_BASE_URL") or ""
+    return key.startswith("rjt_") and key not in (ORG_KEY, GROUP_KEY) and url.endswith("/llm/v1")
+
+
 # --- §36.2 the deploy: resolution and the env it writes ---------------------------------------------------------------
 @part_a
 @part_b("deploy", "group", "providers")
 def test_the_group_provider_wins_over_the_orgs_and_the_llm_env_is_written_only_for_an_llm_rail(llm_rails):
     w = llm_rails
     env = llm_env(ev.env_file(w))
-    assert env.get("RAMEN_LLM_PROVIDER") == PROVIDER and env.get("RAMEN_LLM_MODEL") == MODEL, sorted(env)
-    assert env.get("RAMEN_LLM_API_KEY") == ORG_KEY, "the org's credential when the group has none"
-    assert (env.get("RAMEN_LLM_BASE_URL") or env.get("RAMEN_LLM_ENDPOINT") or "").startswith(
-        w["org"].url.rsplit("/", 1)[0]
-    )
+    # D85 §38.1: workers get a judge token for the console's /llm/v1 proxy, never a provider key
+    assert env.get("RAMEN_LLM_MODEL") == MODEL, sorted(env)
+    assert judge_env(env), "a judge token for the console's proxy"
+    before = len(w["org"].hits)
     assert group_provider(w, True).status_code == 200
     job = deploy(w)
     assert job["status"] == "ok", job.get("error")
     env = llm_env(ev.env_file(w))
-    assert env.get("RAMEN_LLM_API_KEY") == GROUP_KEY, "the group's provider wins"
-    assert (env.get("RAMEN_LLM_BASE_URL") or env.get("RAMEN_LLM_ENDPOINT") or "").startswith(
-        w["grp"].url.rsplit("/", 1)[0]
-    )
+    assert judge_env(env) and not w["org"].hits[before:], "the group's provider wins (seen at call time below)"
     blob = ev.log_text(job) + json.dumps(job.get("result"))
     assert GROUP_KEY not in blob and ORG_KEY not in blob, "keys are remember_secret-scrubbed everywhere"
     plant(w["repo"], False)
@@ -350,7 +352,7 @@ def test_without_a_provider_the_deploy_fails_at_sync_and_names_the_fix(clean):
     job = deploy(w)
     assert job["status"] == "ok", "the group names no provider: the org's configured one is used (§36.2)"
     env = llm_env(ev.env_file(w))
-    assert env.get("RAMEN_LLM_API_KEY") == ORG_KEY and env.get("RAMEN_LLM_MODEL") == MODEL, sorted(env)
+    assert judge_env(env) and env.get("RAMEN_LLM_MODEL") == MODEL, sorted(env)
     assert org_provider(w, False).status_code == 200
     job = deploy(w)
     assert job["status"] == "error" and NO_PROVIDER in (job.get("error") or "") + ev.log_text(job), job.get("error")
@@ -406,7 +408,9 @@ def test_the_token_answer_and_the_policy_carry_the_guardrails_and_the_version_mo
     assert files.get(YAML) == guardrails_yaml(True) and files.get(f"{DIR}/rails.co") == RAILS_CO, sorted(files)
     assert {f"{DIR}/config.yml", f"{DIR}/actions.py"} <= set(files), sorted(files)
     llm = told["client_llm"]
-    assert (llm["provider"], llm["model"], llm["api_key"]) == (PROVIDER, MODEL, ORG_KEY), "the bridge's rails run on it"
+    # D85 §38.1: the client is pointed at the console's judge proxy; it never receives a provider key
+    assert llm["model"] == MODEL and llm["base_url"].endswith("/llm/v1"), llm
+    assert "api_key" not in llm and ORG_KEY not in json.dumps(llm), "no provider key in the token answer"
     pol = a.policy("demo", "local")
     assert pol["guardrails"] == {"version": v0, "required": False}, pol
     assert "config" not in json.dumps(pol) and ORG_KEY not in json.dumps(pol), "public: versions and flags only"

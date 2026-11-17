@@ -565,7 +565,6 @@ def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = N
     pods (§24.1: a sleeping zone's activator forwards to `worker-direct`)."""
     peers = [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "ramen-system"}}}]
     peers += [{"ipBlock": {"cidr": c}} for c in (lb_cidrs if lb_cidrs is not None else GCP_LB_CIDRS)]
-    peers += [{"ipBlock": {"cidr": c}} for c in console_source_cidrs()]  # §28.1: the console from another cluster
     return {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -579,6 +578,24 @@ def networkpolicy(ns: str, group: str, zone: str, lb_cidrs: list[str] | None = N
             ],
         },
     }
+
+
+def with_console_sources(docs: list[dict], satellite: bool) -> list[dict]:
+    """§28.1 / S6: the console reaches a SATELLITE zone's workers from the home cluster's networks
+    (`RAMEN_CONSOLE_SOURCE_CIDRS`: the home pod range on GKE, the home nodes' subnets on EKS/AKS where the cross-VPC
+    hop is SNATed), so only a satellite zone's `worker` policy admits them — as a rule of their own on the worker
+    port. A home zone never does: there the console is the `ramen-system` namespace peer, and an `ipBlock` over the
+    home pod range would admit every home pod on a CNI that matches pod IPs by `ipBlock`. Idempotent."""
+    cidrs = console_source_cidrs()
+    if not satellite or not cidrs:
+        return docs
+    rule = {"from": [{"ipBlock": {"cidr": c}} for c in cidrs], "ports": [{"port": PORT, "protocol": "TCP"}]}
+    for d in docs:
+        if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "worker":
+            ingress = d["spec"].setdefault("ingress", [])
+            if rule not in ingress:
+                ingress.append(rule)
+    return docs
 
 
 EGRESS_ENV, SERVICE_CIDR_ENV = "RAMEN_WORKER_EGRESS", "RAMEN_CLUSTER_SERVICE_CIDR"

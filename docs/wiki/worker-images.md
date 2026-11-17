@@ -15,6 +15,23 @@ and a new worker pod starts without installing anything.
 The group page's **Worker image** card shows which one is current (*pinned*, *built on deploy* or *The release
 image*) and the history of recorded and built images.
 
+## What the release images are built on
+
+Every image Ramen builds starts from an official slim image named by language minor only — no patch version, no
+Debian codename, no digest — so the security rebuilds upstream publishes under that tag reach Ramen's next build.
+As of 1.0.0 these tags are Debian 13 (trixie):
+
+| Image | Build stage | Runtime base |
+|---|---|---|
+| worker (`node-rs/Dockerfile`) | `rust:1.99-slim` (cross-compiles for the target) | `python:3.12-slim` (the runtime is pinned to 3.12, D45) |
+| console (`console/Dockerfile`) | — (`uv` 0.12 copied in) | `python:3.14-slim` |
+| SkillSpector (`deploy/docker/skillspector`) | `python:3.12-slim` | `python:3.12-slim` |
+| Glama (`glama/Dockerfile`, `glama/Dockerfile.standalone`) | `rust:1.99-slim` | `python:3.12-slim` |
+
+The Rust minor follows `rust-toolchain.toml`. An image built on deploy starts `FROM` the worker image, so it inherits
+these. Dependabot proposes updates weekly once a release is 14 days old; a new Python or Rust minor is a deliberate
+bump. To freeze an install on one exact build of Ramen's images, use the chart's `image.digest` / `image.workerDigest`.
+
 ## Images built on deploy
 
 ### When a build happens
@@ -179,9 +196,10 @@ image (security finding F2). Now:
   console) and `image.workerDigest` (the worker base) in the chart; the reference becomes `<repo>@<digest>` and the
   tag is informational. Read a digest after a push with
   `docker buildx imagetools inspect <image> --format '{{json .Manifest.Digest}}'`.
-- **The console's own rights** (Terraform): GCP — create repositories, and get / update / delete / IAM on
-  repositories, project-wide (Artifact Registry ignores IAM Conditions on the repository name, so no
-  `ramen-groups-*` fence is possible; the residual is in the [threat model](../threat-model.md)); AWS — create, tag, describe and delete ECR repositories
+- **The console's own rights** (Terraform): GCP — create and list repositories and tag a new one `ramen-repo=group`,
+  and get / update / delete / IAM only on repositories carrying that tag (Artifact Registry ignores IAM Conditions on
+  the repository name but evaluates resource tags; the platform repository is tagged `ramen-repo=platform`, see
+  [IAM and network on GCP](iam-network-gcp.md)); AWS — create, tag, describe and delete ECR repositories
   under `ramen/groups/`, and create roles only with the worker or build boundary; Azure — a data-plane role to read
   and delete repositories under `ramen/groups/` (an ABAC condition, no write action). None can push.
 - The group name `build` is reserved: `ramen-build-<group>` names build identities and `ramen-<group>-<zone>` zone

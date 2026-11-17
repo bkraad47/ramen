@@ -872,6 +872,59 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// D92 (§39.2a): the console sets `RAMEN_TLS_SERVER_NAME` to the zone's own name; a worker holding another
+    /// zone's leaf (same install CA) is never reached.
+    #[tokio::test]
+    async fn the_upstream_must_hold_this_zones_leaf() {
+        let ca = crate::testca::TestCa::new();
+        let dir = crate::testca::temp_dir("act-zone");
+        let (bundle, cert, key) = ca.write(&dir, &["demo.b.worker.ramen.internal"]);
+        let (bundle, cert, key) = (
+            bundle.to_str().unwrap(),
+            cert.to_str().unwrap(),
+            key.to_str().unwrap(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let workers = cfg(&[
+            ("RAMEN_ACTIVATOR", "1"),
+            ("RAMEN_ACTIVATOR_UPSTREAM", "127.0.0.1:1"),
+            ("RAMEN_TLS_CERT", cert),
+            ("RAMEN_TLS_KEY", key),
+            ("RAMEN_TLS_CA", bundle),
+            ("RAMEN_BUCKET", dir.to_str().unwrap()),
+        ]);
+        let server = tokio::spawn(crate::server::run(workers, listener, async move {
+            let _ = rx.await;
+        }));
+        let as_zone = |name: &str| {
+            let a = Activator::new_for_test(&cfg(&[
+                ("RAMEN_ACTIVATOR_UPSTREAM", &addr),
+                ("RAMEN_TLS_CA", bundle),
+                ("RAMEN_TLS_SERVER_NAME", name),
+                ("RAMEN_WAKE_TIMEOUT_SECS", "1"),
+            ]))
+            .unwrap();
+            a.poll_ms.store(50, Relaxed);
+            a
+        };
+        let zone_a = as_zone("demo.a.worker.ramen.internal");
+        assert!(
+            zone_a.ready().await.is_err(),
+            "zone b's leaf passed as zone a"
+        );
+        let generic = as_zone("worker.ramen.internal");
+        assert!(
+            generic.ready().await.is_err(),
+            "the pre-D92 name is not on a D92 leaf"
+        );
+        let zone_b = as_zone("demo.b.worker.ramen.internal");
+        assert!(matches!(zone_b.ready().await, Ok(Ready::Up)));
+        tx.send(()).unwrap();
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn nobody_upstream_is_a_timeout_and_a_503_with_retry_after() {
         let a = Activator::new_for_test(&cfg(&[

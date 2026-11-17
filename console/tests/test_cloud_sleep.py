@@ -444,10 +444,10 @@ async def test_deploy_config_reaches_workers_and_the_activator_through_the_secre
     the runtime (tenant code) reads."""
     provider, cloud, k8s = zone
 
-    async def reload(target, key):
+    async def reload(target, key, **_):
         return {"tools": [], "errors": []}
 
-    async def health(target):
+    async def health(target, **_):
         return True
 
     monkeypatch.setattr(cloud.rpc, "reload", reload)
@@ -470,7 +470,7 @@ async def test_local_adapter_hands_the_telemetry_settings_to_the_worker_in_its_d
     them out of the runtime's environment); the kube adapters use the Secret, tested above."""
 
     class Rpc:
-        async def reload(self, target, key):
+        async def reload(self, target, key, **_):
             return {"tools": []}
 
     c = LocalCloud(tmp_path, rpc=Rpc())

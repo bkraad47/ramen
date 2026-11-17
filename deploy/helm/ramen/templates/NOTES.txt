@@ -2,6 +2,12 @@
 WARNING: networkPolicy.workerEgress is on but cluster.serviceCidr is empty — no worker-egress policy is written to the
          zone namespaces (§33.4a). Set cluster.serviceCidr to the cluster's Service range (values.yaml says where to read it).
 {{- end }}
+{{- if and .Values.console.sourceCidrs (ne .Values.provider "gcp") }}
+WARNING: console.sourceCidrs is set on {{ .Values.provider }}, whose policy engine (VPC CNI / Calico) matches POD addresses
+         by ipBlock: a range that holds pods admits every one of them to the console port here and to every worker of a
+         satellite cluster. List only the home nodes' subnets the console's SNATed calls leave from, never a pod range
+         (S6, docs/threat-model.md).
+{{- end }}
 {{- if eq .Values.provider "azure" }}
 Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on AKS ({{ .Values.region }}, resource group {{ .Values.azure.resourceGroup }}). CONTRACTS §21.6.
          kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (lets the console HTTPRoute attach to port 443)

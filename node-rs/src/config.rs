@@ -68,6 +68,8 @@ const DEPLOY_KEYS: &[&str] = &[
     "AWS_REGION",
     // §31.4a (D76): the per-deploy key Ramen's own evals Job calls with; MCP methods only, no policy gate.
     "RAMEN_EVALS_KEY",
+    // D92 (§16.7): revoked keys and tokens; merged with the env's and an `Admin/Reload` overlay, never replaced.
+    "RAMEN_REVOKED",
 ];
 
 /// C10 (0.7.2): who may see and who may call one tool. Kinds: `key`, `group_admin`, `viewer`, `mcp_user`;
@@ -239,6 +241,8 @@ pub struct Config {
     pub guardrails_required: bool,
     /// §31.4a: the bearer of Ramen's own evals Job (`RAMEN_EVALS_KEY`, rotated per deploy); none = nothing accepted.
     pub evals_key: Option<String>,
+    /// D92 (§16.7): `RAMEN_REVOKED` from every source; listed keys are already gone from `mcp_keys`.
+    pub revoked: crate::revoke::Revoked,
     /// §36.2: what the runtime child gets for its LLM rails (`RUNTIME_KEYS` present in the env or the deploy file).
     pub runtime_env: RuntimeEnv,
 }
@@ -343,18 +347,32 @@ impl Config {
         let Some(text) = deploy.iter().find_map(|p| std::fs::read_to_string(p).ok()) else {
             return Ok(base);
         };
+        let mut revoked = None;
         for (k, v) in parse_flat(&text) {
             if !DEPLOY_KEYS.contains(&k.as_str()) {
                 continue;
             }
-            if k == "RAMEN_MCP_KEYS" {
+            if k == "RAMEN_REVOKED" {
+                revoked = Some(crate::revoke::Revoked::parse(&v)?); // D92: a union with the env's, below
+            } else if k == "RAMEN_MCP_KEYS" {
                 let merged = map.get(&k).map(|s| format!("{s},{v}")).unwrap_or(v);
                 map.insert(k, merged);
             } else {
                 map.insert(k, v);
             }
         }
-        Config::from_map(&map)
+        let mut cfg = Config::from_map(&map)?;
+        if let Some(r) = revoked {
+            cfg.revoke(&r);
+        }
+        Ok(cfg)
+    }
+
+    /// D92: merge more revocations in and drop every key they name.
+    pub fn revoke(&mut self, more: &crate::revoke::Revoked) {
+        self.revoked.merge(more);
+        let r = &self.revoked;
+        self.mcp_keys.retain(|k| !r.key_revoked(k));
     }
 
     pub fn from_map(m: &HashMap<String, String>) -> Result<Config, String> {
@@ -450,7 +468,13 @@ impl Config {
             plaintext_refused,
             python: get("RAMEN_PYTHON").unwrap_or_else(|| "python3".into()),
             pythonpath: get("RAMEN_PYTHONPATH"),
-            mcp_keys: list("RAMEN_MCP_KEYS"),
+            mcp_keys: {
+                let r = crate::revoke::Revoked::parse(&get("RAMEN_REVOKED").unwrap_or_default())?;
+                list("RAMEN_MCP_KEYS")
+                    .into_iter()
+                    .filter(|k| !r.key_revoked(k))
+                    .collect()
+            },
             allowed_cidrs,
             admin_cidrs,
             admin_key: get("RAMEN_ADMIN_KEY"),
@@ -553,6 +577,7 @@ impl Config {
                 Some("1" | "true")
             ),
             evals_key: get("RAMEN_EVALS_KEY"),
+            revoked: crate::revoke::Revoked::parse(&get("RAMEN_REVOKED").unwrap_or_default())?,
             runtime_env: RuntimeEnv::from_map(m),
         })
     }

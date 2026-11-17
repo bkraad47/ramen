@@ -413,9 +413,11 @@ class Node:
         k = self.admin_key if admin_key is UNSET else admin_key
         return ([("x-ramen-admin-key", k)] if k else []) + self.metadata(None)
 
-    def admin_reload(self, admin_key=UNSET, timeout: float = 180) -> dict:
+    def admin_reload(self, admin_key=UNSET, timeout: float = 180, revoked: str = "") -> dict:
+        """`revoked` (D92, §16.7): the console's `RAMEN_REVOKED` JSON, merged by the node at this reload."""
         stub = admin_pb2_grpc.AdminStub(self.channel())
-        r = stub.Reload(admin_pb2.ReloadRequest(), metadata=self.admin_metadata(admin_key), timeout=timeout)
+        req = admin_pb2.ReloadRequest(revoked=revoked.encode())
+        r = stub.Reload(req, metadata=self.admin_metadata(admin_key), timeout=timeout)
         return json.loads(r.json)
 
     def admin_metrics(self, admin_key=UNSET) -> dict:

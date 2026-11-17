@@ -78,7 +78,7 @@ install's edge host, the group's zones and a registered client id, one section p
     ```
     Run by hand it signs in, then waits silently for MCP messages on stdin; that is normal.
 
-**Where the bridge keeps the token (bridge 0.3.0).**
+**Where the bridge keeps the token (bridge 0.3.0 and later).**
 
 - In memory by default: nothing is written to disk, and the person signs in again when the client restarts.
 - `--keychain` keeps it in the operating system's secret store (macOS Keychain, or a Secret Service such as GNOME
@@ -88,13 +88,14 @@ install's edge host, the group's zones and a registered client id, one section p
   `data.sign_in_url`, so the AI client can show it; the person opens it, approves, and the next call works.
   `--no-browser` prints the link instead of opening a browser.
 - Behind a self-signed certificate add `--ca <pem>`; it verifies the console during sign-in as well as the worker.
-- TLS is the bridge's default since 0.6.0 (D86); the commands above keep `--tls` so an older bridge connects too.
+- TLS is the default of bridge 1.0.0, the bridge for Ramen 1.0.0 (D86); the commands above keep `--tls` so a 0.3.x
+  bridge uses TLS too.
   `--insecure` (plaintext h2c, `RAMEN_BRIDGE_INSECURE=1`) is for a bare local worker only and is an error next to
   `--tls` or `--ca`.
 
 Bridge 0.2.x kept the refresh token in `~/.config/ramen-mcp-bridge/`; 0.3.0 does so only when asked.
 
-**What the bridge writes at sign-in (bridge 0.5.0, Ramen 1.0.0c; PyPI still serves 0.3.0 until 0.6.0 is published).** The token answer's `telemetry` and `evals`
+**What the bridge writes at sign-in (bridge 1.0.0, the bridge for Ramen 1.0.0).** The token answer's `telemetry` and `evals`
 objects become the **policy bundle** at `~/.ramen/policy/<host>/<group>-<zone>.json` (0600; telemetry header
 values stay in memory) and the group's evals config lands at `~/.ramen/evals/<host>/<group>/promptfooconfig.yaml`.
 Unless started with `--no-client-config`, the bridge also merges a marked `ramen` entry into the editor's own files:
@@ -104,7 +105,7 @@ Claude Code's `~/.claude/settings.json` (a `SessionStart` hook running `ramen-mc
 reverts them. `policy show` and `policy check` print the bundle and compare it with the console's public
 `/.well-known/ramen-policy`. Without a bundle and unable to sign in, the bridge exits with `Ramen policy missing:
 reconnect (sign in)`. Details and the limit of what this can enforce: [Evals](evals.md#client-policy-versions-the-gate-the-bridge).
-Bridge 0.6.0 adds the `skillspector` policy to the bundle: when the group requires it, `policy check` also scans the
+Bridge 1.0.0 also keeps the `skillspector` policy in the bundle: when the group requires it, `policy check` also scans the
 skills on your machine with a local SkillSpector and exits 3 on a `DO_NOT_INSTALL`
 ([SkillSpector scans](skillspector.md#client-policy-the-bridges-local-scan)). When the repo carries
 `mcp/guardrails.yaml` (1.0.0c Phase 2.5), the bundle also holds `guardrails {version, required, config, client_llm}`:

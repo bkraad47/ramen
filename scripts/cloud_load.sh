@@ -7,7 +7,8 @@
 # RAMEN_CONSOLE_URL it hands the run to the session's driver (RAMEN_CLOUD_DRIVER, default the scratchpad cloud2.sh):
 # `cloud2.sh <cloud> verify load …`, which exports the same variables from its <cloud>-final.env.
 # Knobs: RAMEN_LOAD_IDLE_SECS (scale-down wait; default here 480 — 4→1 is three −1 steps of a 120 s cooldown),
-# RAMEN_LOAD_FAST=1 (dry run), RAMEN_PHOENIX_URL (port-forward of svc/phoenix 6006 for the span delta),
+# RAMEN_LOAD_FAST=1 (dry run), RAMEN_PHOENIX_URL (port-forward of svc/phoenix 6006 for the span delta; D92: with
+# RAMEN_PHOENIX_ADMIN_SECRET = Secret ramen-engines `phoenix-admin-secret`, Phoenix's auth is on),
 # RAMEN_LOAD_REPORT_MD (the report file), RAMEN_LOAD_KEY (a group key the workers already know: skips the deploy).
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

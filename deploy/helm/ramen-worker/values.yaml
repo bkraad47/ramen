@@ -29,7 +29,7 @@ serviceAccount:
   gsa: ""                   # default: ramen-<group>-<zone>@<project>.iam.gserviceaccount.com; "-" = no WI annotation
 bucketUri: ""               # default: gs://ramen-<project>-groups/<group>
 bucketPath: /data/bucket
-port: 8080                  # gRPC h2c; set RAMEN_TLS_CERT/RAMEN_TLS_KEY in env for node TLS (then the LB backend needs HTTP2)
+port: 8080                  # gRPC + HTTP/2 over TLS only: the console adds the leaf, RAMEN_REQUIRE_TLS=1 and TLS backends to every zone it deploys (D86)
 replicas: 1                 # stable `worker`
 canaryReplicas: 1           # `worker-canary` (console scales to 0 on failed canary)
 size: s                     # key into sizes (super admin allowlist per group+zone)

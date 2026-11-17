@@ -17,7 +17,7 @@ import secrets
 import time
 from urllib.parse import urlencode, urlparse, urlunparse
 
-from . import configs, evals, guardrails, otel, skillspector
+from . import configs, evals, guardrails, otel, revocation, skillspector
 from .accounts import Accounts
 from .errors import ApiError, invalid, not_found
 from .rbac import Principal, can_connect, principal_from
@@ -178,8 +178,14 @@ class OAuthServer:
         if not await self.store.get("oauth_clients", client_id):
             raise not_found("OAuth client")
         await self.store.delete("oauth_clients", client_id)
-        for r in await self.store.list("oauth_refresh", {"client_id": client_id}):
+        records = await self.store.list("oauth_refresh", {"client_id": client_id})
+        await self._revoke_records(records, "oauth.client.delete")  # D92: its live access tokens go too
+        for r in records:
             await self.store.delete("oauth_refresh", r["id"])
+
+    async def _revoke_records(self, records: list[dict], reason: str) -> None:
+        """D92 (§16.7): every live access token minted with these refresh records, denied and pushed at once."""
+        await self.accounts.revoked(await revocation.deny_records(self.store, records, reason))
 
     async def client(self, client_id: str) -> dict:
         c = await self.store.get("oauth_clients", client_id or "")
@@ -198,6 +204,8 @@ class OAuthServer:
             "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],
+            "revocation_endpoint": f"{issuer}/oauth/revoke",  # D92: RFC 7009
+            "revocation_endpoint_auth_methods_supported": ["none"],
             "service_documentation": "https://bkraad47.github.io/ramen/how-tos/security/",
         }
 
@@ -323,19 +331,23 @@ class OAuthServer:
     async def _refresh(self, form: dict, issuer: str) -> dict:
         client = await self.client(form.get("client_id"))
         salt = await token_salt(self.store)
+        reused = None
         async with self.store.transaction() as tx:
             rec = await _first(tx, "oauth_refresh", token_ids(form.get("refresh_token"), salt))
             if rec and rec.get("used"):
                 # a rotated-out token presented again means two parties hold the chain: the whole family dies (M3)
-                for r in await tx.list("oauth_refresh", {"family": rec["family"]}):
+                reused = await tx.list("oauth_refresh", {"family": rec["family"]})
+                for r in reused:
                     await tx.delete("oauth_refresh", r["id"])
-                raise OAuthError(
-                    "invalid_grant",
-                    "refresh token reuse detected; every token of this grant is revoked",
-                    reason="refresh_reuse",
-                )
-            if rec:  # rotation: the presented token dies here, kept as a tombstone until the family expires
+            elif rec:  # rotation: the presented token dies here, kept as a tombstone until the family expires
                 await tx.put("oauth_refresh", rec["id"], {**rec, "used": True})
+        if reused is not None:  # D92: and every access token the grant minted, at once
+            await self._revoke_records(reused, "refresh_reuse")
+            raise OAuthError(
+                "invalid_grant",
+                "refresh token reuse detected; every token of this grant is revoked",
+                reason="refresh_reuse",
+            )
         if not rec or rec["client_id"] != client["client_id"] or rec["exp"] < time.time():
             raise OAuthError(
                 "invalid_grant", "refresh token is unknown, expired, or not for this client", reason="refresh_invalid"
@@ -345,6 +357,51 @@ class OAuthServer:
         return await self._tokens(
             client, user, rec["group"], rec["zone"], issuer, family=rec["family"], tel=tel, gate=False
         )
+
+    # --- revocation (RFC 7009, D92 §16.7) ----------------------------------------------------------------------------
+    async def revoke(self, form: dict) -> None:
+        """An access token: its `jti` is denied on the group's workers until it expires. A refresh token: the whole
+        grant, and every access token it minted. Unknown, malformed or expired tokens are fine (RFC 7009 §2.2); a token
+        issued to another client is refused."""
+        client = await self.client(form.get("client_id"))
+        token = form.get("token") or ""
+        if not token:
+            raise OAuthError("invalid_request", "token is required")
+        if token.count(".") == 2 and form.get("token_type_hint") != "refresh_token":
+            claims = await self._verified(token)
+            if claims is not None:
+                if claims.get("client_id") != client["client_id"]:
+                    raise OAuthError("invalid_request", "the token was not issued to this client", reason="other")
+                if await revocation.deny_jti(
+                    self.store, claims.get("group") or "", claims.get("jti") or "", claims.get("exp") or 0, "revoke"
+                ):
+                    await self.accounts.revoked({claims["group"]})
+                return
+        salt = await token_salt(self.store)
+        family = None
+        async with self.store.transaction() as tx:
+            rec = await _first(tx, "oauth_refresh", token_ids(token, salt))
+            if rec and rec["client_id"] != client["client_id"]:
+                family = "other"
+            elif rec:
+                family = await tx.list("oauth_refresh", {"family": rec["family"]})
+                for r in family:
+                    await tx.delete("oauth_refresh", r["id"])
+        if family == "other":
+            raise OAuthError("invalid_request", "the token was not issued to this client", reason="other")
+        if family:
+            await self._revoke_records(family, "revoke")
+
+    async def _verified(self, token: str) -> dict | None:
+        """The claims of an access token this console signed (any group's key), else None."""
+        try:
+            h, p, s = token.split(".")
+            claims = json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))
+            secret = await self.svc.session_secret(str(claims["group"]))
+        except Exception:  # noqa: BLE001 - not one of ours: nothing to revoke
+            return None
+        want = b64url(hmac.new(token_key(secret), f"{h}.{p}".encode(), hashlib.sha256).digest())
+        return claims if isinstance(claims, dict) and hmac.compare_digest(want, s) else None
 
     async def _still_allowed(self, rec: dict) -> dict:
         """M2: what was true at consent is re-checked at every mint — the user exists, can still log in, still has
@@ -421,6 +478,8 @@ class OAuthServer:
                 "family": family,
                 "used": False,
                 "exp": iat + refresh_ttl(),
+                "jti": claims["jti"],  # D92: what revoking this grant denies on the workers
+                "access_exp": claims["exp"],
                 "created": now(),
                 **({"tel": True} if tel else {}),
             },

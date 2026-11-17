@@ -95,9 +95,9 @@ configs changed: sign in again`. It runs after the [SkillSpector gate](skillspec
 lists and `server/discover` stay open. Access-log reasons `configs_required` and `configs_stale`. The gate holds for
 every client, whatever sent the call.
 
-## What the bridge writes (bridge 0.6.0)
+## What the bridge writes (bridge 1.0.0)
 
-Bridge 0.6.0 is not on PyPI yet; the published 0.3.0 writes none of this. At sign-in, when the token answer says
+Bridge 1.0.0 is the bridge for Ramen 1.0.0; 0.3.x writes none of this. At sign-in, when the token answer says
 `accepted: false`, the bridge opens `/groups/<g>/configs?next=…` in the
 browser and waits, as it does for the OAuth consent. Then it writes **every target** as its `merge` says, records each
 in `~/.ramen/clients.json` (path, format, SHA-256 of the Ramen block or keys, version), and carries the version on

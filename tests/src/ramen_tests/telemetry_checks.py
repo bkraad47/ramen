@@ -7,6 +7,7 @@ import time
 
 import httpx
 
+from . import env as E
 from .mcp_client import TELEMETRY_META, telemetry_event, telemetry_report
 from .modern import Modern, strip_envelope
 
@@ -88,7 +89,7 @@ def call_with_events(m: Modern, tool: str, arguments: dict, version: str, reason
 def jaeger_trace(jaeger: str, trace_id: str, timeout: float = 120) -> dict:
     deadline, last = time.monotonic() + timeout, None
     while time.monotonic() < deadline:
-        resp = httpx.get(f"{jaeger.rstrip('/')}/api/traces/{trace_id}", timeout=15)
+        resp = httpx.get(f"{jaeger.rstrip('/')}/api/traces/{trace_id}", timeout=15, auth=E.engines_auth())
         data = resp.json().get("data") if resp.status_code == 200 else None
         last = data[0] if data and data[0].get("spans") else None
         if last and any(tag(s, "ramen.event.kind") for s in last["spans"]):  # §32.1: client spans, by the event

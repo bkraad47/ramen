@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Write deploy/local/.env from .env.example with fresh secrets (`make env`, run by `make up`).
 
-Generated: RAMEN_ADMIN_PASSWORD, RAMEN_FERNET_KEY, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_SESSION_SECRET and (§33.4a)
-RAMEN_REDIS_PASSWORD. The example
+Generated: RAMEN_ADMIN_PASSWORD, RAMEN_FERNET_KEY, RAMEN_MCP_KEYS, RAMEN_ADMIN_KEY, RAMEN_SESSION_SECRET, (§33.4a)
+RAMEN_REDIS_PASSWORD and (D92, the engines' credentials, as the chart's Secret ramen-engines) RAMEN_ENGINES_PASSWORD,
+RAMEN_ENGINES_UPLOAD_PASSWORD, RAMEN_PHOENIX_SECRET, RAMEN_PHOENIX_ADMIN_SECRET. The example
 carries no values for them, so a copied example never starts a console with a known password. An existing .env is
 kept unless one of those is empty, shorter than a generated value or the Fernet key that shipped before 0.8.0; then
 just those keys are rotated and the old file is left in .env.bak. Checked by scripts/check_secrets.py.
@@ -27,6 +28,10 @@ KEYS = (
     "RAMEN_ADMIN_KEY",
     "RAMEN_SESSION_SECRET",
     "RAMEN_REDIS_PASSWORD",
+    "RAMEN_ENGINES_PASSWORD",
+    "RAMEN_ENGINES_UPLOAD_PASSWORD",
+    "RAMEN_PHOENIX_SECRET",
+    "RAMEN_PHOENIX_ADMIN_SECRET",
 )
 LEGACY_FERNET_SHA256 = "b03096c60becdd08c0abddb84c186a16e3ba8818d6e0dd5fc31b56f555b222cc"
 
@@ -39,6 +44,8 @@ def generate() -> dict[str, str]:
         "RAMEN_ADMIN_KEY": secrets.token_hex(24),
         "RAMEN_SESSION_SECRET": secrets.token_hex(32),
         "RAMEN_REDIS_PASSWORD": secrets.token_hex(24),
+        # D92: Phoenix wants ≥ 32 characters with a digit and a lowercase letter (both secrets distinct)
+        **{k: secrets.token_hex(20) + "7k" for k in KEYS[-4:]},
     }
 
 

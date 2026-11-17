@@ -433,7 +433,7 @@ def phoenix_span_count(url: str | None, project: str = "demo") -> int | None:
         return None
     base = url.rstrip("/")
     try:
-        with httpx.Client(timeout=30) as c:
+        with httpx.Client(timeout=30, headers=E.phoenix_headers()) as c:  # D92: Phoenix's auth is on
             q = "{ projects { edges { node { id name recordCount } } } }"
             r = c.post(f"{base}/graphql", json={"query": q})
             if r.status_code == 200 and not (r.json().get("errors")):

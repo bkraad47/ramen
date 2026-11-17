@@ -40,6 +40,7 @@ from .gcp_k8s import (
     ns_name,
     rolebinding,
     same_zone_rule,
+    with_console_sources,
 )
 from .local import worker_tls_from_env
 
@@ -248,6 +249,7 @@ class GcpCloud(Cloud):
             # CONTRACTS §7: the console creates the per-zone GSA; without it workers have no GCS/Secret identity
             spec["service_account"] = self._identity(group, zone)["name"]
         renderer, docs = self._render(group, zone, spec)
+        docs = with_console_sources(docs, self.cluster_key(self.current_cluster) != "home")  # S6: satellites only
         issued = None
         if require_tls():  # D86 §39.2: a fresh leaf + bundle first, then workers that serve TLS behind TLS backends
             docs = zone_tls.secure(docs, self.PROVIDER)
@@ -342,8 +344,11 @@ class GcpCloud(Cloud):
 
         ca, kube, out = zone_tls.ca(), self._use(cluster), []
         for ns, group, zone, cur in list(self._zones_with_leaves(kube)):
-            if leaves and tls.needs_renewal(cur.get("tls.crt", ""), ca):
-                docs = zone_tls.objects(group, zone)
+            pem = cur.get("tls.crt", "")
+            # D92 §39.5b: a leaf without its zone name is due too; one that carried the generic name keeps it (the
+            # zone's activator and Envoy policy verify it until the zone's next deploy writes zone-only)
+            if leaves and (tls.needs_renewal(pem, ca) or not tls.has_name(pem, tls.worker_name(group, zone))):
+                docs = zone_tls.objects(group, zone, legacy=tls.has_name(pem, tls.WORKER_NAME))
             elif cur.get("ca.crt") != ca.bundle:
                 kube.patch("Secret", ns, zone_tls.SECRET, {"stringData": {"ca.crt": ca.bundle}})
                 docs = [zone_tls.bundle_configmap(group, zone)]
@@ -450,7 +455,9 @@ class GcpCloud(Cloud):
         n, failed, warned = 0, [], []
         for p in await asyncio.to_thread(self.kube.pods, ns, WORKERS):
             try:
-                await self.rpc.reload(self._target(p), self.admin_key)
+                await self.rpc.reload(
+                    self._target(p), self.admin_key, peer=(group, zone), revoked=config.get("RAMEN_REVOKED")
+                )  # D92 (§16.7): revocations apply at this reload; the restart below makes them the env
                 n += 1
             except GrpcError as e:
                 is_canary = (p["metadata"].get("labels") or {}).get("ramen.io/track") == "canary"
@@ -485,7 +492,7 @@ class GcpCloud(Cloud):
         """Admin/Reload, then Mcp/Call tools/list with the first MCP key (Health/Check when the group has no keys)."""
         target, name = self._target(pod), pod["metadata"]["name"]
         try:
-            result = await self.rpc.reload(target, self.admin_key)
+            result = await self.rpc.reload(target, self.admin_key, peer=(group, zone))
         except GrpcError as e:
             raise RuntimeError(f"reload on {name} returned {e.code.name}: {e.details[:200]}") from None
         log(f"{name}: reload ok ({len(result.get('tools', []))} tools, {len(result.get('errors', []))} errors)")
@@ -498,7 +505,7 @@ class GcpCloud(Cloud):
                 raise RuntimeError(f"smoke test on {name} failed: {e.code.name} {e.details[:200]}") from None
             if "result" not in r:
                 raise RuntimeError(f"smoke test on {name} failed: {str(r.get('error'))[:200]}")
-        elif not await self.rpc.health(target):
+        elif not await self.rpc.health(target, peer=(group, zone)):
             raise RuntimeError(f"smoke test on {name} failed: health not SERVING")
         log(f"{name}: smoke ok ({'tools/list' if mcp_key else 'health SERVING, no MCP keys configured'})")
         return result
@@ -851,8 +858,7 @@ class GcpCloud(Cloud):
         ar = self._ar(self._build_registry())
         if ar is None:  # not Artifact Registry (kind, a plain registry): nothing to create
             return {}
-        location, project = ar
-        reg = gcp_api.Registry(self.c.artifactregistry, project, location, delay=self.kube.poll)
+        reg = self._registry(ar)
         repo_id = repository.split("/")[2]
         reg.ensure(repo_id, {"ramen": "group-worker", "ramen-group": group}, f"ramen worker images of group {group}")
         number = self._iam().project_number()
@@ -862,6 +868,27 @@ class GcpCloud(Cloud):
         )
         reg.bind(repo_id, "roles/artifactregistry.writer", member)
         return {}
+
+    @staticmethod
+    def _ar_group_tag(project) -> str | None:
+        """§38.2: the tag value bound to every group repository — terraform's `ramen-repo=group`, by namespaced name
+        (`<project>/ramen-repo/group`) unless `RAMEN_AR_GROUP_TAG` names another (`tagValues/<id>` or a namespaced
+        name); `none` turns tagging off (an install whose console rights are not tag-conditioned)."""
+        v = os.environ.get("RAMEN_AR_GROUP_TAG", "").strip()
+        if v.lower() == "none":
+            return None
+        return v or f"{project}/ramen-repo/group"
+
+    def _registry(self, ar) -> gcp_api.Registry:
+        location, project = ar
+        return gcp_api.Registry(
+            self.c.artifactregistry,
+            project,
+            location,
+            delay=self.kube.poll,
+            tags=self.c.tag_bindings(location),
+            tag_value=self._ar_group_tag(project),
+        )
 
     def _ensure_builder(self, group, repository) -> str:
         """The group's build identity (cloud side, unless `RAMEN_BUILD_IDENTITIES=none`) and its KSA in ramen-system."""
@@ -887,7 +914,7 @@ class GcpCloud(Cloud):
         ar = self._ar(self._build_registry())
         if ar is None:
             return {}
-        reg = gcp_api.Registry(self.c.artifactregistry, ar[1], ar[0], delay=self.kube.poll)
+        reg = self._registry(ar)
         repo_id = self.ar_repo_id(group)
         return {"repositories": [repo_id] if reg.delete(repo_id) else []}
 
@@ -1034,7 +1061,7 @@ class GcpCloud(Cloud):
                 out.append({**w, "load": "down", "metrics": {}})
                 continue
             try:
-                m = await self.rpc.metrics(self._target(p), self.admin_key)
+                m = await self.rpc.metrics(self._target(p), self.admin_key, peer=(group, zone))
                 out.append({**w, "load": m.get("load", "unknown"), "metrics": m})
             except (GrpcError, ValueError) as e:
                 out.append({**w, "load": "down", "metrics": {}, "error": f"{type(e).__name__}: {e}"})

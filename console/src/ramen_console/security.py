@@ -144,7 +144,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Fixed-window per-IP limit on *failed* credential attempts (login, reset, magic link). Default 20/minute;
     successful requests are never counted, so automation and test harnesses are unaffected. 0 disables."""
 
-    PATHS = ("/login", "/auth/reset", "/auth/magic", "/oauth/token")  # token: code and refresh guessing (L5)
+    PATHS = ("/login", "/auth/reset", "/auth/magic", "/oauth/token", "/oauth/revoke")  # guessing (L5); D92 revoke
 
     def __init__(self, app, limit: int | None = None, window: float = 60.0):
         super().__init__(app)

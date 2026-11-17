@@ -396,6 +396,7 @@ def test_a_safe_scan_is_recorded_with_the_report_page(demo, runner, tmp_path, ws
     assert "scan: SAFE" in page and f'href="{url}"' in page and "Scan report" in page
     r = demo.get(url)
     assert r.status_code == 200 and "ramen-served-zone-a" in r.text and "SAFE" in r.text and "9/100" in r.text
+    assert r.text.count("<h1") == 1 and "<h1>Scan report — demo / zone-a</h1>" in r.text  # N10: the title once
     assert demo.get(f"/groups/demo/scans/{job['id']}/zone-b").status_code == 404
     assert demo.get("/groups/demo/scans/nope/zone-a").status_code == 404
     make_user(demo, "v@x", "viewer", ["demo"])

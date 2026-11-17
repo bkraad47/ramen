@@ -3,12 +3,12 @@
 | | Where | Latest |
 |---|---|---|
 | **Ramen** | [GitHub releases](https://github.com/bkraad47/ramen/releases), tagged `v<version>` with zips built by CI | [latest](https://github.com/bkraad47/ramen/releases/latest) |
-| **ramen-mcp-bridge** | [PyPI](https://pypi.org/project/ramen-mcp-bridge/) and [GitHub](https://github.com/bkraad47/ramen-mcp-bridge) | [0.3.0](https://pypi.org/project/ramen-mcp-bridge/0.3.0/) |
+| **ramen-mcp-bridge** | [PyPI](https://pypi.org/project/ramen-mcp-bridge/) and [GitHub](https://github.com/bkraad47/ramen-mcp-bridge) | [1.0.0](https://pypi.org/project/ramen-mcp-bridge/1.0.0/) |
 | **ramen-demo-mcp** | [GitHub](https://github.com/bkraad47/ramen-demo-mcp-group), the demo group repo | tagged `v<version>` with each Ramen release |
 | **Images** | Docker Hub [`bkraad47/ramen-worker`](https://hub.docker.com/r/bkraad47/ramen-worker), [`bkraad47/ramen-console`](https://hub.docker.com/r/bkraad47/ramen-console); the same on `ghcr.io/bkraad47/` | `<version>` and `latest` |
 
 ```sh
-uvx ramen-mcp-bridge@latest      # or: pip install ramen-mcp-bridge==0.3.0
+uvx ramen-mcp-bridge@latest      # or: pip install ramen-mcp-bridge==1.0.0
 docker pull bkraad47/ramen-worker:latest bkraad47/ramen-console:latest
 ```
 
@@ -16,7 +16,7 @@ docker pull bkraad47/ramen-worker:latest bkraad47/ramen-console:latest
 
 | Ramen | Bridge on PyPI | Demo repo | Notes |
 |---|---|---|---|
-| 1.0.0 | 0.3.0 | `v1.0.0` tag: `confirm_delete_note` (asks before it deletes), `slow_report` (`"task": true`), golden cases with `respond` | MCP spec 2026-07-28 next to 2025-06-18 on the same endpoint: stateless requests, standard headers, multi round-trip requests, tasks, `subscriptions/listen`; 2025-06-18 clients answered as in 0.8.0; the group contract only gains optional additions. [What changes for existing users](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) |
+| 1.0.0 | **1.0.0** (TLS by default, the policy bundle; 0.3.x cannot pass a Required policy) | `v1.0.0` tag: `confirm_delete_note` (asks before it deletes), `slow_report` (`"task": true`), golden cases with `respond` | MCP spec 2026-07-28 next to 2025-06-18 on the same endpoint: stateless requests, standard headers, multi round-trip requests, tasks, `subscriptions/listen`; 2025-06-18 clients answered as in 0.8.0; the group contract only gains optional additions. [What changes for existing users](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) |
 | 0.8.0 | 0.3.0 | `v0.8.0` tag (same tools and rails as `v0.7.5`) | the security review's fixes (`repo_url` validation, no repo-shipped deploy file, loopback redirect check, one autoscale decision per zone, no concurrent deploys, trusted-hop audit ip); the compose stack pulls the published images; worker, Glama and MCPB images pin bridge 0.3.0; no static secrets; verified again on GKE, EKS and AKS |
 | 0.7.5 | 0.2.2 in the worker image; 0.3.0 documented, on PyPI since 2026-10-17 | `v0.7.5` tag: `mcp/guardrails.yaml`, NeMo rails, `word_count` | guardrails in the runtime, identity-provider group lookup, custom roles, AKS, autoscaling by Ramen, salted hashes |
 | 0.7.0 to 0.7.2 | 0.2.2 | `v0.7.0` to `v0.7.2` tags: `mcp/tests.yaml`, `output` schemas, richer descriptions | gates, golden cases, output schemas (0.7.0); per-tool access, rollout notice, drift (0.7.2) |

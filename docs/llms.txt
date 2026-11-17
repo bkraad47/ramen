@@ -47,7 +47,7 @@ Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth t
 ## Code
 
 - [ramen](https://github.com/bkraad47/ramen): console/ (FastAPI), node-rs/ (Rust, tonic), runtime-py/ (Python), proto/, deploy/ (compose, Helm, Terraform, CloudFormation), skills/, tests/
-- [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge): the stdio bridge, `uvx ramen-mcp-bridge@latest` or `pip install ramen-mcp-bridge` (0.6.0 or later for Ramen 1.0.0's policy versions)
+- [ramen-mcp-bridge](https://github.com/bkraad47/ramen-mcp-bridge): the stdio bridge, `uvx ramen-mcp-bridge@latest` or `pip install ramen-mcp-bridge` (1.0.0, the bridge for Ramen 1.0.0: TLS by default and the policy versions)
 - Images: `docker.io/bkraad47/ramen-worker` and `ramen-console` (also `ghcr.io/bkraad47/`), tags `<version>` and `latest`, linux/amd64 and arm64; the local compose stack pulls them
 - [ramen-demo-mcp-group](https://github.com/bkraad47/ramen-demo-mcp-group): the demo group repo: tools (one asks before it acts, one runs as a task, Iris data tools on pandas), resources, prompts, an MCP App, two skills, an `env.yaml`, golden cases, NeMo rails (static and LLM), promptfoo evals and LLM configs
 - [Releases](https://github.com/bkraad47/ramen/releases)

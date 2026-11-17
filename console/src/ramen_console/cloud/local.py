@@ -208,7 +208,9 @@ class LocalCloud(Cloud):
         n, failed = 0, []
         for target in self._targets(group, zone):
             try:
-                await self.rpc.reload(target, self.admin_key)
+                await self.rpc.reload(
+                    target, self.admin_key, peer=(group, zone), revoked=config.get("RAMEN_REVOKED")
+                )  # D92: at once
                 n += 1
             except (GrpcError, ValueError) as e:
                 failed.append(f"{target}: {type(e).__name__}: {e}")
@@ -220,7 +222,7 @@ class LocalCloud(Cloud):
         mcp_key = (vars_.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
         for target in self._targets(group, zone):
             try:
-                body = await self.rpc.reload(target, self.admin_key)
+                body = await self.rpc.reload(target, self.admin_key, peer=(group, zone))
                 if gate:  # no canary track here: the gate runs on every worker's reload (0.7.0)
                     await gate(body, self._caller(target, mcp_key, group, zone) if mcp_key else None)
                 results.append({"id": target, "ok": True, "status": "OK", "result": body})
@@ -258,7 +260,7 @@ class LocalCloud(Cloud):
         out = []
         for target in self._targets(group, zone):
             try:
-                m = await self.rpc.metrics(target, self.admin_key)
+                m = await self.rpc.metrics(target, self.admin_key, peer=(group, zone))
                 out.append({"id": target, "load": m.get("load", "unknown"), "metrics": m})
             except (GrpcError, ValueError) as e:
                 out.append({"id": target, "load": "down", "metrics": {}, "error": f"{type(e).__name__}: {e}"})
@@ -347,14 +349,18 @@ class LocalCloud(Cloud):
 def worker_tls_from_env():
     """RAMEN_WORKER_TLS=1 → TLS to nodes (RAMEN_WORKER_CA / _CERT / _KEY as PEM paths, RAMEN_WORKER_TLS_NAME the name
     to verify); unset → h2c. D86 (§39.3): under RAMEN_REQUIRE_TLS it is on unless set, verifying the install CA's
-    bundle (resolved at dial time) as `worker.ramen.internal` — the console dials pod IPs, which no leaf names."""
+    bundle (resolved at dial time) — the console dials pod IPs, which no leaf names. D92 (§39.2a): as the peer zone's
+    own name `<group>.<zone>.worker.ramen.internal` (the generic name only inside the upgrade window, §39.5b);
+    RAMEN_WORKER_TLS_NAME pins one fixed name instead."""
     from .. import tls as install_tls
 
     flag, required = os.environ.get("RAMEN_WORKER_TLS", "").strip(), install_tls.require_tls()
     if flag != "1" and not (required and flag == ""):
         return None
     tls = {k: os.environ.get(f"RAMEN_WORKER_{k.upper()}") for k in ("ca", "cert", "key")}
-    tls["name"] = os.environ.get("RAMEN_WORKER_TLS_NAME") or (install_tls.WORKER_NAME if required else None)
+    tls["name"] = os.environ.get("RAMEN_WORKER_TLS_NAME") or (install_tls.worker_name if required else None)
+    if required and callable(tls["name"]):
+        tls["legacy"] = install_tls.legacy_worker_name
     tls = {k: v for k, v in tls.items() if v}
     if required:
         tls.setdefault("ca", install_tls.bundle)

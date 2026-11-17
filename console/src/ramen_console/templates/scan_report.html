@@ -1,6 +1,5 @@
-{% extends "base.html" %}{% block title %}Scan report {{ group }} / {{ zone }}{% endblock %}
+{% extends "base.html" %}{% block title %}Scan report — {{ group }} / {{ zone }}{% endblock %}
 {% block body %}
-<h1>Scan report — {{ group }} / {{ zone }}</h1>
 <p class="muted"><a href="{{ base }}/groups/{{ group }}">← Group {{ group }}</a> · deploy job <code>{{ job.id[:8] }}</code> finished {{ job.finished or '—' }} · NVIDIA SkillSpector</p>
 <div class="card"><span class="badge {{ 'ok' if report.recommendation == 'SAFE' else 'error' }}">{{ report.recommendation }}</span> <b>{{ report.score }}/100</b> ({{ report.severity }}) · {{ summary }}{% if report.truncated %} · <span class="badge error" title="The stored report was cut to 256 KiB; the job log names the first findings">truncated</span>{% endif %}
 <p class="muted">SAFE ≤ 20, CAUTION ≤ 50, DO_NOT_INSTALL above. The skills are the repo's <code>mcp/skills/*</code> plus <code>ramen-served-{{ zone }}</code>, synthesized from the tools and prompts the zone served at this deploy.</p></div>

@@ -89,7 +89,7 @@ digits of a SHA-256 over `required`, `llm` and the baseline text, and `/.well-kn
 missing → `-32027 skillspector policy required` (HTTP 428), another version → `-32027 skillspector policy changed:
 sign in again`; it runs after the evals gate.
 
-**Bridge 0.6.0** (not on PyPI yet, which still serves 0.3.0) keeps `skillspector` in its policy bundle, carries the version on every call and signs in again
+**Bridge 1.0.0**, the bridge for Ramen 1.0.0, keeps `skillspector` in its policy bundle, carries the version on every call and signs in again
 once on `-32027`. When the group requires it, `policy check` — the Claude Code `SessionStart` hook, the Cursor rule,
 `policy show` — also runs `skillspector scan <dir> --recursive --no-llm --format json` over the client's own skill
 directories (`~/.claude/skills`, `<cwd>/.claude/skills`, `~/.codex/skills` when present) with a local `skillspector`

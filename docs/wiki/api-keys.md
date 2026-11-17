@@ -7,14 +7,21 @@ Two kinds of key, and each side refuses the other:
 | Opens | a group's **workers** | the **console** API |
 | Sent as | `Authorization: Bearer rmk_...` on `/mcp`, or the bridge's `--key` | `X-Ramen-Api-Key: rmn_...` on `/api/v1/*` |
 | Made on | the group page, **MCP auth keys → Generate key** | the **API keys** page (super admins) |
-| Scope | one group; reaches its workers on the next deploy | a role and groups, never wider than the creator's |
+| Scope | one group; pushed to its running workers when minted or revoked (1.0.0) | a role and groups, never wider than the creator's |
 | Use for | agents, Claude Desktop, Cursor, `curl` | CI deploys, rotation, backups, scripts |
 
 Both are shown once and stored hashed: since 0.7.5 as `s1$<salt>$<HMAC-SHA256>` with a random salt per key (a key
 hashed by an older release still verifies and is rewritten salted on its next use).
 
-Revoke an MCP key on the group page and deploy to push the change. The old pods keep accepting it until they
-drain, so treat a leaked key as live for a few minutes.
+**Revoke** an MCP key on the group page (or `DELETE $U/groups/<g>/mcp-keys/<id>`) and the group's running workers
+refuse it within seconds, no deploy needed (1.0.0, D92): the console pushes the group's key set and the revoked key's
+SHA-256 to every zone of that group, the reload itself applies it, and the pods then restart with the new Secret.
+Deleting an agent API key does the same in every group it reached. Minting a key is pushed the same way, so a rotation
+is: generate the new key, switch the client, revoke the old one.
+
+If a zone cannot be reached, the answer carries a `warning` and `pending` naming it, the group page shows
+**Revocation pending** above the MCP keys, and the console retries in the background until it lands (a sleeping zone
+picks it up when it wakes). Until then that zone still accepts the key.
 
 <figure markdown>
 ![The API keys page](../img/api-keys.png){ .ramen-shot }

@@ -23,6 +23,16 @@ variable "node_service_account" {
   default     = ""
   description = "Service account the GKE nodes run as. Empty = the module's minimal ramen-nodes@ SA (§33.4a), honoured at cluster creation. GKE refuses to change it on an existing Autopilot cluster, so a cluster created before 1.0.0c sets \"default\" (the project's default compute SA, what it already runs as) until it is re-created; see deploy-gcp.md."
 }
+variable "remove_default_compute_editor" {
+  type        = bool
+  default     = true
+  description = "S5: remove roles/editor from the project's default compute SA (<number>-compute@developer.gserviceaccount.com). Ramen's nodes run as ramen-nodes@; a cluster still on the default SA gets the node roles first. Only safe when nothing else in the project relies on the default SA's editor grant (Compute Engine VMs, legacy Cloud Build/Functions/App Engine): set false in a shared project. Destroying the module does not give editor back."
+}
+variable "default_compute_runs_nodes" {
+  type        = bool
+  default     = false
+  description = "Set true while a satellite cluster of this project (deploy/terraform/gcp-satellite with node_service_account = \"default\") still runs as the default compute SA: it then keeps the node roles when editor is removed. The home cluster's own \"default\" is detected from node_service_account."
+}
 variable "public_hostname" {
   type        = string
   default     = ""

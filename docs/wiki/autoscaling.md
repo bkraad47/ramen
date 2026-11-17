@@ -71,14 +71,21 @@ The console folds the zone's pods into one **p50** (sample-weighted) and the win
 
 | | When |
 |---|---|
-| **Up** | as before, **or** the zone p50 ≥ `RAMEN_AUTOSCALE_P50_MS` (default 500 ms) with at least `RAMEN_AUTOSCALE_MIN_RPS` (default 2) calls/s in the window, so an idle zone's one slow call never scales it on noise; the step is `ceil(ready × p50 / bound)`, at least +1 |
+| **Up** | as before, **or** the zone p50 ≥ `RAMEN_AUTOSCALE_P50_MS` (default 250 ms since 1.0.0, was 500) with at least `RAMEN_AUTOSCALE_MIN_RPS` (default 2) calls/s in the window, so an idle zone's one slow call never scales it on noise; the step is `ceil(ready × p50 / bound)`, at least +1 |
 | **Down** | only when the rate per worker is low **and** the zone p50 is under half the bound, for the same 3 rebalances |
 | **Hold** | a high p50 under the minimum rate holds (and blocks a step down) |
 
-Decisions name the trigger: `up 1→2 — p50 812 ms ≥ 500`, `hold 2→2 — p50 ok, rps low 1/3`,
-`hold 1→1 — p50 812 ms, rps 0.5 < 2: no step up`, `hold 2→2 — p50 300 ms ≥ 250, not low`. The cooldowns, the
+Decisions name the trigger: `up 1→2 — p50 300 ms ≥ 250`, `hold 2→2 — p50 ok, rps low 1/3`,
+`hold 1→1 — p50 812 ms, rps 0.5 < 2: no step up`, `hold 2→2 — p50 150 ms ≥ 125, not low`. The cooldowns, the
 proportional step and the min/max rules are unchanged. A worker older than 1.0.0c reports no latency fields and keeps
 the rps-only decisions and their wording (`low 1/3`).
+
+**Why 250 ms (1.0.0).** The p50 is a one-minute window, and a new worker can take a minute or two to serve behind a
+cloud load balancer (pod start, image pull, runtime load at 250m, the LB's health checks). At 500 ms
+the 8→64-client ramp asked for the second worker when the first was already near its limit, and the zone's p95
+crossed 1.5 s before help arrived (GKE 1.87 s, EKS 2.12 s on 1.0.0b34–b36). At 250 ms it asks at roughly half the
+load. A zone whose tools are slow by nature (an LLM rail, an outside API at 300 ms) and that serves ≥ 2 calls/s now
+grows to its max sooner; lower that zone's max, or raise `RAMEN_AUTOSCALE_P50_MS` (it applies to every zone).
 
 Where it shows: the Config page's scheduler card and each zone's **Autoscale** row list the three bounds; the zone row
 on the group page shows the live last-minute p50/p95 and rate next to the workers, and the last decision carries the

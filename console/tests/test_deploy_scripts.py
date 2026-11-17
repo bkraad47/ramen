@@ -370,7 +370,7 @@ def test_aws_terraform_and_cloudformation_hand_the_alb_subnets_to_the_chart():
     assert "--set networkPolicy.awsAlbCidrs={${SubnetA.CidrBlock},${SubnetB.CidrBlock}}" in out
 
 
-def _fake_demo_tools(tmp_path, policy: str):
+def _fake_demo_tools(tmp_path, policy: str, job: str = '{"status":"ok"}', extra_env: dict | None = None):
     """`curl` answering the compose console and worker, `uv` standing in for runtime-py (it records what mcp_call.py
     would get), for `deploy/local/demo.sh`."""
     calls, meta = tmp_path / "curl-calls", tmp_path / "meta"
@@ -386,7 +386,7 @@ def _fake_demo_tools(tmp_path, policy: str):
         '  */configs/accept) echo \'{"version":"v1"}\' ;;\n'
         '  */mcp-keys) echo \'{"key":"rmk_x"}\' ;;\n'
         '  */deploy) echo \'{"id":"j1"}\' ;;\n'
-        '  */jobs/j1) echo \'{"status":"ok"}\' ;;\n'
+        f"  */jobs/j1) echo '{job}' ;;\n"
         "  */mcp) echo demo_calculator_tool ;;\n"
         "  *) echo '{}' ;;\n"
         "esac\n"
@@ -399,6 +399,7 @@ def _fake_demo_tools(tmp_path, policy: str):
         (b / f).chmod(0o755)
     e = {**os.environ, "PATH": f"{b}:{os.environ['PATH']}", "RAMEN_ADMIN_PASSWORD": "pw"}
     e["RAMEN_DEMO_COOKIES"] = str(tmp_path / "cookies")
+    e.update(extra_env or {})
     (tmp_path / "cookies").write_text("")
     r = subprocess.run(
         ["bash", str(ROOT / "deploy" / "local" / "demo.sh")], env=e, capture_output=True, text=True, timeout=60
@@ -433,6 +434,26 @@ def test_demo_still_runs_against_a_repo_without_llm_configs(tmp_path):
     assert r.returncode == 0, r.stderr + r.stdout
     assert not [c for c in calls if "/configs/accept" in c.split(" ", 1)[0]]
     assert meta.read_text() in ("", "{}")
+
+
+def test_demo_deploys_the_ref_it_is_given(tmp_path):
+    """get-started: `RAMEN_DEMO_REF=v0.8.0 make demo` is the key-free try-out (the 1.0.0 demo's LLM rails need a
+    provider on Config → LLM providers)."""
+    r, calls, _ = _fake_demo_tools(tmp_path, "{}", extra_env={"RAMEN_DEMO_REF": "v0.8.0"})
+    assert r.returncode == 0, r.stderr + r.stdout
+    made = [c for c in calls if c.split(" ", 1)[0].endswith(("/api/v1/groups", "/groups/demo/environments"))]
+    assert len(made) == 2 and all('"ref":"v0.8.0"' in c for c in made), made
+
+
+def test_a_failed_demo_deploy_names_the_reason_and_the_way_out(tmp_path):
+    import json
+
+    err = "RuntimeError: mcp/guardrails.yaml: guardrails: no LLM provider: set one on the group or ask a super admin"
+    job = json.dumps({"status": "error", "error": err})
+    r, _, _ = _fake_demo_tools(tmp_path, "{}", job=job)
+    assert r.returncode == 1
+    assert f"deploy failed: {err}" in r.stdout, r.stdout
+    assert "Config → LLM providers" in r.stdout and "RAMEN_DEMO_REF=v0.8.0" in r.stdout, r.stdout
 
 
 def test_azure_operator_can_push_platform_images_in_abac_mode():
@@ -529,3 +550,69 @@ def test_chart_renders_the_gp3_class_and_binds_the_pvcs_to_it():
     assert rc == 0, err
     assert by_kind(docs, "StorageClass", "gp3") is None
     assert "storageClassName" not in by_kind(docs, "PersistentVolumeClaim", "promptfoo")["spec"]  # cluster default
+
+
+# S5 / §38.2 GCP residual (sec-gaps, 2026-11-17) -----------------------------------------------------------------
+def _gtf(d, f="main.tf"):
+    return (ROOT / f"deploy/terraform/{d}/{f}").read_text()
+
+
+def _flat_block(text, head):
+    """The `resource "<type>" "<name>" { … }` block starting at `head` (brace-matched), whitespace collapsed."""
+    i = text.index(head)
+    depth, j = 0, text.index("{", i)
+    for k in range(j, len(text)):
+        depth += {"{": 1, "}": -1}.get(text[k], 0)
+        if depth == 0:
+            return " ".join(text[i : k + 1].split())  # whitespace-insensitive (terraform fmt aligns `=`)
+    raise AssertionError(head)
+
+
+def test_s5_gcp_removes_editor_from_the_default_compute_sa_behind_a_variable():
+    tf, var = _gtf("gcp"), _gtf("gcp", "variables.tf")
+    rm = _flat_block(tf, 'resource "google_project_iam_member_remove" "default_compute_editor"')
+    assert "count = var.remove_default_compute_editor ? 1 : 0" in rm
+    assert 'role = "roles/editor"' in rm and "local.default_compute_sa" in rm
+    assert '"${data.google_project.this.number}-compute@developer.gserviceaccount.com"' in tf
+    v = _flat_block(var, 'variable "remove_default_compute_editor"')
+    assert "default = true" in v and "ramen-nodes" in v and "relies on" in v
+    # a cluster still running as the default SA keeps what nodes need once editor is gone (granted before removal)
+    keep = _flat_block(tf, 'resource "google_project_iam_member" "default_compute_node"')
+    assert "local.default_sa_runs_nodes" in keep and "local.node_roles_all" in keep
+    assert "google_project_iam_member.default_compute_node" in rm  # depends_on: grant first, then remove
+    assert 'var.node_service_account == "default"' in tf and "var.default_compute_runs_nodes" in tf
+
+
+def test_s5_gcp_satellite_nodes_run_as_ramen_nodes_not_the_default_sa():
+    tf, var = _gtf("gcp-satellite"), _gtf("gcp-satellite", "variables.tf")
+    assert "auto_provisioning_defaults" in tf and "service_account = local.node_service_account" in tf
+    assert '"ramen-nodes@${var.project}.iam.gserviceaccount.com"' in tf
+    assert 'variable "node_service_account"' in var and "default_compute_runs_nodes" in var
+    assert "google_project_iam" not in tf  # still no IAM in the satellite module
+
+
+def test_ar_platform_and_group_repositories_are_told_apart_by_a_resource_tag():
+    tf, out = _gtf("gcp"), _gtf("gcp", "outputs.tf")
+    key = _flat_block(tf, 'resource "google_tags_tag_key" "repo"')
+    assert 'short_name = "ramen-repo"' in key and 'parent = "projects/${var.project}"' in key
+    assert 'short_name = "platform"' in _flat_block(tf, 'resource "google_tags_tag_value" "platform"')
+    assert 'short_name = "group"' in _flat_block(tf, 'resource "google_tags_tag_value" "group"')
+    plat = _flat_block(tf, 'resource "google_tags_location_tag_binding" "platform_repo"')
+    assert "//artifactregistry.googleapis.com/projects/" in plat
+    assert "/repositories/${google_artifact_registry_repository.ramen.repository_id}" in plat
+    assert "google_tags_tag_value.platform.id" in plat and "location" in plat
+    # the console's repository rights only match repositories carrying ramen-repo=group
+    repos = _flat_block(tf, 'resource "google_project_iam_member" "console_build_repos"')
+    assert "condition {" in repos
+    assert 'resource.matchTagId(\\"${google_tags_tag_key.repo.id}\\", \\"${google_tags_tag_value.group.id}\\")' in repos
+    # it may attach ONLY the group value (Tag User on that value), never detach a binding anywhere
+    tu = _flat_block(tf, 'resource "google_tags_tag_value_iam_member" "console_group_tag_user"')
+    assert "google_tags_tag_value.group.name" in tu and 'role = "roles/resourcemanager.tagUser"' in tu
+    create = _flat_block(tf, 'resource "google_project_iam_custom_role" "console_build_create"')
+    assert '"artifactregistry.repositories.createTagBinding"' in create
+    assert '"artifactregistry.repositories.list"' in create
+    for block in (create, _flat_block(tf, 'resource "google_project_iam_custom_role" "console_build_repos"')):
+        assert '"artifactregistry.repositories.deleteTagBinding"' not in block
+    assert "google_tags_tag_value_iam_member" not in _flat_block(tf, 'resource "google_tags_tag_value" "platform"')
+    assert tf.count('resource "google_tags_tag_value_iam_member"') == 1
+    assert 'output "ar_group_tag"' in out  # the namespaced value the console binds (its default, RAMEN_AR_GROUP_TAG)

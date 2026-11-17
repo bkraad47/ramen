@@ -469,8 +469,8 @@ def test_aks_satellite_client_takes_server_and_ca_from_the_kubeconfig_and_an_aad
 
 def test_the_console_identity_and_source_networks_reach_every_zone_namespace(monkeypatch):
     """§28: on a satellite the console is a User/Group, not the home ServiceAccount, and it arrives from the home
-    network — both are handed in by the chart and land in every RoleBinding and worker NetworkPolicy."""
-    from ramen_console.cloud.gcp_k8s import networkpolicy, rolebinding
+    network — both are handed in by the chart and land in every RoleBinding and every satellite worker NetworkPolicy."""
+    from ramen_console.cloud.gcp_k8s import networkpolicy, rolebinding, with_console_sources
 
     monkeypatch.delenv("RAMEN_CONSOLE_SUBJECTS", raising=False)
     monkeypatch.delenv("RAMEN_CONSOLE_SOURCE_CIDRS", raising=False)
@@ -492,5 +492,6 @@ def test_the_console_identity_and_source_networks_reach_every_zone_namespace(mon
         {"kind": "Group", "name": "ramen-console"},
         {"kind": "User", "name": "ramen-console@p.iam.gserviceaccount.com"},
     ]
-    peers = networkpolicy("ramen-demo-a", "demo", "a")["spec"]["ingress"][0]["from"]
+    # S6: a satellite zone's policy only, in its own rule (tests/test_sec_gaps_netpol.py)
+    peers = with_console_sources([networkpolicy("ramen-demo-a", "demo", "a")], True)[0]["spec"]["ingress"][-1]["from"]
     assert {"ipBlock": {"cidr": "10.7.128.0/17"}} in peers and {"ipBlock": {"cidr": "10.42.0.0/16"}} in peers

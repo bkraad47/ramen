@@ -3,7 +3,7 @@ import logging
 import os
 import time
 
-from . import autoscale, evals, imagebuild, otel, regions, sleeping
+from . import autoscale, evals, imagebuild, otel, regions, revocation, sleeping
 from .audit import write_audit
 from .cloud.base import Cloud
 from .cloud.gcp_k8s import normalize_size
@@ -1205,8 +1205,13 @@ class Services:
         s = await self.store.get("secrets", sid)
         if not s or s["group"] != group or s.get("kind") != kind:
             raise not_found("secret")
+        if kind == "mcp_key":  # D92 (§16.7): the running workers drop it at the push, before their restart
+            await revocation.deny_key(self.store, group, await self._raw(s), "mcp_key.delete")
         await self.secrets_backend.delete(s)
         await self.store.delete("secrets", sid)
+
+    async def _raw(self, s: dict) -> str:
+        return await self.secrets_backend.resolve(s.get("ref") or s.get("value")) or ""
 
     async def mint_mcp_key(self, group, name, by="", accepted_configs=None) -> dict:
         """A group MCP key is the group page's agent key (D21): `rmk_`, workers only, never the console API.
@@ -1232,13 +1237,14 @@ class Services:
             out.append(await self.add_secret(g, f"{safe}-{kid[:6]}", raw, by=by, kind="mcp_key", extra=extra))
         return out
 
-    async def revoke_agent_key(self, kid) -> int:
-        """Revoking the API key must also stop it reaching workers on the next deploy."""
+    async def revoke_agent_key(self, kid) -> list[str]:
+        """Revoking the API key stops it reaching workers; D92: the groups whose workers must drop it now."""
         docs = await self.store.list("secrets", {"kind": "mcp_key", "api_key": kid})
         for s in docs:
+            await revocation.deny_key(self.store, s["group"], await self._raw(s), "api_key.delete")
             await self.secrets_backend.delete(s)
             await self.store.delete("secrets", s["id"])
-        return len(docs)
+        return sorted({s["group"] for s in docs})
 
     async def mcp_key_names(self, group) -> dict[str, str]:
         """`key_id` -> key name, for resolving the consumer on the Logs page (U4)."""

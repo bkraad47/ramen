@@ -30,3 +30,8 @@ variable "console_gsa" {
   default     = ""
   description = "The console's GSA email (home apply output console_gsa), bound as a cluster user by the satellite chart. Empty = ramen-console@<project>.iam.gserviceaccount.com. Output only; no IAM is created here."
 }
+variable "node_service_account" {
+  type        = string
+  default     = ""
+  description = "Service account the satellite's nodes run as. Empty = ramen-nodes@<project> (made by the home apply). A satellite created before this change runs as the default compute SA and GKE cannot change it in place: set \"default\" here and default_compute_runs_nodes = true in the home apply (it keeps the node roles when roles/editor is removed) until the satellite is re-created. No IAM is created here."
+}

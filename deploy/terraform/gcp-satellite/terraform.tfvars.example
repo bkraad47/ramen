@@ -6,3 +6,5 @@ home_pod_cidr = "10.7.128.0/17" # gcloud container clusters describe ramen --reg
 # name            = "ramen-australia-southeast1"   # default: ramen-<region>
 # public_hostname = ""                              # default: <ip-with-dashes>.sslip.io
 # console_gsa     = ""                              # default: ramen-console@<project>.iam.gserviceaccount.com
+# node_service_account = ""                         # default: ramen-nodes@<project> (S5); "default" only for a satellite
+#                                                   # created before this change (and default_compute_runs_nodes = true at home)

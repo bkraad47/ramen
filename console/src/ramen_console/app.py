@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, alerts, baseuri, llm_providers, rbac, roles, scheduler, tls
+from . import __version__, alerts, baseuri, llm_providers, rbac, revocation, roles, scheduler, tls
 from .accounts import Accounts
 from .audit import AuthAuditMiddleware
 from .auth import providers
@@ -82,6 +82,7 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         tasks = [
             asyncio.create_task(scheduler.run_forever(app.state.services)),
             asyncio.create_task(alerts.run_forever(app.state.services, app.state)),
+            asyncio.create_task(app.state.revocation.retry_forever()),  # D92: zones a revocation has not reached
         ]
         if tls.require_tls():
             every = float(os.environ.get("RAMEN_TLS_RENEW_SECS", "3600"))
@@ -104,6 +105,8 @@ def create_app(store=None, cloud=None, secrets=None) -> FastAPI:
         st.store = VaultedStore(st.store, st.secrets)
     st.services = Services(st.store, st.cloud, st.secrets)
     st.accounts = Accounts(st.store)
+    st.revocation = revocation.Pusher(st.services)  # D92 (§16.7): revocations pushed to the group's workers at once
+    st.accounts.on_revoke = st.revocation.schedule
     st.backups = Backups(st.services)
     st.jobs = Jobs(st.store)  # §26.2: deploy jobs live in the store
     signing_secret = resolve_signing_secret()

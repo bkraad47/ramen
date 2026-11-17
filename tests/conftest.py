@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 from ramen_tests import env as E  # ramen_tests before grpc: sets GRPC_ENABLE_FORK_SUPPORT
-from ramen_tests import state
+from ramen_tests import ledger, state
 from ramen_tests.console import Console
+from ramen_tests.fakes import judge_provider
 from ramen_tests.mcp_client import Node, code_of
 
 
@@ -73,8 +74,26 @@ def admin(console_url, admin_creds) -> Console:
     r = c.login(*admin_creds)
     assert r.status_code in (200, 303), f"bootstrap login failed: {r.status_code} {r.text[:300]}"
     assert c.me().status_code == 200
+    if url := E.env("RAMEN_FAKE_LLM_URL"):  # CI (`--profile ci`): the demo's LLM rails judged by the fake (§36.4)
+        r = c.set_llm_providers(judge_provider(url))
+        assert r.status_code == 200, f"config/llm-providers → the fake judge: {r.status_code} {r.text[:300]}"
     yield c
+    SWEPT.append(ledger.sweep(c))  # S7: the users, keys, clients, groups and branches this run created
     c.close()
+
+
+SWEPT: list[dict] = []
+
+
+def pytest_terminal_summary(terminalreporter):
+    deleted = [x for s in SWEPT for x in s["deleted"]]
+    left = [x for s in SWEPT for x in s["left"]] + [f"{r['kind']} {r['id']} on {r['base']}" for r in ledger.RECORDS]
+    if not (deleted or left):
+        return
+    terminalreporter.section("run residue (S7)")
+    terminalreporter.write_line(f"removed {len(deleted)}: {', '.join(deleted)}" if deleted else "removed 0")
+    for x in left:
+        terminalreporter.write_line(f"LEFT  {x}")
 
 
 @pytest.fixture(scope="session")

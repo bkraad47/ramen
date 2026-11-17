@@ -4,11 +4,14 @@
 {{- end }}
 {{- if eq $engine "promptfoo" }}
 # §29.2: the promptfoo server for trying evals out and for the test runs — UI and API on 3000, its SQLite database and
-# eval results on a small PVC, no authentication. The console's evals Jobs share every run here (`--share` with
-# PROMPTFOO_REMOTE_API_BASE_URL). Deliberately no Ingress/HTTPRoute (no sign-in, every group's runs; its SPA serves
-# from `/` only, so the console cannot mount it under a path): reach it with
-# `kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443` → https://localhost:3443 (evals.uiUrl; the TLS front, install CA); a deploy's
-# evals badge opens the run's cases in the console itself. Not for production.
+# eval results on a small PVC. promptfoo has no auth of its own (D92 §39.7): its TLS front wants a credential from
+# Secret ramen-engines — the operator's (`username`/`password`: everything) or the evals Jobs' (`upload-*`: one share
+# upload per connection, never a read). The console's evals Jobs share every run here (`--share` with
+# PROMPTFOO_REMOTE_API_BASE_URL). Deliberately no Ingress/HTTPRoute (every group's runs; its SPA serves from `/` only,
+# so the console cannot mount it under a path): reach it with
+# `kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443` → https://localhost:3443 (evals.uiUrl; the TLS front,
+# install CA; the browser asks for admin + the password); a deploy's evals badge opens the run's cases in the console
+# itself. Not for production.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -63,11 +66,17 @@ spec:
           image: {{ include "ramen.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: [python, -m, ramen_console.tlsproxy, --listen, "0.0.0.0:3443", --upstream, "127.0.0.1:3000",
-                    --cert, /tls/tls.crt, --key, /tls/tls.key]
+                    --cert, /tls/tls.crt, --key, /tls/tls.key, --require-auth,
+                    # D92: what the evals Jobs' upload credential may send — promptfoo's share upload, nothing else
+                    --upload-route, "POST ^/api/eval$", --upload-route, "POST ^/api/eval/[A-Za-z0-9:_-]+/results$"]
+          env:
+            {{- range $env, $key := dict "RAMEN_PROXY_USER" "username" "RAMEN_PROXY_PASSWORD" "password" "RAMEN_PROXY_UPLOAD_USER" "upload-username" "RAMEN_PROXY_UPLOAD_PASSWORD" "upload-password" }}
+            - { name: {{ $env }}, valueFrom: { secretKeyRef: { name: {{ include "ramen.engines.secretName" $ }}, key: {{ $key }} } } }
+            {{- end }}
           securityContext: { runAsUser: 10001, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
           ports:
             - { name: https, containerPort: 3443 }
-          readinessProbe: { httpGet: { path: /health, port: https, scheme: HTTPS }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }
+          readinessProbe: { tcpSocket: { port: https }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }   # every HTTP path wants the credential
           resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
           volumeMounts: [{ name: tls, mountPath: /tls, readOnly: true }]
       volumes:

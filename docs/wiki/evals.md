@@ -89,7 +89,7 @@ run writes no results, the error carries promptfoo's last log lines.
 
 | Variable | Value |
 |---|---|
-| `RAMEN_MCP_URL` | the canary's in-cluster Streamable HTTP endpoint: `https://worker.ramen.internal:8080/mcp` on a TLS install (D86; the name is mapped to the canary pod's IP and the Job trusts the install CA), `http://<pod>:8080/mcp` without `RAMEN_REQUIRE_TLS` |
+| `RAMEN_MCP_URL` | the canary's in-cluster Streamable HTTP endpoint: `https://<group>.<zone>.worker.ramen.internal:8080/mcp` on a TLS install (D86, D92: the zone's own name, mapped to the canary pod's IP and the Job trusts the install CA), `http://<pod>:8080/mcp` without `RAMEN_REQUIRE_TLS` |
 | `RAMEN_MCP_KEY` | the deploy's own evals key (`rek_…`, rotated every deploy): no client-policy gate; under [tool access](users-access.md) it is the caller kind **`evals`** ("Evals Job") — a tool whose rule leaves `evals` out is hidden from the run, and its cases error with `Tool <name> not found in any connected MCP server` |
 | `RAMEN_GROUP`, `RAMEN_ENV`, `RAMEN_ZONE` | what is being deployed |
 | `ANTHROPIC_API_KEY` | from Config → LLM providers, when set |
@@ -127,14 +127,24 @@ is audited as `config.llm_providers` with `provider:<name>` tags only.
 ## The promptfoo UI (trying it out)
 
 `evals.engine: promptfoo` in the Helm chart also runs a single-replica promptfoo server (`ghcr.io/promptfoo/promptfoo`,
-pinned; port 3000 behind a TLS front; a PVC for its database, so runs survive restarts; no authentication and no edge
-route, like the chart's Jaeger or Phoenix — for try-out and test clusters). Every run is shared into it. Open it from
-your machine:
+pinned; port 3000 behind a TLS front that asks for a credential; a PVC for its database, so runs survive restarts;
+no edge route, like the chart's Jaeger or Phoenix — for try-out and test clusters). Every run is shared into it. Open
+it from your machine:
 
 ```bash
 kubectl -n ramen-system port-forward deploy/promptfoo 3443:3443
 # then https://localhost:3443/eval/<run>  — <run> is the id the console's run page names
+# the browser asks for a sign-in: user admin, and the password (a super admin with cluster access reads it):
+kubectl -n ramen-system get secret ramen-engines -o jsonpath='{.data.password}' | base64 -d; echo
 ```
+
+The front (since 1.0.0, D92) wants that credential on every connection — Basic `admin:<password>` or
+`Authorization: Bearer <password>`; no path is open without it. The evals Jobs hold a second, **upload-only**
+credential (`upload-password`, given to the Job by a Secret reference, never in its config): it may send promptfoo's
+share upload — one request per connection — and nothing else, so a group's evals config cannot read another group's
+runs with it. The Jobs also verify the server's certificate (`PROMPTFOO_INSECURE_SSL=false`; promptfoo's default
+skips it). Local compose: `make up ENGINES=promptfoo`, user `admin`, `RAMEN_ENGINES_PASSWORD` from
+`deploy/local/.env`.
 
 The forward goes to the pod's TLS front, so promptfoo is HTTPS end to end like Phoenix: the certificate is signed by
 the install CA — trust it once (`kubectl -n ramen-system get configmap ramen-ca -o jsonpath='{.data.ca\.crt}' >
@@ -144,8 +154,8 @@ reachable from outside the pod, NetworkPolicy or not. The address the console pr
 (`RAMEN_EVALS_UI_URL`, default `https://localhost:3443`); set it if you put your own authenticated route in front.
 
 Why the console does not proxy it: promptfoo's single-page app loads `/assets/…`, calls `/api/…` and routes from `/`,
-with no base path to set, so it cannot live under a console path; it has no sign-in of its own and lists every group's
-runs. A run that "is not found" in it — promptfoo shows `404 Eval not found` whenever its `/api/eval/<id>/table`
+with no base path to set, so it cannot live under a console path; it has no sign-in of its own (the TLS front is
+Ramen's) and lists every group's runs. A run that "is not found" in it — promptfoo shows `404 Eval not found` whenever its `/api/eval/<id>/table`
 request fails, not only for an unknown id — is a forward that dropped or a server other than the chart's.
 `evals.image` alone (no server) runs the Jobs with `--no-write`: the run page and the job log, no promptfoo UI.
 
@@ -174,7 +184,7 @@ one); another version → `-32026 evals config changed: sign in again`. It runs 
 `server/discover` stay open; a worker that was never told a version accepts any. Access-log reasons `evals_required`
 and `evals_stale`.
 
-**The bridge (0.5.0; not on PyPI yet, which still serves 0.3.0)** turns the token answer's `telemetry` and `evals` into a **policy bundle** at
+**The bridge (1.0.0, the bridge for Ramen 1.0.0)** turns the token answer's `telemetry` and `evals` into a **policy bundle** at
 `~/.ramen/policy/<host>/<group>-<zone>.json` (mode 0600; telemetry header values stay in memory only) and keeps the
 evals config at `~/.ramen/evals/<host>/<group>/promptfooconfig.yaml`, so the person can run the same suite locally.
 Every forwarded call carries the evals version; on `-32026` it signs in again once, as it does on `-32025`. Started

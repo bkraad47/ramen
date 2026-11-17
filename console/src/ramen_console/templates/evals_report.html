@@ -1,9 +1,8 @@
-{% extends "base.html" %}{% block title %}Evals {{ group }} / {{ zone }}{% endblock %}
+{% extends "base.html" %}{% block title %}Evals — {{ group }} / {{ zone }}{% endblock %}
 {% block body %}
-<h1>Evals — {{ group }} / {{ zone }}</h1>
 <p class="muted"><a href="{{ base }}/groups/{{ group }}">← Group {{ group }}</a> · deploy job <code>{{ job.id[:8] }}</code> finished {{ job.finished or '—' }} · promptfoo, <code>mcp/evals/promptfooconfig.yaml</code> against the canary</p>
 <div class="card"><span class="badge {{ 'error' if report.failed or report.errors else 'ok' }}">{{ 'failed' if report.failed or report.errors else 'passed' }}</span> {{ summary }}{% if report.truncated %} · <span class="badge error" title="Only the first cases are kept; the job log names the first failures">truncated</span>{% endif %}
-{% if report.id %}<p class="muted">promptfoo run <code>{{ report.id }}</code>{% if run_ui %} — in the chart's promptfoo UI at <a href="{{ run_ui }}">{{ run_ui }}</a> once <code>{{ port_forward }}</code> runs on your machine (the server has no route through the edge and no sign-in; it shows every group's runs).{% endif %}</p>{% endif %}</div>
+{% if report.id %}<p class="muted">promptfoo run <code>{{ report.id }}</code>{% if run_ui %} — in the chart's promptfoo UI at <a href="{{ run_ui }}">{{ run_ui }}</a> once <code>{{ port_forward }}</code> runs on your machine (the server has no route through the edge and asks for the operator's credential from Secret <code>ramen-engines</code>, which a super admin holds — it shows every group's runs).{% endif %}</p>{% endif %}</div>
 <table><tr><th>Case</th><th>Result</th><th>Sent</th><th>Answer</th><th>Why</th></tr>
 {% for c in report.cases %}<tr><td>{{ c.name }}</td><td><span class="badge {{ 'ok' if c.status == 'pass' else 'error' }}">{{ c.status }}</span>{% if c.latency_ms is defined %} <span class="muted">{{ c.latency_ms }} ms</span>{% endif %}</td><td>{% if c.input %}<code>{{ c.input }}</code>{% endif %}</td><td>{% if c.output %}<code>{{ c.output }}</code>{% endif %}</td><td>{{ c.reason or '' }}</td></tr>
 {% else %}<tr><td colspan="5" class="muted">The run reported no cases.</td></tr>{% endfor %}</table>

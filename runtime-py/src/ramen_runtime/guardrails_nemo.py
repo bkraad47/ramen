@@ -13,6 +13,8 @@ installs `nemoguardrails`; the runtime is pinned to Python 3.12 for it (D45).
 
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Awaitable, Mapping
 from pathlib import Path
 
@@ -32,6 +34,10 @@ class NemoEngine:
             from nemoguardrails import LLMRails, RailsConfig
         except ImportError:
             raise GuardrailsError("engine nemo is not installed (pip install 'ramen-runtime[nemo]')") from None
+        install_cached_eval()
+        # §35.1: NeMo's anonymous usage events (a thread per LLMRails + a 10-min heartbeat to NVIDIA) stay off unless
+        # the deploy sets the variable itself
+        os.environ.setdefault("NEMO_GUARDRAILS_NO_USAGE_STATS", "1")
         self.tools = dict(rails or {})
         key = (model or {}).get("parameters", {}).get("api_key")
         self.secret = key if isinstance(key, str) and key else None  # a `Token` is fetched per request, never logged
@@ -43,11 +49,13 @@ class NemoEngine:
             repo = RailsConfig.from_path(str(config))
             self.repo_models = bool(repo.models)  # deprecated since 1.0.0c (§36.2): `guardrails.load` warns
             self.static = LLMRails(repo)
+            drop_idle_flows(self.static)
             self.rails = self.static
             if self.tools:
                 cfg = RailsConfig.from_path(str(config))
                 self._extend(cfg, model)
                 self.rails = LLMRails(cfg)
+                drop_idle_flows(self.rails)
                 # the post rails' prompts read the tool's own data (§36.1 fix: evidence = result + args)
                 self.rails.register_prompt_context("ramen_evidence", lambda: guardrails_llm.EVIDENCE.get(""))
                 self.rails.register_output_parser(guardrails_llm.final_answer, guardrails_llm.FINAL_ANSWER)
@@ -141,6 +149,83 @@ class NemoEngine:
             args,
             result,
         )
+
+
+_PARSED: dict[str, object] = {}  # expression text → its parsed tree (read-only once built)
+_PARSED_MAX = 4096
+_LOCAL = threading.local()
+
+
+def cached_simple_eval(expr, operators=None, functions=None, names=None, allowed_attrs=None):
+    """§35.1 (D80 perf): `simpleeval.simple_eval` for Colang 1.0's `eval_expression`, which calls it ~90 times per rail
+    call with `functions={"len": len}`: one evaluator per thread (only `names` changes) and each expression parsed
+    once. Any other arguments, or a nested call, go to `simple_eval` unchanged. Answers and errors are simpleeval's."""
+    import simpleeval
+
+    s = getattr(_LOCAL, "evaluator", None)
+    if operators is not None or allowed_attrs is not None or functions != {"len": len} or getattr(_LOCAL, "busy", 0):
+        return simpleeval.simple_eval(expr, operators, functions, names, allowed_attrs)
+    if s is None:
+        s = _LOCAL.evaluator = simpleeval.SimpleEval(functions={"len": len})
+    tree = _PARSED.get(expr)
+    if tree is None:
+        tree = s.parse(expr)
+        if len(_PARSED) < _PARSED_MAX:
+            _PARSED[expr] = tree
+    s.names = simpleeval.DEFAULT_NAMES.copy() if names is None else names
+    _LOCAL.busy = 1
+    try:
+        return s.eval(expr, previously_parsed=tree)
+    finally:
+        _LOCAL.busy = 0
+
+
+def install_cached_eval() -> None:
+    """Points NeMo's Colang 1.0 evaluator at `cached_simple_eval` (it looks `simple_eval` up per call); a NeMo that
+    no longer uses simpleeval's function there is left alone."""
+    import simpleeval
+    from nemoguardrails.colang.v1_0.runtime import eval as colang_eval
+
+    if getattr(colang_eval, "simple_eval", None) is simpleeval.simple_eval:
+        colang_eval.simple_eval = cached_simple_eval
+
+
+def _start_action(flow) -> str | None:
+    """The action a top-level flow starts on (its first step runs it), or None: a flow that starts on an event, a
+    `bot ...` step (matches any bot intent) or a sliding step is never a candidate."""
+    first = flow.elements[0] if flow.elements else None
+    if flow.is_subflow or not first or first.get("_type") != "run_action" or first.get("action_name") == "utter":
+        return None
+    return first.get("action_name")
+
+
+def drop_idle_flows(rails) -> list[str]:
+    """§35.1 (D80 perf): NeMo appends its whole Colang 1.0 library to every config and, on every event of every rail
+    call, tries to start each top-level flow. A top-level flow whose first step runs an action can start only on that
+    action's `InternalSystemActionFinished` (or an explicit `start_flow` of its id); when no kept flow runs that action
+    or calls the flow, it never starts and is dropped from the runtime. A repo that runs a library action keeps the
+    library flow, exactly as before. ~20 % of a static rail's CPU on the demo. → the ids dropped."""
+    flows = rails.runtime.flow_configs
+    elements = [e for f in flows.values() for e in f.elements]
+    if any(  # an explicit `run_action` event could match any action step: keep everything
+        e.get("_type") == "run_action"
+        and e.get("action_name") == "create_event"
+        and (e.get("action_params") or {}).get("event", {}).get("_type") == "run_action"
+        for e in elements
+    ):
+        return []
+    idle = {fid for fid, f in flows.items() if _start_action(f) is not None}
+    while True:
+        kept = [f for fid, f in flows.items() if fid not in idle]
+        calls = {e.get("flow_name") for f in kept for e in f.elements if e.get("_type") == "flow"}
+        runs = {e.get("action_name") for f in kept for e in f.elements if e.get("_type") == "run_action"}
+        needed = {fid for fid in idle if fid in calls or _start_action(flows[fid]) in runs}
+        if not needed:
+            break
+        idle -= needed
+    for fid in idle:
+        del flows[fid]
+    return sorted(idle)
 
 
 class CaTransport:

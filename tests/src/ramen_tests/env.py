@@ -38,6 +38,20 @@ def console_verify() -> bool | str:
     return install_ca() or tls_verify()
 
 
+def engines_auth() -> tuple[str, str] | None:
+    """D92 (CONTRACTS §39.7): Basic credentials for Jaeger's / promptfoo's TLS front — `RAMEN_ENGINES_PASSWORD` (Secret
+    ramen-engines `password`; compose: deploy/local/.env)."""
+    pw = env("RAMEN_ENGINES_PASSWORD")
+    return ("admin", pw) if pw else None
+
+
+def phoenix_headers() -> dict[str, str]:
+    """D92: Phoenix's REST/GraphQL take its admin secret as a bearer (`RAMEN_PHOENIX_ADMIN_SECRET`, Secret ramen-engines
+    `phoenix-admin-secret`)."""
+    s = env("RAMEN_PHOENIX_ADMIN_SECRET")
+    return {"authorization": f"Bearer {s}"} if s else {}
+
+
 def strip(url: str) -> str:
     return url.rstrip("/")
 

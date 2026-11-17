@@ -79,9 +79,10 @@ def test_worker_tls_from_env(monkeypatch):
 
 def test_worker_tls_defaults_on_with_the_install_ca(monkeypatch, required):
     t = worker_tls_from_env()
-    assert t["name"] == tls.WORKER_NAME and t["ca"] is tls.bundle
+    assert t["name"] is tls.worker_name and t["ca"] is tls.bundle  # D92: the peer zone's own name
     monkeypatch.setenv("RAMEN_WORKER_CA", "/certs/ca.crt")
-    assert worker_tls_from_env() == {"ca": "/certs/ca.crt", "name": tls.WORKER_NAME}
+    t = worker_tls_from_env()
+    assert t["ca"] == "/certs/ca.crt" and t["name"] is tls.worker_name and t["legacy"] is tls.legacy_worker_name
 
 
 def test_credentials_resolve_a_callable_bundle_and_an_empty_one():
@@ -95,14 +96,15 @@ def test_credentials_resolve_a_callable_bundle_and_an_empty_one():
 async def test_the_console_dials_a_tls_worker_by_pod_ip_with_the_worker_name(required):
     ca = tls.new_ca()
     tls.set_current(ca)
-    leaf = ca.issue(tls.zone_names("ramen-demo-a"))
+    leaf = ca.issue(tls.zone_names("ramen-demo-a", tls.worker_name("demo", "a")))
     w = FakeWorker(tls=(leaf.cert, leaf.key)).start()
     try:
         c = grpcclient.Client(tls=worker_tls_from_env(), deadline=5)
-        assert await c.health(w.target) is True  # 127.0.0.1:<port>, verified as worker.ramen.internal
-        assert (await c.reload(w.target, "adm"))["tools"] == [{"name": "calc"}]
+        peer = ("demo", "a")
+        assert await c.health(w.target, peer=peer) is True  # 127.0.0.1:<port>, verified as demo.a.worker.ramen.internal
+        assert (await c.reload(w.target, "adm", peer=peer))["tools"] == [{"name": "calc"}]
         tls.set_current(tls.new_ca())  # another install's CA: the handshake fails
-        assert await c.health(w.target) is False
+        assert await c.health(w.target, peer=peer) is False
         # and plaintext to a TLS port never works
         assert await grpcclient.Client(deadline=2).health(w.target) is False
     finally:

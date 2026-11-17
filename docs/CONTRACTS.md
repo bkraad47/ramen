@@ -60,7 +60,7 @@ Additive details settled in v0.1.0: `Cloud.deploy(..., config: dict)` carries th
 | sa-restrictions | `PUT /api/v1/groups/{group}/sa-restrictions` {rules} | 409 on clash with super-admin rules |
 | verbose | `POST /api/v1/groups/{group}/environments/{env}/verbose` {verbose} | |
 | requests | `POST\|GET /api/v1/requests`, `POST /api/v1/requests/{id}/approve` | permission requests (F4.2) |
-| restore / password | `POST /api/v1/backups/{id}/restore` {dry_run,prune,reconcile,force} (§13.1), `POST /api/v1/users/{id}/password` | |
+| restore / password | `POST /api/v1/backups/{id}/restore` {dry_run,prune,reconcile,force} (§13.1), `POST /api/v1/users/{id}/password`, `POST /api/v1/users/{id|me}/sign-out` (D92, §16.7) | |
 | revocation (v0.4.1) | `POST /api/v1/requests/{id}/deny`, `POST /api/v1/requests/{id}/revoke`, `DELETE /api/v1/groups/{group}/zones/{zone}/permissions/{permission}` | super admin (§13.2) |
 | worker images (v0.4.1) | `GET\|POST /api/v1/groups/{group}/images`, `PUT\|DELETE /api/v1/groups/{group}/images/current` | GET: viewer of the group; writes: super admin (§13.3) |
 | logs | `GET /api/v1/logs?group&zone&worker?&tail&download=1` → text/plain (+Content-Disposition attachment) | |
@@ -81,6 +81,14 @@ Services: `firestore` (emulator, 8081), `console` (8443), `worker` (node-rs + ru
 
 ## 6. Versioning
 `ramen/VERSION` is the single source; Cargo.toml and both pyproject versions must equal it (CI checks).
+- **Base images (1.0.0, Phase 9).** Every Ramen-built image (worker, console, SkillSpector, both Glama files) names its
+  base by language minor + `-slim` only — `python:3.12-slim` for everything that installs the runtime and for
+  SkillSpector, `python:3.14-slim` for the console, `rust:<minor of rust-toolchain.toml>-slim` for the build stages —
+  never a patch version, a Debian codename or a digest: upstream re-publishes these tags with security fixes and the
+  next build takes them (Debian 13 trixie as of 1.0.0). Third-party images in the chart and compose carry plain version
+  tags (the chart and compose must agree, §34.1). `.github/dependabot.yml` proposes updates weekly with a 14-day
+  cooldown; a Python or Rust minor is bumped by hand. Ramen's own images may still be pinned per install with the
+  chart's opt-in `image.digest` / `image.workerDigest` (D85).
 
 ## 7. GCP deployment (v0.2.0, binding)
 Decisions: D6 one zone first but multi-zone capable, D16 throwaway project, D17 static IP + self-signed cert.
@@ -388,8 +396,8 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   access log records as the consumer (`key_id` stays for keys). A token for another group/zone is `401` — it is
   not a credential for this worker at all, and the challenge tells the client where to get one that is.
 - Revocation: the console's session epoch (V1.4) is embedded in refresh tokens; bumping it (password/role change,
-  delete, restore) invalidates refresh. Access tokens live ≤ 1 h and are not revocable individually — stated in the
-  security how-to.
+  delete, restore) invalidates refresh. Access tokens live ≤ 1 h (`RAMEN_OAUTH_ACCESS_TTL`) and, since 1.0.0 (D92),
+  are revocable before that through the pushed denylist of §16.7.
 
 ### 16.4 Defaults and clients (X2, X6, X7)
 - Quickstart, `make demo`, `deploy/local/mcp-client-config.example.json`, the README and the how-tos land a new user
@@ -421,6 +429,46 @@ endpoint is reversed by the user's own decision. Sub-decisions D32–D35 below.
   only once HTTP is the front door — which this release makes true, so it may be claimed for HTTP clients and no
   further. SECURE is one sentence: user code never runs in the process that holds keys and auth. The unverified
   list stays in the README as a feature of the pitch, not a footnote.
+
+### 16.7 Revocation that takes effect at once (D92, 1.0.0, binding)
+Keys and access tokens are checked offline by the node; the console tells the node what is revoked.
+- **The list.** `RAMEN_REVOKED` = compact JSON `{"keys": [<lowercase hex SHA-256 of an rmk_ key>], "jti": [<token id>],
+  "sub": {<user id>: <unix seconds>}}`, per group, in every zone's deploy config (`deploy.zone_config`, so every deploy
+  and every §26.3 push carries it). The node merges it from every source — env, deploy file, and the overlay below —
+  as a union (it never shrinks a list it holds); a listed key is dropped from `RAMEN_MCP_KEYS` (the call is
+  `UNAUTHENTICATED` / HTTP 401 like any unknown key); a token whose `jti` is listed, or whose `sub` is listed with
+  `iat` ≤ that time (or no `iat`), is refused the same way with access-log reason `token_revoked`. A malformed list is a
+  config error (fatal at start, "keeping current" at a reload).
+- **At once.** `ramen.v1.Admin/Reload` takes `ReloadRequest.revoked` (bytes, the same JSON); the node merges it over the
+  config it re-reads before anything else and keeps it (in memory) for every later reload until the pod restarts, so a
+  pushed revocation holds on a pod whose env (the deploy Secret) still names the key; malformed → `INVALID_ARGUMENT`,
+  nothing changes. Every adapter's `push_config` sends the zone's `RAMEN_REVOKED` on each reload, then rolls the pods
+  as before (the restart makes it the env).
+- **Store.** `revocations` docs `{kind: key|jti|sub, group, value, before?, exp, reason, created}`; `exp` = a key's
+  delete + 24 h, a token id's token `exp`, a person's cut-off + `RAMEN_OAUTH_ACCESS_TTL` — never longer than something
+  it covers can be presented; expired entries are pruned when the list is built. Refresh records carry the `jti` and
+  `access_exp` of the access token minted with them; a person's entry is written for every group in which they hold a
+  live refresh record (where a live token can be), and none when they hold none.
+- **Triggers.** Key: `DELETE /api/v1/groups/{g}/mcp-keys/{id}` and `DELETE /api/v1/api-keys/{id}` (an agent key, in
+  every group it was mirrored to); minting a key pushes too, so a rotation (mint, then revoke) needs no deploy. Person:
+  every session-epoch bump — membership removed or changed, role changed, user deleted, password set or reset, an
+  approved request revoked, an IdP mapping that changes the effective set — and `POST /api/v1/users/{uid}/sign-out`
+  (`me`, or anyone whose account the caller may manage; ends the console sessions too; answers `revoked_groups`).
+  Token: RFC 7009 `POST /oauth/revoke` (`token`, `token_type_hint`, `client_id`; public clients, no secret): an access
+  token's `jti` until it expires, a refresh token's whole grant with every access token it minted; unknown, malformed
+  or expired tokens answer `200 {}`, another client's token `400 invalid_request`, an unknown client `401
+  invalid_client`; the metadata names `revocation_endpoint`. Refresh-token reuse and OAuth client deletion deny every
+  live access token of the grants they end.
+- **Push and retry.** `revocation.Pusher.push(group)` = `deploy.push_config(svc, warnings, group)` (only that group's
+  zones), one at a time per group, a request that arrives during a push answered by the next one. Key routes push
+  synchronously and answer `pushed`, plus `warning` (`"<g>/<z>": "<error>; … retried in the background"`) and
+  `pending: ["<g>/<z>"]` for a zone not reached; person and token triggers push in the background. A zone not reached
+  is recorded in `config/revocation_pending` (`{groups: {g: {since, zones, tries}}}`), shown on the group page above
+  the MCP keys, and retried every `RAMEN_REVOKE_RETRY_SECS` (default 30) until it lands; a sleeping zone's Secret is
+  rewritten by the push, so it wakes with the list.
+- **TTL.** `RAMEN_OAUTH_ACCESS_TTL` (seconds, default 3600) is the access token's life and the longest a person's entry
+  is kept. Shorter = a smaller window if the console cannot reach a zone and a shorter list, at the cost of a refresh
+  per TTL per client. TLS and every enforcement gate are unchanged.
 
 ## 17. v0.5.1 — the end-to-end guide, its screenshots, and the GKE proof of 0.5.0 (binding)
 - 17.1 One how-to, `docs/how-tos/end-to-end.md` (folded into `docs/get-started.md` by the 0.6.0 docs reorganization), walks the whole path **console → worker → AI client** twice: on the
@@ -544,7 +592,7 @@ negative and combination tests (the brief's acceptance bar); the combinations ar
 
 ### 21.1 Runtime on Python 3.12 (D45)
 - `runtime-py` `requires-python = ">=3.12,<3.13"` — 3.12 only, because the flagship guardrails engine (NeMo
-  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim`; CI runtime jobs
+  Guardrails) does not run on 3.14. Worker image and both Glama images build `FROM python:3.12-slim` (§6); CI runtime jobs
   (`runtime`, `node-conformance`, compose, kind) install 3.12. The console stays on 3.14. `scripts/check_versions.py`
   fails when a runtime pin and the Dockerfiles disagree.
 
@@ -1045,7 +1093,7 @@ Asked for by the user on 2026-11-13 for 1.0. Supersedes §21.7 "min 1 per zone" 
 - Chart: `otel.collector: none | jaeger | phoenix` (default none) adds a Jaeger all-in-one (OTLP in, query API) or
   Arize Phoenix (UI 6006, behind an OTel Collector sidecar on 4318 that turns Ramen's OTLP/JSON into protobuf and
   drops metrics) to `ramen-system` for trying it out and for the test runs;
-  not for production. Phoenix's SQLite lives on a PVC (`otel.phoenix.persistence`, default on, 5Gi, maxSurge 0);
+  not for production. Both UIs want a sign-in since D92 (§39.7). Phoenix's SQLite lives on a PVC (`otel.phoenix.persistence`, default on, 5Gi, maxSurge 0);
   Jaeger keeps traces in memory (lost at a restart).
 
 ### 24.4 Verification
@@ -1298,7 +1346,8 @@ zones are records only and stay unchecked.
   id>`). Found live: on GKE `roles/container.developer` masks a missing binding, on EKS it is a 403 inside the
   namespace. Likewise every worker NetworkPolicy admits the console's home networks (`console.sourceCidrs` →
   `RAMEN_CONSOLE_SOURCE_CIDRS`: the home pod range / VPC / VNet) next to its own `ramen-system` namespace — found
-  live: a satellite worker dropped the console's reload (DEADLINE_EXCEEDED) until it did.
+  live: a satellite worker dropped the console's reload (DEADLINE_EXCEEDED) until it did. (Amended by S6, §33.4a:
+  only a satellite zone's worker policy admits them; a home zone never does.)
 - Images: Artifact Registry is regional but world-readable to the project's identities; satellite nodes pull from
   the home repo. Builds (kaniko Jobs) stay in the home cluster.
 - AWS: a satellite is an EKS cluster in another region (same account); the console builds its kube client from
@@ -1375,8 +1424,8 @@ Config page. The providers feed evals as env (`ANTHROPIC_API_KEY`, `OPENAI_API_K
   zone's result carries no `evals` key (the harness reads that as "absent"). No `RAMEN_EVALS_IMAGE` → `evals: {skipped: "no evals engine"}` in the result, once per deploy in
   the log.
 - Chart `evals.engine: none | promptfoo` (default none): `promptfoo` adds a Deployment + Service `promptfoo`
-  (`ghcr.io/promptfoo/promptfoo:<pinned>`, port 3000, a PVC for `/home/promptfoo/.promptfoo`, single replica, no
-  auth, no edge route — try-out and test runs, like Jaeger/Phoenix) and hands the console `RAMEN_EVALS_IMAGE`,
+  (`ghcr.io/promptfoo/promptfoo:<pinned>`, port 3000, a PVC for `/home/promptfoo/.promptfoo`, single replica, a
+  credential on its TLS front since D92 (§39.7), no edge route — try-out and test runs, like Jaeger/Phoenix) and hands the console `RAMEN_EVALS_IMAGE`,
   `RAMEN_EVALS_API_URL` (`https://promptfoo.<ns>:3000`, §39) and `RAMEN_EVALS_UI_URL` = `evals.uiUrl` (default
   `https://localhost:3443`: where a person opens promptfoo's UI, through its TLS front after `kubectl -n ramen-system
   port-forward deploy/promptfoo 3443:3443`; also the Job's and the server's `PROMPTFOO_REMOTE_APP_BASE_URL`; promptfoo
@@ -1387,7 +1436,8 @@ Config page. The providers feed evals as env (`ANTHROPIC_API_KEY`, `OPENAI_API_K
   chart runs the server — the run's address in promptfoo's UI (`<RAMEN_EVALS_UI_URL>/eval/<run>`) with the
   port-forward command. The group page's evals badge links it. promptfoo's UI itself is **not** proxied through the
   console (1.0.0c, found on GKE): its single-page app hard-codes `/assets/…`, `/api/…` and a root router (no base
-  path), has no sign-in and lists every group's runs, so it stays a port-forward-only operator tool.
+  path), has no sign-in of its own and lists every group's runs, so it stays a port-forward-only operator tool behind
+  the operator's credential (D92, §39.7).
 
 ### 29.3 Policy to clients: versions, the worker gate, the bridge, client config files
 - The token answer (§24.3/§26.3) gains `evals: {version, required, config}` when the group repo carries the file:
@@ -1759,7 +1809,10 @@ Azure are torn down, GCP is kept on the latest build for the user's manual check
   S4); a dedicated node SA `ramen-nodes@` (`logging.logWriter`, `monitoring.metricWriter`, `monitoring.viewer`,
   `stackdriver.resourceMetadata.writer`, `autoscaling.metricsWriter`, `artifactregistry.reader` on the repo) set as the
   Autopilot node identity for NEW installs — Autopilot refuses the change on a live cluster, so the test cluster keeps
-  the default compute SA until re-created (tfvars `node_service_account = "default"`); the console GSA's
+  the default compute SA until re-created (tfvars `node_service_account = "default"`; S5, sec-gaps: Terraform removes
+  `roles/editor` from the default compute SA — `google_project_iam_member_remove`, variable
+  `remove_default_compute_editor`, default true — after granting it the node roles while a cluster still runs as it,
+  and `gcp-satellite` sets `ramen-nodes@` as its node identity); the console GSA's
   `iam.serviceAccountUser` is REMOVED (IAM conditions cannot name service accounts, and the console never impersonates).
   AWS: the worker permissions boundary is keyed on the role tag `group=<group>` (`s3:prefix`, object ARNs and secrets
   under `<group>/`), so a mis-written inline policy cannot cross groups; the console policy carries no `iam:PassRole`.
@@ -1793,6 +1846,13 @@ Azure are torn down, GCP is kept on the latest build for the user's manual check
   (home, satellite). Deprecated, rendered as before when `awsAlbCidrs` is empty: `networkPolicy.awsVpcCidr`,
   `console.env.RAMEN_AWS_VPC_CIDR`; the console reads `RAMEN_AWS_ALB_CIDRS`, else `RAMEN_AWS_VPC_CIDR`, else
   10.0.0.0/16. Still admitted on 8080: node addresses (probes, `hostNetwork`, a home pod's SNATed call to a satellite).
+- **Console source networks (S6, sec-gaps).** `console.sourceCidrs` (`RAMEN_CONSOLE_SOURCE_CIDRS`) is admitted only by
+  the chart's `console` policy (its own port) — never Phoenix / Jaeger, promptfoo or Redis — and, in zone namespaces,
+  only by a satellite zone's `worker` policy, as a separate ingress rule on 8080 (`gcp_k8s.with_console_sources`, applied
+  by the adapter's attach for a zone whose cluster is not home); a home zone admits the console as the `ramen-system`
+  namespace peer only. On EKS / AKS (`ipBlock` matches pod addresses) the value must list node subnets, never a pod
+  range; the chart's NOTES warn when it is set there. Residual: a satellite admits every home pod (GKE pod range;
+  EKS/AKS home node subnets after SNAT) — the console has no fixed address.
 - **Managed Redis.** Chart `redis.externalUrl` (with `redis.enabled: false`) writes a managed instance's URL into Secret
   `ramen-redis` (`url`, `password`) and runs no Redis; `rediss://` is TLS (the node's client carries rustls + webpki
   roots — managed instances are TLS-only). The Azure Terraform creates an Azure Managed Redis (`managed_redis`,
@@ -1908,6 +1968,41 @@ are low; the runtime executes up to `RAMEN_RUNTIME_CONCURRENCY` (default 4) tool
 (load, reload and shutdown stay exclusive; tenant tool code must tolerate concurrent calls — documented in the group
 repo contract). The §35 steady/mixed p95 bound stays 1.5 s and is re-measured after D83 lands.
 
+**Per-call cost pass (1.0.0, as built; D80 misses on 1.0.0b34–b36: GKE `scale` p95 1872 ms, EKS `steady` 1927 ms
+at 27 rps, EKS `scale` 2116 ms).** Worker CPU stays 250m (D83). Root causes, measured on the demo's
+`demo_calculator_tool` (static NeMo pre rail) in-process: 4.2 ms CPU per call = NeMo Colang 2.8 + JSON Schema 1.2 +
+the rest; the node is ~0.35 ms (`burst` serves 550–660 rps of node-only 429s on one worker).
+- **Runtime — JSON Schema.** `jsonschema.validate` checked the input and the output schema against the metaschema on
+  every call. Each tool now compiles its validators once per load (`Package.input_validator` / `output_validator`,
+  same draft choice and best-match error text): a rail-free tool 0.89 → 0.04 ms.
+- **Runtime — NeMo library flows.** NeMo appends its whole Colang 1.0 library to every config and tries to start each
+  top-level flow on every event. A top-level flow whose first step runs an action that no kept flow runs, and that no
+  flow calls, can never start and is dropped at load (`guardrails_nemo.drop_idle_flows`, to a fixpoint; a flow that
+  starts on `bot ...` is never dropped; a library flow whose action an LLM rail wrapper runs stays, as before). −0.65 ms.
+- **Runtime — Colang expressions.** Colang's `eval_expression` built a new simpleeval evaluator and re-parsed the text
+  ~90 times per rail call. `guardrails_nemo.cached_simple_eval` replaces the `simple_eval` NeMo looks up per call: one
+  evaluator per thread, parsed trees cached (≤ 4096); any other call shape, or a nested call, goes to simpleeval
+  unchanged. nemoguardrails stays pinned `<0.25`; the swap is skipped if NeMo stops using simpleeval there. −0.7 ms.
+- **Runtime — NeMo usage stats.** NeMo 0.24 posts an anonymous usage event to NVIDIA from a thread at every rails
+  config (two per load) plus a 10-min heartbeat; the engine sets `NEMO_GUARDRAILS_NO_USAGE_STATS=1` unless the deploy
+  set it.
+- **Node — load timeout.** A cold `runtime.load` at 250m (`import nemoguardrails` alone ≈ 8 CPU-s, pandas ≈ 3) can pass
+  the 120 s call timeout; the node killed it and loaded again from scratch, doubling a new worker's time to SERVING.
+  `runtime.load` now waits `max(RAMEN_CALL_TIMEOUT_SECS, 600)` s (`sidecar::LOAD_TIMEOUT_SECS`); other calls keep
+  the call timeout.
+- **Console — latency trigger.** `RAMEN_AUTOSCALE_P50_MS` defaults to 250 (was 500); the rest of the rule is unchanged
+  (down below half the bound, `MIN_RPS` 2). The p50 is a one-minute window and a new worker needs one to two minutes
+  or more to serve behind a cloud LB, so at 500 ms the `scale` ramp asked for help when the first worker was already at
+  its limit.
+
+Local result (Docker `--cpus 0.25`, arm64 worker 1.0.0 + the demo with pandas baked, 32 clients half Streamable HTTP
+h2 / half gRPC, calc, 40 s, Docker HEALTHCHECK off as on Kubernetes): before 29.8 rps, p50/p95/p99 808/2111/7398 ms,
+8.5 ms CPU per call; after 69.3 rps, 404/786/1000 ms, 3.7 ms. Expected on the clouds (to be re-measured, §35): one
+worker serves about 2.3× the calls per second it did on b34–b36 — `steady` (32 clients, one worker) ≈ 60 rps with p95
+≈ 0.8 s on EKS t3.small (was 27 rps / 1927 ms) and lower on GKE and AKS; `mixed` and `burst` unchanged or better;
+`scale` asks for the second worker at about half the load and each worker carries twice the calls, so a fluid model
+fitted to the b34–b36 misses puts its p95 at 0.8–1.2 s on all three (was 1.1–2.1 s).
+
 ## 38. v1.0.0c — closing the final security pass (binding, D85)
 
 ### 38.1 LLM judge proxy (F1)
@@ -1942,16 +2037,32 @@ requirements unless the group admin sets `build.allow_urls: true`.
   identity can write them; the chart takes `image.digest` / `image.workerDigest`. The group name `build` is reserved.
   `requirements.txt` refuses every option except `--require-hashes`, `--only-binary`, `--prefer-binary`, `--pre`, and
   any URL/VCS/path/archive requirement, unless `build.allow_urls: true`. Residual (console compromise, not group
-  code): on Azure the console's RBAC administrator role, and on GCP its project-wide repository IAM rights (Artifact
-  Registry ignores IAM Conditions on `resource.name`, so a `ramen-groups-*` condition cannot fence them), would let a
-  compromised console grant itself writer on the platform repository; platform images are pinned by digest, so a re-tag
-  there does not reach a pod until an operator changes the digest. On AWS the console's ECR rights are fenced to
-  `ramen/groups/*`.
+  code): on Azure the console's RBAC administrator role would let a compromised console grant itself writer on the
+  platform repository; platform images are pinned by digest, so a re-tag there does not reach a pod until an operator
+  changes the digest. On AWS the console's ECR rights are fenced to `ramen/groups/*`.
+- **GCP repository rights by resource tag (sec-gaps, closes the GCP residual).** Artifact Registry ignores IAM
+  Conditions on `resource.name` but every service evaluates resource tags. Terraform creates the project tag key
+  `ramen-repo` with values `platform` and `group`, binds `platform` to the repository `ramen`
+  (`google_tags_location_tag_binding`), and binds `ramenConsoleBuildRepos` (get/update/delete/get+setIamPolicy) under
+  `resource.matchTagId(<key id>, <group value id>)`. `ramenConsoleBuildRepoCreate` (unconditioned: checked before a
+  repository carries a tag) holds `repositories.create`, `repositories.list` and `repositories.createTagBinding`; the
+  console holds `roles/resourcemanager.tagUser` on the `group` value only and no `deleteTagBinding` anywhere. A
+  resource holds one value per key, so the console can neither re-tag `ramen` nor reach it. Console
+  (`gcp_api.Registry`): existence from `list` (get answers 403 for an untagged or missing repository); after create it
+  binds `group` through the regional endpoint `https://<location>-cloudresourcemanager.googleapis.com/v3/tagBindings`
+  (`parent = //artifactregistry.googleapis.com/projects/<project>/locations/<location>/repositories/<repo>`,
+  `tagValueNamespacedName = <project>/ramen-repo/group`, or `tagValue` when `RAMEN_AR_GROUP_TAG` is `tagValues/<id>`;
+  `none` = no tagging), 409 = already bound; then retries 403 on get and on the IAM calls (IAM-condition propagation,
+  Resource Manager: ≤ 2 min, up to 7; 48 tries × 5 × poll) and fails naming the tag. A repository made before the tag
+  (untagged) is tagged on the group's next build or on its deletion. A console from before this change cannot tag:
+  terraform and console are upgraded together.
 - **Judge proxy as built (§38.1).** Judge token `rjt_<b64url(group/zone/job)>.<HMAC>` valid while its deploy runs or is
   recorded in `last_deploy.judge[zone]` (current + previous); workers call `RAMEN_CONSOLE_INTERNAL_URL/llm/v1` in-cluster;
   the console identity holds `roles/aiplatform.user` (GCP, `console_vertex`) and Bedrock invoke rights (AWS,
-  `console_bedrock`); the rate limit is per console replica; local compose cannot reach the proxy (TLS-only console), so
-  LLM rails are cloud-only there.
+  `console_bedrock`); the rate limit is per console replica. Local compose sets `RAMEN_CONSOLE_INTERNAL_URL=
+  https://console:8443` (the console leaf names `console`), so the worker's rails reach the proxy there too; CI's compose
+  profile `ci` adds `fake-llm`, a deterministic OpenAI-compatible judge over TLS (compose CA), set as the org's
+  `openai` provider by the harness (`RAMEN_FAKE_LLM_URL`), so CI deploys the real demo repo with no key.
 
 ### 38.3 Throttle Redis (F3)
 The chart's Redis (`redis.enabled=true`, generated password, NetworkPolicy) replaces the hand-applied one on GKE; the
@@ -2008,8 +2119,9 @@ All leaves: EC P-256, signed by the install CA, EKU serverAuth + clientAuth, **3
 renewed when less than a third is left. Names are DNS SANs (plus `127.0.0.1`); no pod IPs.
 - **Zone** (every attach/deploy writes it; the console's scheduler renews it): Secret `ramen-tls` (`tls.crt`,
   `tls.key`, `ca.crt` = bundle) and ConfigMap `ramen-ca` (`ca.crt`) in the zone namespace. SANs:
-  **`worker.ramen.internal`** (the one name every in-install client verifies), `worker`, `worker-direct`,
-  `worker-canary` and their `.<ns>`, `.<ns>.svc`, `.<ns>.svc.cluster.local` forms, `localhost`, `127.0.0.1`. The
+  **`<group>.<zone>.worker.ramen.internal`** (the zone's own name, the one every in-install client verifies, D92
+  §39.2a; `worker.ramen.internal` before D92), `worker`, `worker-direct`, `worker-canary` and their `.<ns>`, `.<ns>.svc`,
+  `.<ns>.svc.cluster.local` forms, `localhost`, `127.0.0.1`. The
   Secret is mounted (directory, not `subPath`) at `/etc/ramen/tls`; the node re-reads the pair when the files change
   (checked every 60 s), so a renewal needs no restart. Workers get `RAMEN_TLS_CERT`, `RAMEN_TLS_KEY`,
   `RAMEN_TLS_CA=/etc/ramen/tls/ca.crt`, `RAMEN_REQUIRE_TLS=1`; the runtime sees `RAMEN_TLS_CA` only (cert and key
@@ -2024,20 +2136,35 @@ renewed when less than a third is left. Names are DNS SANs (plus `127.0.0.1`); n
   console has run once. SANs: `<svc>`, `<svc>.<ns>`, `<svc>.<ns>.svc`, `<svc>.<ns>.svc.cluster.local`, `localhost`,
   `127.0.0.1`.
 
+### 39.2a Zone names (D92)
+The user, 2026-11-17 (D92, amends D90/D91): a verified worker proves its **zone**, not just the install.
+- A zone's leaf carries `<group>.<zone>.worker.ramen.internal` (group and zone are DNS labels, `NAME_RE`) instead of
+  `worker.ramen.internal`; the Service names and loopback stay (the node's own health check, `ramen-mcp-bridge
+  --target 127.0.0.1:8080 --ca …` in the image's `HEALTHCHECK`, dials loopback — a peer that cannot be another zone).
+- Every verifier checks the zone it means: the console's gRPC dial to a pod IP (`grpcclient`: `name` is
+  `tls.worker_name(group, zone)` per call, `peer=(group, zone)` required — a zone-derived name without a peer is a
+  `ValueError`, never a guess); the activator (`RAMEN_TLS_SERVER_NAME` in the zone's pod env, inherited from the
+  `worker` Deployment); Envoy's `BackendTLSPolicy` hostname; the evals Job (`RAMEN_MCP_URL` and `hostAliases` name the
+  zone). A leaf of zone A dialled as zone B fails the handshake (`UNAVAILABLE`; health `false`).
+- GKE's front ends, the ALB and kubelet probes encrypt without verifying (§39.3): unchanged, they verify no name.
+- Local compose runs one worker for every group of zone `local`: its leaf names `*.local.worker.ramen.internal`
+  (`tls init --zone worker=local`; `--zone <leaf>=<ns>:<group>.<zone>` names one zone). `tls init` re-issues a leaf
+  whose names changed. `RAMEN_WORKER_TLS_NAME` still pins one name for a console that must (a laptop run).
+
 ### 39.3 Hops
 | Hop | TLS | Verified against |
 |---|---|---|
 | Client → edge | the edge's public certificate (unchanged) | client's roots |
 | Bridge → edge | TLS by default; `--insecure` (h2c) is explicit, local only, and an error next to `--tls`/`--ca` | system roots, or `--ca` |
-| Edge → worker | node serves TLS (`ramen-tls`). GKE: Service port `appProtocol: HTTP2`, HealthCheckPolicy `HTTP2` on `/readyz`. AWS: target groups `backend-protocol: HTTPS` (GRPC / HTTP1 versions kept), health checks `HTTPS`. Azure: `BackendTLSPolicy` per zone on Service `worker` (CA ConfigMap `ramen-ca`, hostname `worker.ramen.internal`) | Envoy: the install CA. GFE / ALB encrypt but do not verify backend certificates (the clouds' L7 LBs offer no backend CA on these paths) |
+| Edge → worker | node serves TLS (`ramen-tls`). GKE: Service port `appProtocol: HTTP2`, HealthCheckPolicy `HTTP2` on `/readyz`. AWS: target groups `backend-protocol: HTTPS` (GRPC / HTTP1 versions kept), health checks `HTTPS`. Azure: `BackendTLSPolicy` per zone on Service `worker` (CA ConfigMap `ramen-ca`, hostname `<group>.<zone>.worker.ramen.internal`, D92) | Envoy: the install CA. GFE / ALB encrypt but do not verify backend certificates (the clouds' L7 LBs offer no backend CA on these paths) |
 | Kubelet → worker | `httpGet` `scheme: HTTPS` on the node's new `/readyz` (readiness: `""` SERVING) and `/healthz` (liveness) — kubelet's gRPC probe cannot speak TLS | not verified (kubelet) |
-| Console → worker (`Admin/*`, smoke, golden, metrics, packages) | gRPC over TLS to the pod IP with server name `worker.ramen.internal` | install CA |
-| Activator → `worker-direct` | TLS, same name | install CA (`RAMEN_TLS_CA`) |
+| Console → worker (`Admin/*`, smoke, golden, metrics, packages) | gRPC over TLS to the pod IP with server name `<group>.<zone>.worker.ramen.internal` of the zone it means (D92) | install CA |
+| Activator → `worker-direct` | TLS, its own zone's name (`RAMEN_TLS_SERVER_NAME`, set by the console, D92) | install CA (`RAMEN_TLS_CA`) |
 | Worker / runtime → console (wake, `/llm/v1` judge proxy, `/otlp`) | `RAMEN_CONSOLE_INTERNAL_URL=https://console.<ns>.svc.cluster.local:443`; the exemption of `/api/v1/internal/` and `/llm/v1/` from `HttpsOnlyMiddleware` is removed | install CA |
 | Edge → console | console Service port **443** (`https`) → pod 8000 serving TLS. GKE `appProtocol: HTTPS` + HealthCheckPolicy `HTTPS`; ALB `backend-protocol: HTTPS`; Envoy `BackendTLSPolicy` (hostname `console.<ns>.svc.cluster.local`) | as edge → worker |
 | Console / workers → chart Redis | `redis-server --port 0 --tls-port 6379 --tls-auth-clients no` (the password stays the client credential), Secret `ramen-redis` `url` = `rediss://…` | install CA (managed Redis: public roots, as before) |
 | Console / workers → collector | Phoenix's collector and Jaeger take OTLP over TLS on 4318 (`https://phoenix.<ns>:4318`); the collector posts to Phoenix over TLS (`PHOENIX_TLS_*`); Jaeger's query UI is TLS too | install CA |
-| Jobs → promptfoo, Jobs → worker | promptfoo listens on loopback behind a TLS sidecar (`python -m ramen_console.tlsproxy`, the console image) on 3443 (Service port 3000 → 3443); the Jobs mount ConfigMap `ramen-ca` (`NODE_EXTRA_CA_CERTS`; whenever they reach the canary by name or the server URL is `https://`) and reach the canary as `https://worker.ramen.internal:8080/mcp` through `hostAliases` → the canary pod IP | install CA |
+| Jobs → promptfoo, Jobs → worker | promptfoo listens on loopback behind a TLS sidecar (`python -m ramen_console.tlsproxy`, the console image) on 3443 (Service port 3000 → 3443); the Jobs mount ConfigMap `ramen-ca` (`NODE_EXTRA_CA_CERTS`; whenever they reach the canary by name or the server URL is `https://`) and reach the canary as `https://<group>.<zone>.worker.ramen.internal:8080/mcp` through `hostAliases` → the canary pod IP (D92); the share upload carries the Jobs' upload credential (§39.7) and verifies the server (`PROMPTFOO_INSECURE_SSL=false`) | install CA |
 | Console → satellite workers | as console → worker; the console writes the zone's `ramen-tls` into the satellite cluster | install CA |
 | Node → runtime | stdio inside the pod, no network (unchanged) | — |
 
@@ -2049,7 +2176,7 @@ plaintext is refused on cloud installs") and written into every zone's pods.
 - **Console**: refuses to start with `RAMEN_WORKER_TLS=0`, a `redis://` `RAMEN_REDIS_URL`, an `http://`
   `RAMEN_CONSOLE_INTERNAL_URL` / `RAMEN_EVALS_API_URL`, or no serving certificate; answers 422 to an `http://` OTLP
   endpoint (Config → Telemetry), a `redis://` group/zone Redis URL, and an `http://` LLM provider base URL. Under the
-  flag `RAMEN_WORKER_TLS` defaults to 1 with the install CA and the `worker.ramen.internal` name.
+  flag `RAMEN_WORKER_TLS` defaults to 1 with the install CA and each zone's own name (D92, §39.2a).
 - Without the flag (unit tests, a laptop run outside compose) everything stays as it was, so the old paths keep
   their tests; local compose and kind set it anyway.
 
@@ -2074,12 +2201,13 @@ plaintext is refused on cloud installs") and written into every zone's pods.
   `RAMEN_CONSOLE_INTERNAL_URL` / `RAMEN_ACTIVATOR_UPSTREAM` exit at start; `http://` OTLP and `redis://`
   item/scope URLs exit at start and, at a reload, are dropped with a warning (feature off). The activator dials
   `worker-direct` over TLS whenever the node has a pair or `RAMEN_TLS_CA`, verifying `RAMEN_TLS_SERVER_NAME`
-  (default `worker.ramen.internal`). redis 0.27 *replaces* the web roots with a given root, so the install CA is used
+  (the console writes the zone's own name since D92; the node's default stays `worker.ramen.internal` for a zone
+  deployed before it). redis 0.27 *replaces* the web roots with a given root, so the install CA is used
   only for an in-cluster `rediss://` host (an IP, `localhost`, a single label, `*.svc`, `*.svc.cluster.local`, or
   `<svc>.<ns>` with a hyphenated namespace); a managed Redis keeps the public roots. `RAMEN_TLS_CERT`/`KEY` never
   reach the runtime; `RAMEN_TLS_CA` and `RAMEN_REQUIRE_TLS` do (the judge client trusts the CA next to the system
   roots and refuses an `http://` base URL under the flag).
-- **Console**: `RAMEN_WORKER_TLS_NAME` overrides the verified name; the CA dir may hold `ca.crt` only (local
+- **Console**: `RAMEN_WORKER_TLS_NAME` pins one verified name for every zone (instead of each zone's own); the CA dir may hold `ca.crt` only (local
   compose gives the console a pre-issued leaf via `RAMEN_TLS_CERT`/`RAMEN_TLS_KEY` and keeps `ca.key` out of its
   reach). The renewal loop (`RAMEN_TLS_RENEW_SECS`) is independent of the scheduler and never creates a zone's leaf:
   only a deploy does, so a pre-D86 zone is untouched until redeployed. A leaf whose bundle alone is stale gets the
@@ -2092,8 +2220,9 @@ plaintext is refused on cloud installs") and written into every zone's pods.
 - **Local**: compose service `certs` (`tls init`) writes `deploy/local/.certs`; `demo-worker.sh` (a bare node, no
   compose) is the one place that runs plaintext, with the bridge's explicit `--insecure`. Harness: `RAMEN_INSTALL_CA`
   makes `Node`/`HttpNode`/`Console` default to TLS against that bundle (kind: ConfigMap `ramen-ca`).
-- **Bridge**: `RAMEN_BRIDGE_INSECURE=1` is the env form of `--insecure`; `RAMEN_BRIDGE_TLS` is ignored. The console's
-  sign-in card keeps printing `--tls` until bridge 0.6.0 is the published `@latest`.
+- **Bridge**: `RAMEN_BRIDGE_INSECURE=1` is the env form of `--insecure`; `RAMEN_BRIDGE_TLS` is ignored. Bridge 1.0.0
+  (PyPI) is the bridge for Ramen 1.0.0 and always dials TLS; the console's sign-in card and the docs still print `--tls`
+  so every command states it explicitly.
 - **Satellites** (§28; found by the §34.3 docs verification): `console.<ns>.svc.cluster.local` exists only in the
   home cluster, so a satellite zone's pods reach the console at its **public URL** (the zone's `RAMEN_OAUTH_ISSUER`):
   the adapter rewrites a satellite's `RAMEN_LLM_BASE_URL` to `<public>/llm/v1` in the deploy Secret (deploy and
@@ -2151,9 +2280,60 @@ plaintext is refused on cloud installs") and written into every zone's pods.
   the stored one), worker logs (API and Logs page), job records' `error` fields, deploy logs and every log line. At
   start the console remembers the URL passwords of its RAMEN_* env (the chart Redis') for the log scrubber.
 
+### 39.5b Upgrading to zone names (D92)
+1. The first D92 console start writes `config/tls_zone_names` `{since}` (once per install; every replica reads the
+   same) and re-issues **every zone leaf that lacks its zone name** at once (`tls.startup` → `renew_zone_tls`; the
+   renewal loop treats such a leaf as due too). A leaf that carried the generic name keeps it as a second SAN — a
+   *bridge leaf*: that zone's activator env and Envoy policy (written by its last deploy) still verify the generic
+   name until the zone is redeployed. A leaf re-issued later for the same zone (due, CA rotation) stays a bridge leaf
+   until then; a deploy writes a zone-only leaf, the activator's zone name and the zone-name `BackendTLSPolicy` in the
+   same apply — the old pods already hold the bridge leaf, so the new verifiers accept them during the roll.
+2. Until `since + RAMEN_TLS_ZONE_NAME_GRACE_SECS` (900 s: kubelet's Secret refresh ~1–2 min plus the node's 60 s
+   re-read), the console's dial that fails with `UNAVAILABLE` under the zone name gets **one** second try with
+   `worker.ramen.internal` (a pod still serving its pre-D92 leaf). After the window the generic name is never
+   accepted by the console. A fresh install opens the window too; it has no pre-D92 leaf to accept.
+3. `GET /api/v1/config/tls` marks a leaf that still carries the generic name `generic_name: true`: redeploy those
+   zones (their activator and Envoy accept the generic name, i.e. another not-yet-redeployed zone's leaf, until then).
+
 ### 39.6 Verification
 Console: CA create/load/vault/race, rotate + bundle, leaf SANs and lifetime, renewal, the refusals (start and 422),
 zone manifests per cloud carrying the TLS backends and probes, the Jobs' hostAliases and CA, the launcher and the
 TLS proxy. Node: refuses to start under the flag, serves TLS, reloads a renewed pair, `/readyz`/`/healthz`, trusts
 `RAMEN_TLS_CA` for wake/OTLP/activator/Redis. Bridge: TLS default, `--insecure` path, the conflict error. Chart:
 `helm template` shows every service on TLS and fails with `tls.require=false`. Local compose and kind come up TLS.
+
+### 39.7 Authentication in front of the optional engines (D92)
+The user, 2026-11-17 (D92): Phoenix, Jaeger and promptfoo hold every group's traces and evals; reaching their pods
+(a policy that admits too much, a port-forward) must not be enough to read them. Machine ingest keeps working.
+- **Secret `ramen-engines`** (release namespace), generated by the chart whenever an engine runs and kept across
+  upgrades (`lookup`; `engines.existingSecret` names your own with the same keys): `username` (`admin`) + `password`
+  — the operator; `upload-username` (`evals`) + `upload-password` — the evals Jobs; `phoenix-secret`,
+  `phoenix-admin-secret` (≥ 32 characters with a digit and a lowercase letter, distinct). Never printed by the chart,
+  the console or a job; a super admin with cluster access reads one with `kubectl -n ramen-system get secret
+  ramen-engines -o jsonpath='{.data.password}' | base64 -d`. Local compose: `RAMEN_ENGINES_PASSWORD`,
+  `RAMEN_ENGINES_UPLOAD_PASSWORD`, `RAMEN_PHOENIX_SECRET`, `RAMEN_PHOENIX_ADMIN_SECRET` in `deploy/local/.env`
+  (`make env`); a check service stops the engine profiles when they are missing.
+- **Phoenix** (21.1.0's own auth): `PHOENIX_ENABLE_AUTH=true`, `PHOENIX_SECRET`, `PHOENIX_ADMIN_SECRET`,
+  `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` = `password` (applied while the `admin@localhost` account still holds
+  Phoenix's default), `PHOENIX_USE_SECURE_COOKIES=true`. UI, GraphQL, REST and OTLP (HTTP and gRPC 4317) need a
+  sign-in or `Authorization: Bearer <phoenix-admin-secret>`; `/healthz` stays open (the readiness probe). The
+  collector sidecar posts spans to Phoenix with that bearer; its own OTLP receiver on 4318 takes no credential.
+- **Jaeger** (no auth of its own): the query UI/API binds `127.0.0.1:16687` (gRPC query `127.0.0.1:16685`); the pod's
+  TLS front (`python -m ramen_console.tlsproxy`, the console image) on 16686 (Service port `query`) wants the operator's
+  credential. OTLP stays on 4318 (TLS, no credential); the admin port 14269 (health) is the readiness probe.
+- **promptfoo**: its TLS front on 3443 wants a credential on every connection: the operator's (everything) or the
+  upload credential, which may send exactly one request per connection matching `POST ^/api/eval$` or `POST
+  ^/api/eval/[A-Za-z0-9:_-]+/results$` (promptfoo 0.125.1's share upload; Content-Length bodies only, forwarded with
+  `Connection: close`; anything else 403, a chunked body 411) — never a read. The evals Job gets `upload-password` by
+  `secretKeyRef` (`RAMEN_ENGINES_SECRET`, set by the chart) and `PROMPTFOO_REMOTE_API_BASE_URL=https://evals:$(…)@
+  promptfoo.<ns>:3000` (promptfoo turns URL userinfo into Basic auth and strips it from the printed link), plus
+  `PROMPTFOO_INSECURE_SSL=false` (promptfoo skips verification by default). The console never calls promptfoo.
+- **The TLS front** (`tlsproxy`): with `RAMEN_PROXY_PASSWORD` set, the first request of each connection must carry
+  `Authorization: Basic admin:<password>` or `Bearer <password>` (constant-time compares), then the connection is
+  piped as before (a TLS connection is one client); no path is open without a credential (401 with
+  `WWW-Authenticate: Basic`); `--require-auth` exits when the password is missing (chart and compose). Probes are TCP.
+- **NetworkPolicies** (unchanged sources, narrowed ports): the workers reach only the collector's OTLP 4318 (they
+  export directly; `RAMEN_OTEL_ENDPOINT`), never 6006/4317/16686/3443; the edge rule of the collector policy admits the
+  UI port only (it admitted every port). Port-forwards bypass policies by design — hence the credentials.
+- Verification: unit (`test_d92_engines.py`: the proxy's 401/403/411, upload one-shot, chart rendering, policies);
+  GKE: each UI asks for a sign-in, a share upload lands, an upload credential cannot read.

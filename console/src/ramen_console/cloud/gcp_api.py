@@ -588,12 +588,16 @@ class Iam:
 
 
 class Registry:
-    """§38.2 (D85): the per-group Artifact Registry repositories `ramen-groups-<group>` and their writer binding. The
-    console holds these rights project-wide (Artifact Registry ignores IAM Conditions on the repository name; CONTRACTS
-    §38.2 residual) and no upload right; a group's build identity is the only writer of its own repository."""
+    """§38.2 (D85): the per-group Artifact Registry repositories `ramen-groups-<group>` and their writer binding.
+    Artifact Registry ignores IAM Conditions on `resource.name` but evaluates resource tags, so the console's
+    repository rights (get/update/delete/IAM) are conditioned on the tag `ramen-repo=group` (terraform; the platform
+    repository carries `ramen-repo=platform`). The console binds `group` to every repository it creates, then waits out
+    IAM-condition propagation (Resource Manager: up to ~7 min) as 403s. No upload right anywhere; a group's build
+    identity is the only writer of its own repository."""
 
-    def __init__(self, ar, project, location, attempts=10, delay=2.0):
+    def __init__(self, ar, project, location, attempts=10, delay=2.0, tags=None, tag_value=None, iam_attempts=48):
         self.ar, self.project, self.location, self.attempts, self.delay = ar, project, location, attempts, delay
+        self.tags, self.tag_value, self.iam_attempts = tags, tag_value, iam_attempts
 
     def _name(self, repo_id) -> str:
         return f"projects/{self.project}/locations/{self.location}/repositories/{repo_id}"
@@ -609,39 +613,107 @@ class Registry:
                 raise
             return None
 
+    def exists(self, repo_id) -> bool | None:
+        """Through `repositories.list` (unconditioned: checked on the location, so it answers for an untagged or missing
+        repository where get only says 403). None = list refused (terraform before the tag change)."""
+        parent, token, name = f"projects/{self.project}/locations/{self.location}", None, self._name(repo_id)
+        while True:
+            try:
+                page = (
+                    self._repos()
+                    .list(parent=parent, pageSize=1000, pageToken=token)
+                    .execute(num_retries=3, http=fresh_http())
+                )
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 403:
+                    raise
+                return None
+            if any(r.get("name") == name for r in page.get("repositories", [])):
+                return True
+            if not (token := page.get("nextPageToken")):
+                return False
+
+    def tag(self, repo_id, retry=False) -> str:
+        """Bind the `ramen-repo=group` tag value to the repository: "bound", "exists" (already carries it), "off" (no
+        tag configured), "unavailable" (403/404: terraform without the tag, or — retried when `retry` — a repository
+        Resource Manager does not see yet). A repository holding another value of the key (the platform one) is
+        refused by Resource Manager; that error is raised."""
+        if not self.tags or not self.tag_value:
+            return "off"
+        body = {"parent": f"//artifactregistry.googleapis.com/{self._name(repo_id)}"}
+        body["tagValue" if self.tag_value.startswith("tagValues/") else "tagValueNamespacedName"] = self.tag_value
+        for i in range(self.attempts if retry else 1):
+            try:
+                self.tags.tagBindings().create(body=body).execute(num_retries=3, http=fresh_http())
+                return "bound"
+            except Exception as e:  # noqa: BLE001
+                status = http_status(e)
+                if status == 409:
+                    return "exists"
+                if status not in (403, 404):
+                    raise
+                if i + 1 < (self.attempts if retry else 1):
+                    time.sleep(self.delay)
+        return "unavailable"
+
+    def _until(self, repo_id, call, codes=(403,)):
+        """Retry `call` while it answers one of `codes` (IAM-condition propagation after the tag), then explain."""
+        for i in range(self.iam_attempts):
+            try:
+                return call()
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) not in codes:
+                    raise
+                if i + 1 == self.iam_attempts:
+                    raise ApiError(
+                        502,
+                        f"repository {repo_id} does not answer the console: it needs the tag ramen-repo=group and "
+                        f"a few minutes for IAM to see it (CONTRACTS §38.2): {e}",
+                    ) from e
+                time.sleep(self.delay * 5)
+
     def ensure(self, repo_id, labels: dict[str, str], description: str) -> bool:
-        """Create the DOCKER repository unless it exists; wait until it answers (creation is an operation). True when
-        this call created it. Artifact Registry answers 403, not 404, for a repository that does not exist yet when the
-        caller's get right is conditioned on the repository name (GKE, 1.0.0c) — so 403 means "try to create"; a real
-        refusal then surfaces as the create's own error."""
-        if self.get(repo_id, missing=(403, 404)) is not None:
-            return False
-        body = {"format": "DOCKER", "labels": labels, "description": description}
-        try:
-            self._repos().create(
-                parent=f"projects/{self.project}/locations/{self.location}", repositoryId=repo_id, body=body
-            ).execute(num_retries=3, http=fresh_http())
-        except Exception as e:  # noqa: BLE001
-            if http_status(e) != 409:
-                raise
-            return False
-        for _ in range(self.attempts):
-            if self.get(repo_id, missing=(403, 404)) is not None:
-                break
-            time.sleep(self.delay)
-        return True
+        """Create the DOCKER repository unless it exists, bind the `group` tag (also to a repository made before the
+        tag existed) and wait until it answers the console. True when this call created it. Existence comes from
+        `list`; with list refused, from get, where 403 means "not there yet" too (AR answers 403 for a missing
+        repository when the caller's right is conditioned) — a real refusal then surfaces as the create's error."""
+        known = self.exists(repo_id)
+        created = False
+        if known is False or (known is None and self.get(repo_id, missing=(403, 404)) is None):
+            body = {"format": "DOCKER", "labels": labels, "description": description}
+            try:
+                self._repos().create(
+                    parent=f"projects/{self.project}/locations/{self.location}", repositoryId=repo_id, body=body
+                ).execute(num_retries=3, http=fresh_http())
+                created = True
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) != 409:
+                    raise
+        self.tag(repo_id, retry=created)
+        self._until(repo_id, lambda: self.get(repo_id, missing=()), codes=(403, 404))
+        return created
 
     def bind(self, repo_id, role, member) -> bool:
         res, repos = self._name(repo_id), self._repos()
-        pol = repos.getIamPolicy(resource=res).execute(num_retries=3, http=fresh_http())
+        pol = self._until(repo_id, lambda: repos.getIamPolicy(resource=res).execute(num_retries=3, http=fresh_http()))
         if not Iam._add(pol, role, member):
             return False
-        repos.setIamPolicy(resource=res, body={"policy": pol}).execute(num_retries=3, http=fresh_http())
+        self._until(
+            repo_id,
+            lambda: repos.setIamPolicy(resource=res, body={"policy": pol}).execute(num_retries=3, http=fresh_http()),
+        )
         return True
 
     def delete(self, repo_id) -> bool:
+        if self.exists(repo_id) is False:
+            return False
+        tagged = self.tag(repo_id)  # a repository made before the tag existed becomes the console's to delete
         try:
-            self._repos().delete(name=self._name(repo_id)).execute(num_retries=3, http=fresh_http())
+            call = lambda: self._repos().delete(name=self._name(repo_id)).execute(num_retries=3, http=fresh_http())  # noqa: E731
+            if tagged == "bound":
+                self._until(repo_id, call)
+            else:
+                call()
             return True
         except Exception as e:  # noqa: BLE001
             if http_status(e) != 404:

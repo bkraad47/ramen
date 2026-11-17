@@ -6,6 +6,7 @@ import time
 
 import httpx
 
+from . import ledger
 from .env import console_verify, env, no_cloud, strip
 
 ROUTES = {
@@ -118,6 +119,7 @@ class Console:
         headers = {API_KEY_HEADER: api_key} if api_key else {}
         self.http = httpx.Client(base_url=strip(base), verify=console_verify(), timeout=timeout, headers=headers)
         self.http.event_hooks["request"].append(self._csrf)  # cookie sessions must echo the csrf cookie (CONTRACTS §9)
+        self.http.event_hooks["response"].append(ledger.observe)  # S7: what this run creates is removed at its end
         self.email: str | None = None
 
     def _csrf(self, request: httpx.Request) -> None:

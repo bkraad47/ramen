@@ -116,8 +116,9 @@ little later still: poll, do not judge early.
 `skillspector_engine = "skillspector"` in `terraform.tfvars` (all `none` by default) become the chart's
 `otel.collector`, `evals.engine` and `skillspector.engine` through `engines_set`: a try-out trace UI
 ([Telemetry](telemetry.md)), the promptfoo server every evals run is shared with ([Evals](evals.md)), and
-SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without
-auth or an edge route (`kubectl port-forward`); turning one on changes only that engine's objects.
+SkillSpector scans of every group's skills ([SkillSpector](skillspector.md)). Each lives in `ramen-system` without an
+edge route (`kubectl port-forward`), behind the install's engines sign-in (Secret `ramen-engines`, D92;
+[Trust the install CA](trust-ca.md)); turning one on changes only that engine's objects.
 
 ## 5. The first zone, group and deploy
 
@@ -132,8 +133,8 @@ certificate is publicly trusted, so there is no warning.
    `ramen-zone: a` headers, and starts the first canary deploy of `demo/prod` there (the job is on the group page;
    its log reads sync, canary, reload, smoke, stable).
 4. Accept the group's LLM configs at **/groups/demo/configs** (the demo repo ships `mcp/llm-config/`; without
-   that the key is refused with `403 configs not accepted`), then **open the group → MCP auth keys → Generate key**. The key is shown once. Workers learn a new key on the next
-   deploy, so **Deploy (canary)** again after generating one.
+   that the key is refused with `403 configs not accepted`), then **open the group → MCP auth keys → Generate key**. The key is shown once; the console pushes it to the
+   running workers at once (1.0.0, D92), no deploy needed.
 
 <figure markdown>
 ![The group page on GCP](../img/group.png){ .ramen-shot }
@@ -308,8 +309,9 @@ Caveats:
 ## Teardown
 
 ```sh
-# in the console: delete the group, which removes its namespaces, service accounts, routes and Cloud Armor policy
-helm uninstall ramen -n ramen-system
+# in the console: delete the group, which removes its namespaces, service accounts, routes, Cloud Armor policy and image repository
+CTX=$(kubectl config current-context)                # check it is this install's cluster first
+helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # releases the Gateway's forwarding rule and the static IP
 terraform -chdir=deploy/terraform/gcp destroy
 scripts/gcp_test_project.sh delete            # deletes the whole project
 ```
@@ -321,6 +323,12 @@ them. If you keep the project, delete them after the destroy (Secret Manager has
 ```sh
 gcloud secrets list --filter='labels.ramen=console' --format='value(name)' | xargs -n1 gcloud secrets delete --quiet
 ```
+
+Uninstall the chart before `terraform destroy`: the Gateway's forwarding rule holds the static IP, and the destroy
+stalls on it otherwise. Satellites go first (their clean-up order above). The
+[`deploy-gcp` skill](skills.md) lists every leftover by name with its `scripts/leftovers.sh`: console and group
+secrets, group image repositories `ramen-groups-<group>`, network endpoint groups and backend services `ramen-…`,
+Cloud Armor policies, service accounts and PVC disks.
 
 Run `terraform destroy` before deleting the project. If you skip it, the local `terraform.tfstate` still describes
 the deleted project, and the next `terraform apply` in this directory plans against it: move or delete the state

@@ -20,7 +20,7 @@ Vault at cents. Tear it down when you are done.
 
 ## Prerequisites
 
-`az` logged in to the subscription, `terraform` 1.6 or newer, `helm` 3.12 or newer, `kubectl` (`az aks
+`az` logged in to the subscription, `terraform` 1.6 or newer, `helm` 3.14 or newer (`--reset-then-reuse-values`), `kubectl` (`az aks
 install-cli`), `docker` with buildx (or `crane`), `grpcurl`, `uv`, `openssl`, `python3`.
 
 A new subscription has the resource providers unregistered, and AKS fails with `MissingSubscriptionRegistration`
@@ -301,7 +301,8 @@ Caveats:
 
 ```sh
 # in the console: delete the group, which removes its namespaces, identities, role assignments and routes
-helm uninstall ramen -n ramen-system
+CTX=$(kubectl config current-context)                # check it is this install's cluster first
+helm --kube-context "$CTX" uninstall ramen -n ramen-system --wait   # the Envoy Service releases the static public IP
 terraform -chdir=deploy/terraform/azure destroy
 ```
 

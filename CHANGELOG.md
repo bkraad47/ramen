@@ -1,6 +1,11 @@
 # Changelog
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
+## [Unreleased]
+- **Release no longer publishes to Smithery.** Smithery shut down its API, CLI and accounts on 2026-10-31; the 1.0.0
+  release's publish was refused (403 "Updating servers has been removed"). The `smithery` job is gone; the MCPB bundle
+  is still attached to every GitHub release for Claude Desktop, and the `bkraad47/ramen` Smithery listing is not updated.
+
 ## [1.0.0] — released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS
 
 ### Known issues (fixed first in 1.0.1)

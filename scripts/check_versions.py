@@ -36,7 +36,7 @@ TEXT = {
     # the official MCP registry entry (io.github.bkraad47/ramen): a published version is immutable, so a release that
     # forgets this keeps the old listing as "latest"
     "server.json": r"^\s*\"version\":\s*\"([^\"]+)\"",
-    # the Smithery bundle (bkraad47/ramen): same reason
+    # the MCPB bundle attached to the GitHub release
     "mcpb/manifest.json": r"^  \"version\":\s*\"([^\"]+)\"",
     "mcpb/pyproject.toml": r"^version\s*=\s*\"([^\"]+)\"",
 }

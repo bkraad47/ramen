@@ -223,7 +223,7 @@ the file contract and local testing: [The MCP repo](https://bkraad47.github.io/r
 | [`runtime-py/`](runtime-py/) | Python 3.12 runtime (packages, apps, skills, MRTR, tasks, guardrails) |
 | [`proto/`](proto/) | `ramen/v1/mcp.proto`, `admin.proto` |
 | [`deploy/`](deploy/) | compose, kind, Helm charts (console, worker, satellite), Terraform (GCP, AWS, Azure and satellites), CloudFormation, the SkillSpector image |
-| [`glama/`](glama/), [`mcpb/`](mcpb/) | the directory image and the Smithery bundle; both pin the bridge |
+| [`glama/`](glama/), [`mcpb/`](mcpb/) | the directory image and the MCPB bundle for Claude Desktop; both pin the bridge |
 | [`skills/`](skills/) | [Agent Skills](https://agentskills.io) for any coding agent: deploy on GCP, AWS and Azure, rotate keys, backup and restore, scale, test, iterate |
 | [`tests/`](tests/) | conformance, e2e, kind, cloud and load suites |
 | [`docs/`](docs/) | the site's sources; [`docs/CONTRACTS.md`](docs/CONTRACTS.md) is binding for every component |

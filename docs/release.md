@@ -43,7 +43,7 @@ beyond GitHub (`github.actor == 'bkraad47'`); forks and other pushers stop after
 |---|---|
 | GitHub release | zips, the MCPB bundle `ramen-<version>.mcpb`, and `ramen-node-linux-amd64.zip` (the latest worker, no version in the name) |
 | [Official MCP registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.bkraad47/ramen) | `server.json` published with GitHub OIDC; no secret |
-| [Smithery](https://smithery.ai/servers/bkraad47/ramen) | the MCPB bundle, with the `SMITHERY_API_KEY` repository secret (skipped with a warning when unset) |
+| [Smithery](https://smithery.ai/servers/bkraad47/ramen) | not updated: Smithery shut down its API, CLI and accounts on 2026-10-31 and refuses updates (403), so the release no longer publishes there (1.0.0) |
 | [Glama](https://glama.ai/mcp/servers/bkraad47/ramen) | rebuilds from the repository and downloads the latest release's worker; nothing to publish |
 | Docker Hub `bkraad47/ramen-worker`, `bkraad47/ramen-console` and GHCR `ghcr.io/bkraad47/…` (0.7.0) | multi-arch images tagged `<version>` and `latest`; GHCR with the workflow's own token, Docker Hub with `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (skipped with a warning when unset). Any cloud can pull them straight, without `make push`; since 0.8.0 the local compose stack pulls them by default (`make up BUILD=1` builds from source) |
 | Demo repo tag | `ramen-demo-mcp-group` is tagged `v<version>` with the release it was verified against (`VERSION` file in the repo) |

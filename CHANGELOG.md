@@ -3,6 +3,9 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+- **The MCP user's page fills in the commands.** Each of the person's groups lists its deployed zones with ready-to-paste
+  Claude Code / bridge / stdio-client commands — the console's OAuth client id and the zone filled in, a satellite zone at
+  its own host — instead of `<zone>` / `<client id>` placeholders; the same whichever sign-in (password, Entra, Google).
 - **A worker at 250m serves about twice the calls (D80 load bound).** The b34–b36 load runs missed p95 < 1.5 s on EKS
   `steady` (27 rps, 1927 ms) and on the GKE and EKS `scale` ramps; worker CPU stays 250m (D83). The runtime spent
   4.2 ms CPU on a call to a tool with a static NeMo rail and the node 0.35 ms. Fixed: each tool's JSON Schemas are

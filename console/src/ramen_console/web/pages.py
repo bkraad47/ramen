@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request
 
@@ -49,13 +50,17 @@ def render(request: Request, name: str, **ctx):
 async def dashboard(request: Request, p: Principal = Depends(require("mcp_user"))):
     if p.role == "mcp_user":  # 0.5.92: their only page — which groups they may connect a client to, and how
         # §28.1: a zone on a satellite is reached at that cluster's host
+        all_zones = await svc(request).zones()
         satellites = [
-            (z["id"], z["host"])
-            for z in await svc(request).zones()
-            if z.get("host") and set(z.get("groups") or []) & set(p.groups)
+            (z["id"], z["host"]) for z in all_zones if z.get("host") and set(z.get("groups") or []) & set(p.groups)
         ]
         return render(
-            request, "mcp_user.html", groups=sorted(p.groups), public_url=base_url(request), satellites=satellites
+            request,
+            "mcp_user.html",
+            groups=sorted(p.groups),
+            public_url=base_url(request),
+            satellites=satellites,
+            connect=await mcp_user_connect(request, sorted(p.groups), all_zones),
         )
     return render(request, "dashboard.html")
 
@@ -257,6 +262,29 @@ async def guardrail_models_partial(
     return render(
         request, "partials/guardrail_models.html", group=g, gg=gg, guardrail_models=models, kind=kind, llm=llm
     )
+
+
+async def mcp_user_connect(request: Request, groups: list[str], all_zones: list[dict]) -> dict:
+    """1.0.0: the MCP user's ready-to-paste commands — each group's deployed zones and the console's OAuth client id
+    (a public PKCE client id) filled in, a satellite zone at its own host (§28.1). The same for every identity
+    provider: the scope and the client are Ramen's."""
+    from . import signin_guide
+
+    s, base = svc(request), base_url(request)
+    host = urlsplit(base).hostname or "<host>"
+    client = signin_guide.pick_client(await request.app.state.oauth_server.clients())
+    hosts = {z["id"]: z["host"] for z in all_zones if z.get("host")}
+    out = []
+    for g in groups:
+        zones = sorted({z for e in await s.environments(g) for z in e.get("zones") or []})
+        rows = []
+        for z in zones:
+            zh = hosts.get(z) or host
+            url = base if zh == host else f"https://{zh}"
+            boxes = signin_guide.oauth_boxes(url, zh, g, z, client["client_id"], base) if client else []
+            rows.append({"zone": z, "host": zh, "url": f"{url}/mcp", "boxes": boxes})
+        out.append({"group": g, "zones": rows})
+    return {"client": client["client_id"] if client else None, "groups": out}
 
 
 async def mcp_signin(request: Request, group: str, envs: list[dict]) -> dict:

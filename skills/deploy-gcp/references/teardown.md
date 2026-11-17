@@ -18,7 +18,7 @@ and check `kubectl --context "$CTX" get ns ramen-system` before anything else).
 4. **Terraform.** `terraform -chdir=deploy/terraform/gcp destroy`. It does not give `roles/editor` back to the
    default compute account (by design).
 5. **Leftovers.** `bash <skill>/scripts/leftovers.sh $PROJECT $REGION [satellite regions…]` lists, by name only,
-   what the console made outside Terraform: its own secrets `ramenc-…` (label `ramen=console`: identity-provider,
+   what the console made outside Terraform: its own secrets `ramenc-…` (label `ramen=console`: the install CA key, identity-provider,
    SMTP, LLM provider and GitHub App secrets), group secrets `ramen-<group>-…`, group image repositories, network
    endpoint groups and backend services named `ramen-…`, Cloud Armor policies, `ramen-*` service accounts, PVC
    disks. Show the list to the human; delete only after their OK (Secret Manager has no recovery window), e.g.

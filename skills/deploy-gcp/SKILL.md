@@ -19,6 +19,9 @@ judge early.
 - Never print a secret: generate the admin password, Fernet key and admin key inline in the Helm command; read
   one back into a shell variable only when a step needs it (`PW=$(kubectl … | base64 -d)`), never `echo` it. Tell
   the human the `kubectl get secret` command instead of showing the value.
+- Give this install its own kubeconfig: `export KUBECONFIG=$HOME/.kube/ramen-gcp` before `gcloud container clusters get-credentials`.
+  A shared `~/.kube/config` keeps contexts of older clusters under the same names; a teardown run against a stale
+  one leaves the load balancer behind and `terraform destroy` stalls on it.
 - Pin the kube context. Right after `get-credentials`, `CTX=$(kubectl config current-context)`; pass
   `--context "$CTX"` to every `kubectl` and `--kube-context "$CTX"` to every `helm`. Another terminal or a satellite
   can switch the current context under you.

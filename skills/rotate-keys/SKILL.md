@@ -25,7 +25,7 @@ truth: `docs/wiki/api-keys.md`, `docs/wiki/users-access.md`, `docs/wiki/transpor
 
 ## A. `rmk_` MCP keys (a group's agents and clients)
 1. Mint: `POST $U/groups/<g>/mcp-keys {"name":"<client>-<date>"}` → `{key, pushed, pending?}`. The console pushes it to
-   the group's running workers at once (no deploy). `403 configs not accepted`: the minting person must accept the
+   the group's running workers (no deploy; the zone's workers roll to take it, about a minute). `403 configs not accepted`: the minting person must accept the
    group's LLM configs first (`POST $U/groups/<g>/configs/accept {"version": …}`, version from
    `/.well-known/ramen-policy?group=<g>&zone=<z>`).
 2. The owner switches the client. 3. Revoke: `GET $U/groups/<g>/mcp-keys` → old `id` →

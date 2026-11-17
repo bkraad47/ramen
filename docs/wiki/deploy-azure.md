@@ -41,7 +41,7 @@ VMs list zones, and some refuse older sizes (`The VM size of Standard_B2s is not
 
 ```hcl
 location   = "westus2"
-node_size  = "Standard_B2s_v2"   # the default; the error message lists the sizes your subscription allows
+node_size  = "Standard_B2s_v2"   # the default; without quota for it try Standard_D2ls_v6 (the error lists what you may use)
 node_max   = 2                   # a 4-core quota fits two 2-core nodes
 node_zones = []                  # no availability zones for AKS in this subscription
 ```

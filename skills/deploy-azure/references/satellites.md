@@ -12,7 +12,7 @@ az acr show -n $($TF output -raw acr | cut -d. -f1) --query id -o tsv           
 for o in vnet_id vnet_name vnet_resource_group; do $TF output -raw $o; echo; done      # home_vnet_*
 cd deploy/terraform/azure-satellite && cp terraform.tfvars.example terraform.tfvars    # subscription_id, location = $SAT, the values above
 terraform init && terraform apply
-$(terraform output -raw kubeconfig_command); SCTX=$(kubectl config current-context)    # admin credentials
+$(terraform output -raw kubeconfig_command) --file "$KUBECONFIG"; SCTX=$(kubectl config current-context)    # admin credentials
 cd ../../..
 kubectl --context "$SCTX" create ns ramen-system
 kubectl --context "$SCTX" label ns ramen-system ramen.io/routes=true

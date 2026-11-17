@@ -17,6 +17,9 @@ applies this path on a real account. Budget about 30 minutes, most of it the EKS
 ## Rules
 - Never print a secret or an account id into chat, tickets or commits. Generate the three console secrets inline in
   the Helm command; read one back into a shell variable only when a step needs it; never `echo` it.
+- Give this install its own kubeconfig: `export KUBECONFIG=$HOME/.kube/ramen-aws` before `aws eks update-kubeconfig`.
+  A shared `~/.kube/config` keeps contexts of older clusters under the same names; a teardown run against a stale
+  one leaves the load balancer behind and `terraform destroy` stalls on it.
 - Pin the kube context: right after `update-kubeconfig`, `CTX=$(kubectl config current-context)`; pass
   `--context "$CTX"` / `--kube-context "$CTX"` everywhere. Check `aws sts get-caller-identity` is the intended
   account before every apply and destroy.

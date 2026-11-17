@@ -45,7 +45,8 @@ Without it, minting a key answers `403 configs not accepted`.
 K=$(mktemp); chmod 600 "$K"; api POST /groups/demo/mcp-keys '{"name":"first"}' > "$K"
 python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print("pushed:",d.get("pushed"),"pending:",d.get("pending"))' "$K"
 ```
-The console pushes the key to the running workers at once (D92); no deploy needed. A `pending` zone gets it from the
+The console pushes the key to the running workers (D92), no deploy needed: the zone's workers roll to take it, so
+it works within about a minute (15–60 s measured) — wait for a few successful calls in a row before relying on it. A `pending` zone gets it from the
 background retry. Hand the key (`"key"` in `$K`) to the human once, then delete `$K`.
 
 ## 5. An `rmn_` API key for automation (optional)

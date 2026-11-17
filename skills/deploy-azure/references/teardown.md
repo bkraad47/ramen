@@ -1,7 +1,7 @@
 # Teardown on Azure, in order
 
 Only on an explicit request. Check `az account show --query name -o tsv` and that `CTX` is the home cluster
-(`$(terraform -chdir=deploy/terraform/azure output -raw kubeconfig_command); CTX=$(kubectl config current-context)`).
+(`$(terraform -chdir=deploy/terraform/azure output -raw kubeconfig_command) --file "$KUBECONFIG"; CTX=$(kubectl config current-context)`).
 
 1. **Satellites first**: [satellites.md](satellites.md) "Teardown".
 2. **Groups.** As a super admin, `DELETE /api/v1/groups/<group>` for each: removes the zone namespaces, zone and

@@ -134,7 +134,7 @@ certificate is publicly trusted, so there is no warning.
    its log reads sync, canary, reload, smoke, stable).
 4. Accept the group's LLM configs at **/groups/demo/configs** (the demo repo ships `mcp/llm-config/`; without
    that the key is refused with `403 configs not accepted`), then **open the group → MCP auth keys → Generate key**. The key is shown once; the console pushes it to the
-   running workers at once (1.0.0, D92), no deploy needed.
+   running workers (1.0.0, D92), no deploy needed; the zone's workers roll to take it, so allow about a minute.
 
 <figure markdown>
 ![The group page on GCP](../img/group.png){ .ramen-shot }

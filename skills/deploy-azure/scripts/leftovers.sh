@@ -14,5 +14,6 @@ show() { # <label> <az args...>
 show "resource groups (ramen*, MC_ramen*)" group list --query "[?starts_with(name,'ramen') || starts_with(name,'MC_ramen')].name"
 show "soft-deleted Key Vaults (ramen*)" keyvault list-deleted --query "[?starts_with(name,'ramen')].name"
 show "AKS clusters (ramen*)" aks list --query "[?starts_with(name,'ramen')].name"
+show "any other resource named ramen* (public IPs, disks, registries, vaults, identities)" resource list --query "[?contains(name,'ramen')].[type,name]"
 [ "$found" = 0 ] && echo "nothing left" || echo "leftovers above: delete them only with the human's OK"
 exit "$found"

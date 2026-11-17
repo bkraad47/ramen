@@ -17,6 +17,9 @@ About 30 minutes; Terraform about fifteen.
 ## Rules
 - Never print a secret. `terraform output helm_set` and `redis_url` are sensitive (they carry the Managed Redis
   key): expand them inline in the Helm command, never `echo` or paste them. Generate the three console secrets inline.
+- Give this install its own kubeconfig: `export KUBECONFIG=$HOME/.kube/ramen-azure` before `az aks get-credentials`.
+  A shared `~/.kube/config` keeps contexts of older clusters under the same names; a teardown run against a stale
+  one leaves the load balancer behind and `terraform destroy` stalls on it.
 - Pin the kube context: after `get-credentials`, `CTX=$(kubectl config current-context)`; `--context "$CTX"` /
   `--kube-context "$CTX"` on every call. Check `az account show --query name -o tsv` before applies and destroys.
 - `terraform apply` is billable: plan, summarise, get the human's OK unless the request already said so.
@@ -27,7 +30,8 @@ About 30 minutes; Terraform about fifteen.
    `for ns in Microsoft.ContainerService Microsoft.Compute Microsoft.Network Microsoft.Storage Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.ContainerRegistry Microsoft.OperationalInsights; do az provider register -n $ns --wait; done`.
    Check quota: `az vm list-usage --location <location> -o table` (4 free cores in the node size's family).
 2. **Infrastructure.** `cd deploy/terraform/azure && cp terraform.tfvars.example terraform.tfvars`: `subscription_id`,
-   `location`; `node_size = "Standard_B2s_v2"` (the error lists the sizes a subscription allows); `node_zones = []`
+   `location`; `node_size = "Standard_B2s_v2"` (the default; many subscriptions have no quota for it — `Standard_D2ls_v6` worked
+   in the 1.0.0 runs; the error lists the sizes a subscription allows); `node_zones = []`
    when AKS answers `AvailabilityZoneNotSupported` (zones then are logical, `RAMEN_AZURE_ZONAL=0`); `acme_email`;
    engines as on the other clouds; `managed_redis = true` (default: Balanced_B0, TLS on 10000). `terraform init &&
    terraform plan -out=ramen.plan`, summarise, `terraform apply ramen.plan`; a `404` on the federated identity
@@ -39,7 +43,7 @@ About 30 minutes; Terraform about fifteen.
 4. **Console.**
    ```sh
    TF="terraform -chdir=deploy/terraform/azure"; V=$(cat VERSION)
-   $($TF output -raw kubeconfig_command); CTX=$(kubectl config current-context)
+   $($TF output -raw kubeconfig_command) --file "$KUBECONFIG"; CTX=$(kubectl config current-context)
    kubectl --context "$CTX" create ns ramen-system
    kubectl --context "$CTX" label ns ramen-system ramen.io/routes=true
    helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system $($TF output -raw helm_set) \

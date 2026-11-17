@@ -38,7 +38,8 @@ def zone_targets() -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def zone_regions() -> dict[str, str]:
-    """`RAMEN_KIND_NODE_ZONES=a=us-central1-a,b=us-central1-b` → the zone record's `region`, i.e. the node label each zone pins to."""
+    """`RAMEN_KIND_NODE_ZONES=a=us-central1-a,b=us-central1-b` → the zone record's `region`, i.e. the node label
+    each zone pins to."""
     return _pairs(E.env("RAMEN_KIND_NODE_ZONES", ""))
 
 

@@ -12,6 +12,12 @@ guardrails, client policies enforced at every sign-in, telemetry per group and u
 <a href="https://pypi.org/project/ramen-mcp-bridge/"><img height="20" src="https://img.shields.io/pypi/v/ramen-mcp-bridge?color=F26B3A&label=ramen-mcp-bridge&style=flat" alt="PyPI bridge"></a>
 <a href="LICENSE"><img height="20" src="https://img.shields.io/badge/license-BSD--3--Clause-F26B3A?style=flat" alt="license"></a>
 <a href="https://modelcontextprotocol.io"><img height="20" src="https://img.shields.io/badge/MCP-2026--07--28%20%2B%202025--06--18-2B2622?style=flat" alt="MCP"></a>
+<br>
+<a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.bkraad47/ramen"><img height="20" src="https://img.shields.io/badge/MCP%20registry-io.github.bkraad47%2Framen-2B2622?style=flat" alt="MCP registry"></a>
+<a href="https://bkraad47.github.io/ramen/get-started/"><img height="20" src="https://img.shields.io/badge/runs%20on-GKE%20%C2%B7%20EKS%20%C2%B7%20AKS-2B2622?style=flat" alt="runs on GKE, EKS and AKS"></a>
+<a href="https://bkraad47.github.io/ramen/how-it-works/"><img height="20" src="https://img.shields.io/badge/governance-NeMo%20Guardrails%20%C2%B7%20promptfoo%20%C2%B7%20SkillSpector%20%C2%B7%20Phoenix-F26B3A?style=flat" alt="governance: NeMo Guardrails, promptfoo, SkillSpector, Phoenix"></a>
+<a href="https://github.com/bkraad47/ramen/stargazers"><img height="20" src="https://img.shields.io/github/stars/bkraad47/ramen?color=F26B3A&style=flat" alt="stars"></a>
+<a href="https://github.com/bkraad47/ramen/discussions"><img height="20" src="https://img.shields.io/github/discussions/bkraad47/ramen?color=2B2622&label=discussions&style=flat" alt="discussions"></a>
 </p>
 
 <p align="center"><a href="https://glama.ai/mcp/servers/bkraad47/ramen"><img width="380" height="200" src="https://glama.ai/mcp/servers/bkraad47/ramen/badge" alt="Ramen on Glama: score, tools and listing"></a></p>

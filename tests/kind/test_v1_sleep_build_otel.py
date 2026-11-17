@@ -845,11 +845,33 @@ def test_the_other_zone_did_not_sleep(admin, sleepy, zone_targets, group):
         assert text_of(Modern(h).call("plain_tool", {"text": "awake"})) == "awake"
 
 
+def wake_logs(ns: str) -> str:
+    """The zone's worker logs (every container, previous ones too) and the console's revocation/reload lines of the
+    last minutes: what a call that fails during a wake needs explained (a runtime restart mid-call, 1.0.1)."""
+    out = []
+    for args in (
+        ("logs", "-n", ns, "-l", "app=worker", "--all-containers", "--prefix", "--since=6m", "--tail=150"),
+        ("logs", "-n", ns, "-l", "app=worker", "--all-containers", "--prefix", "--previous", "--tail=60"),
+        ("logs", "-n", "ramen-system", "deploy/console", "--since=6m", "--tail=400"),
+    ):
+        try:
+            text = kube.kubectl(*args)
+        except Exception as e:  # noqa: BLE001 - diagnostics only
+            text = f"({e})"
+        if args[2] == "ramen-system":
+            text = "\n".join(line for line in text.splitlines() if any(w in line for w in ("revoc", "reload", ns)))
+        out.append(f"--- kubectl {' '.join(args)}\n{text}")
+    return "\n".join(out)
+
+
 def test_a_call_through_the_edge_wakes_the_zone_and_is_answered(admin, sleepy, zone_targets, group):
     zone, ns = sleepy["zone"], sleepy["ns"]
     began, t0 = time.time(), time.monotonic()
     with http_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as h:
-        result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
+        try:
+            result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
+        except Exception as e:  # 1.0.0 known issue (1.0.1): keep the evidence of a runtime restart during the wake
+            raise AssertionError(f"the waking call failed after {time.monotonic() - t0:.0f}s: {e}\n{wake_logs(ns)}")
     took = time.monotonic() - t0
     assert text_of(result) == "good morning", result
     assert took <= WAKE_TIMEOUT + 5, f"answered within the wake timeout: {took:.0f}s"

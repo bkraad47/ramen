@@ -1,7 +1,9 @@
 # Teardown on AWS, in order
 
 Only on an explicit request. Check `aws sts get-caller-identity` is the install's account and `CTX` is the home
-cluster (`aws eks update-kubeconfig --name ramen --region $REGION; CTX=$(kubectl config current-context)`).
+cluster (`export KUBECONFIG=$HOME/.kube/ramen-aws; aws eks update-kubeconfig --name ramen --region $REGION;
+CTX=$(kubectl config current-context)`). Log in again first (`aws login`): a session that lapses mid-destroy leaves
+the cluster and VPC behind.
 
 1. **Satellites first**: [satellites.md](satellites.md) "Teardown".
 2. **Groups.** As a super admin, `DELETE /api/v1/groups/<group>` for each: removes the zone namespaces and their

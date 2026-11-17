@@ -33,7 +33,7 @@ jobs:
           ls -la dist
       - uses: actions/setup-node@v4
         with: { node-version: "24" }
-      - name: MCPB bundle (Smithery, Claude Desktop)
+      - name: MCPB bundle (Claude Desktop)
         run: npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "dist/ramen-$VER.mcpb"
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -58,26 +58,6 @@ jobs:
           # a published version is immutable: re-running a release must not fail on it
           if ! out=$(./mcp-publisher publish 2>&1); then echo "$out"; grep -q "duplicate version" <<<"$out" || exit 1; fi
           echo "$out"
-
-  # Smithery (bkraad47/ramen) from the MCPB bundle; needs the SMITHERY_API_KEY repo secret.
-  smithery:
-    needs: build
-    # only bkraad47's own releases publish to the registries (not forks, not other pushers)
-    if: github.repository == 'bkraad47/ramen' && github.actor == 'bkraad47'
-    runs-on: ubuntu-latest
-    permissions: { contents: read }
-    env:
-      SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "24" }
-      - name: Publish
-        run: |
-          if [ -z "$SMITHERY_API_KEY" ]; then echo "::warning::SMITHERY_API_KEY not set; Smithery not published"; exit 0; fi
-          VER=$(cat VERSION)
-          npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "ramen-$VER.mcpb"
-          npx -y @smithery/cli@4.11.1 mcp publish "./ramen-$VER.mcpb" -n bkraad47/ramen
 
   # Public images (R6, 0.7.0): docker.io/bkraad47/{ramen-worker,ramen-console} and ghcr.io/bkraad47/{...}, linux/amd64 +
   # linux/arm64, tags <version> and latest. Either cloud can pull them straight from the charts (deploy/README.md

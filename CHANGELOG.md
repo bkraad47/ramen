@@ -3,6 +3,9 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
 
 ## [Unreleased]
 
+- **A group's first image build waits for its new build identity.** On Azure the first deploy of a group failed with
+  AADSTS70025 (the federated credential created moments before had not propagated); a build failing with an identity-
+  propagation error is now retried every 30 s for `RAMEN_BUILD_IDENTITY_WAIT_SECS` (300).
 - **The MCP user's page fills in the commands.** Each of the person's groups lists its deployed zones with ready-to-paste
   Claude Code / bridge / stdio-client commands — the console's OAuth client id and the zone filled in, a satellite zone at
   its own host — instead of `<zone>` / `<client id>` placeholders; the same whichever sign-in (password, Entra, Google).

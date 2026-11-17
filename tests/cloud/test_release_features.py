@@ -1154,7 +1154,7 @@ def test_the_config_page_names_the_llm_providers_and_the_evals_ui(admin, evals):
     page = ok(admin.page("/config")).text
     assert "LLM providers" in page, "the §29.1 card"
     assert "Evals UI" in page, "the §29.2 address of the promptfoo server"
-    assert "port-forward deploy/promptfoo 3000:3000" in page, "how a person reaches it"
+    assert "port-forward deploy/promptfoo 3443:3443" in page, "how a person reaches it (D92: the TLS front)"
     if evals["ui"]:
         assert evals["ui"] in page
     assert "anthropic" in page.lower() and "openai" in page.lower()

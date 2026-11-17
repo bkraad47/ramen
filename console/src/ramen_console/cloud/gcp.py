@@ -80,6 +80,15 @@ async def _maybe(v):
     return await v if inspect.isawaitable(v) else v
 
 
+# 1.0.0: what a just-created build identity looks like before it has propagated (Entra federated credential, GCP WIF
+# repository binding, AWS IAM role policy) — a build failing with one of these is retried (`build_image`)
+IDENTITY_PROPAGATION = re.compile(
+    r"AADSTS70025|AADSTS700213|no configured federated identity|No matching federated identity record"
+    r"|artifactregistry\.repositories\.uploadArtifacts\W+denied|not authorized to perform: ecr:",
+    re.IGNORECASE,
+)
+
+
 class GcpCloud(Cloud):
     PROVIDER = "GCP"
 
@@ -1038,8 +1047,21 @@ class GcpCloud(Cloud):
         group's `ramen-build-<group>` and pushes to the group's repository, the answer is the image by digest.
         Raises `BuildError` (its text ends with the last 40 log lines) on a failed or timed-out build."""
         self._use("home")  # §28.2: builds stay in the home cluster
+        # 1.0.0: the group's build identity (and its federated credential / IAM binding) may have been created moments
+        # ago and not yet propagated — Entra answers AADSTS70025/700213, GCP and AWS a permission denial. Retry such a
+        # build for RAMEN_BUILD_IDENTITY_WAIT_SECS (default 300); any other failure fails at once.
+        deadline = time.monotonic() + float(os.environ.get("RAMEN_BUILD_IDENTITY_WAIT_SECS", "300"))
         try:
-            return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
+            while True:
+                try:
+                    return await asyncio.to_thread(self._build, group, tag, dockerfile, files)
+                except BuildError as e:
+                    if not IDENTITY_PROPAGATION.search(f"{e} {e.log}") or time.monotonic() >= deadline:
+                        raise
+                    logging.getLogger("ramen.cloud").info(
+                        "image build %s: build identity not propagated yet, retrying", tag
+                    )
+                    await asyncio.to_thread(time.sleep, 30)
         except (ApiError, BuildError):
             raise
         except Exception as e:  # noqa: BLE001 - upstream failure surfaced as 502, never with secret values

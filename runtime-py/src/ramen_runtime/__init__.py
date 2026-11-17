@@ -18,3 +18,36 @@ def _version() -> str:
 
 
 __version__ = _version()
+
+# the group contract (CONTRACTS §23.3): what tool, resource and prompt code imports
+from .content import audio, image, resource, text  # noqa: E402
+from .context import (  # noqa: E402
+    InputRequired,
+    MissingCapability,
+    client_capabilities,
+    elicit,
+    elicit_url,
+    input_responses,
+    list_roots,
+    progress,
+    request_state,
+    sample,
+)
+
+__all__ = [
+    "InputRequired",
+    "MissingCapability",
+    "__version__",
+    "audio",
+    "client_capabilities",
+    "elicit",
+    "elicit_url",
+    "image",
+    "input_responses",
+    "list_roots",
+    "progress",
+    "request_state",
+    "resource",
+    "sample",
+    "text",
+]

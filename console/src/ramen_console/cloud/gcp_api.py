@@ -212,6 +212,76 @@ class Compute:
         )
         return f"projects/{self.project}/global/securityPolicies/{name}"
 
+    @staticmethod
+    def _later(e) -> bool:
+        """A 400 that means "come back later": the resource is still referenced, or (Gateway-managed backend
+        services, for minutes after a change) "is not ready"."""
+        msg = str(e).lower()
+        return http_status(e) == 400 and ("in use" in msg or "being used" in msg or "not ready" in msg)
+
+    def delete_negs(self, name, attempts=45, delay=20.0) -> list[str]:
+        """D69: delete every zonal network endpoint group called `name` (the NEG controller names them after the
+        zone's namespace). GCP refuses one a backend service still uses, and the Gateway controller keeps that
+        backend service for minutes after the route went: retry `attempts` times, `delay` apart. The zones deleted."""
+        page = (
+            self.api.networkEndpointGroups()
+            .aggregatedList(project=self.project, filter=f"name={name}")
+            .execute(num_retries=3, http=fresh_http())
+        )
+        zones = sorted(
+            scope.rsplit("/", 1)[-1]
+            for scope, v in (page.get("items") or {}).items()
+            if any(g.get("name") == name for g in v.get("networkEndpointGroups") or [])
+        )
+        deleted = []
+        # The Gateway controller drops the backend service from its URL map at once but may never delete it; GCE
+        # refuses to delete one a URL map still references, so trying is safe — a 400 "in use" means wait.
+        for i in range(attempts):
+            try:
+                bs = self.find_backend_service(name, "").get("name") if zones else None
+            except ApiError as e:  # none left: the controller did collect it
+                if e.status_code != 404:
+                    raise
+                bs = None
+            if not bs:
+                break
+            try:
+                self._wait(
+                    self.api.backendServices()
+                    .delete(project=self.project, backendService=bs)
+                    .execute(num_retries=3, http=fresh_http())
+                )
+                break
+            except Exception as e:  # noqa: BLE001
+                if http_status(e) == 404:
+                    break
+                if self._later(e) and i < attempts - 1:
+                    time.sleep(delay)
+                    continue
+                raise
+        for z in zones:
+            for i in range(attempts):
+                try:
+                    op = (
+                        self.api.networkEndpointGroups()
+                        .delete(project=self.project, zone=z, networkEndpointGroup=name)
+                        .execute(num_retries=3, http=fresh_http())
+                    )
+                    if isinstance(op, dict) and op.get("name") and op.get("status") != "DONE":
+                        self.api.zoneOperations().wait(project=self.project, zone=z, operation=op["name"]).execute(
+                            num_retries=3, http=fresh_http()
+                        )
+                    deleted.append(z)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    if http_status(e) == 404:
+                        break
+                    if self._later(e) and i < attempts - 1:
+                        time.sleep(delay)
+                        continue
+                    raise
+        return deleted
+
     def delete_armor(self, name, attempts=24) -> bool:
         """Delete policy `name`; False when it does not exist. GCP refuses a policy still set on a backend service,
         and Gateway-managed ones outlive their namespace for minutes: those are cleared first."""
@@ -333,11 +403,38 @@ class Iam:
         return changed
 
     # resource-level bindings (SEC-08): the console holds no project-level setIamPolicy -------------------------
+    @staticmethod
+    def _shed_deleted(policy: dict) -> bool:
+        """Drop `deleted:` members (a principal deleted while still bound). GCS refuses a policy write that carries
+        one once a principal of that name exists again, for every group that shares the bucket."""
+        before = sum(len(b["members"]) for b in policy.get("bindings", []))
+        for b in policy.get("bindings", []):
+            b["members"] = [m for m in b["members"] if not m.startswith("deleted:")]
+        policy["bindings"] = [b for b in policy.get("bindings", []) if b["members"]]
+        return before != sum(len(b["members"]) for b in policy["bindings"])
+
+    def purge_bucket_member(self, storage, bucket_name, email) -> bool:
+        """Remove the identity from every binding of the bucket, before the identity itself is deleted."""
+        bucket = storage.bucket(bucket_name)
+        pol = bucket.get_iam_policy(requested_policy_version=3)
+        doc = {"bindings": [dict(b) for b in pol.bindings]}
+        member = f"serviceAccount:{email}"
+        had = any(member in b["members"] for b in doc["bindings"])
+        for b in doc["bindings"]:
+            b["members"] = [m for m in b["members"] if m != member]
+        shed = self._shed_deleted(doc)  # also sheds emptied bindings
+        if had or shed:
+            pol.version = 3
+            pol.bindings = doc["bindings"]
+            bucket.set_iam_policy(pol)
+        return had
+
     def grant_bucket_roles(self, storage, bucket_name, email, bindings: list[tuple[str, dict | None]]) -> list[str]:
         """Bind roles on the groups bucket itself (conditions keep them to the group's prefix)."""
         bucket = storage.bucket(bucket_name)
         pol = bucket.get_iam_policy(requested_policy_version=3)
         doc = {"bindings": [dict(b) for b in pol.bindings]}
+        self._shed_deleted(doc)
         if [role for role, cond in bindings if self._add(doc, role, f"serviceAccount:{email}", cond)]:
             pol.version = 3
             pol.bindings = doc["bindings"]
@@ -357,6 +454,7 @@ class Iam:
         bucket = storage.bucket(bucket_name)
         pol = bucket.get_iam_policy(requested_policy_version=3)
         doc = {"bindings": [dict(b) for b in pol.bindings]}
+        self._shed_deleted(doc)
         changed = self._remove(doc, set(roles), f"serviceAccount:{email}")
         if changed:
             pol.version = 3
@@ -487,3 +585,65 @@ class Iam:
         if self._add(pol, "roles/iam.workloadIdentityUser", member):
             sa.setIamPolicy(resource=res, body={"policy": pol}).execute(num_retries=3, http=fresh_http())
         return member
+
+
+class Registry:
+    """§38.2 (D85): the per-group Artifact Registry repositories `ramen-groups-<group>` and their writer binding. The
+    console holds these rights project-wide (Artifact Registry ignores IAM Conditions on the repository name; CONTRACTS
+    §38.2 residual) and no upload right; a group's build identity is the only writer of its own repository."""
+
+    def __init__(self, ar, project, location, attempts=10, delay=2.0):
+        self.ar, self.project, self.location, self.attempts, self.delay = ar, project, location, attempts, delay
+
+    def _name(self, repo_id) -> str:
+        return f"projects/{self.project}/locations/{self.location}/repositories/{repo_id}"
+
+    def _repos(self):
+        return self.ar.projects().locations().repositories()
+
+    def get(self, repo_id, missing=(404,)) -> dict | None:
+        try:
+            return self._repos().get(name=self._name(repo_id)).execute(num_retries=3, http=fresh_http())
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) not in missing:
+                raise
+            return None
+
+    def ensure(self, repo_id, labels: dict[str, str], description: str) -> bool:
+        """Create the DOCKER repository unless it exists; wait until it answers (creation is an operation). True when
+        this call created it. Artifact Registry answers 403, not 404, for a repository that does not exist yet when the
+        caller's get right is conditioned on the repository name (GKE, 1.0.0c) — so 403 means "try to create"; a real
+        refusal then surfaces as the create's own error."""
+        if self.get(repo_id, missing=(403, 404)) is not None:
+            return False
+        body = {"format": "DOCKER", "labels": labels, "description": description}
+        try:
+            self._repos().create(
+                parent=f"projects/{self.project}/locations/{self.location}", repositoryId=repo_id, body=body
+            ).execute(num_retries=3, http=fresh_http())
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 409:
+                raise
+            return False
+        for _ in range(self.attempts):
+            if self.get(repo_id, missing=(403, 404)) is not None:
+                break
+            time.sleep(self.delay)
+        return True
+
+    def bind(self, repo_id, role, member) -> bool:
+        res, repos = self._name(repo_id), self._repos()
+        pol = repos.getIamPolicy(resource=res).execute(num_retries=3, http=fresh_http())
+        if not Iam._add(pol, role, member):
+            return False
+        repos.setIamPolicy(resource=res, body={"policy": pol}).execute(num_retries=3, http=fresh_http())
+        return True
+
+    def delete(self, repo_id) -> bool:
+        try:
+            self._repos().delete(name=self._name(repo_id)).execute(num_retries=3, http=fresh_http())
+            return True
+        except Exception as e:  # noqa: BLE001
+            if http_status(e) != 404:
+                raise
+            return False

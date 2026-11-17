@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}LLM configs of {{ group }}{% endblock %}
+{% block body %}
+<div class="card"><p>Group <b>{{ group }}</b> ships settings for your LLM tools from its repo (<code>mcp/llm-config/</code>), version <code>{{ c.version }}</code>{% if c.manifest.description %}: {{ c.manifest.description }}{% endif %}. When you sign in with the Ramen bridge it writes them into the files below on your machine and keeps them there; Ramen's workers refuse calls from a tool that does not carry this version. Every file is shown in full, exactly as the repo holds it.</p>
+{% if c.error %}<p class="error">This version does not validate ({{ c.error }}); the group admin must fix the repo and deploy before anyone can accept it.</p>
+{% elif accepted == c.version %}<p><span class="badge ok">accepted this version</span>{% if next != '/' %} <a href="{{ base }}{{ next }}">Continue</a>{% endif %}</p>
+{% else %}<p><span class="badge error">not accepted</span>{% if accepted %} <span class="muted">you accepted version <code>{{ accepted }}</code>; this is a newer one</span>{% endif %}</p>
+<form method="post" action="{{ base }}/groups/{{ group }}/configs/accept"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ c.version }}"><input type="hidden" name="next" value="{{ next }}"><button type="submit">Accept version {{ c.version }}</button></form>{% endif %}</div>
+{% for t in c.manifest.targets %}<div class="card"><h2 style="margin-top:0"><code>{{ t.path }}</code></h2><p class="muted">{{ t.client }} · from <code>{{ t.file }}</code> · {{ t.format }} · merge <code>{{ t.merge }}</code></p><pre>{{ c.files[t.file]|pre }}</pre></div>{% endfor %}
+{% for name, text in c.files.items() if name not in c.manifest.targets|map(attribute='file') %}<div class="card"><h2 style="margin-top:0"><code>{{ name }}</code> <span class="muted">(not a target)</span></h2><pre>{{ text|pre }}</pre></div>{% endfor %}
+<div class="card"><h2 style="margin-top:0"><code>manifest.yaml</code></h2><pre>{{ manifest_text|pre }}</pre></div>
+{% endblock %}

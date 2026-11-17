@@ -1,5 +1,5 @@
 site_name: Ramen
-site_description: Multizone, highly available MCP server for GKE, EKS and AKS. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, guardrails, secrets, roles, Entra ID and Google Workspace sign-in, and autoscaling. Rust node, Python runtime, FastAPI console.
+site_description: Multizone, highly available MCP server for GKE, EKS and AKS. A git repo of Python tools, apps and skills becomes a fleet of MCP workers (MCP 2026-07-28) with canary deploys, evals, skill scans, guardrails, client policies enforced at sign-in, telemetry per group and user, roles, Entra ID and Google Workspace sign-in, and autoscaling. Rust node, Python runtime, FastAPI console.
 site_url: https://bkraad47.github.io/ramen/
 repo_url: https://github.com/bkraad47/ramen
 repo_name: bkraad47/ramen
@@ -33,7 +33,7 @@ theme:
     - content.code.copy
 extra_css: [stylesheets/ramen.css]
 extra:
-  version_current: 0.8.0
+  version_current: 1.0.0
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/bkraad47/ramen
@@ -58,15 +58,27 @@ plugins:
 nav:
   - Home: index.md
   - Get started: get-started.md
-  - How it works: how-it-works.md
+  - Deploy your first group: first-group.md
+  - Concepts:
+      - How it works: how-it-works.md
+      - Architecture: architecture/index.md
+      - Roles: roles.md
+      - MCP features: wiki/mcp-features.md
+      - Threat model, security and isolation: threat-model.md
   - Wiki:
       - Overview: wiki/index.md
       - Deploy on GCP: wiki/deploy-gcp.md
       - Deploy on AWS: wiki/deploy-aws.md
       - Deploy on Azure: wiki/deploy-azure.md
+      - IAM and network on GCP: wiki/iam-network-gcp.md
+      - IAM and network on AWS: wiki/iam-network-aws.md
+      - IAM and network on Azure: wiki/iam-network-azure.md
+      - Trust the install CA and enforce HTTPS: wiki/trust-ca.md
       - Groups, zones and regions: wiki/groups-zones.md
       - Autoscaling: wiki/autoscaling.md
+      - Sleeping workers: wiki/sleeping-workers.md
       - The MCP repo, structure and local development: wiki/mcp-repo.md
+      - Worker images: wiki/worker-images.md
       - Secrets at runtime: wiki/secrets.md
       - Users and access: wiki/users-access.md
       - Connect a client with OAuth: wiki/connect-oauth.md
@@ -76,18 +88,22 @@ nav:
       - Throttling with Redis: wiki/throttling.md
       - Entra ID and Google Workspace: wiki/sso.md
       - Guardrails (NeMo or your own policy): wiki/guardrails.md
+      - Multi round-trip requests: wiki/mrtr.md
+      - Tasks: wiki/tasks.md
+      - Telemetry: wiki/telemetry.md
+      - Evals, LLM providers and client policy: wiki/evals.md
+      - SkillSpector scans: wiki/skillspector.md
+      - LLM configs from the group repo: wiki/llm-configs.md
       - Backups: wiki/backups.md
       - Configuration: wiki/configuration.md
   - Changelog: changelog.md
   - Release: release.md
   - Reference:
       - Transport, hop by hop: wiki/transport.md
-      - Threat model: threat-model.md
       - Cloud-ops agent skills: wiki/skills.md
       - Interface contracts: CONTRACTS.md
       - Contributing and modifying: contributing.md
       - Version tracker: versions.md
-      - Architecture (v0.7.x): architecture/index.md
       - Architecture history:
           - v0.6.0: architecture/v0.6.0.md
           - v0.4.0: architecture/v0.4.0.md

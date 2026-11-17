@@ -12,10 +12,13 @@ and sets the max; viewers and MCP users see the count only, and an API attempt i
 
 - **Group page → Zone actions**: *Count (min 1)*, *Max (autoscale up to)*, then **Scale workers**. A count outside
   1..max is refused (`422`). Lowering the max under load brings the count down to it at once.
-- **Zones and workers**: one row per group × zone with *Max workers* and **Save max**, and the last decision.
+- **Environments, Zones and Workers → Workers per group**: one row per group × zone with *Max workers* and **Save max**, and the last decision.
 - API: `PUT /api/v1/groups/{g}/zones/{z}/workers {"max_count": 3}`.
 
 A zone created before 0.7.5 starts with max = its current count, so nothing scales until an admin raises it.
+
+The one case with 0 workers is a zone an admin allowed to [sleep](sleeping-workers.md) (1.0, off by default): the
+autoscaler holds while a zone is asleep or waking.
 
 <figure markdown>
 ![Zone actions with count, max and the last autoscale decision](../img/group-autoscale.png){ .ramen-shot }
@@ -23,8 +26,8 @@ A zone created before 0.7.5 starts with max = its current count, so nothing scal
 </figure>
 
 <figure markdown>
-![The Zones and workers page with a max per group and zone](../img/zones.png){ .ramen-shot }
-<figcaption>Zones and workers: live workers with their load, the max per group × zone, and the last decision.</figcaption>
+![The Environments, Zones and Workers page with a max per group and zone](../img/environments.png){ .ramen-shot }
+<figcaption>Environments, Zones and Workers: live workers with their load, the max per group × zone, and the last decision.</figcaption>
 </figure>
 
 ## Who runs it
@@ -58,6 +61,29 @@ and its total call count. The console keeps the previous total per pod to work o
   restarted CPU-saturated workers in the middle of a load test.
 - Bursts shorter than two scheduler intervals do not register a rate; the in-flight signal still catches them.
 
+## Latency trigger (1.0.0c, D83)
+
+The 1.0.0c load runs found the real ceiling of a worker: a `s` pod has a 250m CPU cap, so a zone at the rps target was
+already queueing — calls per second said "fine" while callers waited. Since 1.0.0c every node keeps the latency of the
+calls it served in the **last 60 s** (a ring of per-second buckets, quantiles computed when the console polls) and
+reports it in `Admin/Metrics` as `latency_p50_ms`, `latency_p95_ms` and `latency_n` (the samples in the window).
+The console folds the zone's pods into one **p50** (sample-weighted) and the window's rate (`Σ latency_n / 60`).
+
+| | When |
+|---|---|
+| **Up** | as before, **or** the zone p50 ≥ `RAMEN_AUTOSCALE_P50_MS` (default 500 ms) with at least `RAMEN_AUTOSCALE_MIN_RPS` (default 2) calls/s in the window, so an idle zone's one slow call never scales it on noise; the step is `ceil(ready × p50 / bound)`, at least +1 |
+| **Down** | only when the rate per worker is low **and** the zone p50 is under half the bound, for the same 3 rebalances |
+| **Hold** | a high p50 under the minimum rate holds (and blocks a step down) |
+
+Decisions name the trigger: `up 1→2 — p50 812 ms ≥ 500`, `hold 2→2 — p50 ok, rps low 1/3`,
+`hold 1→1 — p50 812 ms, rps 0.5 < 2: no step up`, `hold 2→2 — p50 300 ms ≥ 250, not low`. The cooldowns, the
+proportional step and the min/max rules are unchanged. A worker older than 1.0.0c reports no latency fields and keeps
+the rps-only decisions and their wording (`low 1/3`).
+
+Where it shows: the Config page's scheduler card and each zone's **Autoscale** row list the three bounds; the zone row
+on the group page shows the live last-minute p50/p95 and rate next to the workers, and the last decision carries the
+p50 it judged.
+
 ## Staying up while nodes come and go
 
 Ramen owns the worker count, so the cluster autoscaler may not evict a worker or the console to empty a node
@@ -86,7 +112,8 @@ which the [warning email digest](configuration.md#email) carries.
 `scripts/load_test.py` drives 64 concurrent `tools/call` through the edge against one zone with max 3 and the
 scheduler every 20 s, in five scenarios: a viewer refused, max 1 never scales, sustained load up to the max and back
 to 1, a 45 s burst, and the max lowered under load. It also polls the console's `/readyz` and fails on anything but
-200. Results from the last round (2026-10-11):
+200. Results from the 0.7.5 round (2026-10-11; the 1.0.0 round is on the
+[Transport page](transport.md#what-is-verified-and-what-is-not)):
 
 | Cloud | Up to 3 | Back to 1 | Calls ok | `429` (back-pressure) | 5xx |
 |---|---|---|---|---|---|
@@ -99,3 +126,15 @@ next worker is ready, which is the intended back-pressure. An earlier round with
 120 s cooldown took 309 s to reach 3 on GKE with 57 % of calls refused; the proportional step and the 30 s up cooldown
 brought that to 2 %. Times are from the start of the run. The kind-cluster proofs for this design are written but were
 not run for 0.7.5.
+
+Since 1.0.0c the release gate is `tests/load/` (`RAMEN_LOAD=1` on top of the cloud test env; `scripts/cloud_load.sh
+<cloud>` runs it and appends the table to the status report): four scenarios through the public edge over Streamable
+HTTP and gRPC with one group key and one OAuth token, every call carrying the policy `_meta` and a telemetry report —
+`steady` (32 clients, 120 s), `mixed` (lists, prompts, the Iris resource and tool, a task round trip, 90 s; the
+slow-by-design task is timed on its own, outside the p95 bound), `burst` (256 clients for 30 s against a scope
+throttle of 1000/min, or half of what the run will spend when that is less: `429`s, never `5xx`) and `scale` (8→64
+clients over 4 min on a zone with max 4 and the scheduler every 20 s: the count grows — the first decision is awaited
+up to 3 min after the ramp — p95 stays under 1.5 s, and the zone is back at 1 after `RAMEN_LOAD_IDLE_SECS` — three −1
+steps of the 120 s cooldown, so allow ≥ 400 s). The row per scenario (requests, rps,
+errors by code, p50/p95/p99, workers before→after, Phoenix span delta, verdict) is what the 1.0.0c report shows under
+"Load tests".

@@ -159,7 +159,7 @@ class LocalConsole:
         a = self.admin
         assert a.create_zone(zone, provider="local", region="local").status_code in (201, 409)
         assert a.create_group(group, E.DEMO_REPO).status_code in (201, 409)
-        assert a.create_environment(group, env, [zone]).status_code in (201, 409)
+        assert a.create_environment(group, env, [zone]).status_code in (201, 409)  # §27.3: the attach deploy is awaited
 
     # --- OAuth 2.1 (§16.3) -------------------------------------------------------------------------------------
     def register_client(self, name: str = "ramen-tests", redirect_uris: list[str] | None = None) -> str:
@@ -174,6 +174,7 @@ class LocalConsole:
         `/oauth/token` → `{access_token, refresh_token, expires_in, ...}`."""
         verifier, challenge = pkce()
         scope = f"mcp:{group}:{zone}"
+        self.admin.accept_configs(group, zone)  # §31.1: no token until the group's LLM configs are accepted
         q = {
             "response_type": "code",
             "client_id": client_id,

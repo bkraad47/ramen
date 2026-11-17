@@ -32,7 +32,7 @@ class AwsClients(GcpClients):
     def __init__(self, region: str):
         super().__init__(project="")
         self.region = region
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # a satellite kube build (§28.2) reads `eks`/`sts` under the same lock
 
     def _cached(self, key, make):
         with self._lock:
@@ -86,6 +86,104 @@ class AwsClients(GcpClients):
     @property
     def eks(self):
         return self._boto("eks")
+
+    @property
+    def ecr(self):  # §38.2
+        return self._boto("ecr")
+
+    def for_cluster(self, region: str, name: str):
+        """§28.2: a satellite EKS cluster's clients — kubernetes bound to it, boto3 clients in its region."""
+        return EksClients(region, name)
+
+
+class Ecr:
+    """§38.2 (D85): the per-group repositories `ramen/groups/<group>/worker`. The console may create and delete only
+    repositories under `ramen/groups/` (Terraform); it never holds a push action."""
+
+    def __init__(self, ecr):
+        self.ecr = ecr
+
+    def ensure(self, name, tags: dict[str, str]) -> tuple[str, bool]:
+        """(repository ARN, created)."""
+        try:
+            r = self.ecr.create_repository(
+                repositoryName=name,
+                imageScanningConfiguration={"scanOnPush": True},
+                tags=[{"Key": k, "Value": v} for k, v in tags.items()],
+            )
+            return r["repository"]["repositoryArn"], True
+        except Exception as e:  # noqa: BLE001
+            if aws_error_code(e) != "RepositoryAlreadyExistsException":
+                raise
+        return self.ecr.describe_repositories(repositoryNames=[name])["repositories"][0]["repositoryArn"], False
+
+    def delete(self, name) -> bool:
+        try:
+            self.ecr.delete_repository(repositoryName=name, force=True)
+            return True
+        except Exception as e:  # noqa: BLE001
+            if aws_error_code(e) != "RepositoryNotFoundException":
+                raise
+            return False
+
+
+def ecr_repo_arn(ref: str, region: str, account: str) -> str | None:
+    """The ECR repository ARN of an image reference in this account and region's registry, else None (public)."""
+    host = f"{account}.dkr.ecr.{region}.amazonaws.com/"
+    if not ref.startswith(host):
+        return None
+    name = ref[len(host) :].split("@", 1)[0]
+    if ":" in name.rsplit("/", 1)[-1]:
+        name = name.rsplit(":", 1)[0]
+    return f"arn:aws:ecr:{region}:{account}:repository/{name}"
+
+
+def eks_token(sts, region: str, cluster: str) -> str:
+    """The aws-iam-authenticator token: `k8s-aws-v1.` + base64url of a presigned `GetCallerIdentity` carrying the
+    `x-k8s-aws-id` header, signed by the console's own credentials (its pod role)."""
+    import base64
+
+    from botocore.signers import RequestSigner
+
+    signer = RequestSigner(
+        sts.meta.service_model.service_id, region, "sts", "v4", sts._request_signer._credentials, sts.meta.events
+    )
+    url = signer.generate_presigned_url(
+        {
+            "method": "GET",
+            "url": f"https://sts.{region}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15",
+            "body": {},
+            "headers": {"x-k8s-aws-id": cluster},
+            "context": {},
+        },
+        region_name=region,
+        expires_in=60,
+        operation_name="",
+    )
+    return "k8s-aws-v1." + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
+
+
+class EksClients(AwsClients):
+    """A satellite EKS cluster's clients: endpoint + CA from `eks.describe_cluster`, the STS-presigned token as
+    bearer (the satellite's access entry maps the console role to the `ramen-console` group)."""
+
+    def __init__(self, region: str, name: str):
+        super().__init__(region)
+        self.name = name
+
+    def _kube(self):
+        if "kube" not in self._c:
+            import base64
+
+            from .gcp_clients import remote_kube
+
+            info = self.eks.describe_cluster(name=self.name)["cluster"]
+            ca = base64.b64decode(info["certificateAuthority"]["data"])
+            sts, region, name = self.sts, self.region, self.name
+            self._c["kube"] = remote_kube(
+                self._kube_modules()[1], info["endpoint"], ca, lambda: eks_token(sts, region, name)
+            )
+        return self._c["kube"]
 
 
 def _retry(fn, attempts=6, delay=2.0):
@@ -338,13 +436,16 @@ class Waf:
 
 # IAM (IRSA) ---------------------------------------------------------------------
 BOUNDARY_NAME = "ramen-worker-boundary"  # deploy/terraform/aws + cloudformation create it under /ramen/
+BUILD_PATH = "/ramen/build/"  # §38.2: per-group build roles, apart from the zone roles a group teardown lists
+BUILD_BOUNDARY_NAME = "ramen-build-boundary"  # deploy/terraform/aws: ECR push only under ramen/groups/<tag>/
 
 
 class Iam:
-    def __init__(self, iam, sts, eks, region, cluster, boundary=None):
+    def __init__(self, iam, sts, eks, region, cluster, boundary=None, build_boundary=None):
         self.iam, self.sts, self.eks, self.region, self.cluster = iam, sts, eks, region, cluster
         self._account = self._issuer = None
         self._boundary = boundary  # None = default name in this account; "-" = no permissions boundary
+        self._build_boundary = build_boundary
 
     def boundary(self) -> str | None:
         """SEC-10: every worker role carries the permissions boundary the console policy requires on iam:CreateRole."""
@@ -495,6 +596,60 @@ class Iam:
             RoleName=name, PolicyName="ramen-worker", PolicyDocument=json.dumps(self.worker_policy(bucket, group))
         )
         return "ramen-worker"
+
+    # §38.2 (D85): per-group build roles ----------------------------------------------------------------------
+    def build_boundary(self) -> str | None:
+        if self._build_boundary == "-":
+            return None
+        return self._build_boundary or f"arn:aws:iam::{self.account()}:policy{ROLE_PATH}{BUILD_BOUNDARY_NAME}"
+
+    @staticmethod
+    def build_role_name(group) -> str:
+        return f"ramen-build-{group}"[:64]
+
+    def ensure_build_role(self, name, ns, ksa, group, repo_tag) -> str:
+        """IAM role under /ramen/build/ with IRSA trust for `<ns>/<ksa>` and the build permissions boundary; tagged
+        `ramen-build=<repository component>`, the key the boundary's push statement reads."""
+        trust = json.dumps(self.trust_policy(ns, ksa))
+        tags = [
+            {"Key": "ramen", "Value": "build"},
+            {"Key": "group", "Value": group},
+            {"Key": "ramen-build", "Value": repo_tag},
+        ]
+        kw = {"PermissionsBoundary": b} if (b := self.build_boundary()) else {}
+        try:
+            r = self.iam.create_role(
+                RoleName=name,
+                Path=BUILD_PATH,
+                AssumeRolePolicyDocument=trust,
+                Tags=tags,
+                Description=f"ramen image build {group}",
+                **kw,
+            )
+            return r["Role"]["Arn"]
+        except Exception as e:  # noqa: BLE001
+            if aws_error_code(e) != "EntityAlreadyExists":
+                raise
+        self.iam.update_assume_role_policy(RoleName=name, PolicyDocument=trust)
+        return self.iam.get_role(RoleName=name)["Role"]["Arn"]
+
+    BUILD_POLICY = "ramen-build"
+    PULL = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    PUSH = ["ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"]
+
+    def build_policy(self, repo_arn: str, pull_arns: list[str]) -> dict:
+        stmts = [
+            {"Effect": "Allow", "Action": ["ecr:GetAuthorizationToken"], "Resource": "*"},  # not scopable
+            {"Effect": "Allow", "Action": self.PULL + self.PUSH, "Resource": repo_arn},
+        ]
+        if pull_arns:
+            stmts.append({"Effect": "Allow", "Action": self.PULL, "Resource": sorted(set(pull_arns))})
+        return {"Version": "2012-10-17", "Statement": stmts}
+
+    def put_build_policy(self, name, repo_arn: str, pull_arns: list[str]) -> str:
+        doc = json.dumps(self.build_policy(repo_arn, pull_arns))
+        self.iam.put_role_policy(RoleName=name, PolicyName=self.BUILD_POLICY, PolicyDocument=doc)
+        return self.BUILD_POLICY
 
     def list_roles(self, prefix="ramen-") -> list[dict]:
         out = []

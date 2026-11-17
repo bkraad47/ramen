@@ -1,0 +1,37 @@
+{# 1.0.0c: the one "LLM providers" card, org (Config page) and group (group page) alike. `sid` keys the element ids
+   ("org" / "group-<g>"), `llm` is `llm_providers.card()` ({providers, configured, defaults}), `url` the PUT route
+   (also the prefix of `<url>/<provider>/models`). One row per provider: name, state, its own fields inline, the
+   Allowed models control; one "Save changes" button (PUT merges: an empty key keeps the stored one, Clear removes it). #}
+{% from "partials/multi.html" import multi %}
+{% set PH = {'anthropic_api_key': 'sk-ant-…', 'openai_api_key': 'sk-…', 'openai_base_url': 'https://api.openai.com/v1',
+   'azure_openai_host': 'my-resource.openai.azure.com', 'vertex_project': 'my-project', 'vertex_location': 'us-central1',
+   'bedrock_region': 'us-west-2', 'foundry_endpoint': 'https://my-resource.openai.azure.com', 'foundry_deployment': 'gpt-4o',
+   'openai_compatible_base_url': 'http://ollama:11434/v1', 'openai_compatible_headers': '{"X-Team": "ops"}'} %}
+{% set FL = {'api_key': 'API key', 'base_url': 'Base URL', 'host': 'Host', 'project': 'Project', 'location': 'Location',
+   'region': 'Region', 'endpoint': 'Endpoint', 'deployment': 'Deployment', 'headers': 'Headers (JSON)'} %}
+
+{% macro models_control(sid, pname, e, default, models_url, listed, source, error) %}
+{% set ids = [] %}{% if default %}{% set _ = ids.append(default) %}{% endif %}
+{% for mid in e.allowed_models + listed %}{% if mid not in ids %}{% set _ = ids.append(mid) %}{% endif %}{% endfor %}
+{% set opts = [] %}{% for mid in ids %}{% set _ = opts.append((mid, mid)) %}{% endfor %}
+{{ multi(pname ~ '_allowed_models', opts, e.allowed_models, 'am-' ~ sid ~ '-' ~ pname, '', 'default only' if default else 'none yet') }}
+<input name="{{ pname }}_allowed_models" autocomplete="off" placeholder="more ids, comma-separated" title="Model ids not in the list, comma-separated; added to the picked ones">
+<small class="muted"><a href="#" hx-get="{{ models_url }}/{{ pname }}/models" hx-target="#models-{{ sid }}-{{ pname }}" hx-swap="innerHTML" title="Ask the provider for its models (deployments for Azure)">Load models</a>{% if default %} · default <code>{{ default }}</code>{% endif %}{% if source %} · <span class="badge {{ 'ok' if source in ('live', 'cached') else '' }}">{{ listed|length }} {{ source }}</span>{% if error %} {{ error }}{% endif %}{% endif %}</small>
+{% endmacro %}
+
+{% macro llm_card(sid, llm, url, confirm_scope) %}
+<div id="llm-{{ sid }}" hx-ext="json">
+<table class="providers">
+<tr><th>Provider</th><th>State</th><th>Settings</th><th>Allowed models</th></tr>
+{% for pname, label in provider_labels().items() %}{% set e = llm.providers[pname] %}{% set on = pname in llm.configured %}
+<tr id="llm-{{ sid }}-{{ pname }}"><th>{{ label }}</th>
+<td class="state">{% if on %}<span class="badge ok">configured</span>{% elif e.api_key_set %}<span class="badge">key only</span>{% else %}<span class="badge">not set</span>{% endif %}
+{% if e.api_key_set %}<small class="muted">key set (hidden)</small> <button type="button" class="sm ghost" hx-put="{{ url }}" hx-vals='{"{{ pname }}": {"api_key": ""}}' hx-confirm="Clear the {{ label }} key{{ confirm_scope }}?" hx-swap="none">Clear key</button>{% endif %}
+{% if e.headers_set %}<small class="muted">headers set (hidden)</small> <button type="button" class="sm ghost" hx-put="{{ url }}" hx-vals='{"{{ pname }}": {"headers": ""}}' hx-swap="none">Clear headers</button>{% endif %}
+{% if on and not e.api_key_set %}{% set clr = {} %}{% for f in llm_fields()[pname] %}{% set _ = clr.update({f: ''}) %}{% endfor %}<button type="button" class="sm ghost" hx-put="{{ url }}" hx-vals='{{ tojson({pname: clr}) }}' hx-confirm="Clear the {{ label }} provider{{ confirm_scope }}?" hx-swap="none">Clear</button>{% endif %}</td>
+<td><div class="fields">{% for f in llm_fields()[pname] if f != 'allowed_models' %}<label>{{ FL[f] }}{% if f == 'api_key' %}<input name="{{ pname }}_{{ f }}" type="password" autocomplete="off" placeholder="{{ 'unchanged' if e.api_key_set else PH.get(pname ~ '_' ~ f, 'key') }}">{% elif f == 'headers' %}<input name="{{ pname }}_{{ f }}" autocomplete="off" placeholder='{{ 'unchanged' if e.headers_set else PH[pname ~ '_' ~ f] }}'>{% else %}<input name="{{ pname }}_{{ f }}" value="{{ e[f] }}" placeholder="{{ PH.get(pname ~ '_' ~ f, '') }}">{% endif %}</label>{% endfor %}</div></td>
+<td class="models"><div id="models-{{ sid }}-{{ pname }}">{{ models_control(sid, pname, e, llm.defaults[pname], url, [], none, none) }}</div></td></tr>
+{% endfor %}</table>
+<div class="row-actions"><button class="act" hx-put="{{ url }}" hx-include="#llm-{{ sid }}" hx-swap="none">Save changes</button></div>
+</div>
+{% endmacro %}

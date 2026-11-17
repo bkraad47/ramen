@@ -129,7 +129,7 @@ class LocalNode:
 
     def http_client(self, key=None, **kw) -> HttpNode:
         """§16: the same port, over Streamable HTTP. A self-signed node cert is pinned when TLS is on."""
-        kw = {"ca": self.ca, "group": "demo", "zone": "local", **kw}
+        kw = {"ca": self.ca, "group": "demo", "zone": "local", "tls": self.tls, **kw}
         return HttpNode(self.url, self.key if key is None else key, **kw)
 
     def for_transport(self, transport: str, key=None, **kw):

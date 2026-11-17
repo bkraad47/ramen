@@ -1,0 +1,39 @@
+# helm upgrade --install ramen-satellite deploy/helm/ramen-satellite -n ramen-system --create-namespace \
+#   $(terraform -chdir=deploy/terraform/<cloud>-satellite output -raw helm_set)
+# CONTRACTS §28: a worker-only cluster in another region, driven by the console in the home cluster.
+provider: gcp                # gcp | aws | azure, the console's own cloud
+project: ""                  # gcp: the home project id (required)
+region: ""                   # the satellite's region: GCP region, AWS region, Azure location (required)
+
+console:
+  identity: ""               # the console's identity on this cluster's API server, bound to the console ClusterRoles:
+                             #   gcp   `kind: User` = the console GSA email; default ramen-console@<project>.iam.gserviceaccount.com
+                             #   azure `kind: User` = the object id of the console's user-assigned identity (terraform var console_principal_id)
+                             #   aws   unused: the EKS access entry maps the console role to the group aws.consoleGroup
+
+gateway:                     # gcp: GKE Gateway API; azure: Envoy Gateway (same shapes as the console chart's, console-less)
+  enabled: true
+  name: ramen
+  className: gke-l7-global-external-managed
+  staticIpName: ""           # gcp: terraform google_compute_global_address.edge; default ramen-<region>
+  certificateMap: ""         # gcp: terraform output certificate_map (required on gcp: no self-signed fallback)
+  tlsSecret: ramen-edge-tls  # azure: the Secret cert-manager fills for the https listener
+  routesLabel: ramen.io/routes         # namespaces labelled <routesLabel>=true may attach HTTPRoutes (worker namespaces; label ramen-system too)
+  backendTimeoutSec: 300     # azure: Envoy request timeout for every route on the Gateway (worker gRPC calls run to their own deadline)
+
+aws:                         # provider=aws only (terraform -chdir=deploy/terraform/aws-satellite output helm_set)
+  certificateArn: ""         # ACM certificate for the ALB HTTPS listener (terraform output certificate_arn; self-signed import, required)
+  albGroup: ramen            # ALB IngressGroup shared by the chart's `edge` Ingress (404 catch-all) and every worker Ingress
+  consoleGroup: ramen-console   # Kubernetes group the EKS access entry maps the console role to (terraform var console_group)
+
+azure:                       # provider=azure only (terraform -chdir=deploy/terraform/azure-satellite output helm_set)
+  nodeResourceGroup: ""      # MC_..., where the edge's static public IP lives
+  publicIpName: ramen-edge   # the Envoy Gateway Service binds this IP (terraform azurerm_public_ip.edge)
+  publicHostname: ""         # <ip-with-dashes>.sslip.io: the certificate's name and the satellite host
+  tls: letsencrypt           # letsencrypt (cert-manager HTTP-01 through the Gateway) | selfsigned
+  acmeEmail: ""
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory
+  gatewayClass: ramen-envoy
+
+rbac:
+  create: true               # ClusterRole ramen-console + its binding to the console identity, and the unbound ramen-console-zone the console binds per zone namespace (SEC-09)

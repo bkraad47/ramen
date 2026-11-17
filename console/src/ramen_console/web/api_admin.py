@@ -2,23 +2,38 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import alerts, baseuri, drift, github_app, oauth_server, rbac, regions, roles, scheduler
+from .. import (
+    alerts,
+    baseuri,
+    configs,
+    drift,
+    github_app,
+    llm_models,
+    oauth_server,
+    otel,
+    rbac,
+    regions,
+    roles,
+    scheduler,
+)
+from .. import deploy as dep
+from .. import llm_providers as lp
 from .. import mail as mail_mod
-from ..audit import note
+from ..audit import client_ip, note, write_audit
 from ..auth import providers
 from ..config import apply_config
 from ..errors import forbidden, invalid
 from ..mail import invite_mail
 from ..policy import permissions as perm
 from ..rbac import Principal, require
+from ..redact import NOT_SECRET, SECRET_NAMES, redact, secret_name
 from . import models as m
 from .api import _once
 from .helpers import accounts, backups, respond, svc, tabular
 
 r = APIRouter(prefix="/api/v1")
 viewer, admin, super_ = require("viewer"), require("group_admin"), require("super_admin")
-MASK = ("SECRET", "PASSWORD", "KEY", "TOKEN", "DSN")  # N9: a DSN commonly embeds a password (RAMEN_POSTGRES_DSN)
-UNMASKED = {"RAMEN_SECRETS_BACKEND"}
+MASK, UNMASKED = SECRET_NAMES, NOT_SECRET
 
 
 @r.get("/users")
@@ -87,10 +102,16 @@ async def mint_key(request: Request, body: m.KeyIn, p: Principal = Depends(super
     hands them to the workers, exactly as the group page's key form does (D21)."""
     note(request, "api_key.create", body.name, [f"client_type:{body.client_type}"])
     a = accounts(request)
+    accepted = {}
+    if body.client_type == "agent":  # §31.1: an agent key reaches the workers like a group key: same acceptance
+        from ..baseuri import public_url
+
+        for g in body.groups or []:
+            accepted[g] = await configs.require_accepted(svc(request), g, p, public_url(request))
     doc = await a.mint_key(p, body.name, body.role, body.groups, body.client_type)
     if doc["client_type"] == "agent":
         try:
-            await svc(request).mirror_agent_key(doc["groups"], doc["name"], doc["key"], doc["id"], p.name)
+            await svc(request).mirror_agent_key(doc["groups"], doc["name"], doc["key"], doc["id"], p.name, accepted)
         except Exception:
             await a.store.delete("api_keys", doc["id"])  # never leave a key that can never reach a worker
             raise
@@ -256,7 +277,7 @@ def _restore_html(r: dict) -> str:
 
 def masked_env() -> dict[str, str]:
     return {
-        k: ("***" if any(w in k for w in MASK) and k not in UNMASKED else v)
+        k: ("***" if secret_name(k) else redact(v))  # N1 (§34.3): URL credentials under any name
         for k, v in sorted(os.environ.items())
         if k.startswith("RAMEN_")
     }
@@ -289,6 +310,40 @@ async def reload_config(request: Request, p: Principal = Depends(super_)):
     await providers.refresh(st, force=True, rebuild=True)  # D50: env + the store doc
     st.mailer = await mail_mod.build_mailer(st.store)  # layers config/smtp back over the fresh env read (N2)
     return respond(request, {"applied": sorted(applied)})
+
+
+@r.post("/config/tls/rotate")
+async def rotate_tls(request: Request, retire: bool = False, p: Principal = Depends(super_)):
+    """D86 §39.1, in phases: the new CA is staged and the two-CA bundle published to every peer now; once the settle
+    time has passed (`RAMEN_TLS_ROTATE_SETTLE_SECS`, a job started here) the new CA issues and the console's, every
+    zone's and then the chart services' leaves are re-issued. `retire=1` drops the previous CA — refused (409) while
+    a rotation is staged or any leaf is still from another CA; it re-issues nothing."""
+    import asyncio
+
+    from .. import tls
+    from ..errors import conflict
+
+    st = request.app.state
+    try:
+        out = await (tls.retire_previous if retire else tls.start_rotation)(st.store, st.cloud)
+    except tls.CaError as e:
+        raise conflict(str(e)) from None
+    note(request, "config.tls.rotate", "install_ca", ["scope:global", f"retire:{int(retire)}"])
+    if retire:
+        return respond(request, out)
+    if (settle := tls.rotate_settle()) <= 0:
+        out.update(await tls.finish_rotation(st.store, st.cloud) or {})
+    else:
+        st.tls_rotation = asyncio.create_task(tls.finish_later(st.store, st.cloud, settle))
+    return respond(request, out)
+
+
+@r.get("/config/tls")
+async def tls_status(request: Request, p: Principal = Depends(super_)):
+    """§39.1: the CAs (fingerprints), the rotation stage, and which CA issued each leaf."""
+    from .. import tls
+
+    return await tls.status(request.app.state.store, request.app.state.cloud)
 
 
 @r.get("/config/auth")
@@ -562,21 +617,62 @@ async def delete_role(request: Request, name: str, p: Principal = Depends(super_
 
 @r.get("/config/regions")
 async def get_regions_config(request: Request, p: Principal = Depends(super_)):
-    return {"blocked": await svc(request).blocked_regions(), "regions": regions.REGIONS, "note": regions.NOTE}
+    s = svc(request)
+    return {
+        "blocked": await s.blocked_regions(),
+        "clusters": await s.clusters(),
+        "home": s.cloud.home_region(),
+        "regions": regions.REGIONS,
+        "note": regions.NOTE,
+    }
+
+
+def _cluster_tags(clusters: list[dict]) -> list[str]:
+    return [f"{c['provider']}:{c['region']}:{c['name']}@{c['host']}" for c in clusters] or ["-"]
 
 
 @r.put("/config/regions")
 async def set_regions_config(request: Request, body: m.RegionsConfig, p: Principal = Depends(super_)):
-    """C7: regions no zone may be created in or deployed to; a zone already there fails its next deploy."""
-    current = await svc(request).blocked_regions()
-    try:  # a provider the form did not send (the Config card shows only this console's cloud) keeps its list
-        sent = {p: getattr(body, p) for p in regions.PROVIDERS}
-        blocked = regions.clean({p: (v if v is not None else current.get(p, [])) for p, v in sent.items()})
-    except ValueError as e:
-        raise invalid(str(e)) from e
-    note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])
-    await svc(request).store.put("config", regions.DOC, {"blocked": blocked})
-    return respond(request, {"blocked": blocked})
+    """C7: regions no zone may be created in or deployed to; a zone already there fails its next deploy. §28.1: the
+    satellite `clusters` list travels with it (replaced whole when sent)."""
+    s = svc(request)
+    current = await s.blocked_regions()
+    sent = {p: getattr(body, p) for p in regions.PROVIDERS}
+    out = {"blocked": current, "clusters": await s.clusters()}
+    if body.clusters is not None:
+        out["clusters"] = await s.set_clusters(body.clusters)
+        note(request, "config.clusters", "regions", _cluster_tags(out["clusters"]))
+    if any(v is not None for v in sent.values()):
+        try:  # a provider the form did not send (the Config card shows only this console's cloud) keeps its list
+            blocked = regions.clean({p: (v if v is not None else current.get(p, [])) for p, v in sent.items()})
+        except ValueError as e:
+            raise invalid(str(e)) from e
+        note(request, "config.regions", "regions", [f"{k}:{','.join(v) or '-'}" for k, v in blocked.items()])
+        out["blocked"] = await s.set_blocked_regions(blocked)
+    return respond(request, out)
+
+
+@r.post("/config/regions/clusters", status_code=201)
+async def add_cluster(request: Request, body: m.ClusterIn, p: Principal = Depends(super_)):
+    """§28.1: the Clusters card's add form — one satellite appended to the list."""
+    s = svc(request)
+    clusters = await s.set_clusters([*await s.clusters(), body.model_dump(exclude_none=True)])
+    note(request, "config.clusters", "regions", _cluster_tags(clusters))
+    return respond(request, {"clusters": clusters}, 201)
+
+
+@r.delete("/config/regions/clusters/{name}")
+async def remove_cluster(request: Request, name: str, p: Principal = Depends(super_)):
+    """§28.1: remove one satellite; 409 while a zone sits in its region."""
+    from ..errors import not_found
+
+    s = svc(request)
+    current = await s.clusters()
+    if not any(c["name"] == name for c in current):
+        raise not_found("cluster")
+    clusters = await s.set_clusters([c for c in current if c["name"] != name])
+    note(request, "config.clusters", "regions", _cluster_tags(clusters))
+    return respond(request, {"clusters": clusters})
 
 
 @r.get("/config/drift")
@@ -603,6 +699,93 @@ async def set_scheduler_config(request: Request, body: m.SchedulerConfig, p: Pri
     doc = await scheduler.set_config(svc(request).store, **body.model_dump())
     note(request, "config.scheduler", "scheduler", [f"{k}:{v}" for k, v in doc.items()])
     return respond(request, doc)
+
+
+@r.get("/config/otel")
+async def get_otel_config(request: Request, p: Principal = Depends(super_)):
+    return otel.public_config(await otel.get_config(svc(request).store))
+
+
+@r.put("/config/otel")
+async def set_otel_config(request: Request, body: m.OtelConfig, p: Principal = Depends(super_)):
+    """§24.3: where Ramen exports telemetry and what connected agents are told. Header values are write-only."""
+    note(request, "config.otel", "otel", [f"enabled:{body.enabled}"] if body.enabled is not None else [])
+    s = svc(request)
+    doc = otel.public_config(await otel.set_config(s.store, **body.model_dump()))
+    note(request, "config.otel", "otel", [f"enabled:{doc['enabled']}", f"endpoint:{doc['endpoint'] or '-'}"])
+    # §26.3: every deployed zone gets the new config and a reload now, not on its next deploy
+    warnings: dict[str, str] = {}
+    pushed = await dep.push_config(s, warnings)
+    if pushed:
+        tags = [f"{k}:{'ok' if v == 'ok' else 'error'}" for k, v in pushed.items()]
+        tags += [f"error:{k} {v}"[:200] for k, v in pushed.items() if v != "ok"]
+        tags += [f"warning:{k} {v}"[:200] for k, v in warnings.items()]  # P4-B1: a canary that was not reached
+        await write_audit(
+            s.store,
+            user=p.name,
+            ip=client_ip(request),
+            action="telemetry.push",
+            target="otel",
+            ok=all(v == "ok" for v in pushed.values()),
+            tags=[f"version:{doc['telemetry_version']}", *tags],
+        )
+    return respond(request, {**doc, **dep.pushed_answer(pushed, warnings)})
+
+
+@r.get("/config/llm-providers")
+async def get_llm_providers(request: Request, p: Principal = Depends(super_)):
+    """§29.1: every provider, the key as set/not set."""
+    return lp.public(await lp.load(svc(request).store))
+
+
+@r.put("/config/llm-providers")
+async def set_llm_providers(request: Request, body: m.LlmProvidersConfig, p: Principal = Depends(super_)):
+    """§29.1: merge — a field left out keeps its value, "" clears it; keys are console secrets (§24.5)."""
+    s = svc(request)
+    try:
+        cfg = lp.merge(await lp.load(s.store), body.providers)
+    except ValueError as e:
+        raise invalid(str(e)) from e
+    note(request, "config.llm_providers", "llm_providers", [f"provider:{n}" for n in sorted(body.providers)])
+    for n in body.providers:
+        llm_models.forget("org", n)
+    return respond(request, lp.public(await lp.save(s.store, cfg)))
+
+
+@r.get("/config/llm-providers/{provider}/models")
+async def org_llm_models(request: Request, provider: str, p: Principal = Depends(super_)):
+    """1.0.0c: the model ids the org's provider offers (`{models, source, error?}`); an htmx request gets the Allowed
+    models control re-rendered with them."""
+    return await models_answer(
+        request, provider, await lp.load(svc(request).store), "org", "/api/v1/config/llm-providers"
+    )
+
+
+async def models_answer(request: Request, provider: str, cfg: dict, scope: str, url: str):
+    from ..baseuri import prefix
+    from ..errors import not_found
+    from .helpers import is_hx
+
+    if provider not in lp.FIELDS:
+        raise not_found("provider")
+    out = await llm_models.list_models(cfg, provider, scope)
+    if not is_hx(request):
+        return out
+    card = lp.card(cfg)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "partials/llm_models.html",
+        {
+            "sid": scope.replace(":", "-"),
+            "pname": provider,
+            "e": card["providers"][provider],
+            "default": card["defaults"][provider],
+            "models_url": prefix(request) + url,  # the base URI, as every link
+            "listed": out["models"],
+            "source": out["source"],
+            "error": out.get("error"),
+        },
+    )
 
 
 @r.get("/config/smtp")

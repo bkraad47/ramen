@@ -1,6 +1,6 @@
 [project]
 name = "ramen-console"
-version = "0.8.0"
+version = "1.0.0"
 description = "Ramen console: FastAPI + Jinja2 + HTMX manager UI and /api/v1 for groups, environments, zones, secrets and deploys"
 license = "BSD-3-Clause"
 requires-python = ">=3.14"
@@ -21,6 +21,7 @@ dependencies = [
   "grpcio>=1.66",
   "grpcio-health-checking>=1.66",
   "protobuf>=5.28",
+  "opentelemetry-proto>=1.45.2",
 ]
 
 [project.optional-dependencies]

@@ -1,3 +1,7 @@
+{{- if and .Values.networkPolicy.workerEgress (not .Values.cluster.serviceCidr) }}
+WARNING: networkPolicy.workerEgress is on but cluster.serviceCidr is empty — no worker-egress policy is written to the
+         zone namespaces (§33.4a). Set cluster.serviceCidr to the cluster's Service range (values.yaml says where to read it).
+{{- end }}
 {{- if eq .Values.provider "azure" }}
 Ramen console {{ .Chart.AppVersion }} in {{ .Release.Namespace }} on AKS ({{ .Values.region }}, resource group {{ .Values.azure.resourceGroup }}). CONTRACTS §21.6.
          kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (lets the console HTTPRoute attach to port 443)

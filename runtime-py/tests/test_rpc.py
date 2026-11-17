@@ -2,6 +2,7 @@ import io
 import json
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -93,7 +94,9 @@ def test_load_at_start_when_flag(demo_bucket, monkeypatch):
             "params": {"name": "demo_calculator_tool", "arguments": {"var1": 1, "var2": 1, "func": "add"}},
         },
     )
-    assert res[0]["result"]["content"][0]["text"] == "2"
+    # the reply by id: the thread pool (D83) may write a notification line before it (flaky 2 of 3 by position)
+    reply = next(r for r in res if r.get("id") == 1)
+    assert reply["result"]["content"][0]["text"] == "2"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="posix only")
@@ -131,3 +134,119 @@ def test_main_inprocess(demo_bucket, monkeypatch, capsys):
     )
     assert main(["--bucket", str(demo_bucket), "--load"]) == 0
     assert json.loads(capsys.readouterr().out)["result"] == {"ok": True}
+
+
+# ---- request concurrency (D83) --------------------------------------------------------------------------------------
+SLOW_PROTO = {
+    "type": "tool",
+    "name": "slow",
+    "description": "d",
+    "callable": "f",
+    "input": {"tag": {"type": "string"}, "ms": {"type": "number"}},
+}
+SLOW = (
+    "import threading, time\n"
+    "from ramen_runtime import progress\n"
+    "L, ACTIVE, PEAK, SPAN = threading.Lock(), [0], [0], {}\n"
+    "def f(tag, ms):\n"
+    "    with L:\n"
+    "        ACTIVE[0] += 1\n"
+    "        PEAK[0] = max(PEAK[0], ACTIVE[0])\n"
+    "    t0 = time.monotonic()\n"
+    "    progress(1, 2, tag)\n"
+    "    time.sleep(ms / 1000)\n"
+    "    progress(2, 2, tag)\n"
+    "    with L:\n"
+    "        ACTIVE[0] -= 1\n"
+    "    SPAN[tag] = (t0, time.monotonic())\n"
+    "    if tag == 'boom':\n"
+    "        raise ValueError('bad tag')\n"
+    "    return tag\n"
+)
+
+
+def slow(rid, tag, ms, **extra):
+    p = {"name": "slow", "arguments": {"tag": tag, "ms": ms}} | extra
+    return {"jsonrpc": "2.0", "id": rid, "method": "runtime.call_tool", "params": p}
+
+
+@pytest.fixture
+def slow_server(demo_bucket, monkeypatch):
+    monkeypatch.setattr("ramen_runtime.rpc.deps.install", lambda b: {"installed": False})
+    from conftest import write_pkg
+
+    write_pkg(demo_bucket, "tools", "slow", SLOW_PROTO, SLOW)
+    return lambda: Server(demo_bucket, load_on_start=True)
+
+
+def tool_globals(s: Server) -> dict:
+    return s.exe.tool("slow").func.__globals__
+
+
+def test_concurrent_calls_overlap_and_answers_keep_their_ids(slow_server):
+    s = slow_server()
+    assert s.concurrency == 4  # RAMEN_RUNTIME_CONCURRENCY default
+    t0 = time.monotonic()
+    out = run(s, *(slow(i, f"t{i}", 300) for i in range(4)))
+    assert time.monotonic() - t0 < 0.9, "four 300 ms calls run together, not one after the other"
+    by = {r["id"]: r for r in out if r.get("id") is not None}
+    assert {i: by[i]["result"]["content"][0]["text"] for i in range(4)} == {i: f"t{i}" for i in range(4)}
+    assert tool_globals(s)["PEAK"][0] == 4
+
+
+def test_the_concurrency_limit_is_honoured_and_a_bad_value_means_one(slow_server, monkeypatch):
+    monkeypatch.setenv("RAMEN_RUNTIME_CONCURRENCY", "2")
+    s = slow_server()
+    assert s.concurrency == 2
+    out = run(s, *(slow(i, f"t{i}", 150) for i in range(5)))
+    assert len([r for r in out if r.get("id") is not None]) == 5
+    assert tool_globals(s)["PEAK"][0] == 2, "the third call waited for a free worker"
+    for bad in ("0", "-3", "many"):
+        monkeypatch.setenv("RAMEN_RUNTIME_CONCURRENCY", bad)
+        assert slow_server().concurrency == 1 if bad != "many" else slow_server().concurrency == 4
+
+
+def test_a_reload_waits_for_in_flight_calls_and_blocks_new_ones(slow_server, monkeypatch):
+    s = slow_server()
+    real, when = s.load, {}
+
+    def load(params):
+        when["start"] = time.monotonic()
+        r = real(params)
+        when["end"] = time.monotonic()
+        return r
+
+    monkeypatch.setattr(s, "load", load)
+    g = tool_globals(s)  # the module object survives the reload (sys.modules), its SPAN with it
+    out = run(
+        s,
+        slow(1, "before", 300),
+        {"jsonrpc": "2.0", "id": 2, "method": "runtime.load", "params": {}},
+        slow(3, "after", 10),
+    )
+    assert [r["id"] for r in out if r.get("id") is not None] == [1, 2, 3]
+    span = g["SPAN"] if "before" in g["SPAN"] else tool_globals(s)["SPAN"]
+    assert span["before"][1] <= when["start"], "the load waited for the running call"
+    after = tool_globals(s)["SPAN"]["after"]
+    assert when["end"] <= after[0], "the call behind the load ran on the reloaded runtime"
+
+
+def test_a_tool_raising_on_one_thread_does_not_touch_another(slow_server, capsys):
+    s = slow_server()
+    capsys.readouterr()
+    out = run(s, slow(1, "boom", 100), slow(2, "fine", 100))
+    by = {r["id"]: r for r in out if r.get("id") is not None}
+    assert by[1]["result"]["isError"] and by[1]["result"]["content"][0]["text"] == "ValueError: bad tag"
+    assert by[2]["result"] == {"content": [{"type": "text", "text": "fine"}], "isError": False}
+    lines = [json.loads(x) for x in capsys.readouterr().err.splitlines() if '"call_tool"' in x]
+    assert sorted((x["name"], x["ok"]) for x in lines) == [("slow", False), ("slow", True)], "one log line per call"
+
+
+def test_progress_lines_name_their_own_request_under_concurrency(slow_server):
+    s = slow_server()
+    out = run(s, slow("p1", "one", 150, progress=True), slow("p2", "two", 150, progress=True))
+    steps = [m["params"] for m in out if m.get("method") == "runtime.progress"]
+    assert len(steps) == 4
+    assert {(p["id"], p["message"]) for p in steps} == {("p1", "one"), ("p2", "two")}, "an id never crosses a call"
+    by = {r["id"]: r for r in out if "result" in r}
+    assert by["p1"]["result"]["content"][0]["text"] == "one" and by["p2"]["result"]["content"][0]["text"] == "two"

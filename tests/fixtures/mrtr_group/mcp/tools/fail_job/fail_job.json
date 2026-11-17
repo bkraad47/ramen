@@ -1,0 +1,8 @@
+{
+  "type": "tool",
+  "name": "fail_job",
+  "description": "As a task: fail at once, so the task completes with an isError result.",
+  "callable": "run",
+  "input": {},
+  "task": true
+}

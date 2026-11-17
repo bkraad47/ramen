@@ -99,7 +99,6 @@ def _pages(c) -> dict[str, str]:
         "/groups",
         "/groups/demo",
         "/environments",
-        "/zones",
         "/secrets",
         "/users",
         "/api-keys",

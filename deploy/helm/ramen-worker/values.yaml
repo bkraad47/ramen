@@ -21,7 +21,7 @@ zone: a                     # zone record name → namespace ramen-<group>-<zone
 gcpZone: us-central1-a      # nodeSelector topology.kubernetes.io/zone (zone record `region` field)
 image: ""                   # default: <region>-docker.pkg.dev/<project>/ramen/worker:<tag> (gcp) or <account>.dkr.ecr.<region>.amazonaws.com/ramen/worker:<tag> (aws);
                             # any full reference works on both clouds, e.g. docker.io/bkraad47/ramen-worker:<tag> or ghcr.io/bkraad47/ramen-worker:<tag> (no `make push`)
-tag: 0.8.0
+tag: 1.0.0
 pullPolicy: Always
 createNamespace: true
 serviceAccount:
@@ -71,4 +71,4 @@ consoleNamespace: ramen-system
 networkPolicy:
   enabled: true
   gcpCidrs: ["35.191.0.0/16", "130.211.0.0/22"]   # Google front ends / health checkers
-  awsCidrs: ["10.0.0.0/16"]                        # the VPC CIDR from deploy/terraform/aws (ALB targets)
+  awsCidrs: ["10.0.0.0/16"]                        # the ALB subnets (D89: terraform output alb_cidrs; the console passes RAMEN_AWS_ALB_CIDRS)

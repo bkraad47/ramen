@@ -1,0 +1,4 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Chart</title></head>
+<body><svg id="c" width="200" height="100"></svg>
+<script>window.addEventListener("message",e=>{const r=e.data&&e.data.result;if(r)document.getElementById("c").innerHTML=r.map((v,i)=>`<rect x="${i*20}" y="${100-v}" width="18" height="${v}"/>`).join("")});</script>
+</body></html>

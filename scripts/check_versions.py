@@ -46,6 +46,52 @@ DERIVED = ("console/src/ramen_console/__init__.py", "runtime-py/src/ramen_runtim
 HARDCODED = re.compile(r'^__version__\s*=\s*[\'"]\d', re.M)
 
 
+# §30.0 / §34.1: each engine's image tag is pinned in one place per file and every file must agree (upstream tags, not
+# Ramen's VERSION). The first file of each engine is the reference: SkillSpector's Dockerfile ARG, the chart's values
+# for promptfoo, Phoenix and its collector (the compose profiles repeat them).
+ENGINES = {
+    "skillspector": {
+        "deploy/docker/skillspector/Dockerfile": r"^ARG SKILLSPECTOR_REF=v(\S+)",
+        "deploy/helm/ramen/values.yaml": r"ramen-skillspector:(\S+)",
+        "docs/CONTRACTS.md": r"pinned tag \*\*v([^*\s]+)\*\*",
+    },
+    "promptfoo": {
+        "deploy/helm/ramen/values.yaml": r"ghcr\.io/promptfoo/promptfoo:(\S+)",
+        "deploy/local/docker-compose.yml": r"ghcr\.io/promptfoo/promptfoo:([^\s}]+)",
+    },
+    "phoenix": {
+        "deploy/helm/ramen/values.yaml": r"arizephoenix/phoenix:(\S+)",
+        "deploy/local/docker-compose.yml": r"arizephoenix/phoenix:(\S+)",
+    },
+    "otel-collector": {
+        "deploy/helm/ramen/values.yaml": r"otel/opentelemetry-collector:(\S+)",
+        "deploy/local/docker-compose.yml": r"otel/opentelemetry-collector:(\S+)",
+    },
+    "redis": {
+        "deploy/helm/ramen/values.yaml": r"image: redis:(\S+)",
+        "deploy/local/docker-compose.yml": r"image: redis:(\S+)",
+    },
+}
+
+
+def engine_pins(root: Path, engine: str) -> dict[str, str]:
+    out = {}
+    for rel, pat in ENGINES[engine].items():
+        path = root / rel
+        found = sorted(set(re.findall(pat, path.read_text(), re.M))) if path.exists() else []
+        out[rel] = ", ".join(found) or "(missing)"
+    return out
+
+
+def check_engines(root: Path) -> list[str]:
+    bad = []
+    for engine in ENGINES:
+        pins = engine_pins(root, engine)
+        want = next(iter(pins.values()))
+        bad += [f"{rel}: {engine} {v} != {want}" for rel, v in pins.items() if v != want or "," in v]
+    return bad
+
+
 def read(path: Path, keys) -> str | None:
     if not path.exists():
         return None
@@ -129,6 +175,9 @@ def main() -> int:
             for b in bases:
                 if b != minor.group(1):
                     bad.append(f"{rel}: FROM python:{b} but the runtime is pinned to {minor.group(1)}")
+    for engine in ENGINES:
+        rows += [(f"{rel} {engine}", v) for rel, v in engine_pins(a.root, engine).items()]
+    bad += check_engines(a.root)
     if a.tag:
         t = a.tag.removeprefix("v")
         rows.append(("tag", t))

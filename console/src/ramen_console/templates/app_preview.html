@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}App {{ app }} — {{ group }} / {{ zone }}{% endblock %}
+{% block body %}
+<p class="muted"><a href="{{ base }}/groups/{{ group }}">← Group {{ group }}</a> · <code>ui://{{ group }}/{{ app }}</code> read from a worker of zone <code>{{ zone }}</code> with the group's key · MCP Apps (<code>io.modelcontextprotocol/ui</code>)</p>
+<div class="card"><p class="muted">Sandboxed: the app runs in an opaque origin with scripts only — no cookies, no storage, no network beyond what its policy allows, no access to this page. Policy: <code>{{ csp }}</code></p>
+<iframe class="app-preview" title="App {{ app }}" sandbox="allow-scripts" referrerpolicy="no-referrer" credentialless srcdoc="{{ doc }}"></iframe></div>
+{% endblock %}

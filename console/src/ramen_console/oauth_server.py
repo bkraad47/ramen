@@ -17,6 +17,7 @@ import secrets
 import time
 from urllib.parse import urlencode, urlparse, urlunparse
 
+from . import configs, evals, guardrails, otel, skillspector
 from .accounts import Accounts
 from .errors import ApiError, invalid, not_found
 from .rbac import Principal, can_connect, principal_from
@@ -57,12 +58,17 @@ class OAuthError(ApiError):
     """RFC 6749 §5.2: `{"error": ..., "error_description": ...}` with the status the spec names. `reason` is the
     audit tag (D3): finer than `error`, never shown to the client."""
 
-    def __init__(self, error: str, description: str, status: int = 400, reason: str | None = None):
+    def __init__(self, error: str, description: str, status: int = 400, reason: str | None = None, data=None):
         super().__init__(status, description)
-        self.error, self.reason = error, reason or error
+        self.error, self.reason, self.data = error, reason or error, data
+        if data is not None:  # §31.1: `configs not accepted` is the contract's literal phrase, not sentence-cased
+            self.detail = description
 
     def body(self) -> dict:
-        return {"error": self.error, "error_description": self.detail}
+        out = {"error": self.error, "error_description": self.detail}
+        if self.data is not None:  # §31.1: `403 configs not accepted` names the version and the page
+            out["data"] = self.data
+        return out
 
 
 def b64url(raw: bytes) -> str:
@@ -225,7 +231,14 @@ class OAuthServer:
             raise OAuthError("invalid_scope", f"{group}/{zone} is not a deployed zone")
         if not can_connect(p, group):
             raise OAuthError("access_denied", f"you have no access to group {group}", 403)
+        # §31.1: the group's LLM configs, shown on the consent page until this person accepted the current version
+        lc = await configs.load(self.svc, group)
+        user = await self.store.get("users", p.id) or {}
         return {
+            # §24.3: the host named in the telemetry notice when this group requires consent, else None
+            "telemetry": await self.consent_host(group),
+            "configs": lc,
+            "configs_accepted": lc is None or configs.is_accepted(user, group, lc["version"]),
             "client": client,
             "redirect_uri": redirect,
             "group": group,
@@ -235,7 +248,25 @@ class OAuthServer:
             "code_challenge": q["code_challenge"],
         }
 
-    async def issue_code(self, p: Principal, a: dict) -> str:
+    async def consent_host(self, group: str) -> str | None:
+        g = await self.store.get("groups", group) or {}
+        return otel.consent_host(await otel.get_config(self.store), g)
+
+    async def _consented(self, rec: dict) -> bool:
+        """§24.3: a grant made without the telemetry acceptance cannot mint for a group that requires it — not at the
+        code exchange, and not at a refresh after the group turned consent on: the person goes through consent again.
+        Returns what the token's `tel` claim is."""
+        if rec.get("tel"):
+            return True
+        if await self.consent_host(rec["group"]) is not None:
+            raise OAuthError(
+                "invalid_grant",
+                f"group {rec['group']} requires telemetry consent; authorize the client again",
+                reason="consent_required",
+            )
+        return False
+
+    async def issue_code(self, p: Principal, a: dict, tel: bool = False) -> str:
         code = b64url(secrets.token_bytes(32))
         user = await self.store.get("users", p.id)
         await self.store.put(
@@ -252,6 +283,7 @@ class OAuthServer:
                 "zone": a["zone"],
                 "epoch": self.accounts.epoch_of(user or {}),
                 "exp": int(time.time()) + CODE_TTL,
+                **({"tel": True} if tel else {}),  # the person ticked the telemetry notice on the consent page
             },
         )
         return code
@@ -285,7 +317,8 @@ class OAuthServer:
         if not hmac.compare_digest(b64url(hashlib.sha256(verifier.encode()).digest()), rec["code_challenge"]):
             raise OAuthError("invalid_grant", "code_verifier does not match", reason="pkce_mismatch")
         user = await self._still_allowed(rec)
-        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=uid())
+        tel = await self._consented(rec)
+        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=uid(), tel=tel)
 
     async def _refresh(self, form: dict, issuer: str) -> dict:
         client = await self.client(form.get("client_id"))
@@ -308,7 +341,10 @@ class OAuthServer:
                 "invalid_grant", "refresh token is unknown, expired, or not for this client", reason="refresh_invalid"
             )
         user = await self._still_allowed(rec)
-        return await self._tokens(client, user, rec["group"], rec["zone"], issuer, family=rec["family"])
+        tel = await self._consented(rec)
+        return await self._tokens(
+            client, user, rec["group"], rec["zone"], issuer, family=rec["family"], tel=tel, gate=False
+        )
 
     async def _still_allowed(self, rec: dict) -> dict:
         """M2: what was true at consent is re-checked at every mint — the user exists, can still log in, still has
@@ -324,8 +360,31 @@ class OAuthServer:
             )
         return user
 
-    async def _tokens(self, client: dict, user: dict, group: str, zone: str, issuer: str, family: str) -> dict:
+    async def _tokens(
+        self,
+        client: dict,
+        user: dict,
+        group: str,
+        zone: str,
+        issuer: str,
+        family: str,
+        tel: bool = False,
+        gate: bool = True,
+    ) -> dict:
         scope = f"mcp:{group}:{zone}"
+        # §31.1: no first token until the person accepted the group's current LLM configs (a new version re-asks); a
+        # refresh (`gate=False`) still answers, with `configs.accepted: false` — the bridge polls it while the person
+        # accepts in the browser, and the workers refuse calls without the version anyway (§31.2)
+        lc = await configs.load(self.svc, group)
+        accepted = lc is None or (not lc.get("error") and configs.is_accepted(user, group, lc["version"]))
+        if gate and not accepted:
+            url = configs.page_url(issuer, group)
+            raise OAuthError(
+                "configs_not_accepted",
+                f"configs not accepted: version {lc['version']} of group {group}'s LLM configs; open {url}",
+                403,
+                data={"version": lc["version"], "url": url},
+            )
         iat = int(time.time())
         claims = {
             "iss": issuer,
@@ -343,6 +402,8 @@ class OAuthServer:
             "exp": iat + access_ttl(),
             "jti": uid(),
         }
+        if tel:  # §24.3: the node serves a consent-gated group to this caller without asking again
+            claims["tel"] = True
         access = mint_jwt(claims, await self.svc.session_secret(group))
         for r in await self.store.list("oauth_refresh", {"family": family}):
             if r["exp"] < iat:  # tombstones and dead chains of this grant are swept as it renews
@@ -361,15 +422,32 @@ class OAuthServer:
                 "used": False,
                 "exp": iat + refresh_ttl(),
                 "created": now(),
+                **({"tel": True} if tel else {}),
             },
         )
-        return {
+        out = {
             "access_token": access,
             "token_type": "Bearer",
             "expires_in": access_ttl(),
             "refresh_token": refresh,
             "scope": scope,
         }
+        # §24.3 / §26.3: where the connected agent sends its own telemetry (never Ramen's export headers), the
+        # config version it must report with, and whether this group requires the report
+        g = await self.store.get("groups", group) or {}
+        cfg = await otel.get_config(self.store)
+        if (telemetry := otel.client_info(cfg, group, zone, bool(g.get("require_telemetry_consent")))) is not None:
+            out["telemetry"] = telemetry
+        # §29.3: the group repo's evals config, its version and whether calls must carry it (the bridge's policy bundle)
+        if (ev := evals.client_info(await evals.load(self.svc, group), g)) is not None:
+            out["evals"] = ev
+        if (scan := skillspector.client_info(await skillspector.load_baseline(self.svc, group), g)) is not None:
+            out["skillspector"] = scan  # §30.3
+        if (gr := await guardrails.token_info(self.svc, g, issuer)) is not None:
+            out["guardrails"] = gr  # §36.3 / §38.1: every sign-in path, with where the bridge's local rails judge
+        if (lc_info := configs.client_info(lc, accepted)) is not None:
+            out["configs"] = lc_info  # §31.1
+        return out
 
 
 def token_key(session_secret: str) -> bytes:

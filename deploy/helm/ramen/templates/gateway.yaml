@@ -39,7 +39,7 @@ spec:
   parentRefs: [{ name: {{ .Values.gateway.name }}, namespace: {{ .Release.Namespace }} }]
   rules:
     - matches: [{ path: { type: PathPrefix, value: / } }]
-      backendRefs: [{ name: console, port: 80 }]
+      backendRefs: [{ name: console, port: 443 }]
 ---
 apiVersion: networking.gke.io/v1
 kind: HealthCheckPolicy
@@ -50,8 +50,8 @@ spec:
   default:
     checkIntervalSec: 15
     config:
-      type: HTTP
-      httpHealthCheck: { requestPath: /healthz, port: {{ .Values.console.port }} }
+      type: HTTPS
+      httpsHealthCheck: { requestPath: /healthz, port: {{ .Values.console.port }} }
   targetRef: { group: "", kind: Service, name: console }
 ---
 # Console API calls that drive GCP operations (rebalance, ip-rules, service accounts) can exceed the LB's 30s default.

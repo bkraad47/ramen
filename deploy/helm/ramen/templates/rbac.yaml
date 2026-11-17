@@ -20,6 +20,11 @@ rules:
   - apiGroups: [networking.gke.io]
     resources: [healthcheckpolicies, gcpbackendpolicies]
     verbs: [get, list, create, patch, update, delete]
+  # D69: a deleted zone's namespace is held Terminating by the NEG controller's finalizer; by then the zone
+  # RoleBinding is collected, so clearing it needs a cluster-wide right on this one resource
+  - apiGroups: [networking.gke.io]
+    resources: [servicenetworkendpointgroups]
+    verbs: [get, list, patch]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, list, create, patch, update, delete]
@@ -31,6 +36,9 @@ rules:
   # §21.6: per-zone edge IP rules mirrored as Envoy Gateway SecurityPolicies, and per-route timeouts
   - apiGroups: [gateway.envoyproxy.io]
     resources: [securitypolicies, backendtrafficpolicies]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [gateway.networking.k8s.io]   # D86 §39.3: Envoy verifies each zone's workers
+    resources: [backendtlspolicies]
     verbs: [get, list, watch, create, patch, update, delete]
   {{- end }}
   {{- if eq .Values.provider "aws" }}
@@ -55,7 +63,7 @@ metadata:
   labels: {{- include "ramen.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [serviceaccounts, secrets, services]
+    resources: [serviceaccounts, secrets, services, configmaps]   # configmaps: ramen-ca (D86)
     verbs: [get, list, watch, create, patch, update, delete]
   - apiGroups: [apps]
     resources: [deployments, deployments/scale]
@@ -64,6 +72,38 @@ rules:
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch, create, patch, update, delete]
   - apiGroups: [""]
-    resources: [pods, pods/log]
+    resources: [pods, pods/log, endpoints]
     verbs: [get, list, watch]
+---
+# D86 §39.2: in this namespace the console writes only the TLS objects — the CA bundle, one leaf per chart service —
+# and restarts those services after a renewal. `create` cannot be narrowed by name in RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ramen-console-tls
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [ramen-tls-redis, ramen-tls-phoenix, ramen-tls-jaeger, ramen-tls-promptfoo]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [ramen-ca]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [secrets, configmaps]
+    verbs: [create]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [redis, phoenix, jaeger, promptfoo]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ramen-console-tls
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ramen-console-tls }
+subjects: [{ kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }} }]
 {{- end }}

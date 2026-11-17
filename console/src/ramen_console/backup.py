@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .errors import conflict, invalid, not_found
 from .services import Services
-from .storage.encrypted import SENSITIVE
+from .storage.encrypted import NESTED, SENSITIVE
 from .util import now, uid
 
 COLLECTIONS = ("groups", "zones", "environments", "workers", "users", "config")
@@ -25,6 +25,24 @@ def release_version() -> str:
     return __version__
 
 
+def _strip(col: str, doc: dict, hidden: set) -> dict:
+    """No secret in a backup: the collection's fields, and per-entry ones such as an identity provider's secret."""
+    out = {k: v for k, v in doc.items() if k not in hidden}
+    if nested := NESTED.get((col, doc.get("id"))):
+        out = {k: {f: x for f, x in v.items() if f != nested} if isinstance(v, dict) else v for k, v in out.items()}
+    return out
+
+
+def _merge(col: str, existing: dict, d: dict) -> dict:
+    """Field-wise, so what `_strip` left out survives; per-entry for docs with nested secrets."""
+    doc = {**existing, **d}
+    if NESTED.get((col, d.get("id"))):
+        for k, v in d.items():
+            if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                doc[k] = {**existing[k], **v}
+    return doc
+
+
 class Backups:
     def __init__(self, svc: Services):
         self.svc, self.store = svc, svc.store
@@ -40,7 +58,7 @@ class Backups:
         data = {"release_version": release_version(), "created": now()}
         for col in COLLECTIONS:
             hidden = SENSITIVE.get(col, set())
-            data[col] = [{k: v for k, v in d.items() if k not in hidden} for d in await self.store.list(col)]
+            data[col] = [_strip(col, d, hidden) for d in await self.store.list(col)]
         return data
 
     async def create(self, target: str, by: str, path: str | None = None) -> dict:
@@ -94,7 +112,7 @@ class Backups:
             docs = [d for d in data.get(col, []) if isinstance(d, dict) and d.get("id")]
             have = {d["id"]: d for d in await self.store.list(col)}
             created = [d["id"] for d in docs if d["id"] not in have]
-            updated = [d["id"] for d in docs if d["id"] in have and {**have[d["id"]], **d} != have[d["id"]]]
+            updated = [d["id"] for d in docs if d["id"] in have and _merge(col, have[d["id"]], d) != have[d["id"]]]
             plan[col] = {"created": created, "updated": updated, "unchanged": len(docs) - len(created) - len(updated)}
             extra[col] = sorted(k for k in have if k not in {d["id"] for d in docs})
         out = {
@@ -126,7 +144,7 @@ class Backups:
                 if not isinstance(d, dict) or not d.get("id"):
                     continue
                 existing = await self.store.get(col, d["id"]) or {}
-                doc = {**existing, **d}
+                doc = _merge(col, existing, d)
                 if col == "users":
                     if d["id"] in new_ids and not existing.get("password_hash"):
                         doc["login_disabled"] = True

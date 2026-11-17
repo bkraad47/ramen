@@ -3,7 +3,8 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from ..audit import note
+from .. import configs
+from ..audit import client_ip, note, write_audit
 from ..auth import csrf
 from ..oauth_server import OAuthError, OAuthServer, with_params
 from ..rbac import Principal, require
@@ -81,7 +82,8 @@ async def authorize_decide(
     _=Depends(csrf.csrf_form),
 ):
     form = await request.form()
-    q = {k: str(v) for k, v in form.items() if k not in ("decision", "csrf_token")}
+    own = ("decision", "csrf_token", "telemetry_consent", "configs_accept")
+    q = {k: str(v) for k, v in form.items() if k not in own}
     a = await server(request).validate_authorize(p, q)  # re-validated: the form is untrusted input like the query
     tags = [f"group:{a['group']}", f"client:{a['client']['client_id']}", f"zone:{a['zone']}"]
     params = {"state": a["state"]} if a["state"] else {}
@@ -90,8 +92,33 @@ async def authorize_decide(
         return _back_to_client(
             request, with_params(a["redirect_uri"], {**params, "error": "access_denied"}), a["client"].get("name", "")
         )
-    code = await server(request).issue_code(p, a)
-    note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"])
+    tel = a.get("telemetry") is not None
+    if tel and form.get("telemetry_consent") != "1":  # §24.3: approving without the acceptance is impossible
+        note(request, "oauth.authorize", a["scope"], tags + ["decision:allow", "reason:consent_required"])
+        raise OAuthError("invalid_request", "this group requires telemetry consent: tick the box to allow, or deny")
+    if a["configs"] is not None and not a["configs_accepted"]:  # §31.1: the consent page is also the configs page
+        lc = a["configs"]
+        if lc.get("error") or form.get("configs_accept") != lc["version"]:
+            note(request, "oauth.authorize", a["scope"], tags + ["decision:allow", "reason:configs_not_accepted"])
+            raise OAuthError(
+                "configs_not_accepted",
+                "configs not accepted: tick the box to accept this group's LLM configs, or deny",
+                403,
+                data={"version": lc["version"], "url": configs.page_url(base_url(request), a["group"])},
+            )
+        await configs.accept(request.app.state.services, p.id, a["group"], lc["version"])
+        await write_audit(
+            request.app.state.store,
+            user=p.name,
+            ip=client_ip(request),
+            action="configs.accept",
+            target=a["group"],
+            ok=True,
+            tags=[f"group:{a['group']}", f"version:{lc['version']}", "via:consent"],
+        )
+        tags.append("configs:accepted")
+    code = await server(request).issue_code(p, a, tel=tel)
+    note(request, "oauth.authorize", a["scope"], tags + ["decision:allow"] + (["telemetry:accepted"] if tel else []))
     target = with_params(a["redirect_uri"], {**params, "code": code})
     return _back_to_client(request, target, a["client"].get("name", ""))
 

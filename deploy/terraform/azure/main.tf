@@ -73,23 +73,61 @@ resource "azurerm_kubernetes_cluster" "ramen" {
     upgrade_settings { max_surge = "10%" }
   }
   identity { type = "SystemAssigned" }
+  # S6b: without a policy engine AKS stores NetworkPolicies and enforces none. Calico, because it is the engine both
+  # Ramen AKS shapes take: this overlay cluster and the satellite's node-subnet Azure CNI, where azurerm accepts Cilium
+  # only with overlay or a pod subnet (Azure NPM is the legacy engine). Setting it on an existing cluster may force
+  # Terraform to replace the cluster (read the plan; deploy-azure.md, upgrading) — new clusters are unaffected.
   network_profile {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
+    network_policy      = "calico"
     load_balancer_sku   = "standard"
   }
 }
 
+# §38.2 (D85): repository permissions (ABAC). Role assignments on the registry may carry a condition naming a
+# repository, which is how a group's build identity can push to ramen/groups/<group>/worker and nowhere else. In this
+# mode ACR honours the "Container Registry Repository *" roles, not AcrPull/AcrPush, hence the kubelet's role below.
+# The platform repositories ramen/{console,worker,skillspector} are written by your own pushes (az acr login), never
+# by a build identity.
 resource "azurerm_container_registry" "ramen" {
-  name                = "ramen${local.suffix}"
-  resource_group_name = azurerm_resource_group.ramen.name
-  location            = azurerm_resource_group.ramen.location
-  sku                 = "Basic"
+  name                 = "ramen${local.suffix}"
+  resource_group_name  = azurerm_resource_group.ramen.name
+  location             = azurerm_resource_group.ramen.location
+  sku                  = "Basic"
+  role_assignment_mode = "AbacRepositoryPermissions"
+}
+
+# Your own pushes of the platform images (az acr login + docker/crane push): in ABAC mode Owner/Contributor grant no
+# data-plane rights, so the principal that runs terraform gets "Container Registry Repository Writer" on the platform
+# repositories only (1.0.0c: a fresh registry answered 401 to the operator's push). Group repositories stay writable
+# only by their own build identity.
+resource "azurerm_role_assignment" "operator_acr_push" {
+  scope                = azurerm_container_registry.ramen.id
+  role_definition_name = "Container Registry Repository Writer"
+  principal_id         = data.azurerm_client_config.me.object_id
+  condition_version    = "2.0"
+  condition            = <<-EOT
+    (
+     (
+      !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/read'})
+      AND !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/write'})
+      AND !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/read'})
+      AND !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/write'})
+     )
+     OR
+     (
+      @Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'ramen/console'
+      OR @Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'ramen/worker'
+      OR @Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'ramen/skillspector'
+     )
+    )
+  EOT
 }
 
 resource "azurerm_role_assignment" "kubelet_acr_pull" {
   scope                = azurerm_container_registry.ramen.id
-  role_definition_name = "AcrPull"
+  role_definition_name = "Container Registry Repository Reader" # every repository: platform and every group's
   principal_id         = azurerm_kubernetes_cluster.ramen.kubelet_identity[0].object_id
 }
 
@@ -98,6 +136,7 @@ resource "azurerm_storage_account" "ramen" {
   resource_group_name             = azurerm_resource_group.ramen.name
   location                        = azurerm_resource_group.ramen.location
   account_tier                    = "Standard"
+  account_kind                    = "StorageV2" # the default, written down: ABAC conditions on blob roles need GPv2 (§33.4a)
   account_replication_type        = "LRS"
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
@@ -157,4 +196,82 @@ resource "azurerm_role_assignment" "console" {
   scope                = azurerm_resource_group.ramen.id
   role_definition_name = each.value
   principal_id         = azurerm_user_assigned_identity.console.principal_id
+}
+
+# §38.2 (D85, F2): no shared builder identity. The console creates per group the managed identity ramen-build-<group>
+# (federated with KSA ramen-system/ramen-build-<group>) and assigns it "Container Registry Repository Writer" on this
+# registry under an ABAC condition naming ramen/groups/<group>/worker only (plus "... Reader" on the worker base
+# repository). Its "Managed Identity Contributor" and "Role Based Access Control Administrator" above cover that.
+# To remove a deleted group's repository it holds this data-plane role, conditioned to ramen/groups/* and without any
+# write action: it can delete group images, never push anything.
+resource "azurerm_role_definition" "console_acr_cleaner" {
+  name        = "Ramen group repository cleaner (${local.suffix})"
+  scope       = azurerm_container_registry.ramen.id
+  description = "Read and delete ACR repositories (no push); assigned with a ramen/groups/ condition (D85)"
+  permissions {
+    data_actions = [
+      "Microsoft.ContainerRegistry/registries/repositories/metadata/read",
+      "Microsoft.ContainerRegistry/registries/repositories/metadata/delete",
+      "Microsoft.ContainerRegistry/registries/repositories/content/delete",
+    ]
+  }
+  assignable_scopes = [azurerm_container_registry.ramen.id]
+}
+
+resource "azurerm_role_assignment" "console_acr_cleaner" {
+  scope              = azurerm_container_registry.ramen.id
+  role_definition_id = azurerm_role_definition.console_acr_cleaner.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.console.principal_id
+  condition_version  = "2.0"
+  condition          = <<-EOT
+    (
+     (
+      !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/read'})
+      AND
+      !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/metadata/delete'})
+      AND
+      !(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/content/delete'})
+     )
+     OR
+     (
+      @Request[Microsoft.ContainerRegistry/registries/repositories:name] StringStartsWithIgnoreCase 'ramen/groups/'
+     )
+    )
+  EOT
+}
+
+# §33.4a (D79): the identity the evals and SkillSpector scan Jobs run as (KSA ramen-system/ramen-evals). They execute
+# a group repo's promptfoo config, so it holds NO role assignment: no registry, no storage, no Key Vault. (Pod logs
+# reach Azure Monitor through the node agent, not through this identity.)
+resource "azurerm_user_assigned_identity" "evals" {
+  name                = "ramen-evals"
+  resource_group_name = azurerm_resource_group.ramen.name
+  location            = azurerm_resource_group.ramen.location
+}
+
+resource "azurerm_federated_identity_credential" "evals" {
+  name      = "ramen-evals"
+  parent_id = azurerm_user_assigned_identity.evals.id
+  audience  = ["api://AzureADTokenExchange"]
+  issuer    = azurerm_kubernetes_cluster.ramen.oidc_issuer_url
+  subject   = "system:serviceaccount:ramen-system:ramen-evals"
+}
+
+# Azure Managed Redis (1.0.0c): the group throttle / task store the chart hands every zone as RAMEN_REDIS_URL
+# (`redis.externalUrl`), in place of the in-cluster Redis. TLS-only on port 10000 (the node and the workers speak
+# `rediss://`); access-key auth; public endpoint — AKS egress reaches it over the internet, the key is the gate.
+resource "azurerm_managed_redis" "ramen" {
+  count                     = var.managed_redis ? 1 : 0
+  name                      = "${var.name}-${local.suffix}"
+  resource_group_name       = azurerm_resource_group.ramen.name
+  location                  = azurerm_resource_group.ramen.location
+  sku_name                  = var.managed_redis_sku
+  high_availability_enabled = var.managed_redis_ha
+  public_network_access     = "Enabled"
+  default_database {
+    access_keys_authentication_enabled = true
+    client_protocol                    = "Encrypted"
+    clustering_policy                  = "EnterpriseCluster" # one endpoint, no cluster-aware client needed
+    eviction_policy                    = "NoEviction"        # throttle counters and tasks are never silently dropped
+  }
 }

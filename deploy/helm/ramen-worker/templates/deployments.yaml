@@ -18,6 +18,7 @@ spec:
       labels: {{- include "rw.labels" $root | nindent 8 }}
         app: worker
         ramen.io/track: {{ $t.track }}
+        ramen.io/role: worker   # §24.1: pod label only — never in spec.selector, which is immutable
         {{- if eq $root.Values.provider "azure" }}
         azure.workload.identity/use: "true"
         {{- end }}

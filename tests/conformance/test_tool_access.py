@@ -182,6 +182,20 @@ def test_console_validates_the_map_and_hands_it_to_the_deploy(console):
     assert "Tool access" in page and "/environments/dev/tool-access" in page
 
 
+def test_the_evals_job_is_a_kind_rules_name_and_no_role_may_take(console):
+    """§31.4a: `evals` (the deploy's evals Job) is offered in the lists and stored; no custom role may be `evals`."""
+    con = console
+    body = {CALC: {"list": ["key", "evals"], "call": ["evals"]}}
+    r = put_access(con, body)
+    assert r.status_code in (200, 204), r.text
+    envs = [e for e in con.admin.get("environments_all", params={"group": "demo"}).json() if e["name"] == "dev"]
+    assert envs[0].get("tool_access") == body, envs
+    assert "Evals Job" in con.admin.page("/groups/demo").text
+    r = con.admin.http.put("/api/v1/config/roles/evals", json={"base": "viewer"})
+    assert r.status_code == 422 and "built-in" in r.text, r.text
+    assert put_access(con, ACCESS).status_code in (200, 204)
+
+
 def test_console_token_carries_the_role_claim(console):
     con = console
     cid = con.register_client()

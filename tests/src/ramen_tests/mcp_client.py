@@ -15,6 +15,7 @@ import shlex
 import shutil
 import ssl
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -33,6 +34,147 @@ UNSET = object()
 MAX_MESSAGE = 4 * 1024 * 1024
 CLIENT_INFO = {"name": "ramen-tests", "version": "0.4.0"}
 _ids = itertools.count(1)
+_seq = itertools.count(1)
+TELEMETRY_META = "io.ramen/telemetry"  # §26.3: the client's report, on every gated call
+EVALS_META = "io.ramen/evals"  # §29.3: {"version": "<v>"} on every gated call (a legacy body: `params.evals`)
+EVALS_REQUIRED = -32026  # §29.3 (HTTP 428): "evals config required" / "evals config changed: sign in again"
+GUARDRAILS_META = "io.ramen/guardrails"  # §36.3: {"version": "<v>"} on every gated call (legacy `params.guardrails`)
+GUARDRAILS_REQUIRED = -32029  # §36.3 (HTTP 428): "guardrails policy required" / "… changed: sign in again"
+GATED = ("tools/call", "prompts/get", "resources/read")
+# §29.3 / §30.3 / §31.2 / §36.3: the policies a bare client must name on every gated call when the group requires them
+# — `/.well-known/ramen-policy` key → `_meta` key (a legacy body carries the same object top-level under the policy key)
+POLICY_META = {
+    "evals": EVALS_META,
+    "skillspector": "io.ramen/skillspector",
+    "configs": "io.ramen/configs",
+    "guardrails": GUARDRAILS_META,
+}
+_POLICIES: dict[tuple, tuple[float, dict | None]] = {}
+
+
+def telemetry_event(kind="llm", name="test-model", ms=12, ok=True, reasoning=None, ts=None) -> dict:
+    from datetime import UTC, datetime
+
+    e = {
+        "ts": ts or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "kind": kind,
+        "name": name,
+        "ms": ms,
+        "ok": ok,
+    }
+    if reasoning is not None:
+        e["reasoning"] = reasoning
+    return e
+
+
+def telemetry_report(version: str = "", events: list | None = None, seq: int | None = None) -> dict:
+    """What goes in `params._meta["io.ramen/telemetry"]` (or on `telemetry/report`): `version` = the
+    `telemetry_version` of `GET /api/v1/config/otel` ("" when the worker was told none)."""
+    return {"version": version, "seq": next(_seq) if seq is None else seq, "events": list(events or [])}
+
+
+def with_report(method: str, params: dict | None, version: str | None) -> dict | None:
+    """`params` with a report added for a gated method when `version` is not None and none is there yet."""
+    if version is None or method not in GATED or params is None:
+        return params
+    meta = dict(params.get("_meta") or {})
+    if TELEMETRY_META in meta:
+        return params
+    meta[TELEMETRY_META] = telemetry_report(version)
+    return {**params, "_meta": meta}
+
+
+def evals_meta(version: str) -> dict:
+    """What goes in `params._meta["io.ramen/evals"]` (§29.3): the evals version of the token answer / policy."""
+    return {"version": version}
+
+
+def with_evals(method: str, params: dict | None, version: str | None) -> dict | None:
+    """`params` with the evals version added for a gated method when `version` is not None and none is there yet."""
+    if version is None or method not in GATED or params is None:
+        return params
+    meta = dict(params.get("_meta") or {})
+    if EVALS_META in meta:
+        return params
+    meta[EVALS_META] = evals_meta(version)
+    return {**params, "_meta": meta}
+
+
+def fetch_policy(console_url: str | None, group: str | None, zone: str | None, ttl: float = 60) -> dict | None:
+    """`GET <console>/.well-known/ramen-policy?group=&zone=` (public, §29.3) — what a bare client must carry; None
+    without a console URL, a group and zone, or when the console does not answer it. Cached `ttl` seconds."""
+    if not console_url or not group or not zone:
+        return None
+    key, now = (console_url, group, zone), time.monotonic()
+    if key in _POLICIES and _POLICIES[key][0] > now:
+        return _POLICIES[key][1]
+    try:
+        r = httpx.get(
+            f"{E.strip(console_url)}/.well-known/ramen-policy",
+            params={"group": group, "zone": zone},
+            verify=E.console_verify(),
+            timeout=30,
+        )
+        doc = r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        doc = None
+    _POLICIES[key] = (now + ttl, doc if isinstance(doc, dict) else None)
+    return _POLICIES[key][1]
+
+
+def forget_policies() -> None:
+    """Drop the cached policy documents (a test that flips a group's `required` wants the next client to re-read)."""
+    _POLICIES.clear()
+
+
+def env_policy(group: str | None, zone: str | None) -> dict | None:
+    """The policy of RAMEN_CONSOLE_URL for `group`/`zone` (None when unset): what `from_env` clients carry."""
+    return fetch_policy(E.env("RAMEN_CONSOLE_URL"), group, zone)
+
+
+def policy_meta(policy: dict | None) -> dict:
+    """`{"io.ramen/<policy>": {"version"}}` for every policy the document marks `required` (telemetry excluded: a
+    report is more than a version, see `with_report`)."""
+    out = {}
+    for name, meta_key in POLICY_META.items():
+        p = (policy or {}).get(name)
+        if isinstance(p, dict) and p.get("required") and isinstance(p.get("version"), str):
+            out[meta_key] = {"version": p["version"]}
+    return out
+
+
+def with_policy(method: str, params: dict | None, policy: dict | None) -> dict | None:
+    """`params` with every required policy version in `_meta` for a gated method (keys already there are kept)."""
+    add = policy_meta(policy)
+    if not add or method not in GATED or params is None:
+        return params
+    meta = dict(params.get("_meta") or {})
+    for k, v in add.items():
+        meta.setdefault(k, v)
+    return {**params, "_meta": meta}
+
+
+def legacy_policy(body: dict, method: str, policy: dict | None) -> dict:
+    """A 2025-06-18 body: the required versions top-level in `params` (`evals`, `skillspector`, `configs`), as the
+    bridge sends them."""
+    if method in GATED and isinstance(body.get("params"), dict):
+        for name, meta_key in POLICY_META.items():
+            if meta_key in policy_meta(policy):
+                body["params"].setdefault(name, policy_meta(policy)[meta_key])
+    return body
+
+
+def legacy_evals(body: dict, method: str, version: str | None) -> dict:
+    """§29.3: a 2025-06-18 body through the bridge carries the version as `params.evals` (the node strips it before
+    the tool sees the arguments), not in `_meta`."""
+    if (
+        version is not None
+        and method in GATED
+        and isinstance(body.get("params"), dict)
+        and "evals" not in body["params"]
+    ):
+        body["params"]["evals"] = evals_meta(version)
+    return body
 
 
 class JsonRpcError(Exception):
@@ -88,30 +230,44 @@ class Node:
         *,
         group: str | None = None,
         zone: str | None = None,
-        tls: bool = False,
+        tls: bool | None = None,
         ca: str | bytes | None = None,
         admin_key: str | None = None,
         timeout: float = 30,
     ):
+        if tls is None:  # D86: on a stack with an install CA every worker is TLS, verified against it
+            tls, ca = E.install_ca() is not None, ca if ca is not None else E.install_ca()
         self.target, self.key, self.admin_key, self.timeout, self.tls = target, key, admin_key, timeout, tls
         self.group, self.zone = group, zone
+        self.telemetry: str | None = None  # a version → every gated request carries a §26.3 report
+        self.evals: str | None = None  # a version → every gated request carries it top-level (§29.3, legacy body)
+        self.policy: dict | None = None  # the `/.well-known/ramen-policy` document → the required versions (§31.4a)
         self._ca = Path(ca).read_bytes() if isinstance(ca, str) else ca
         self._channel: grpc.Channel | None = None
 
     @classmethod
     def from_env(cls, key: str | None = None, **kw) -> Node:
-        target, tls = E.node_target(E.require("RAMEN_NODE_URL"))
+        """`target=` (a `host[:port]` or `grpcs://host`) aims the call at another edge than RAMEN_NODE_URL — a
+        satellite cluster's host (CONTRACTS §28.1); routing metadata is the same, the trust anchor is `ca=` or
+        RAMEN_SATELLITE_CA (RAMEN_NODE_CA for the home edge)."""
+        host = kw.pop("target", None)
+        target, tls = E.node_target(E.edge_url(host) if host else E.require("RAMEN_NODE_URL"))
         meta = dict(E.routing_metadata())
-        return cls(
+        group, zone = kw.pop("group", meta["ramen-group"]), kw.pop("zone", meta["ramen-zone"])
+        policy = kw.pop("policy", UNSET)
+        n = cls(
             target,
             key,
-            group=kw.pop("group", meta["ramen-group"]),
-            zone=kw.pop("zone", meta["ramen-zone"]),
+            group=group,
+            zone=zone,
             tls=tls,
-            ca=E.env("RAMEN_NODE_CA"),
+            ca=kw.pop("ca", E.edge_ca(host)),
             admin_key=kw.pop("admin_key", E.env("RAMEN_ADMIN_KEY")),
             **kw,
         )
+        # §31.4a: a bare client is not exempt from the gates — it carries what the console's public policy requires
+        n.policy = env_policy(group, zone) if policy is UNSET else policy
+        return n
 
     # -- channel -------------------------------------------------------------------------------------------------
     def channel(self) -> grpc.Channel:
@@ -169,8 +325,9 @@ class Node:
         """JSON-RPC request → `result`. Raises JsonRpcError for an error object, grpc.RpcError for transport errors."""
         rid = next(_ids)
         body = {"jsonrpc": "2.0", "id": rid, "method": method}
-        if params is not None:
+        if (params := with_report(method, params, self.telemetry)) is not None:
             body["params"] = params
+        legacy_policy(legacy_evals(body, method, self.evals), method, self.policy)
         out = json.loads(self.call_raw(body, key, timeout=timeout) or b"null")
         assert isinstance(out, dict) and out.get("jsonrpc") == "2.0" and out.get("id") == rid, out
         if "error" in out:
@@ -280,6 +437,7 @@ HTTP_OUTCOMES = {
     403: "PERMISSION_DENIED",
     404: "NOT_FOUND",
     413: "OUT_OF_RANGE",
+    428: "FAILED_PRECONDITION",  # §26.3 / §29.3: a report or the evals version is missing or stale (-32024..-32026)
     429: "RESOURCE_EXHAUSTED",
     503: "UNAVAILABLE",
 }
@@ -308,8 +466,16 @@ class HttpNode:
         ca: str | bytes | None = None,
         verify: bool | None = None,
         timeout: float = 30,
+        tls: bool | None = None,
     ):
+        if tls is None and E.install_ca() and url.startswith("http://"):  # D86: the stack serves TLS only
+            url = "https://" + url[len("http://") :]
+        if tls is not False and url.startswith("https://") and ca is None and verify is None and E.install_ca():
+            ca = E.install_ca()
         self.url, self.key, self.group, self.zone, self.timeout = url, key, group, zone, timeout
+        self.telemetry: str | None = None  # a version → every gated request carries a §26.3 report
+        self.evals: str | None = None  # a version → every gated request carries it top-level (§29.3, legacy body)
+        self.policy: dict | None = None  # the `/.well-known/ramen-policy` document → the required versions (§31.4a)
         self.session_id: str | None = None
         self.protocol_version: str | None = None
         self.notifications: list[dict] = []  # server notifications carried on SSE answers (C11), in order
@@ -317,19 +483,28 @@ class HttpNode:
         v: bool | str = E.tls_verify() if verify is None else verify
         if isinstance(ca, (str, bytes)):
             v = ca if isinstance(ca, str) else _ca_file(ca)
+        self.verify = v
         self._client = httpx.Client(timeout=timeout, verify=v)
 
     @classmethod
     def from_env(cls, key: str | None = None, **kw) -> HttpNode:
+        """`host=` (a `host[:port]` or `https://host`) aims the call at another edge than RAMEN_NODE_URL — a
+        satellite cluster's host (CONTRACTS §28.1); the `/mcp` path and headers are the same, the trust anchor is
+        `ca=` or RAMEN_SATELLITE_CA (RAMEN_NODE_CA for the home edge)."""
+        host = kw.pop("host", None)
         meta = dict(E.routing_metadata())
-        return cls(
-            E.node_http_url(E.require("RAMEN_NODE_URL")),
+        group, zone = kw.pop("group", meta["ramen-group"]), kw.pop("zone", meta["ramen-zone"])
+        policy = kw.pop("policy", UNSET)
+        h = cls(
+            E.node_http_url(E.edge_url(host) if host else E.require("RAMEN_NODE_URL")),
             key,
-            group=kw.pop("group", meta["ramen-group"]),
-            zone=kw.pop("zone", meta["ramen-zone"]),
-            ca=E.env("RAMEN_NODE_CA"),
+            group=group,
+            zone=zone,
+            ca=kw.pop("ca", E.edge_ca(host)),
             **kw,
         )
+        h.policy = env_policy(group, zone) if policy is UNSET else policy  # §31.4a, as `Node.from_env`
+        return h
 
     def close(self):
         self._client.close()
@@ -381,8 +556,9 @@ class HttpNode:
     def request(self, method: str, params: dict | None = None, key=UNSET, timeout: float | None = None) -> dict:
         rid = next(_ids)
         body = {"jsonrpc": "2.0", "id": rid, "method": method}
-        if params is not None:
+        if (params := with_report(method, params, self.telemetry)) is not None:
             body["params"] = params
+        legacy_policy(legacy_evals(body, method, self.evals), method, self.policy)
         r = self.post(body, key, timeout=timeout)
         if r.status_code >= 300:
             raise HttpError(r)
@@ -470,7 +646,7 @@ def sdk_http_client(node: HttpNode, key: str | None = None, timeout: float = 60)
     headers = {
         name: value for name, value in node.headers(k, session=False).items() if name not in ("Content-Type", "Accept")
     }
-    return httpx2.AsyncClient(headers=headers, verify=E.tls_verify(), timeout=timeout)
+    return httpx2.AsyncClient(headers=headers, verify=node.verify, timeout=timeout)
 
 
 @asynccontextmanager

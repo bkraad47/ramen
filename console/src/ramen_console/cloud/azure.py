@@ -12,15 +12,25 @@ import functools
 import os
 from typing import Any
 
-from .. import __version__
+from .. import __version__, imagebuild
 from ..errors import ApiError
 from ..policy import permissions as perm
-from ..util import now
 from . import azure_api
-from .azure_api import BASELINE, BLOB_ROLES, MANAGED, SECRET_ROLE, AzureClients, Identities
-from .azure_k8s import WI_CLIENT_ID, AzureKube, azure_manifests, securitypolicy
+from .azure_api import (
+    BASELINE,
+    BLOB_ROLES,
+    BUILD_TAG,
+    MANAGED,
+    READ_ACTIONS,
+    SECRET_ROLE,
+    WRITE_ACTIONS,
+    AzureClients,
+    Identities,
+    repo_condition,
+)
+from .azure_k8s import WI_CLIENT_ID, WI_USE, AzureKube, azure_manifests, securitypolicy
 from .gcp import GcpCloud, detail_of
-from .gcp_k8s import ns_name
+from .gcp_k8s import ACTIVATOR, BUILD_NS, ns_name
 
 
 def _guard(fn):
@@ -36,11 +46,28 @@ def _guard(fn):
     return wrapper
 
 
+WRITER, READER = "Container Registry Repository Writer", "Container Registry Repository Reader"
+_BLOB = "Microsoft.Storage/storageAccounts/blobServices/containers/blobs"
+
+
+def blob_condition(group: str) -> str:
+    """§33.4a: the ABAC condition on a worker's `Storage Blob Data Reader` — reads only under `<group>/`, lists only
+    with that prefix."""
+    read, lst = f"ActionMatches{{'{_BLOB}/read'}}", "SubOperationMatches{'Blob.List'}"
+    return (
+        f"(!({read} AND NOT {lst}) OR @Resource[{_BLOB}:path] StringStartsWith '{group}/') AND "
+        f"(!({read} AND {lst}) OR @Request[{_BLOB}:prefix] StringStartsWith '{group}/')"
+    )
+
+
 def _open(cidrs: list[str]) -> bool:
     return not cidrs or any(c.strip() in ("0.0.0.0/0", "::/0") for c in cidrs)
 
 
 class AzureCloud(GcpCloud):
+    PROVIDER = "Azure"
+    JOB_POD_LABELS = {WI_USE: "true"}  # §33.4a: the webhook injects the `ramen-evals` identity's token into the Jobs
+
     def __init__(
         self,
         subscription,
@@ -57,10 +84,11 @@ class AzureCloud(GcpCloud):
         timeout=10.0,
         wait_secs=300,
         poll=2.0,
+        node_wait_secs=None,
     ):
         clients = clients or AzureClients(subscription, storage_account, key_vault, container)
         super().__init__("", location, container, image, admin_key, clients, rpc, timeout, wait_secs, poll, None)
-        self.kube = AzureKube(clients, poll=poll, wait_secs=wait_secs)
+        self.kube = AzureKube(clients, poll=poll, wait_secs=wait_secs, node_wait_secs=node_wait_secs)
         self.subscription, self.resource_group, self.location = subscription, resource_group, location
         self.account, self.key_vault, self.oidc_issuer, self.container = (
             storage_account,
@@ -95,6 +123,7 @@ class AzureCloud(GcpCloud):
             os.environ.get("RAMEN_AZURE_CONTAINER", "groups"),
             timeout=float(os.environ.get("RAMEN_WORKER_DEADLINE", "10")),
             wait_secs=int(os.environ.get("RAMEN_DEPLOY_TIMEOUT_SECS", "300")),
+            node_wait_secs=int(os.environ.get("RAMEN_NODE_WAIT_SECS", "1200")),
         )
 
     # the k8s-side flow is the GCP one; re-guard so errors say "Azure"
@@ -102,12 +131,66 @@ class AzureCloud(GcpCloud):
     abort_deploy = _guard(GcpCloud.abort_deploy.__wrapped__)
     attach_zone = _guard(GcpCloud.attach_zone.__wrapped__)
     scale = _guard(GcpCloud.scale.__wrapped__)
+    zone_runtime = _guard(GcpCloud.zone_runtime.__wrapped__)
+    sleep_zone = _guard(GcpCloud.sleep_zone.__wrapped__)
+    wake_zone = _guard(GcpCloud.wake_zone.__wrapped__)
+
+    # §38.2 (D85): per-group build identities ------------------------------------------------------------------
+    def _acr_scope(self) -> str:
+        """The registry's resource id: `RAMEN_AZURE_ACR_ID`, else the registry of the build registry's host in the
+        install's resource group (Terraform puts it there)."""
+        if acr_id := os.environ.get("RAMEN_AZURE_ACR_ID", "").strip():
+            return acr_id
+        name = self._build_registry().split("/")[0].split(".")[0]
+        return f"{self._ids().rg_path}/providers/Microsoft.ContainerRegistry/registries/{name}"
+
+    def _build_identity(self, group, repository) -> dict[str, str]:
+        """Managed identity `ramen-build-<group>` (tag `ramen-build-group`, federated with KSA
+        `ramen-system/ramen-build-<group>`) holding `Container Registry Repository Writer` on the registry under an
+        ABAC condition naming the group's repository `ramen/groups/<group>/worker`, and `… Reader` on the base image's
+        repository when it lives in the same registry. ACR creates the repository on the first push."""
+        ids, name = self._ids(), f"ramen-build-{group}"[:128]
+        ident, _ = ids.ensure(name, {BUILD_TAG: group})
+        ids.federate(name, self.oidc_issuer, f"system:serviceaccount:{BUILD_NS}:{self.build_ksa(group)}", "build")
+        pid, scope, host = ident["properties"]["principalId"], self._acr_scope(), self._build_registry().split("/")[0]
+        existing = ids.assignments(pid)
+        repo = repository.split("/", 1)[1]
+        ids.grant(pid, WRITER, scope, BASELINE, existing, repo_condition(repo, WRITE_ACTIONS))
+        base = imagebuild.repo_of(imagebuild.base_image(self))
+        if base.startswith(host + "/"):
+            ids.grant(pid, READER, scope, BASELINE, existing, repo_condition(base.split("/", 1)[1], READ_ACTIONS))
+        return {WI_CLIENT_ID: ident["properties"]["clientId"]}
+
+    def _drop_build_identity(self, group) -> dict[str, list[str]]:
+        ids, out = self._ids(), {"repositories": [], "service_accounts": []}
+        if ident := ids.get(f"ramen-build-{group}"[:128]):
+            self._drop_identity(ids, ident)
+            out["service_accounts"].append(ident["name"])
+        repository = self.build_repository(group)
+        if repository and self.c.acr(repository.split("/")[0]).delete_repository(repository.split("/", 1)[1]):
+            out["repositories"].append(repository)
+        return out
+
+    def _build_extras(self, registry) -> dict:
+        """kaniko's bundled `acr-env` helper exchanges the federated token the workload-identity webhook injects (the
+        pod label asks for it; `ramen-build-<group>`'s KSA names the identity) for an ACR token."""
+        host = registry.split("/")[0]
+        return {"docker_config": {"credHelpers": {host: "acr-env"}}, "pod_labels": {WI_USE: "true"}}
 
     def bucket_uri(self, group) -> str:
         return f"az://{self.account}/{self.container}/{group}"
 
     def _ids(self) -> Identities:
         return Identities(self.c.arm, self.subscription, self.resource_group, self.location)
+
+    # clusters (§28.2): a satellite is an AKS cluster in another location; `project` names its resource group
+    def _satellite_clients(self, entry: dict):
+        rg = entry.get("project") or entry.get("resource_group") or self.resource_group
+        return self.c.for_cluster(rg, entry["name"])
+
+    def _issuer(self) -> str:
+        """The OIDC issuer the zone identity's federated credential trusts: the satellite's for a satellite zone."""
+        return self.oidc_issuer if self.current_cluster == "home" else self.cc.oidc_issuer
 
     # scopes -------------------------------------------------------------
     def _container_scope(self, name=None) -> str:
@@ -137,17 +220,20 @@ class AzureCloud(GcpCloud):
 
     def _identity(self, group, zone) -> dict:
         """Managed identity `ramen-<group>-<zone>` federated with KSA `<ns>/worker`, with the baseline grants: read on
-        the code container (Azure cannot scope a role to a blob prefix; the console's sync keeps groups apart) and
-        Key Vault Secrets User on each of the group's secrets. Idempotent."""
+        the code container under an ABAC condition that keeps it to the group's own prefix (§33.4a; a SKU without
+        ABAC rejects the condition and the error names it) and Key Vault Secrets User on each of the group's secrets.
+        Idempotent."""
         ns, ids = ns_name(group, zone), self._ids()
         name = ids.name(group, zone)
         ident, created = ids.ensure(name, {"ramen-group": group, "ramen-zone": zone})
-        subject = f"system:serviceaccount:{ns}:worker"
-        ids.federate(name, self.oidc_issuer, subject)
+        subject, issuer = f"system:serviceaccount:{ns}:worker", self._issuer()
+        ids.federate(name, issuer, subject)
         pid = ident["properties"]["principalId"]
         existing = ids.assignments(pid)
         roles = []
-        if ids.grant(pid, "Storage Blob Data Reader", self._container_scope(), BASELINE, existing):
+        if ids.grant(
+            pid, "Storage Blob Data Reader", self._container_scope(), BASELINE, existing, blob_condition(group)
+        ):
             roles.append("Storage Blob Data Reader")
         for sid in self._group_secrets(group):
             if ids.grant(pid, SECRET_ROLE, self._secret_scope(sid), BASELINE, existing):
@@ -159,12 +245,16 @@ class AzureCloud(GcpCloud):
             "created": created,
             "roles": roles,
             "ksa": f"{ns}/worker",
-            "workload_identity": f"{self.oidc_issuer}#{subject}",
+            "workload_identity": f"{issuer}#{subject}",
         }
+
+    def home_region(self) -> str | None:
+        return self.location
 
     @_guard
     async def create_service_account(self, group, zone):
         ns = ns_name(group, zone)
+        await self._select(zone)
 
         def run():
             out = self._identity(group, zone)
@@ -262,10 +352,34 @@ class AzureCloud(GcpCloud):
         except ResourceNotFoundError:
             return None
 
+    @_guard
+    async def list_files(self, group, prefix):
+        def run():
+            blobs = self.c.container.list_blobs(name_starts_with=f"{group}/{prefix}")
+            return sorted(b.name[len(group) + 1 :] for b in blobs)
+
+        return await asyncio.to_thread(run)
+
+    @_guard
+    async def delete_files(self, group):
+        from azure.core.exceptions import ResourceNotFoundError
+
+        def run():
+            names = [b.name for b in self.c.container.list_blobs(name_starts_with=f"{group}/")]
+            for n in names:
+                try:
+                    self.c.container.delete_blob(n)
+                except ResourceNotFoundError:
+                    pass
+            return len(names)
+
+        return await asyncio.to_thread(run)
+
     # observe ------------------------------------------------------------
     @_guard
     async def logs(self, group, zone, worker=None, tail=500):
-        return await asyncio.to_thread(azure_api.fetch_pod_logs, self.kube, ns_name(group, zone), worker, tail)
+        kube = await self._select(zone)
+        return await asyncio.to_thread(azure_api.fetch_pod_logs, kube, ns_name(group, zone), worker, tail)
 
     # traffic ------------------------------------------------------------
     @_guard
@@ -283,10 +397,12 @@ class AzureCloud(GcpCloud):
         """The node enforces the list (authoritative, needs no cloud API); the zone route's Envoy `SecurityPolicy`
         mirrors it at the edge, best effort. An open list removes the edge policy."""
         ns, cidrs = ns_name(group, zone), list(cidrs)
+        await self._select(zone)
         await asyncio.to_thread(
             self.kube.merge_secret, ns, "ramen-deploy", {"RAMEN_ALLOWED_CIDRS": ",".join(cidrs) or "0.0.0.0/0"}
         )
-        for dep in ("worker", "worker-canary"):  # env comes from the Secret at pod start: roll the workers
+        # env comes from the Secret at pod start: roll the workers (and a sleeping zone's activator, which enforces too)
+        for dep in ("worker", "worker-canary", ACTIVATOR):
             d = await asyncio.to_thread(self.kube.read, "Deployment", ns, dep)
             if d and d.get("spec", {}).get("replicas", 0) > 0:
                 await asyncio.to_thread(self.kube.restart, ns, dep)
@@ -313,6 +429,7 @@ class AzureCloud(GcpCloud):
         """Destroy one group's deployment in one zone: its namespace (workers, routes and policies go with it), the
         zone identity and every role assignment it holds."""
         ns, ids = ns_name(group, zone), self._ids()
+        await self._select(zone)
         await asyncio.to_thread(self.kube.delete_namespace, ns)
         removed = {"namespaces": [ns], "service_accounts": []}
         if ident := await asyncio.to_thread(ids.get, ids.name(group, zone)):
@@ -323,49 +440,22 @@ class AzureCloud(GcpCloud):
     @_guard
     async def detach_group(self, group):
         removed = {"namespaces": [], "service_accounts": []}
-        for ns in await asyncio.to_thread(self.kube.list_namespaces, group):
-            await asyncio.to_thread(self.kube.delete_namespace, ns)
-            removed["namespaces"].append(ns)
+        for cluster in await self._all_clusters():  # §28.2: every cluster's namespaces of the group
+            kube = self._use(cluster)
+            for ns in await asyncio.to_thread(kube.list_namespaces, group):
+                await asyncio.to_thread(kube.delete_namespace, ns)
+                removed["namespaces"].append(ns)
+        self._use("home")
         ids = self._ids()
         for ident in await asyncio.to_thread(ids.of_group, group):
             await asyncio.to_thread(self._drop_identity, ids, ident)
             removed["service_accounts"].append(ident["name"])
+        await self._drop_builder(group, removed)
         return removed
 
-    @_guard
-    async def refresh(self):
-        def run():
-            zones, skipped = [], []
-            for n in self.c.to_dict(self.c.core.list_namespace(label_selector="ramen.io/group")).get("items", []):
-                labels, ns = n["metadata"].get("labels", {}), n["metadata"]["name"]
-                if (n.get("status") or {}).get("phase") == "Terminating":
-                    skipped.append({"namespace": ns, "reason": "terminating"})
-                    continue
-                try:
-                    main = self.kube.read("Deployment", ns, "worker") or {}
-                    can = self.kube.read("Deployment", ns, "worker-canary") or {}
-                    ksa = self.kube.read("ServiceAccount", ns, "worker") or {}
-                except Exception as e:  # noqa: BLE001 - report the namespace as unreadable, keep surveying
-                    skipped.append({"namespace": ns, "reason": detail_of(e)})
-                    continue
-                zones.append(
-                    {
-                        "group": labels.get("ramen.io/group"),
-                        "zone": labels.get("ramen.io/zone"),
-                        "namespace": ns,
-                        "replicas": main.get("spec", {}).get("replicas", 0),
-                        "ready": (main.get("status") or {}).get("readyReplicas", 0),
-                        "canary_replicas": can.get("spec", {}).get("replicas", 0),
-                        "canary_ready": (can.get("status") or {}).get("readyReplicas", 0),
-                        "service_account": (ksa.get("metadata", {}).get("annotations") or {}).get(WI_CLIENT_ID),
-                    }
-                )
-            return {
-                "groups": sorted({z["group"] for z in zones if z.get("group")}),
-                "zones": zones,
-                "skipped": skipped,
-                "service_accounts": self._ids().all(),
-                "at": now(),
-            }
+    SA_ANNOTATION = WI_CLIENT_ID
 
-        return await asyncio.to_thread(run)
+    def _accounts(self) -> list:
+        return self._ids().all()
+
+    refresh = _guard(GcpCloud.refresh.__wrapped__)

@@ -7,5 +7,6 @@
 <pre>claude mcp add-json ramen-{{ groups[0] }} '{"type":"http","url":"{{ public_url }}/mcp",
   "headers":{"ramen-group":"{{ groups[0] }}","ramen-zone":"&lt;zone&gt;"},
   "oauth":{"clientId":"&lt;client id&gt;","scopes":"mcp:{{ groups[0] }}:&lt;zone&gt;"}}'</pre>
-<p class="muted">Then run <code>/mcp</code> in Claude Code (or open the server in your client) and approve it in the browser window it opens. The zone names come from the admin who deployed the group.</p></div>{% endif %}
+<p class="muted">Then run <code>/mcp</code> in Claude Code (or open the server in your client) and approve it in the browser window it opens. The zone names come from the admin who deployed the group.</p>
+{% if satellites %}<p class="muted">Some zones run on a satellite cluster with its own address — use it in place of <code>{{ public_url }}</code> for them (the sign-in stays here): {% for z, h in satellites %}zone <code>{{ z }}</code> at <code>https://{{ h }}</code>{{ ', ' if not loop.last }}{% endfor %}.</p>{% endif %}</div>{% endif %}
 {% endblock %}

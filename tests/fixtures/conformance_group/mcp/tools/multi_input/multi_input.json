@@ -1,0 +1,11 @@
+{
+  "type": "tool",
+  "name": "multi_input",
+  "description": "Ask two questions at once (two elicitations) and finish when both are answered. Runs as a task.",
+  "callable": "run",
+  "input": {},
+  "task": true,
+  "error": {
+    "type": "string"
+  }
+}

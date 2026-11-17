@@ -1,0 +1,8 @@
+# cp terraform.tfvars.example terraform.tfvars && edit
+project = "<the home apply's project id>"
+region  = "australia-southeast1"
+home_pod_cidr = "10.7.128.0/17" # gcloud container clusters describe ramen --region us-central1 --format='value(clusterIpv4Cidr)'
+# node_tag        = "gke-ramen-australia-southeast1-61e0f6af-node"   # after the first apply: terraform output -raw node_tag_command | sh
+# name            = "ramen-australia-southeast1"   # default: ramen-<region>
+# public_hostname = ""                              # default: <ip-with-dashes>.sslip.io
+# console_gsa     = ""                              # default: ramen-console@<project>.iam.gserviceaccount.com

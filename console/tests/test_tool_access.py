@@ -17,8 +17,12 @@ URL = "/api/v1/groups/demo/environments/prod/tool-access"
 ALL = list(toolaccess.KINDS)
 
 
-def test_kinds_are_the_four_the_node_knows_and_super_admin_is_not_one():
-    assert toolaccess.KINDS == ("key", "group_admin", "viewer", "mcp_user")
+def test_kinds_are_the_five_the_node_knows_and_super_admin_is_not_one():
+    # §31.4a: `evals` = the deploy's evals Job (RAMEN_EVALS_KEY); a rule that leaves it out hides the tool from the Job
+    assert toolaccess.KINDS == ("key", "evals", "group_admin", "viewer", "mcp_user")
+    assert toolaccess.clean({"calc": {"list": ["viewer", "evals"], "call": ["evals"]}}) == {
+        "calc": {"list": ["evals", "viewer"], "call": ["evals"]}
+    }
 
 
 def test_clean_validates_orders_and_drops_unrestricted_entries():
@@ -158,6 +162,8 @@ def test_group_page_shows_a_tool_access_table_per_environment_and_badges_restric
     assert 'name="list:calc" value="viewer" checked' in page and 'name="list:calc" value="mcp_user">' in page
     assert 'name="call:calc" value="key" checked' in page and 'name="call:calc" value="viewer">' in page
     assert '<details class="multi" id="ta-prod-ghost-list">' in page and "not in the last deploy" in page
+    assert 'name="list:calc" value="evals">' in page and "Evals Job" in page  # §31.4a: offered, unticked here
+    assert "the evals Job before a deploy goes live" in page
     assert page.count('<span class="badge error">restricted</span>') >= 2  # the table rows and the packages row
     assert 'type="hidden" name="list:calc" value=""' in page  # an emptied column still reaches the API
     make_user(demo, "v@x", "viewer", ["demo"])

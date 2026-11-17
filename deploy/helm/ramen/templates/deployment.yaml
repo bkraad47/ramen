@@ -12,7 +12,7 @@
   "RAMEN_AZURE_ZONAL" (ternary "0" "1" (eq (toString .Values.azure.zonal) "false"))
   "RAMEN_PUBLIC_URL" (printf "https://%s" .Values.azure.publicHostname)
   "RAMEN_GROUPS_BUCKET" (printf "az://%s/groups" .Values.azure.storageAccount)
-  "RAMEN_IMAGE_WORKER" (printf "%s/ramen/worker:%s" .Values.azure.acr (.Values.image.tag | toString))
+  "RAMEN_IMAGE_WORKER" (include "ramen.workerImage" .)
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
   "RAMEN_COOKIE_SECURE" "1"
   "RAMEN_TRUST_PROXY_HOPS" "1") }}
@@ -24,8 +24,9 @@
   "RAMEN_EKS_CLUSTER" .Values.aws.cluster
   "RAMEN_DDB_TABLE" .Values.aws.table
   "RAMEN_ALB_GROUP" .Values.aws.albGroup
+  "RAMEN_AWS_ALB_CIDRS" (include "ramen.awsAlbCidrs" .)
   "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" (.Values.aws.account | toString))
-  "RAMEN_IMAGE_WORKER" (printf "%s.dkr.ecr.%s.amazonaws.com/ramen/worker:%s" (.Values.aws.account | toString) .Values.region (.Values.image.tag | toString))
+  "RAMEN_IMAGE_WORKER" (include "ramen.workerImage" .)
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
   "RAMEN_COOKIE_SECURE" "1"
   "RAMEN_TRUST_PROXY_HOPS" "1") }}
@@ -34,11 +35,59 @@
   "RAMEN_GCP_PROJECT" .Values.project
   "RAMEN_GCP_REGION" .Values.region
   "RAMEN_GROUPS_BUCKET" (printf "ramen-%s-groups" .Values.project)
-  "RAMEN_IMAGE_WORKER" (printf "%s-docker.pkg.dev/%s/ramen/worker:%s" .Values.region .Values.project (.Values.image.tag | toString))
+  "RAMEN_IMAGE_WORKER" (include "ramen.workerImage" .)
   "RAMEN_CONSOLE_PORT" (.Values.console.port | toString)
   "RAMEN_COOKIE_SECURE" "1"
   "RAMEN_TRUST_PROXY_HOPS" "2") }}
 {{- end }}
+{{- /* §24.1 / §24.2: set for every provider; console.env still wins */ -}}
+{{- if not .Values.tls.require }}{{ fail "tls.require=false: D86 — plaintext is refused on cloud installs (CONTRACTS §39.4)" }}{{ end }}
+{{- $v1 := dict "RAMEN_CONSOLE_INTERNAL_URL" (include "ramen.internalUrl" .) }}
+{{- /* D86 §39: TLS on every hop — the console's launcher, the CA, the chart services' leaves */ -}}
+{{- $_ := set $v1 "RAMEN_REQUIRE_TLS" "1" }}
+{{- $_ := set $v1 "RAMEN_NAMESPACE" .Release.Namespace }}
+{{- $_ := set $v1 "RAMEN_TLS_SERVICES" (include "ramen.tlsServices" .) }}
+{{- $_ := set $v1 "RAMEN_TLS_LEAF_DAYS" (.Values.tls.leafDays | toString) }}
+{{- $_ := set $v1 "RAMEN_TLS_RENEW_SECS" (.Values.tls.renewSecs | toString) }}
+{{- if include "ramen.builder.enabled" . }}
+{{- $_ := set $v1 "RAMEN_BUILDER" "1" }}
+{{- $_ := set $v1 "RAMEN_BUILD_REGISTRY" (include "ramen.builder.registry" .) }}
+{{- $_ := set $v1 "RAMEN_BUILD_IDENTITIES" (.Values.builder.identities | default "cloud") }}
+{{- with .Values.builder.image }}{{- $_ := set $v1 "RAMEN_BUILDER_IMAGE" . }}{{- end }}
+{{- end }}
+{{- with .Values.console.k8sSubjects }}{{- /* §28.2: the console's identity on satellite clusters, bound in every zone namespace */ -}}
+{{- $_ := set $v1 "RAMEN_CONSOLE_SUBJECTS" (toJson .) }}
+{{- end }}
+{{- with .Values.console.sourceCidrs }}{{- /* §28.1: the home networks a satellite zone's NetworkPolicy must admit */ -}}
+{{- $_ := set $v1 "RAMEN_CONSOLE_SOURCE_CIDRS" (join "," .) }}
+{{- end }}
+{{- if eq .Values.otel.collector "jaeger" }}{{- /* §26.3: the Config page names the chart's trace UI (port-forward only) */ -}}
+{{- $_ := set $v1 "RAMEN_OTEL_UI_URL" (printf "https://jaeger.%s:16686" .Release.Namespace) }}
+{{- else if eq .Values.otel.collector "phoenix" }}
+{{- $_ := set $v1 "RAMEN_OTEL_UI_URL" (printf "https://phoenix.%s:6006" .Release.Namespace) }}
+{{- end }}
+{{- with .Values.evals.image }}{{- /* §29.2: the evals Jobs' image; the server's URLs when the chart runs it */ -}}
+{{- $_ := set $v1 "RAMEN_EVALS_IMAGE" . }}
+{{- end }}
+{{- if or .Values.evals.image (eq (.Values.skillspector.engine | default "none") "skillspector") }}
+{{- $_ := set $v1 "RAMEN_EVALS_SA" .Values.evals.serviceAccount }}{{- /* §33.4a: the Jobs' identity */ -}}
+{{- end }}
+{{- if and .Values.networkPolicy.workerEgress .Values.cluster.serviceCidr }}{{- /* §33.4a: worker-egress per zone */ -}}
+{{- $_ := set $v1 "RAMEN_WORKER_EGRESS" "1" }}
+{{- $_ := set $v1 "RAMEN_CLUSTER_SERVICE_CIDR" .Values.cluster.serviceCidr }}
+{{- end }}
+{{- if eq (.Values.evals.engine | default "none") "promptfoo" }}
+{{- $_ := set $v1 "RAMEN_EVALS_API_URL" (printf "https://promptfoo.%s:3000" .Release.Namespace) }}
+{{- $_ := set $v1 "RAMEN_EVALS_UI_URL" (.Values.evals.uiUrl | default "https://localhost:3443") }}
+{{- end }}
+{{- if eq (.Values.skillspector.engine | default "none") "skillspector" }}{{- /* §30.0: the scan Jobs' image and size */ -}}
+{{- $_ := set $v1 "RAMEN_SKILLSPECTOR_IMAGE" .Values.skillspector.image }}
+{{- $_ := set $v1 "RAMEN_SKILLSPECTOR_CPU" (.Values.skillspector.cpu | toString) }}
+{{- $_ := set $v1 "RAMEN_SKILLSPECTOR_MEMORY" (.Values.skillspector.memory | toString) }}
+{{- $_ := set $v1 "RAMEN_SKILLSPECTOR_MEMORY_LIMIT" (.Values.skillspector.memoryLimit | toString) }}
+{{- $_ := set $v1 "RAMEN_SKILLSPECTOR_TIMEOUT_SECS" (.Values.skillspector.timeoutSecs | toString) }}
+{{- end }}
+{{- $env = merge (dict) $env $v1 }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,15 +124,20 @@ spec:
         - name: console
           image: {{ include "ramen.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports: [{ name: http, containerPort: {{ .Values.console.port }} }]
+          ports: [{ name: https, containerPort: {{ .Values.console.port }} }]   # D86: TLS (the console's own leaf)
           env:
             {{- range $k, $v := $env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
+            {{- if include "ramen.redis.configured" . }}
+            # §33.4a: the shared Redis, password included, from its Secret
+            - name: RAMEN_REDIS_URL
+              valueFrom: { secretKeyRef: { name: {{ include "ramen.redis.secretName" . }}, key: url } }
+            {{- end }}
           envFrom:
             - secretRef: { name: {{ include "ramen.secretName" . }} }
           resources: {{- toYaml .Values.console.resources | nindent 12 }}
-          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
-          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 12 }
+          livenessProbe: { httpGet: { path: /healthz, port: https, scheme: HTTPS }, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6 }
+          readinessProbe: { httpGet: { path: /readyz, port: https, scheme: HTTPS }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 12 }
           # keeps serving while the load balancer detaches it: 15 s still left ~6 s of 503 on GKE (Gateway NEG detach)
           lifecycle: { preStop: { exec: { command: ["sleep", "40"] } } }

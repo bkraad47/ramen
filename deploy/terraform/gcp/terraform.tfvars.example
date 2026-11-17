@@ -2,3 +2,8 @@
 project = "<your project id>"
 region  = "us-central1"
 # groups_bucket = "ramen-<project>-groups"   # default: ramen-<project>-groups
+# node_service_account = "default"           # only for a cluster created before 1.0.0c (§33.4a): GKE cannot change an
+#                                            # Autopilot cluster's node SA in place; new clusters get ramen-nodes@
+# otel_collector      = "none"   # §34.1 optional engines: none | jaeger | phoenix
+# evals_engine        = "none"   # none | promptfoo
+# skillspector_engine = "none"   # none | skillspector

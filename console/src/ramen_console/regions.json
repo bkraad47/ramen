@@ -1,5 +1,5 @@
 {
-  "note": "Public GCP regions (zone letters) and AWS commercial regions (availability-zone letters) as of 2026-10. Static list, edited by hand at release time; GovCloud and China partitions are left out. AWS AZ letters are per-account aliases, so a letter may map to a different physical AZ in another account. Azure regions with availability zones (numbered 1-3); a zone is named <region>-<n>.",
+  "note": "Public GCP regions (zone letters), AWS commercial regions (availability-zone letters) and Azure public regions as of 2026-11. Static list, edited by hand at release time; GovCloud, China and access-restricted regions are left out. AWS AZ letters are per-account aliases, so a letter may map to a different physical AZ in another account. Azure regions with availability zones are numbered 1-3 (a zone is named <region>-<n>); a region without them lists the one logical zone <region>-1 (deploy with RAMEN_AZURE_ZONAL=0 there).",
   "gcp": {
     "africa-south1": [
       "a",
@@ -390,10 +390,16 @@
     ]
   },
   "azure": {
+    "australiacentral": [
+      "1"
+    ],
     "australiaeast": [
       "1",
       "2",
       "3"
+    ],
+    "australiasoutheast": [
+      "1"
     ],
     "brazilsouth": [
       "1",
@@ -405,12 +411,20 @@
       "2",
       "3"
     ],
+    "canadaeast": [
+      "1"
+    ],
     "centralindia": [
       "1",
       "2",
       "3"
     ],
     "centralus": [
+      "1",
+      "2",
+      "3"
+    ],
+    "chilecentral": [
       "1",
       "2",
       "3"
@@ -440,6 +454,11 @@
       "2",
       "3"
     ],
+    "indonesiacentral": [
+      "1",
+      "2",
+      "3"
+    ],
     "israelcentral": [
       "1",
       "2",
@@ -455,7 +474,18 @@
       "2",
       "3"
     ],
+    "japanwest": [
+      "1"
+    ],
     "koreacentral": [
+      "1",
+      "2",
+      "3"
+    ],
+    "koreasouth": [
+      "1"
+    ],
+    "malaysiawest": [
       "1",
       "2",
       "3"
@@ -469,6 +499,9 @@
       "1",
       "2",
       "3"
+    ],
+    "northcentralus": [
+      "1"
     ],
     "northeurope": [
       "1",
@@ -505,6 +538,9 @@
       "2",
       "3"
     ],
+    "southindia": [
+      "1"
+    ],
     "spaincentral": [
       "1",
       "2",
@@ -530,10 +566,19 @@
       "2",
       "3"
     ],
+    "ukwest": [
+      "1"
+    ],
+    "westcentralus": [
+      "1"
+    ],
     "westeurope": [
       "1",
       "2",
       "3"
+    ],
+    "westus": [
+      "1"
     ],
     "westus2": [
       "1",

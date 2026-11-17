@@ -19,7 +19,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.12-slim
-ARG VERSION=0.8.0
+ARG VERSION=1.0.0
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"
 RUN useradd -r -u 10001 -m -d /home/ramen ramen && mkdir -p /buckets /data/bucket /opt/venv && chown -R ramen:ramen /buckets /data /opt/venv
 USER ramen
@@ -31,5 +31,6 @@ ENV RAMEN_NODE_PORT=8080 RAMEN_BUCKET=/buckets/default RAMEN_PYTHON=/opt/venv/bi
 EXPOSE 8080
 VOLUME ["/buckets"]
 # Liveness: ramen.v1.Admin is SERVING from process start; readiness (loaded) is the overall "" service.
-HEALTHCHECK --interval=15s --timeout=5s CMD ["/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--health", "ramen.v1.Admin", "--timeout", "3"]
+# D86: a TLS node (RAMEN_TLS_CA set) is probed over TLS against its own CA; the leaf names 127.0.0.1
+HEALTHCHECK --interval=15s --timeout=5s CMD /opt/venv/bin/ramen-mcp-bridge --target 127.0.0.1:8080 ${RAMEN_TLS_CA:+--ca "$RAMEN_TLS_CA"} --health ramen.v1.Admin --timeout 3
 ENTRYPOINT ["ramen-node"]

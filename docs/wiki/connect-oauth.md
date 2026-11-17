@@ -88,8 +88,36 @@ install's edge host, the group's zones and a registered client id, one section p
   `data.sign_in_url`, so the AI client can show it; the person opens it, approves, and the next call works.
   `--no-browser` prints the link instead of opening a browser.
 - Behind a self-signed certificate add `--ca <pem>`; it verifies the console during sign-in as well as the worker.
+- TLS is the bridge's default since 0.6.0 (D86); the commands above keep `--tls` so an older bridge connects too.
+  `--insecure` (plaintext h2c, `RAMEN_BRIDGE_INSECURE=1`) is for a bare local worker only and is an error next to
+  `--tls` or `--ca`.
 
 Bridge 0.2.x kept the refresh token in `~/.config/ramen-mcp-bridge/`; 0.3.0 does so only when asked.
+
+**What the bridge writes at sign-in (bridge 0.5.0, Ramen 1.0.0c; PyPI still serves 0.3.0 until 0.6.0 is published).** The token answer's `telemetry` and `evals`
+objects become the **policy bundle** at `~/.ramen/policy/<host>/<group>-<zone>.json` (0600; telemetry header
+values stay in memory) and the group's evals config lands at `~/.ramen/evals/<host>/<group>/promptfooconfig.yaml`.
+Unless started with `--no-client-config`, the bridge also merges a marked `ramen` entry into the editor's own files:
+Claude Code's `~/.claude/settings.json` (a `SessionStart` hook running `ramen-mcp-bridge policy check`), Cursor's
+`~/.cursor/rules/ramen-<group>-<zone>.mdc` (the policy in words) and VS Code's user `settings.json`
+(`mcp.servers.ramen-<group>-<zone>`); `~/.ramen/clients.json` lists every write and `ramen-mcp-bridge policy remove`
+reverts them. `policy show` and `policy check` print the bundle and compare it with the console's public
+`/.well-known/ramen-policy`. Without a bundle and unable to sign in, the bridge exits with `Ramen policy missing:
+reconnect (sign in)`. Details and the limit of what this can enforce: [Evals](evals.md#client-policy-versions-the-gate-the-bridge).
+Bridge 0.6.0 adds the `skillspector` policy to the bundle: when the group requires it, `policy check` also scans the
+skills on your machine with a local SkillSpector and exits 3 on a `DO_NOT_INSTALL`
+([SkillSpector scans](skillspector.md#client-policy-the-bridges-local-scan)). When the repo carries
+`mcp/guardrails.yaml` (1.0.0c Phase 2.5), the bundle also holds `guardrails {version, required, config, client_llm}`:
+the bridge runs the same rails on your machine with the credential the console hands it for that purpose, and a
+group that requires them refuses a call without the current version (`-32029`) — see [Guardrails](guardrails.md).
+
+**Accepting the group's LLM configs (1.0.0c Phase 3).** When the group repo carries `mcp/llm-config/`, the consent
+page also shows that directory — the manifest and every file verbatim — with an Accept control; the token is not
+issued until it is ticked, once per version of the files. Through the bridge the same page opens in the browser
+(`/groups/<g>/configs`) before the first sign-in, and the bridge then writes each file where the manifest says and
+sets the telemetry environment the group asks for. A changed directory asks again at the next sign-in, and a worker
+refuses calls without the accepted version (`-32028`). [LLM configs](llm-configs.md) has the files, the merges and
+what `policy check` / `policy remove` do with them.
 
 **With a group key instead** (agents, CI): no sign-in, the key in `Authorization: Bearer`. Over HTTP in every
 client (`claude mcp add --transport http … --header "Authorization: Bearer <rmk_ key>"`, or a `url` + `headers`
@@ -137,3 +165,6 @@ in `tests/conformance` for 0.7.0 (see the [changelog](../changelog.md)).
 | `404` on the metadata request | The client did not send the `ramen-group` and `ramen-zone` headers, so the load balancer had no zone to route to |
 | The consent page says you have no access | Your account has no role in that group |
 | `401` after a while | The refresh token ended because your role or password changed. Sign in again |
+| `-32026 evals config required` or `… changed: sign in again` (HTTP 428) | The group requires the current evals config and your client does not hold it, or the repo's `mcp/evals/promptfooconfig.yaml` changed. The bridge signs in again by itself; another client reconnects ([Evals](evals.md)) |
+| `-32027 skillspector policy required` or `… changed: sign in again` (HTTP 428) | The group requires the SkillSpector policy and your client does not hold its current version. The bridge signs in again by itself ([SkillSpector scans](skillspector.md)) |
+| `-32029 guardrails policy required` or `… changed: sign in again` (HTTP 428) | The group requires its guardrails policy and your client does not hold the current version (the rails, `required`, or the group's LLM provider or model changed). The bridge signs in again by itself ([Guardrails](guardrails.md)) |

@@ -1,5 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-# Workers accept ingress only from the console namespace and the load balancer ranges (SEC-04).
+# Workers accept ingress only from the console namespace, the load balancer ranges (SEC-04) and the zone's own
+# worker pods (§24.1).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -15,5 +16,8 @@ spec:
         {{- range (ternary .Values.networkPolicy.awsCidrs .Values.networkPolicy.gcpCidrs (eq .Values.provider "aws")) }}
         - ipBlock: { cidr: {{ . | quote }} }
         {{- end }}
+      ports: [{ port: {{ .Values.port }}, protocol: TCP }]
+    - from:
+        - podSelector: { matchLabels: { app: worker } }   # §24.1: the zone's activator → worker-direct
       ports: [{ port: {{ .Values.port }}, protocol: TCP }]
 {{- end }}

@@ -72,7 +72,19 @@ spec:
   parentRefs: [{ name: {{ .Values.gateway.name }}, namespace: {{ .Release.Namespace }}, sectionName: https }]
   rules:
     - matches: [{ path: { type: PathPrefix, value: / } }]
-      backendRefs: [{ name: console, port: 80 }]
+      backendRefs: [{ name: console, port: 443 }]
+---
+# D86 §39.3: Envoy verifies the console against the install CA (ConfigMap ramen-ca, written by the console)
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: console
+  labels: {{- include "ramen.labels" . | nindent 4 }}
+spec:
+  targetRefs: [{ group: "", kind: Service, name: console }]
+  validation:
+    caCertificateRefs: [{ group: "", kind: ConfigMap, name: ramen-ca }]
+    hostname: {{ printf "console.%s.svc.cluster.local" .Release.Namespace }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

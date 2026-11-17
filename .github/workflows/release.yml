@@ -128,6 +128,15 @@ jobs:
           }
           echo "WORKER_TAGS=$(tags ramen-worker)" >> "$GITHUB_ENV"
           echo "CONSOLE_TAGS=$(tags ramen-console)" >> "$GITHUB_ENV"
+          # §30.0: the scan image carries the upstream SkillSpector tag, pinned in deploy/docker/skillspector/Dockerfile
+          SS=$(sed -n 's/^ARG SKILLSPECTOR_REF=v//p' deploy/docker/skillspector/Dockerfile)
+          t="ghcr.io/bkraad47/ramen-skillspector:$SS"
+          [ "$HUB" = "true" ] && t="$t,docker.io/bkraad47/ramen-skillspector:$SS"
+          echo "SKILLSPECTOR_TAGS=$t" >> "$GITHUB_ENV"
+          # CONTRACTS §30.0: the scanner image is versioned by the pinned SkillSpector tag, not by Ramen's release
+          SS=$(sed -n 's/^ARG SKILLSPECTOR_REF=v\{0,1\}//p' deploy/docker/skillspector/Dockerfile | head -1)
+          [ -n "$SS" ] || { echo "deploy/docker/skillspector/Dockerfile: no ARG SKILLSPECTOR_REF"; exit 1; }
+          echo "SKILLSPECTOR_TAGS=$(VER=$SS tags ramen-skillspector)" >> "$GITHUB_ENV"
       - name: Worker image
         uses: docker/build-push-action@v6
         with:
@@ -146,3 +155,19 @@ jobs:
           push: true
           build-args: RAMEN_VERSION=${{ env.VER }}
           tags: ${{ env.CONSOLE_TAGS }}
+      - name: SkillSpector image
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/docker/skillspector
+          file: deploy/docker/skillspector/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.SKILLSPECTOR_TAGS }}
+      - name: SkillSpector image
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/docker/skillspector
+          file: deploy/docker/skillspector/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.SKILLSPECTOR_TAGS }}

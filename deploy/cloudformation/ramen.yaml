@@ -1,8 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Ramen on AWS (CONTRACTS section 8, v0.3.0) - UNTESTED: authored without an AWS account, checked with cfn-lint only.
-  Base resources for teams that cannot run Terraform: VPC with two public subnets, EKS cluster + managed node group,
-  OIDC provider (IRSA), DynamoDB state table, S3 groups bucket, ECR repos, console / ALB controller / Fluent Bit IAM roles.
+  Base resources for teams that cannot run Terraform: VPC with two public subnets and two pod subnets (D89), EKS cluster + managed node group,
+  OIDC provider (IRSA), DynamoDB state table, S3 groups bucket, ECR repos (console, worker, skillspector),
+  the EBS CSI driver addon, console / evals / ALB controller / Fluent Bit / EBS CSI IAM roles, the worker and build permissions boundaries (no shared
+  builder role: the console creates per-group build roles, D85).
   Helm steps (Load Balancer Controller, Fluent Bit, ramen charts) and the ACM certificate import are documented in
   deploy/README.md, not templated.
 
@@ -37,9 +39,17 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 14
+  ConsoleBedrock:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Let the console role invoke Bedrock models; Bedrock-backed LLM rails go through the console's judge proxy (CONTRACTS section 38.1), workers never call a provider.
+
+Conditions:
+  WithConsoleBedrock: !Equals [!Ref ConsoleBedrock, "true"]
 
 Resources:
-  # --- network: two public subnets, no NAT ---
+  # --- network: two public subnets (nodes, ALB), two pod subnets (D89), no NAT ---
   Vpc:
     Type: AWS::EC2::VPC
     Properties:
@@ -96,6 +106,31 @@ Resources:
   SubnetBRoute:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties: { SubnetId: !Ref SubnetB, RouteTableId: !Ref RouteTable }
+  # D89: pods take addresses from a private /20 per AZ (VPC CNI custom networking, ENIConfigs from the VpcCni addon);
+  # nodes and the ALB stay in the public /24s, so the NetworkPolicies admit the ALB without admitting every pod. No
+  # public IPs, no NAT (pod egress is SNATed to the node), no kubernetes.io/role/elb tag (the ALB never lands here).
+  PodSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [4, !Cidr [!Ref VpcCidr, 6, 12]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${ClusterName}-pods-0" }, { Key: ramen.io/subnet, Value: pods }]
+  PodSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [5, !Cidr [!Ref VpcCidr, 6, 12]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${ClusterName}-pods-1" }, { Key: ramen.io/subnet, Value: pods }]
+  PodSubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PodSubnetA, RouteTableId: !Ref RouteTable }
+  PodSubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PodSubnetB, RouteTableId: !Ref RouteTable }
 
   # --- EKS ---
   ClusterRole:
@@ -123,6 +158,26 @@ Resources:
         EndpointPublicAccess: true
         EndpointPrivateAccess: true
       Tags: [{ Key: app, Value: ramen }]
+  # S6b: EKS enforces NetworkPolicies only with the VPC CNI's network-policy agent on; the managed addon adopts the
+  # self-managed aws-node (OVERWRITE) before the nodes start. Pass output NetworkSet to helm so the ALB stays admitted.
+  # D89: custom networking; the addon creates one ENIConfig per AZ (named after the zone label: pod subnet + the
+  # cluster security group).
+  VpcCni:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: vpc-cni
+      ResolveConflicts: OVERWRITE
+      ConfigurationValues: !Sub
+        - >-
+          {"enableNetworkPolicy":"true",
+          "env":{"AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG":"true","ENI_CONFIG_LABEL_DEF":"topology.kubernetes.io/zone"},
+          "eniConfig":{"create":true,"region":"${AWS::Region}","subnets":{
+          "${AzA}":{"id":"${PodSubnetA}","securityGroups":["${Cluster.ClusterSecurityGroupId}"]},
+          "${AzB}":{"id":"${PodSubnetB}","securityGroups":["${Cluster.ClusterSecurityGroupId}"]}}}}
+        - AzA: !GetAtt PodSubnetA.AvailabilityZone
+          AzB: !GetAtt PodSubnetB.AvailabilityZone
+      Tags: [{ Key: app, Value: ramen }]
   NodeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -137,11 +192,14 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
         - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+  # D89: the "-podnet" name replaces a pre-D89 group once (CloudFormation creates the new one, then deletes the old):
+  # nodes started before custom networking keep pod ENIs in the public subnets. Max pods per t3.small: 8 (was 11).
   NodeGroup:
     Type: AWS::EKS::Nodegroup
+    DependsOn: VpcCni
     Properties:
       ClusterName: !Ref Cluster
-      NodegroupName: !Ref ClusterName
+      NodegroupName: !Sub "${ClusterName}-podnet"
       NodeRole: !GetAtt NodeRole.Arn
       Subnets: [!Ref SubnetA, !Ref SubnetB]
       InstanceTypes: [!Ref NodeInstanceType]
@@ -149,6 +207,19 @@ Resources:
       ScalingConfig: { DesiredSize: !Ref NodeCount, MinSize: 1, MaxSize: !Ref NodeMax }
       UpdateConfig: { MaxUnavailable: 1 }
       Tags: { app: ramen }
+  # 1.0.0c: EKS's in-tree gp2 class provisions nothing without the EBS CSI driver (PVCs stay Pending). The gp3 class
+  # comes from the chart (output StorageSet). After the nodes: the node DaemonSet needs them or the addon never turns
+  # ACTIVE. One controller replica (8 pods per t3.small since D89); volumes tagged app=ramen.
+  EbsCsi:
+    Type: AWS::EKS::Addon
+    DependsOn: NodeGroup
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: aws-ebs-csi-driver
+      ServiceAccountRoleArn: !GetAtt EbsCsiRole.Arn
+      ResolveConflicts: OVERWRITE
+      ConfigurationValues: '{"controller":{"replicaCount":1,"extraVolumeTags":{"app":"ramen"}}}'
+      Tags: [{ Key: app, Value: ramen }]
 
   # --- IRSA ---
   OidcProvider:
@@ -189,10 +260,18 @@ Resources:
       RepositoryName: ramen/console
       ImageScanningConfiguration: { ScanOnPush: true }
       EmptyOnDelete: true
+  # The platform repositories (section 38.2): no build role can push here (the build boundary allows push only under
+  # ramen/groups/). Group images go to ramen/groups/<group>/worker, created by the console on the group's first build.
   EcrWorker:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: ramen/worker
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EmptyOnDelete: true
+  EcrSkillspector:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ramen/skillspector
       ImageScanningConfiguration: { ScanOnPush: true }
       EmptyOnDelete: true
   ApplicationLogGroup:
@@ -202,6 +281,9 @@ Resources:
       RetentionInDays: !Ref LogRetentionDays
 
   # --- permissions boundary for the worker roles the console creates (SEC-10) ---
+  # section 33.4a (D79): the bucket and secret statements are keyed on the role's `group` tag (the console tags every
+  # ramen-<group>-<zone> role it creates, and role tags become aws:PrincipalTag in the IRSA session), so even a
+  # mis-written inline policy cannot reach another group's prefix <bucket>/<other>/ or its ramen/<other>/* secrets.
   WorkerBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -212,11 +294,18 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetBucketLocation]
-            Resource: [!GetAtt GroupsBucket.Arn, !Sub "${GroupsBucket.Arn}/*"]
+            Action: [s3:ListBucket]
+            Resource: !GetAtt GroupsBucket.Arn
+            Condition: { StringLike: { "s3:prefix": ["${aws:PrincipalTag/group}/*", "${aws:PrincipalTag/group}/"] } }
+          - Effect: Allow   # carries no s3:prefix key, so it cannot sit under the condition above
+            Action: [s3:GetBucketLocation]
+            Resource: !GetAtt GroupsBucket.Arn
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+            Resource: !Sub "${GroupsBucket.Arn}/${!aws:PrincipalTag/group}/*"
           - Effect: Allow
             Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
-            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/${!aws:PrincipalTag/group}/*"
           - Effect: Allow
             Action: [logs:CreateLogStream, logs:PutLogEvents, cloudwatch:PutMetricData, sns:Publish,
                      sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes,
@@ -251,7 +340,9 @@ Resources:
               - Effect: Allow
                 Action: [secretsmanager:CreateSecret, secretsmanager:PutSecretValue, secretsmanager:GetSecretValue, secretsmanager:DescribeSecret,
                          secretsmanager:DeleteSecret, secretsmanager:RestoreSecret, secretsmanager:TagResource, secretsmanager:UpdateSecret]
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen/*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ramen-console/*"
               - Effect: Allow
                 Action: secretsmanager:ListSecrets
                 Resource: "*"
@@ -269,10 +360,17 @@ Resources:
                 Action: [iam:DeleteRole, iam:GetRole, iam:UpdateAssumeRolePolicy, iam:TagRole,
                          iam:DeleteRolePolicy, iam:GetRolePolicy, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:DetachRolePolicy]
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ramen/*"
-              - Effect: Allow   # SEC-10: worker roles only with the permissions boundary attached
+              # SEC-10: roles only with the worker (zone roles) or build (section 38.2 group build roles) permissions
+              # boundary attached, so a compromised console cannot self-escalate
+              - Effect: Allow
                 Action: [iam:CreateRole, iam:PutRolePolicy, iam:AttachRolePolicy]
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ramen/*"
-                Condition: { StringEquals: { "iam:PermissionsBoundary": !Ref WorkerBoundary } }
+                Condition: { StringEquals: { "iam:PermissionsBoundary": [!Ref WorkerBoundary, !Ref BuildBoundary] } }
+              # section 38.2: the per-group image repositories ramen/groups/* - created, tagged, deleted; never pushed to
+              - Effect: Allow
+                Action: [ecr:CreateRepository, ecr:DescribeRepositories, ecr:TagResource, ecr:DeleteRepository,
+                         ecr:BatchDeleteImage, ecr:ListImages]
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ramen/groups/*"
               - Effect: Allow
                 Action: iam:ListRoles
                 Resource: "*"
@@ -300,6 +398,75 @@ Resources:
               - Effect: Allow
                 Action: [logs:StartQuery, logs:GetQueryResults, logs:StopQuery, logs:DescribeLogGroups]
                 Resource: "*"
+      Tags: [{ Key: app, Value: ramen }]
+
+  # section 38.1: the judge proxy calls Bedrock for a group's LLM rails; workers never call a provider for rails (the
+  # worker boundary keeps bedrock:InvokeModel only for an approved `ai.user` permission request on tool code).
+  ConsoleBedrockPolicy:
+    Type: AWS::IAM::RolePolicy
+    Condition: WithConsoleBedrock
+    Properties:
+      RoleName: !Ref ConsoleRole
+      PolicyName: ramen-console-bedrock
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource:
+              - "arn:aws:bedrock:*::foundation-model/*"
+              - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*"
+          - Effect: Allow   # Bedrock API keys (bearer tokens) minted from the role's credentials; not resource-scoped
+            Action: [bedrock:CallWithBearerToken]
+            Resource: "*"
+
+  # --- section 38.2 (D85, F2): no shared builder role. The console creates, per group, the ECR repository
+  # ramen/groups/<group>/worker and the role /ramen/build/ramen-build-<group> (IRSA for ramen-system/ramen-build-<group>)
+  # whose inline policy pushes to that repository only. Every such role carries this boundary: push only under
+  # ramen/groups/<its ramen-build tag>/, pull from the ramen/* repositories (the worker base image is the build's FROM),
+  # nothing else - so no build identity can ever write the platform repositories ramen/{console,worker,skillspector}.
+  BuildBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: ramen-build-boundary
+      Path: /ramen/
+      Description: Upper bound for every per-group ramen build role (push only under ramen/groups/<ramen-build tag>/)
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow   # registry login: not scopable to a repository
+            Action: [ecr:GetAuthorizationToken]
+            Resource: "*"
+          - Effect: Allow
+            Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ramen/*"
+          - Effect: Allow
+            Action: [ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload, ecr:PutImage]
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ramen/groups/${!aws:PrincipalTag/ramen-build}/*"
+
+  # --- section 33.4a (D79): the identity the evals and SkillSpector scan Jobs run as (KSA ramen-system/ramen-evals).
+  # They execute a group repo's promptfoo config, so this role may only write its own log streams: no ECR, no bucket,
+  # no secrets.
+  EvalsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-evals
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:ramen-system:ramen-evals", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      Policies:
+        - PolicyName: ramen-evals
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ApplicationLogGroup}:*"
       Tags: [{ Key: app, Value: ramen }]
 
   # --- AWS Load Balancer Controller (KSA kube-system/aws-load-balancer-controller); policy vendored from v2.13.0 ---
@@ -587,6 +754,22 @@ Resources:
       ManagedPolicyArns: [arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy]
       Tags: [{ Key: app, Value: ramen }]
 
+  # --- EBS CSI driver (KSA kube-system/ebs-csi-controller-sa): the PVCs' EBS volumes ---
+  EbsCsiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ramen-ebs-csi
+      Path: /ramen/
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": "${OidcArn}"},
+            "Condition": {"StringEquals": {"${Issuer}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa", "${Issuer}:aud": "sts.amazonaws.com"}}}]}
+        - OidcArn: !Ref OidcProvider
+          Issuer: !Select [1, !Split ["https://", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy]
+      Tags: [{ Key: app, Value: ramen }]
+
 Outputs:
   ClusterName:
     Value: !Ref Cluster
@@ -603,6 +786,15 @@ Outputs:
     Value: !GetAtt EcrWorker.RepositoryUri
   ConsoleRoleArn:
     Value: !GetAtt ConsoleRole.Arn
+  BuilderSet:
+    Value: --set builder.enabled=true
+    Description: "helm flag for image builds (CONTRACTS section 38.2: per-group build roles, no shared builder)"
+  BuildBoundaryArn:
+    Value: !Ref BuildBoundary
+    Description: RAMEN_AWS_BUILD_BOUNDARY (the console default matches this name)
+  EvalsRoleArn:
+    Value: !GetAtt EvalsRole.Arn
+    Description: "helm --set evals.roleArn=<this> (CONTRACTS section 33.4a)"
   AlbControllerRoleArn:
     Value: !GetAtt AlbControllerRole.Arn
   FluentBitRoleArn:
@@ -615,6 +807,14 @@ Outputs:
     Value: !Ref OidcProvider
   LogGroup:
     Value: !Ref ApplicationLogGroup
+  NetworkSet:
+    Value: !Sub "--set networkPolicy.awsAlbCidrs={${SubnetA.CidrBlock},${SubnetB.CidrBlock}}"
+    Description: "helm flag: the public subnets the ALB reaches pods from, admitted by the NetworkPolicies; never the pod subnets (threat model S6b, D89)"
+  StorageSet:
+    Value: --set storage.className=gp3,storage.createAwsGp3=true
+    Description: "helm flag: the chart makes the encrypted gp3 default class (EBS CSI) that its PVCs (promptfoo, Phoenix) bind to"
+  EbsCsiRoleArn:
+    Value: !GetAtt EbsCsiRole.Arn
   KubeconfigCommand:
     Value: !Sub "aws eks update-kubeconfig --name ${Cluster} --region ${AWS::Region}"
   ConsoleUrl:

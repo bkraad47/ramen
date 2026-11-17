@@ -2,12 +2,13 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from .. import grpcclient
 from ..grpcclient import GrpcError, target_of
-from .base import Cloud, GateError
+from .base import BuildError, Cloud, GateError, no_builder
 
 
 def git_env(token: str | None) -> dict[str, str]:
@@ -44,13 +45,49 @@ def repo_files(root) -> dict:
     return out
 
 
+def docker_build(image: str, dockerfile: str, files: dict[str, str], run=subprocess.run) -> dict:
+    """`docker build` + `docker push` of a small context (§24.2, local adapter). BuildError carries the log tail."""
+    import shutil
+    import tempfile
+
+    if run is subprocess.run and shutil.which("docker") is None:
+        raise no_builder()
+    timeout = float(os.environ.get("RAMEN_BUILD_TIMEOUT_SECS", "900"))
+    with tempfile.TemporaryDirectory() as ctx:
+        for rel, text in {"Dockerfile": dockerfile, **files}.items():
+            dest = (Path(ctx) / rel).resolve()
+            if Path(ctx).resolve() not in dest.parents:
+                raise ValueError(f"build context path escapes the context: {rel!r}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text)
+        lines: list[str] = []
+        for cmd in (["docker", "build", "-t", image, "-f", f"{ctx}/Dockerfile", ctx], ["docker", "push", image]):
+            try:
+                r = run(cmd, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                log = "\n".join(lines[-40:])
+                raise BuildError(f"image build for {image} timed out after {int(timeout)}s:\n{log}", log) from None
+            lines += (r.stdout + r.stderr).splitlines()
+            if r.returncode != 0:
+                log = "\n".join(lines[-40:])
+                raise BuildError(f"image build for {image} failed ({cmd[1]}):\n{log}", log)
+    return {"image": image, "log": "\n".join(lines[-40:])}
+
+
 def redact(text: str, token: str | None) -> str:
     return text.replace(token, "***") if token else text
 
 
 # Never written into the bucket's `.ramen/env*`: the runtime reads the bucket, and these are the node's alone. The
 # local worker takes them from its own environment instead (docker-compose.yml). Security review 0.5.0 L6.
-NODE_ONLY = ("RAMEN_SESSION_SECRET", "RAMEN_OAUTH_ISSUER", "RAMEN_PUBLIC_URL")
+# §24.3: the telemetry settings (`RAMEN_OTEL_HEADERS`, `RAMEN_OTEL_CLIENT`) are set on the Config page, so a local
+# worker cannot have them in its own environment: here the deploy file is their only way in. The node still keeps
+# them out of the runtime's environment (`hidden_from_runtime`); on the cloud adapters they travel in a Secret.
+NODE_ONLY = (
+    "RAMEN_SESSION_SECRET",
+    "RAMEN_OAUTH_ISSUER",
+    "RAMEN_PUBLIC_URL",
+)
 
 
 class LocalCloud(Cloud):
@@ -90,6 +127,14 @@ class LocalCloud(Cloud):
     def _bucket(self, group: str) -> Path:
         return self.root / group
 
+    async def delete_files(self, group):
+        d = self._bucket(group)
+        if not d.is_dir():
+            return 0
+        n = sum(1 for p in d.rglob("*") if p.is_file())
+        shutil.rmtree(d)
+        return n
+
     def _targets(self, group, zone) -> list[str]:
         return self.workers_map.get(f"{group}/{zone}") or [self.default_worker]
 
@@ -127,7 +172,18 @@ class LocalCloud(Cloud):
         p = self._bucket(group) / path
         return p.read_bytes() if p.is_file() else None
 
-    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+    async def list_files(self, group, prefix):
+        root = self._bucket(group)
+        if not root.is_dir():
+            return []
+        return sorted(
+            p.relative_to(root).as_posix()
+            for p in root.rglob("*")
+            if p.is_file() and p.relative_to(root).as_posix().startswith(prefix)
+        )
+
+    def _write_env(self, group, env, zone, canary, config) -> tuple[dict, Path]:
+        """The deploy file the compose worker reads on `Admin/Reload`: `.ramen/env` and `.ramen/env-<zone>`."""
         vars_ = {
             "RAMEN_GROUP": group,
             "RAMEN_ENV": env,
@@ -144,6 +200,22 @@ class LocalCloud(Cloud):
         text = "".join(f"{k}={v}\n" for k, v in vars_.items() if k not in NODE_ONLY)
         (d / "env").write_text(text)
         (d / f"env-{zone}").write_text(text)
+        return vars_, d
+
+    async def push_config(self, group, env, zone, config):
+        """§26.3: the deploy file rewritten, every worker of the zone reloaded; no gate, no canary."""
+        self._write_env(group, env, zone, False, config)
+        n, failed = 0, []
+        for target in self._targets(group, zone):
+            try:
+                await self.rpc.reload(target, self.admin_key)
+                n += 1
+            except (GrpcError, ValueError) as e:
+                failed.append(f"{target}: {type(e).__name__}: {e}")
+        return {"ok": not failed, "reloaded": n, "error": "; ".join(failed) or None}
+
+    async def deploy(self, group, env, zone, canary=True, config=None, spec=None, log=None, gate=None):
+        vars_, d = self._write_env(group, env, zone, canary, config)
         results = []
         mcp_key = (vars_.get("RAMEN_MCP_KEYS") or "").split(",")[0].strip() or None
         for target in self._targets(group, zone):
@@ -164,7 +236,23 @@ class LocalCloud(Cloud):
         async def call(msg):
             return await self.rpc.call(target, mcp_key, group, zone, msg)
 
+        call.target = target  # §29.2: the evals Job addresses the same pod over HTTP
         return call
+
+    # §29.2 / §30.2: compose has no Job runner; tests (and a harness) inject `evals_runner` / `scan_runner`
+    # `(group, zone, spec) -> {"exit_code", "log"}`
+    evals_runner = None
+    scan_runner = None
+
+    async def run_evals_job(self, group, zone, spec):
+        if self.evals_runner is None:
+            raise NotImplementedError("the local adapter runs no evals Job (no evals_runner)")
+        return await self.evals_runner(group, zone, spec)
+
+    async def run_scan_job(self, group, zone, spec):
+        if self.scan_runner is None:
+            raise NotImplementedError("the local adapter runs no scan Job (no scan_runner)")
+        return await self.scan_runner(group, zone, spec)
 
     async def workers(self, group, zone):
         out = []
@@ -193,6 +281,36 @@ class LocalCloud(Cloud):
 
     async def rebalance(self, group, zone):
         return {"ok": True, "note": "local adapter: no load balancer to rebalance"}
+
+    # §24.1: compose has one fixed worker per zone; the console only flips the zone's state
+    async def sleep_zone(self, group, zone):
+        return {"ok": True, "note": "local adapter: the compose worker keeps running", **self._runtime(group, zone)}
+
+    async def wake_zone(self, group, zone, count, canary):
+        return {"ok": True, "note": "local adapter: the compose worker keeps running", **self._runtime(group, zone)}
+
+    def _runtime(self, group, zone) -> dict:
+        return {"workers": len(self._targets(group, zone)), "canary": 0, "activator": 0}
+
+    async def zone_runtime(self, group, zone):
+        return self._runtime(group, zone)
+
+    # §24.2: no builder unless RAMEN_BUILD_REGISTRY names a registry the local docker daemon can push to
+    def builder_available(self) -> bool:
+        return os.environ.get("RAMEN_BUILDER") == "1" and bool(os.environ.get("RAMEN_BUILD_REGISTRY", "").strip())
+
+    def build_repository(self, group) -> str | None:
+        """§38.2: the group's own repository path in the local registry."""
+        from ..imagebuild import repo_component
+
+        registry = os.environ.get("RAMEN_BUILD_REGISTRY", "").strip().rstrip("/")
+        return f"{registry}/groups/{repo_component(group)}/worker" if registry else None
+
+    async def build_image(self, group, tag, dockerfile, files):
+        repository = self.build_repository(group)
+        if not repository:
+            raise no_builder()
+        return await asyncio.to_thread(docker_build, f"{repository}:{tag}", dockerfile, files or {})
 
     async def detach_zone(self, group, zone):
         removed = []
@@ -227,8 +345,17 @@ class LocalCloud(Cloud):
 
 
 def worker_tls_from_env():
-    """RAMEN_WORKER_TLS=1 → TLS to nodes (RAMEN_WORKER_CA / _CERT / _KEY as PEM paths); unset → h2c."""
-    if os.environ.get("RAMEN_WORKER_TLS", "0") != "1":
+    """RAMEN_WORKER_TLS=1 → TLS to nodes (RAMEN_WORKER_CA / _CERT / _KEY as PEM paths, RAMEN_WORKER_TLS_NAME the name
+    to verify); unset → h2c. D86 (§39.3): under RAMEN_REQUIRE_TLS it is on unless set, verifying the install CA's
+    bundle (resolved at dial time) as `worker.ramen.internal` — the console dials pod IPs, which no leaf names."""
+    from .. import tls as install_tls
+
+    flag, required = os.environ.get("RAMEN_WORKER_TLS", "").strip(), install_tls.require_tls()
+    if flag != "1" and not (required and flag == ""):
         return None
     tls = {k: os.environ.get(f"RAMEN_WORKER_{k.upper()}") for k in ("ca", "cert", "key")}
-    return {k: v for k, v in tls.items() if v} or True
+    tls["name"] = os.environ.get("RAMEN_WORKER_TLS_NAME") or (install_tls.WORKER_NAME if required else None)
+    tls = {k: v for k, v in tls.items() if v}
+    if required:
+        tls.setdefault("ca", install_tls.bundle)
+    return tls or True

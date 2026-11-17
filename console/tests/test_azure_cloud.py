@@ -47,6 +47,7 @@ def cloud(fk, http_state):
         clients=fk,
         rpc=Client(deadline=2, resolve=http_state.resolve),
         wait_secs=1,
+        node_wait_secs=2,
         poll=0,
     )
 

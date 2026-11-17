@@ -6,3 +6,6 @@ region = "us-east-1"
 # node_max          = 5
 # groups_bucket     = "ramen-<account>-groups"   # default
 # install_addons    = true                       # LB controller + Fluent Bit via Helm from Terraform
+# otel_collector      = "none"   # §34.1 optional engines: none | jaeger | phoenix
+# evals_engine        = "none"   # none | promptfoo
+# skillspector_engine = "none"   # none | skillspector

@@ -1,0 +1,10 @@
+{
+  "type": "tool",
+  "name": "test_input_required_result_capabilities",
+  "description": "Ask only through the input methods the client declared: elicitation and/or sampling.",
+  "callable": "run",
+  "input": {},
+  "error": {
+    "type": "string"
+  }
+}

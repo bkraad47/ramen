@@ -1,0 +1,20 @@
+{
+  "type": "resource",
+  "name": "template_data",
+  "description": "A templated resource: the id in the URI comes back in the JSON text.",
+  "callable": "read",
+  "input": {
+    "id": {
+      "type": "string",
+      "description": "the record id (one path segment)"
+    }
+  },
+  "uri": "test://template/{id}/data",
+  "mime_type": "application/json",
+  "output": {
+    "type": "string"
+  },
+  "error": {
+    "type": "string"
+  }
+}

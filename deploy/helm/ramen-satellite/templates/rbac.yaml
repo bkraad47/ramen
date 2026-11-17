@@ -1,0 +1,82 @@
+{{- if .Values.rbac.create }}
+# SEC-09 on a satellite (CONTRACTS §28.2): the same two ClusterRoles as the console chart, same names, so the
+# RoleBinding the console creates in each zone namespace resolves. The subject is the console's identity on this
+# API server: gcp = its GSA as a User (GKE maps the GSA token), azure = its workload identity's object id as a User
+# (Entra-integrated AKS), aws = the Kubernetes group the EKS access entry maps the console role to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ramen-console
+  labels: {{- include "satellite.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [networking.gke.io]
+    resources: [healthcheckpolicies, gcpbackendpolicies]
+    verbs: [get, list, create, patch, update, delete]
+  # D69: a deleted zone's namespace is held Terminating by the NEG controller's finalizer; by then the zone
+  # RoleBinding is collected, so clearing it needs a cluster-wide right on this one resource
+  - apiGroups: [networking.gke.io]
+    resources: [servicenetworkendpointgroups]
+    verbs: [get, list, patch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, create, patch, update, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [ramen-console-zone]
+    verbs: [bind]
+  {{- if eq .Values.provider "azure" }}
+  # §21.6: per-zone edge IP rules mirrored as Envoy Gateway SecurityPolicies, and per-route timeouts
+  - apiGroups: [gateway.envoyproxy.io]
+    resources: [securitypolicies, backendtrafficpolicies]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [gateway.networking.k8s.io]   # D86 §39.3: Envoy verifies each zone's workers
+    resources: [backendtlspolicies]
+    verbs: [get, list, watch, create, patch, update, delete]
+  {{- end }}
+  {{- if eq .Values.provider "aws" }}
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, update, delete]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ramen-console
+  labels: {{- include "satellite.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: ramen-console }
+{{- if eq .Values.provider "aws" }}
+subjects: [{ kind: Group, name: {{ .Values.aws.consoleGroup | quote }}, apiGroup: rbac.authorization.k8s.io }]
+{{- else }}
+subjects: [{ kind: User, name: {{ include "satellite.identity" . | quote }}, apiGroup: rbac.authorization.k8s.io }]
+{{- end }}
+---
+# Not bound cluster-wide: the console binds it per zone namespace (RoleBinding ramen-console in ramen-<group>-<zone>).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ramen-console-zone
+  labels: {{- include "satellite.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts, secrets, services, configmaps]   # configmaps: ramen-ca (D86)
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, endpoints]
+    verbs: [get, list, watch]
+{{- end }}

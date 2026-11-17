@@ -10,7 +10,7 @@ from . import rbac
 
 DOC = "roles"
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
-RESERVED = set(rbac.ROLES) | {"key"}  # `key` is the tool-access kind of a group MCP key
+RESERVED = set(rbac.ROLES) | {"key", "evals"}  # the tool-access kinds of a group MCP key and the evals Job (§31.4a)
 TTL = 5.0  # seconds a loaded registry is trusted before the store is read again (one console; many are eventual)
 
 

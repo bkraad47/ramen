@@ -15,6 +15,7 @@ from pathlib import Path
 from ..errors import ApiError
 from .gcp_api import _try_json, k8s_name
 from .gcp_clients import GcpClients
+from .gcp_k8s import log_text
 from .local import redact, repo_files, run_git
 
 ARM = "https://management.azure.com"
@@ -34,7 +35,22 @@ ROLE_IDS = {
     "Azure Service Bus Data Sender": "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
     "Azure Service Bus Data Receiver": "4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0",
     "Cognitive Services User": "a97b65f3-24c7-4388-baec-2e87135dc908",
+    # §38.2: ACR in ABAC mode (`roleAssignmentMode: AbacRepositoryPermissions`) honours these per repository
+    "Container Registry Repository Reader": "b93aa761-3e63-49ed-ac28-beffa264f7ac",
+    "Container Registry Repository Writer": "2a1e307c-b015-4ebd-883e-5b7698a07328",
 }
+BUILD_TAG = "ramen-build-group"  # §38.2: tags a group's build identity; never `ramen-group` (zone identities only)
+_REPO = "Microsoft.ContainerRegistry/registries/repositories"
+
+
+def repo_condition(repository: str, actions: tuple[str, ...]) -> str:
+    """§38.2: ABAC condition keeping a registry-scoped ACR repository role to one repository."""
+    acts = " AND ".join(f"!(ActionMatches{{'{_REPO}/{a}'}})" for a in actions)
+    return f"(({acts}) OR (@Request[{_REPO}:name] StringEqualsIgnoreCase '{repository}'))"
+
+
+READ_ACTIONS = ("content/read", "metadata/read")
+WRITE_ACTIONS = (*READ_ACTIONS, "content/write", "metadata/write")
 BLOB_ROLES = ("Storage Blob Data Reader", "Storage Blob Data Contributor")
 SECRET_ROLE = "Key Vault Secrets User"
 
@@ -113,9 +129,9 @@ class Identities:
             return cur, False
         return self.arm.request("PUT", self._path(name), {"location": self.location, "tags": tags}), True
 
-    def federate(self, name, issuer, subject) -> None:
+    def federate(self, name, issuer, subject, credential="worker") -> None:
         body = {"properties": {"issuer": issuer, "subject": subject, "audiences": [FIC_AUDIENCE]}}
-        self.arm.request("PUT", f"{self._path(name)}/federatedIdentityCredentials/worker", body)
+        self.arm.request("PUT", f"{self._path(name)}/federatedIdentityCredentials/{credential}", body)
 
     def delete(self, name) -> None:
         try:
@@ -147,7 +163,9 @@ class Identities:
         )
         return [a for a in (out or {}).get("value", []) if a["properties"].get("principalId") == principal_id]
 
-    def grant(self, principal_id, role, scope, description=BASELINE, existing=None) -> bool:
+    def grant(self, principal_id, role, scope, description=BASELINE, existing=None, condition=None) -> bool:
+        """One role assignment; `condition` (§33.4a, Azure ABAC, condition version 2.0) narrows it, e.g. to a blob
+        prefix."""
         rid = self.role_definition(role)
         current = existing if existing is not None else self.assignments(principal_id)
         if any(a["properties"]["roleDefinitionId"] == rid and a["properties"]["scope"] == scope for a in current):
@@ -160,6 +178,8 @@ class Identities:
                 "description": description,
             }
         }
+        if condition:
+            body["properties"].update(condition=condition, conditionVersion="2.0")
         try:
             self.arm.request("PUT", f"{scope}/providers/Microsoft.Authorization/roleAssignments/{uuid.uuid4()}", body)
         except ArmError as e:
@@ -174,6 +194,52 @@ class Identities:
         except ArmError as e:
             if e.status != 404:
                 raise
+
+
+class Acr:
+    """§38.2: ACR data plane — the console removes a deleted group's repository (`DELETE /acr/v1/<repo>`). Its
+    Entra token is exchanged for a registry token scoped to that one repository; Terraform's ABAC condition limits
+    the console to delete under `ramen/groups/`, never push."""
+
+    def __init__(self, server, token, http=None, timeout=30.0):
+        self.server, self.token, self._http, self.timeout = server, token, http, timeout
+
+    def _client(self):
+        if self._http is None:
+            import httpx
+
+            self._http = httpx.Client()
+        return self._http
+
+    def _post(self, path, data) -> dict:
+        r = self._client().post(f"https://{self.server}{path}", data=data, timeout=self.timeout)
+        if r.status_code >= 400:
+            raise ArmError(r.status_code, f"ACR {path}: {r.text[:200]}")
+        return r.json()
+
+    def delete_repository(self, repository) -> bool:
+        refresh = self._post(
+            "/oauth2/exchange", {"grant_type": "access_token", "service": self.server, "access_token": self.token()}
+        )["refresh_token"]
+        access = self._post(
+            "/oauth2/token",
+            {
+                "grant_type": "refresh_token",
+                "service": self.server,
+                "scope": f"repository:{repository}:delete",
+                "refresh_token": refresh,
+            },
+        )["access_token"]
+        r = self._client().delete(
+            f"https://{self.server}/acr/v1/{repository}",
+            headers={"Authorization": f"Bearer {access}"},
+            timeout=self.timeout,
+        )
+        if r.status_code == 404:
+            return False
+        if r.status_code >= 400:
+            raise ArmError(r.status_code, f"ACR delete {repository}: {r.text[:200]}")
+        return True
 
 
 class AzureClients(GcpClients):
@@ -232,6 +298,67 @@ class AzureClients(GcpClients):
 
         return self._cached("vault", make)
 
+    def acr(self, server: str) -> Acr:
+        cred = self.credential
+        return self._cached(f"acr:{server}", lambda: Acr(server, lambda: cred.get_token(f"{ARM}/.default").token))
+
+    def for_cluster(self, resource_group: str, name: str):
+        """§28.2: a satellite AKS cluster's clients — kubernetes bound to it, the data/control planes this bundle's."""
+        return AksClients(self, resource_group, name)
+
+
+AKS_API = "2024-02-01"
+AKS_AUDIENCE = "6dae42f8-4368-4678-94ff-3960e28e3630"  # AKS AAD server application: the token every kubelogin presents
+
+
+class AksClients(AzureClients):
+    """A satellite AKS cluster's clients: `server` + CA from `listClusterUserCredential` (the ARM action is singular;
+    the kubeconfig's exec block is ignored), a bearer token for the AKS audience from the console's workload identity
+    (Entra integration, Azure RBAC off: the console appears as `User <its object id>`). `oidc_issuer` is the
+    satellite's, for zone identities.
+    The data and control planes (credential, ARM, container, vault) are the home bundle's."""
+
+    def __init__(self, home: AzureClients, resource_group: str, name: str):
+        super().__init__(home.subscription, home.account, home.key_vault, home.container_name)
+        self.home, self.resource_group, self.name = home, resource_group, name
+
+    credential = property(lambda self: self.home.credential)
+    arm = property(lambda self: self.home.arm)
+    container = property(lambda self: self.home.container)
+    vault = property(lambda self: self.home.vault)
+
+    @property
+    def path(self) -> str:
+        return (
+            f"/subscriptions/{self.subscription}/resourceGroups/{self.resource_group}"
+            f"/providers/Microsoft.ContainerService/managedClusters/{self.name}"
+        )
+
+    @property
+    def oidc_issuer(self) -> str:
+        def make():
+            info = self.arm.request("GET", self.path, params={"api-version": AKS_API})
+            return info["properties"]["oidcIssuerProfile"]["issuerURL"]
+
+        return self._cached("issuer", make)
+
+    def _kube(self):
+        if "kube" not in self._c:
+            import base64
+
+            import yaml
+
+            from .gcp_clients import remote_kube
+
+            creds = self.arm.request("POST", self.path + "/listClusterUserCredential", params={"api-version": AKS_API})
+            cluster = yaml.safe_load(base64.b64decode(creds["kubeconfigs"][0]["value"]))["clusters"][0]["cluster"]
+            cred = self.credential
+            ca = base64.b64decode(cluster["certificate-authority-data"])
+            self._c["kube"] = remote_kube(
+                self._kube_modules()[1], cluster["server"], ca, lambda: cred.get_token(f"{AKS_AUDIENCE}/.default").token
+            )
+        return self._c["kube"]
+
 
 def sync_repo_to_blob(container, account, container_name, group, repo_url, ref, token) -> str:
     """Mirror the repo at `ref` to `<container>/<group>/`: upload new or changed files (MD5), delete the rest."""
@@ -268,11 +395,11 @@ def fetch_pod_logs(kube, ns, worker, tail) -> str:
         return ""
     tail = max(1, min(int(tail), 10000))
     entries: list[tuple[str, str]] = []
-    for p in kube.pods(ns):
+    for p in kube.pods(ns, "app=worker"):  # a sleeping zone's activator logs here too (`activator: true`)
         name = p["metadata"]["name"]
         if worker and name != worker:
             continue
-        text = kube.c.core.read_namespaced_pod_log(name, ns, container="worker", tail_lines=tail) or ""
+        text = log_text(kube.c.core.read_namespaced_pod_log(name, ns, container="worker", tail_lines=tail))
         for line in text.splitlines():
             if not line.strip():
                 continue

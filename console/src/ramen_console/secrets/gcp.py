@@ -1,6 +1,7 @@
 """Secret Manager backend: values live in SM as ramen-<group>-<env>-<zone>-<NAME>; the store keeps name + ref only."""
 
 import asyncio
+import re
 
 from ..cloud.gcp_clients import http_status
 from ..errors import ApiError
@@ -10,6 +11,11 @@ from .base import REF_PREFIX, SecretsBackend
 def secret_id(group, env, zone, name, kind="secret") -> str:
     n = name if kind == "secret" else f"mcp-{name}"
     return f"ramen-{group}-{env or 'all'}-{zone or 'all'}-{n}"
+
+
+def console_id(name: str) -> str:
+    """1.0.0: the console's own secrets, `ramenc-…` so no group's `ramen-<group>-…` name can match them."""
+    return ("ramenc-" + re.sub(r"[^A-Za-z0-9_-]", "_", name))[:255]
 
 
 class GcpSecrets(SecretsBackend):
@@ -40,6 +46,27 @@ class GcpSecrets(SecretsBackend):
             request={"parent": f"{parent}/secrets/{sid}", "payload": {"data": value.encode()}}
         )
         return {"value": None, "ref": f"{REF_PREFIX}{parent}/secrets/{sid}"}
+
+    def _put_value(self, name, value):
+        sid = console_id(name)
+        parent = f"projects/{self.project}"
+        self.client.create_secret(
+            request={
+                "parent": parent,
+                "secret_id": sid,
+                "secret": {"replication": {"automatic": {}}, "labels": {"ramen": "console"}},
+            }
+        )
+        self.client.add_secret_version(
+            request={"parent": f"{parent}/secrets/{sid}", "payload": {"data": value.encode()}}
+        )
+        return f"{REF_PREFIX}{parent}/secrets/{sid}"
+
+    async def put_value(self, name, value):
+        try:
+            return await asyncio.to_thread(self._put_value, name, value)
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"Secret Manager: {type(e).__name__}") from e
 
     async def put(self, group, env, zone, name, value, kind="secret"):
         try:

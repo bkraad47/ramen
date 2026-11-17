@@ -1,0 +1,12 @@
+{
+  "type": "prompt",
+  "name": "test_prompt_with_embedded_resource",
+  "description": "A prompt whose first message embeds the resource named by resourceUri.",
+  "callable": "build",
+  "input": {
+    "resourceUri": {
+      "type": "string",
+      "description": "URI of the resource to embed"
+    }
+  }
+}

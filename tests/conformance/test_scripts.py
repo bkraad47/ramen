@@ -35,7 +35,8 @@ def test_demo_repo_version_is_a_row_that_fails_on_mismatch(tmp_path):
 def test_the_runtime_python_pin_and_the_image_bases_must_agree(tmp_path):
     """§21.1 (D45): one Python minor for the runtime, and every image that installs it builds on that minor."""
     root = tmp_path / "ramen"
-    skip = shutil.ignore_patterns(".git", ".venv", "target", "site", "__pycache__", "node_modules", ".demo")
+    # .certs: the compose stack's CA (D86), root-owned and unreadable on CI
+    skip = shutil.ignore_patterns(".git", ".venv", "target", "site", "__pycache__", "node_modules", ".demo", ".certs")
     shutil.copytree(E.RAMEN_DIR, root, ignore=skip)
     ok = run("--root", str(root))
     assert ok.returncode == 0 and "runtime-py python" in ok.stdout and "glama/Dockerfile python" in ok.stdout, ok.stdout

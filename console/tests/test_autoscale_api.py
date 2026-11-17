@@ -197,3 +197,52 @@ def test_concurrent_scheduler_and_button_scale_only_once(demo, monkeypatch):
     assert sorted(d["action"] for d in (a, b)) == ["hold", "up"], (a, b)
     assert len(scaled) == 1 and demo.get(URL).json()["count"] == 2
     assert len(audit(demo, "workers.autoscale")) == 1
+
+
+def test_the_pages_show_the_latency_bounds_and_the_last_p50(demo, monkeypatch):
+    """§35.1 (D83): the bounds where the rps target is shown (Config, group page), the zone row's last-minute p50."""
+    monkeypatch.setenv("RAMEN_AUTOSCALE_P50_MS", "400")
+    monkeypatch.setenv("RAMEN_AUTOSCALE_TARGET_RPS", "50")
+    demo.put(URL, json={"max_count": 2})
+    svc = demo.app.state.services
+
+    async def slow(group, zone):
+        m = {"inflight": 1, "max_inflight": 32, "total": 900, "latency_p50_ms": 812, "latency_p95_ms": 1300}
+        return [{"id": "p1", "load": "low", "metrics": {**m, "latency_n": 300}}]
+
+    monkeypatch.setattr(svc.cloud, "workers", slow)
+    r = demo.post("/api/v1/groups/demo/zones/zone-a/rebalance")
+    assert r.json()["autoscale"]["action"] == "up" and r.json()["autoscale"]["reason"] == "p50 812 ms ≥ 400"
+    part = demo.get("/ui/groups/demo/zones/zone-a/workers").text
+    assert "p50 812 ms" in part and "p95 1300 ms" in part and "5 rps" in part  # the live last-minute figure
+    assert "Last autoscale: <b>up</b> 1→2 — p50 812 ms ≥ 400" in part
+    assert "p50 ≥ 400 ms" in part and "50 calls/s" in part and "≥ 2 rps" in part
+    page = demo.get("/groups/demo").text
+    assert "p50 ≥ 400 ms" in page and "Last decision: <b>up</b> 1→2" in page and "p50 812 ms" in page
+    cfg = demo.get("/config").text
+    assert "p50 ≥ 400 ms" in cfg and "50 calls/s per worker" in cfg and "≥ 2 rps" in cfg
+
+
+def test_an_older_node_shows_no_latency_and_keeps_rps_only_decisions(demo, monkeypatch):
+    svc = demo.app.state.services
+
+    async def old(group, zone):
+        return [{"id": "p1", "load": "low", "metrics": {"inflight": 0, "max_inflight": 32, "total": 3}}]
+
+    monkeypatch.setattr(svc.cloud, "workers", old)
+    demo.post("/api/v1/groups/demo/zones/zone-a/rebalance")
+    part = demo.get("/ui/groups/demo/zones/zone-a/workers").text
+    assert "p50 last minute" not in part and "Last autoscale: <b>hold</b> 1→1 — at the minimum of 1" in part
+
+
+def test_a_decision_recorded_before_the_latency_fields_still_renders(demo):  # noqa: F811
+    # 1.0.0c D83: a decision stored by an older console has no p50_ms / rps — the group page must not 500 (Azure, b26)
+    import asyncio
+
+    svc = demo.app.state.services
+    w = asyncio.run(svc.worker_config("demo", "zone-a"))
+    w["last_autoscale"] = {"action": "hold", "from": 1, "to": 1, "reason": "load even"}
+    asyncio.run(svc.store.put("workers", w["id"], w))
+    page = demo.get("/groups/demo")
+    assert page.status_code == 200, page.text[:300]
+    assert "load even" in page.text

@@ -1,113 +1,163 @@
-# Architecture (current: v0.8.0; the product is 0.7.5)
+# Architecture (current: v1.0.0)
 
-Hierarchy: **Group → Environment → Zone → Worker** (decision D5). Transport: **Streamable HTTP at the edge, gRPC inside** (D31; gRPC since D19).
+Ramen is three pieces — a **console** (FastAPI), a **node** (Rust) and a **runtime** (Python) — plus a stdio
+**bridge** for clients that need one. One console drives one home Kubernetes cluster and, optionally, satellite
+clusters in other regions. The binding detail of every interface is in the [contracts](../CONTRACTS.md); this page is
+the map.
 
 <figure class="ramen-diagram" markdown>
 ![One MCP call end to end: client, load balancer, the zone's worker pod, Rust node, Python runtime](../img/architecture.svg)
-<figcaption>A client posts to /mcp (or a stdio client goes through ramen-mcp-bridge over gRPC); the load balancer (GKE Gateway, AWS ALB or Envoy Gateway on AKS) routes on the ramen-group and ramen-zone headers to the zone's worker pod; the Rust node checks the credential and source range and hands the message to the Python runtime, which loads the group's code from the bucket and runs the group's guardrails around the tool. The console keeps state in Firestore, DynamoDB, Table Storage or Postgres, drives the cloud adapter, scales the workers and calls nodes directly on their pod IP.</figcaption>
+<figcaption>A client posts to /mcp (or a stdio client goes through ramen-mcp-bridge over gRPC); the load balancer (GKE Gateway, AWS ALB or Envoy Gateway on AKS) routes on the ramen-group and ramen-zone headers to the zone's worker pod; the Rust node checks the credential, source range and policy versions and hands the message to the Python runtime, which loads the group's code from the bucket and runs its guardrails around the tool. The console keeps state in Firestore, DynamoDB or Table Storage, drives the cloud adapter, scales the workers and calls nodes directly on their pod IP.</figcaption>
 </figure>
 
-Store: Firestore, DynamoDB, Azure Table Storage or Postgres. Cloud adapter: `local`, `gcp`, `aws` or `azure`
-(namespaces, Deployments, routes, NEG or target groups, Cloud Armor, WAF or Envoy `SecurityPolicy`, per-zone cloud
-identity). Secrets backend: the store, Secret Manager, Secrets Manager or Key Vault. Since 0.7.5 the console also
-**scales the workers** of every group × zone between 1 and an admin's max (no HPA).
-The console reaches workers over gRPC on the pod IP (`Admin/Reload`, `Admin/Metrics`, `Health/Check`), never
-through the load balancer.
+## Groups, environments, zones and workers
+
+| Thing | What it is | Where it lives |
+|---|---|---|
+| **Group** | a tenant: one git repo, one bucket prefix, its secrets, keys, members and policy settings | the console store; `<bucket>/<group>/` |
+| **Environment** | a name shared by the groups it lists, with one git ref (e.g. `prod` on `main` for `demo` and `analytics`) | one record per group × environment (`environments/<group>:<name>`): deploy state, blocked names, tool access |
+| **Zone** | a place workers run: a name, a provider and a cloud zone (`us-central1-a`, `us-east-1a`, `eastus-1`), plus the environments it serves | the console store; a zone's groups are **derived** from its environments |
+| **Worker record** | one per group × zone pair the derivation yields: count, max, size, sleep, IP rules, throttle, service account | `workers/<group>:<zone>` |
+| **Worker** | one pod in namespace `ramen-<group>-<zone>`: the Rust node and, on demand, the Python runtime | Deployments `worker` and `worker-canary` |
+
+A pair appears when a zone gains an environment, an environment gains a group, or a zone is created: Ramen binds it
+(namespace, the zone's own cloud identity, Service, route, NetworkPolicies) and canary-deploys it at once. A pair that
+disappears is detached and torn down. A region change keeps the zone's name and settings and re-creates its workers
+in the new place; across clusters it is a detach plus an attach. Super admins edit everything on the **Environments,
+Zones and Workers** page; a group admin edits what is wholly within their groups ([Roles](../roles.md)).
+
+## How a worker works
+
+- **The node** (`node-rs/`, tonic + tokio) owns port 8080: Streamable HTTP `POST /mcp` and gRPC
+  `ramen.v1.Mcp/Call`, `ramen.v1.Admin` and `grpc.health.v1.Health`, behind one implementation of every guard —
+  source range at the load balancer's forwarded hop, Origin, the bearer (MCP key or OAuth token, checked locally
+  against the deploy's key hashes and the console's signing key), throttle (Redis), in-flight cap, blocked names, tool
+  access, telemetry consent and the policy-version gates (`-32024`…`-32029`). It speaks MCP 2026-07-28 and 2025-06-18
+  on the same endpoint, chosen per request, and writes one access-log line and one span per call.
+- **The runtime** (`runtime-py/`, Python 3.12) is a child process the node spawns on demand and talks to over
+  JSON-RPC on stdin/stdout — no port. It loads the group's `mcp/` tree from the bucket by content hash, renders
+  `mcp/env.yaml` from the group's secrets, installs `requirements.txt` unless the image already baked them, runs
+  guardrails before and after each tool (NeMo or `policy.py`; LLM rails through the console's judge proxy), and runs
+  up to `RAMEN_RUNTIME_CONCURRENCY` (4) calls at once on a thread pool. A crash costs one restart, never the process
+  that holds the keys.
+- **Two tracks.** A deploy restarts `worker-canary` first, gates it, then rolls `worker`. On AWS the two tracks
+  share the zone through weighted target groups.
+- **Autoscaling by Ramen.** The console reads every pod's `Admin/Metrics` (in-flight, rate, p50/p95 latency) and sets
+  the `worker` replicas between 1 and the zone's max: up on load or when p50 passes `RAMEN_AUTOSCALE_P50_MS` (500 ms),
+  down only after three quiet rounds. No HPA ([Autoscaling](../wiki/autoscaling.md)).
+- **Sleeping.** An idle zone (per `sleep_after_secs`) scales to 0 behind one small activator pod that answers health,
+  checks credentials like a worker and wakes the zone on the first authenticated call
+  ([Sleeping workers](../wiki/sleeping-workers.md)).
+- **Tasks and shared state** (task store, consent, throttle counters) live in Redis — the chart's, a managed one, or
+  a group's own; without it task tools answer synchronously ([Tasks](../wiki/tasks.md)).
+
+## Home and satellite clusters
+
+The **home** cluster runs the console, the optional engines and the image-build, evals and scan Jobs, plus any zone in
+its region. A **satellite** is a worker-only cluster in another region of the same cloud (Terraform
+`deploy/terraform/<cloud>-satellite`, chart `deploy/helm/ramen-satellite`), registered on Config → Clusters (**Add satellite**).
+The console drives it with its own cloud identity (GKE API + Google token, EKS presigned token, AKS user credentials),
+binds its ClusterRoles there, and reaches satellite workers by pod IP over a joined network (same VPC + firewall on
+GCP, VPC peering on AWS, VNet peering + NSG on Azure). Clients call a satellite zone at its own edge host; tokens,
+keys and the store stay the home console's. Images are pulled from the home registry; builds stay home. A zone can
+only be placed in a region that has a cluster ([Where a zone can be](../wiki/groups-zones.md#where-a-zone-can-be)).
+
+## Paths
+
+- **An MCP call.** Client → edge (TLS, IP rules) → route on `ramen-group` + `ramen-zone` → node guards and gates →
+  runtime → guardrail pre → tool → output schema → guardrail post → reply. The node exports the call span (with
+  `ramen.user`, `ramen.group`, the client's reported events as child spans) to the configured collector; one Phoenix
+  project per group.
+- **A deploy.** Clone the ref → validate (`mcp/llm-config/`, evals providers, `env.yaml` names, `requirements.txt`) →
+  sync to the bucket → build the group's image when its requirements changed → write each zone's deploy Secret (key
+  hashes, admin key, per-deploy evals key and judge token, policy versions) → canary → `Admin/Reload` → smoke
+  `tools/list` → schema compatibility gate → golden cases → evals Job → scan Job → stable. Any gate that fails leaves
+  stable serving. Jobs are kept in the store ([Groups, zones and regions → Deploying](../wiki/groups-zones.md#deploying)).
+- **A policy change** (telemetry settings, a group's Required switches, a new configs version) rewrites the deploy
+  Secrets of the affected zones and reloads and restarts their workers without a deploy (the org's telemetry save
+  reaches every group; a group's setting only that group).
+- **The image build.** A Job `ramen-build-<hash>` in `ramen-system` running kaniko as `ramen-build-<group>`, which may
+  push only to the group's repository; the deploy pins the result by digest ([Worker images](../wiki/worker-images.md)).
+- **Evals and scans.** Jobs in `ramen-system` running as `ramen-evals` (logging only): promptfoo against the canary
+  with the per-deploy evals key, then NVIDIA SkillSpector over the repo's skills and a skill synthesized from what
+  the canary serves. Results land on the job record and the group page; runs are shared with the chart's promptfoo
+  server when it runs ([Evals](../wiki/evals.md), [SkillSpector](../wiki/skillspector.md)).
+- **LLM judge proxy.** Workers call `<console>/llm/v1/chat/completions` in-cluster with their zone's judge token; the
+  bridge with the person's token. The console resolves the group's provider (group, then org), checks the model
+  against `allowed_models`, adds the key, rate-limits per group and audits. Provider keys never leave the console
+  ([Configuration → The LLM judge proxy](../wiki/configuration.md#the-llm-judge-proxy-100c-d85)).
+- **TLS.** Every in-cluster hop (edge → worker and console, console → worker, worker → console, Redis, collectors,
+  promptfoo) is TLS with leaves from the console's per-install CA (`worker.ramen.internal` for every worker);
+  `RAMEN_REQUIRE_TLS=1` refuses plaintext on cloud installs ([Transport](../wiki/transport.md), CONTRACTS §39).
+- **Client policy.** Every sign-in path (OAuth, password, magic link, a group key) answers the same policy: telemetry,
+  evals, scan, configs and guardrails versions. The bridge keeps them as a bundle, writes the accepted client files and
+  carries every version on every call; the workers refuse calls without them ([Threat model → Gates](../threat-model.md#gates-on-every-call)).
 
 ## Components
-| Dir | What | Tech | Contract |
-|---|---|---|---|
-| `console/` | Manager UI + `/api/v1`; roles per group (D41) and custom roles (D48), the OAuth 2.1 authorization server (D34), identity providers on the Config page with group lookup (D47, D50), IdP role mapping (D38), scoped service-account policy (D40), autoscaling (`autoscale.py`, D55); gRPC client to workers (`ramen_console.grpcclient`) | FastAPI, Jinja2, HTMX (no JS build, no `unsafe-eval`), argon2, itsdangerous, Fernet, grpcio | [§4, §4a, §9, §11, §16.3](../CONTRACTS.md) |
-| `node-rs/` | MCP server node: `ramen.v1.Mcp/Call`, `ramen.v1.Admin`, `grpc.health.v1.Health` on one h2c/TLS port; bearer auth, CIDR allow-lists, blocked names, in-flight limit, access log, sidecar supervisor | Rust 1.98, tonic, tokio | [§11](../CONTRACTS.md) |
-| `runtime-py/` | Loads `mcp/` packages from the bucket (`gs://`, `s3://`, `az://`), validates protos, pip-installs requirements, renders `mcp/env.yaml` from secrets (0.6.0), runs `mcp/guardrails.yaml` pre/post hooks (NeMo or `policy.py`, D46), executes calls, resolves and redacts secrets | Python 3.12 (pinned, D45), jsonschema, optional NeMo Guardrails | [§1, §2, §11](../CONTRACTS.md) |
-| [`ramen-mcp-bridge`](https://github.com/bkraad47/ramen-mcp-bridge) (own repo, PyPI) | Stdio MCP server forwarding to `Mcp/Call` over gRPC with a group key or, since 0.2.0, the person's own OAuth token (PKCE + loopback callback against the console); 0.3.0 keeps tokens in memory or the OS keychain and relays a needed sign-in as error `-32001` (D52) | Python, grpcio | [§11, §16.3](../CONTRACTS.md) |
-| `proto/ramen/v1/` | `mcp.proto`, `admin.proto` — single source for Rust (tonic-build) and Python (grpcio-tools) stubs | protobuf 3 | [§11](../CONTRACTS.md) |
-| `deploy/local` | docker compose: Firestore emulator + console + one worker (gRPC h2c on 8080) | | [§5, §11](../CONTRACTS.md) |
-| `deploy/terraform/gcp`, `deploy/helm/*` | GKE Autopilot, Firestore, GCS, Artifact Registry, static IP, GSA + Workload Identity (custom role, resource-level IAM), GKE Gateway with header routes + gRPC health | Terraform, Helm 4 | [§7, §11](../CONTRACTS.md) |
-| `deploy/terraform/aws`, `deploy/cloudformation` | EKS, DynamoDB, S3, Secrets Manager, ECR, IRSA, ALB controller (gRPC target groups, HTTP1 for `/mcp` and OAuth metadata since 0.6.1), Fluent Bit (exercised on the real account, not at volume) | Terraform, CloudFormation | [§8, §11](../CONTRACTS.md) |
-| `deploy/terraform/azure`, `deploy/helm/*` (`provider=azure`) | AKS (free tier, workload identity), ACR, Blob + Table Storage, Key Vault, static IP, Envoy Gateway + cert-manager (Let's Encrypt), managed identities (D54) | Terraform, Helm | [§21.6](../CONTRACTS.md) |
-| `tests/` | Black-box conformance + e2e + cloud suites over gRPC, plus the bridge via the official `mcp` stdio client | pytest, grpcio, `mcp` | [§11](../CONTRACTS.md) |
-| `skills/` | Cloud-ops agent skills (deploy, rotate, backup, scale) | agentskills `SKILL.md` | [§10](../CONTRACTS.md) |
+
+| Dir | What | Tech |
+|---|---|---|
+| `console/` | Manager UI and `/api/v1`; OAuth 2.1 authorization server; identity providers; roles; deploy, build, evals and scan orchestration; autoscaler; OTLP ingest `/otlp/v1/*`; LLM judge proxy `/llm/v1`; cloud adapters `local`, `gcp`, `aws`, `azure` | FastAPI, Jinja2, HTMX, grpcio |
+| `node-rs/` | the MCP node: transport, auth, limits, gates, access log, OTel export, the sidecar supervisor, the activator mode | Rust, tonic, tokio |
+| `runtime-py/` | loads packages, apps and skills; runs calls, tasks, MRTR rounds, guardrails | Python 3.12, jsonschema, NeMo Guardrails |
+| [`ramen-mcp-bridge`](https://github.com/bkraad47/ramen-mcp-bridge) (own repo) | stdio MCP server forwarding over gRPC; OAuth sign-in; policy bundle, client config files, `policy check/remove`, local SkillSpector scan and rails, `skills install` | Python |
+| `proto/ramen/v1/` | `mcp.proto`, `admin.proto` | protobuf |
+| `deploy/helm/ramen`, `ramen-worker`, `ramen-satellite` | console chart (with the optional Phoenix/Jaeger, promptfoo, Redis, NetworkPolicies), the worker template the console renders, the satellite chart | Helm |
+| `deploy/terraform/{gcp,aws,azure}[-satellite]`, `deploy/cloudformation` | clusters, store, bucket, registry, the console's and Jobs' identities, edge addresses | Terraform, CloudFormation |
+| `deploy/docker/skillspector` | Ramen's image of NVIDIA SkillSpector (pinned 2.13.4) | Docker |
+| `tests/` | conformance, e2e, kind, cloud and load suites | pytest |
+
+State store: Firestore (GCP), DynamoDB (AWS), Table Storage (Azure), or Postgres / the Firestore emulator where you host
+it. Secrets: Secret Manager, Secrets Manager, Key Vault, or Fernet in the store locally.
 
 ## Data model
-| Collection | Key fields | Notes |
-|---|---|---|
-| `users` | email, `idp_memberships` and `manual_memberships` (`{group: role}`, a built-in or custom role; effective `memberships` = IdP overlaid by manual), `super_admin` / `idp_super`, `provider` | `role` and `groups` are derived summaries; password hash Fernet-encrypted |
-| `groups` | name, repo_url, ref, mcp_auth, sa_restrictions | one bucket prefix per group |
-| `environments` | group, name, ref, zones[], verbose, blocked[], last_deploy | zone list drives namespaces |
-| `zones` | name, provider (`local` / `gcp` / `aws` / `azure`), region (cloud zone) | super admin only |
-| `workers` | group, zone, count, max_count, size (`s`/`m`/`l`), allowed_sizes, cidrs, service_account, autoscale_state, last_autoscale | live pods come from the adapter |
-| `secrets` | group, name, env?, zone?, kind (`secret` / `mcp_key`), value or ref | value never returned |
-| `api_keys` | name, role, groups, hash | `rmn_<id>_<secret>`, shown once |
-| `audit` / `activity` | ts, user, ip, action, target, ok, tags | every mutation; permission requests live in `activity` |
-| `config`, `backups` | auth toggles, `oauth_providers` (secret encrypted), `roles`, role maps, `scheduler`, `hashing` (token salt, encrypted), SA rules; backup metadata | backups exclude secrets |
 
-## Request paths
-- **MCP call**: client (`POST /mcp` over Streamable HTTP, a gRPC client, or the stdio bridge) → LB matches
-  `ramen-group` + `ramen-zone` headers → node checks CIDR, Origin (HTTP), then the `rmk_` key or an OAuth token
-  (constant-time) → per-tool access → runtime (spawned on demand) → guardrail pre → tool → output schema →
-  guardrail post → JSON-RPC result in the reply body. Transport failures are
-  gRPC statuses (`UNAUTHENTICATED`, `PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`) or their HTTP twins (401, 403,
-  429); protocol failures stay JSON-RPC errors. One log line per call (`ts, ip, transport, group, method, name,
-  status, grpc_code, ms, key_id`); `RAMEN_VERBOSE=1` logs bodies.
-- **Deploy**: console job → clone repo (token via git header) → upload bucket → write zone Secret/env file
-  (`RAMEN_MCP_KEYS`, `RAMEN_SECRET_*`, `RAMEN_BLOCKED`, `RAMEN_ALLOWED_CIDRS`) → canary restart → `Health/Check`
-  `SERVING` → `Admin/Reload` → `tools/list` smoke → stable restart. See [Deploying](../wiki/groups-zones.md#deploying).
-- **Rebalance and autoscale**: the button or the Config page's scheduler (every group × zone each interval) →
-  `Admin/Metrics` from every pod (`inflight`, `max_inflight`, `total`) → `autoscale.decide` (up proportionally after
-  30 s, down by one after 120 s and three quiet rounds, within 1..max) → the stable Deployment's replicas, plus the
-  load-balancer leg (GCP capacity scaler, AWS weights) → audit `workers.autoscale`. See
-  [Autoscaling](../wiki/autoscaling.md).
-- **IP rules**: console → cloud API (Cloud Armor / WAF / Envoy `SecurityPolicy`) + node env → worker roll.
+| Collection | Key fields |
+|---|---|
+| `users` | email, memberships per group (from an identity provider and from admins), `super_admin`, `accepted_configs` per group and version |
+| `groups` | repo, ref, `evals`, `skillspector`, `guardrails`, `build_image`, `require_telemetry_consent`, own LLM providers (vaulted) |
+| `environments` | `<group>:<name>`: ref, zones, verbose, blocked names, tool access, last deploy (results per zone) |
+| `zones` | name, provider, region, environments, derived groups, cluster |
+| `workers` | `<group>:<zone>`: count, max, size, sleep, CIDRs, throttle, service account, autoscale state |
+| `jobs` | deploy jobs with log, result and SkillSpector reports; the last 50 per target |
+| `secrets`, `api_keys` | values or vault refs never returned; `rmk_` / `rmn_` keys as salted hashes |
+| `audit`, `config`, `backups` | every action; auth, providers, telemetry, regions and clusters, LLM providers; backup metadata |
 
 ## Decisions
 
-Only the decisions that still shape the code are listed. The gaps are ids that were superseded, or that never
-left the private workspace.
+Only decisions that still shape the code are listed; the full record is in the private workspace.
 
 | ID | Decision |
 |---|---|
-| D2 | State DB: Firestore on GCP, DynamoDB on AWS, one repository interface. No Postgres. *(partly superseded by D37)* |
-| D3 | Worker pod = Rust node + Python runtime sidecar, 1:1, spawned on demand, idle-terminated. |
-| D4 | *(superseded by D19)* Transport: JSON-RPC 2.0 over HTTP (MCP Streamable HTTP), 0.1.0–0.3.0. |
+| D3 | Worker pod = Rust node + Python runtime sidecar, spawned on demand, idle-terminated. |
 | D5 | Hierarchy Group → Environment → Zone → Worker. |
-| D6 | One zone first; every layer multi-zone capable. |
-| D9 | Semver from 0.1.0; tags `v*` build releases with zips. |
 | D11 | Console: FastAPI + Jinja2 + HTMX, server-rendered. |
-| D14 | Bucket dir = group repo root; no MCP keys = deny all; node config precedence file < env < deploy file. |
-| D17 | *(superseded by D36)* Console on GCP: static IP + self-signed cert on the global HTTPS LB; managed cert later. |
-| D18 | v0.3.0 scope: AWS (untested at the time; applied to a real account from 0.5.6), OAuth polish, SA policy engine, tool blocking, email auth, docs, launch. |
-| D19 | v0.3.1: MCP transport is JSON-RPC 2.0 over gRPC (`ramen.v1.Mcp/Call`); HTTP MCP endpoint removed; `ramen-mcp-bridge` (stdio) serves standard clients; full security parity on gRPC; LB routes on `ramen-group`/`ramen-zone` metadata; carried security mediums fixed; logo v2. |
-| D21 | v0.4.0: API keys carry an enforced client type — an `agent` key is accepted only by workers over gRPC, a `devops` key only by the console API. |
-| D22 | v0.4.0: the autoscale and rebalance stress test runs on a local kind cluster first, then once on a throwaway GKE project. |
-| D23 | v0.4.0: independent-client evidence is a real MCP client driven against the bridge, plus an editor configuration the user captures. |
-| D31 | v0.5.0: Streamable HTTP at the edge, gRPC inside — every worker serves `POST /mcp` on the gRPC port through the same guards; the bridge is the stdio-only compatibility path. |
-| D32 | v0.5.0: the HTTP handler lives in the node on the same port; never a separate edge service. |
-| D33 | v0.5.0: sessions are stateless signed ids (HMAC over nonce, expiry and the credential; per-group secret handed to every zone). |
-| D34 | v0.5.0: the console is the OAuth 2.1 authorization server — PKCE S256, pre-registered clients, no dynamic registration. |
-| D35 | v0.5.1: cloud runs get their permissions from a rule the human adds; the agent never writes its own permission file. |
-| D36 | v0.5.5: the GCP console gets a Google-managed certificate on a free `sslip.io` hostname derived from the static IP (supersedes D17); no domain to buy, no CA to export. |
-| D37 | v0.5.5: Postgres is an optional third `RAMEN_STORE` for self-hosted deployments; Firestore and DynamoDB stay the cloud defaults (partly supersedes D2). |
-| D38 | v0.5.93: IdP role mapping is authoritative on every login, keyed by claim value, never by person; no match means no membership. |
-| D39 | v0.5.93: a fourth role, `mcp_user`, who only signs in to approve MCP clients for their groups' zones; no console, no API. |
-| D40 | v0.5.93: a service-account permission carries a scope; empty or `*` means the group's own prefix and secrets, named resources bind on those alone. |
-| D41 | v0.5.95: roles are held per group (`user.memberships`); one person may be a Group Admin of one group and an MCP User of another. |
-| D45 | v0.7.5: the worker's Python runtime is pinned to 3.12 (NeMo Guardrails does not run on 3.14); the console stays on 3.14. |
-| D46 | v0.7.5: guardrails are Ramen's own per-tool pre/post hooks in the runtime (`mcp/guardrails.yaml`, engines `nemo` and `policy`, fail-closed). |
-| D47 | v0.7.5: identity federation — group source `claim` or `lookup` (Graph, Cloud Identity) per provider; memberships from the IdP and from admins, the admin's entry wins. |
-| D48 | v0.7.5: custom roles with a base, usable as memberships, mapping targets and tool-access kinds; `oauth_only` refuses password sign-in. |
-| D50 | v0.7.5: identity providers are managed on the Config page; environment variables are a second source. |
-| D51 | v0.7.5: no `email_verified` requirement — the provider's email is the account, else its stable id. |
-| D52 | bridge 0.3.0: tokens in memory by default, keychain or a file on request, 30-minute idle expiry, sign-in URL as error `-32001`. |
-| D53 | v0.7.5: a browser consent to a loopback redirect gets a self-navigating page instead of a `303`. |
-| D54 | v0.7.5: AKS is a third deploy target (Envoy Gateway + Let's Encrypt, Table Storage, Key Vault, Blob, managed identities). |
-| D55 | v0.7.5: Ramen scales workers, not the cloud — min 1, a max set by super and group admins, no HPA, every action audited. |
+| D14 | Bucket dir = group repo root; no MCP keys = deny all. |
+| D19, D31, D32 | gRPC inside since 0.3.1; Streamable HTTP at the edge since 0.5.0, in the node, on the same port. |
+| D33, D34 | Stateless signed sessions; the console is the OAuth 2.1 authorization server (PKCE S256, pre-registered clients). |
+| D36 | Google-managed certificate on a free `sslip.io` hostname (Let's Encrypt on AKS). |
+| D38, D41, D47, D48 | IdP role mapping per claim; roles held per group; identity federation with group lookup; custom roles on a base. |
+| D39 | A fourth role, `mcp_user`, who only signs in to approve MCP clients. |
+| D45, D46 | Runtime pinned to Python 3.12; guardrails are per-tool pre/post hooks in the runtime, fail-closed. |
+| D54 | AKS is a third deploy target. |
+| D55, D83 | Ramen scales workers, not the cloud; it scales on p50 latency too, with worker CPU limits kept at 250m and up to 4 concurrent calls per runtime. |
+| D57, D58 | Sleeping zones behind an activator; worker images built on deploy in-cluster. |
+| D59 | The node is dual-era: MCP 2026-07-28 next to 2025-06-18, per request. |
+| D62, D63 | Telemetry through Ramen: a report on every gated call; the bridge implements the client side. |
+| D64, D65, D66 | Environments across groups, zones attached to environments, derived pairs deployed on bind; edit rule; region changes keep the zone. |
+| D67 | The chart's try-out collector is a choice: none, Jaeger or Phoenix. |
+| D71 | Satellite clusters: zones in other regions, one console. |
+| D72–D74 | promptfoo evals, NVIDIA SkillSpector scans and LLM configs from the group repo, each a client policy enforced on every sign-in path and by the worker gates. |
+| D76 | Ramen's own calls (golden cases, the evals Job) are exempt from the client-policy gates. |
+| D77, D81 | MCP Apps and Skills over MCP in the runtime; LLM rails in NeMo with providers scoped to the group or the org; guardrails as a client policy. |
+| D79, D85 | Hardening after the security passes: Job identity, provider allowlist, NetworkPolicies, Redis auth; the LLM judge proxy, per-group image builds, visible Redis status, injection-hardened judge prompts. |
+| D86 | TLS on every hop with Ramen's own per-install CA; plaintext refused on cloud installs; the bridge (0.6.0) defaults to TLS. |
 
 ## Version history
-[v0.1.0](v0.1.0.md) local core → [v0.2.0](v0.2.0.md) GCP → [v0.3.0](v0.3.0.md) AWS, auth & policy, docs →
-[v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish, docs, and proof → 0.5.x Streamable HTTP
-at the edge, OAuth, the GKE and AWS runs, per-group roles → [v0.6.0](v0.6.0.md) real zone teardown, HTTPS only,
-`env.yaml` → 0.7.x golden cases and the schema gate, per-tool access → 0.7.5 guardrails, identity federation,
-custom roles, AKS, autoscaling by Ramen. This page describes 0.7.5; the [changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) has each
-release and [Versions](../versions.md) tracks them. A drawing of one call end to end, and what protects every hop, is in
-[Transport and what secures each hop](../wiki/transport.md).
+
+[v0.1.0](v0.1.0.md) local core → [v0.2.0](v0.2.0.md) GCP → [v0.3.0](v0.3.0.md) AWS, auth & policy →
+[v0.3.1](v0.3.1.md) gRPC transport → [v0.4.0](v0.4.0.md) console polish → 0.5.x Streamable HTTP and OAuth →
+[v0.6.0](v0.6.0.md) zone teardown, HTTPS only → 0.7.x golden cases, guardrails, identity federation, AKS, autoscaling →
+0.8.0 security review, published images → 1.0.0 MCP 2026-07-28, sleeping workers, builds on deploy, telemetry,
+environments across groups, satellites, evals, scans, LLM configs, apps, skills, LLM rails. The
+[changelog](https://github.com/bkraad47/ramen/blob/main/CHANGELOG.md) has each release.

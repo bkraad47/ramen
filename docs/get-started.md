@@ -3,6 +3,19 @@
 Three short walks: run Ramen on your laptop, connect a repo of tools, and connect a client. Each step shows the
 page you will see; the wiki goes deeper.
 
+!!! tip "Quick links: deploy to a cloud"
+
+    Each deploy guide is self-contained — Terraform (or CloudFormation on AWS), the chart, the first group.
+
+    | Cloud | Deploy guide | What it grants and opens |
+    |---|---|---|
+    | **Google Cloud** (GKE Autopilot) | [Deploy on GCP](wiki/deploy-gcp.md) | [IAM and network on GCP](wiki/iam-network-gcp.md) |
+    | **AWS** (EKS) | [Deploy on AWS](wiki/deploy-aws.md) | [IAM and network on AWS](wiki/iam-network-aws.md) |
+    | **Azure** (AKS) | [Deploy on Azure](wiki/deploy-azure.md) | [IAM and network on Azure](wiki/iam-network-azure.md) |
+
+    Then: [Deploy your first group](first-group.md) · [Trust the install CA and enforce HTTPS](wiki/trust-ca.md) ·
+    [Groups, zones and regions](wiki/groups-zones.md).
+
 You need Docker with compose v2, `git`, `make` and `uv`. The first start pulls the release's two images from
 Docker Hub, about a minute; `make up BUILD=1` builds them from source instead, three to five minutes.
 
@@ -62,8 +75,9 @@ Fork it, or copy the layout into your own repo. Then in the console, for **your*
 
 1. **Groups → Create group**. Name it, paste the repo URL and the ref (`main`). A private repo needs a secret named
    `GITHUB_TOKEN` on the group.
-2. **Open the group → Add environment**. Name it `dev` and tick the zone `local`.
-3. **Deploy (canary)**. The job log reads sync, canary, reload, smoke, stable. The first run pip-installs
+2. **Environments, Zones and Workers → New environment**: name it `dev`, ref `main`, tick your group. Then tick
+   `dev` on the zone `local` in the Zones table and save; binding the zone deploys the group there at once.
+3. Later deploys: **Deploy (canary)** on the group page. The job log reads sync, canary, reload, smoke, stable. The first run pip-installs
    `mcp/requirements.txt` and takes a minute or two.
 
 <figure markdown>
@@ -76,7 +90,8 @@ Fork it, or copy the layout into your own repo. Then in the console, for **your*
 <figcaption>A deploy job. A package that fails to load is named here and the deploy stops at the canary.</figcaption>
 </figure>
 
-Every later change is a push and another Deploy. [How an MCP repo is structured](wiki/mcp-repo.md) explains the
+Every later change is a push and another Deploy. [Deploy your first group](first-group.md) walks the same steps with
+every page, the evals and scan results and the LLM configs. [How an MCP repo is structured](wiki/mcp-repo.md) explains the
 JSON file next to each tool, resources, prompts and local testing.
 
 ## 3. Connect a client
@@ -98,10 +113,15 @@ export RAMEN_MCP_KEY='rmk_...'
 <figcaption>A key is shown once. Keep it in an environment variable, not in a config file.</figcaption>
 </figure>
 
+The local worker serves TLS with the stack's own CA (D86: every hop is TLS, locally too), written to
+`deploy/local/.certs/ca/ca.crt` by `make up`. Clients must trust it: Node-based ones (Claude Code, Cursor, VS Code)
+read `NODE_EXTRA_CA_CERTS`, `curl` takes `--cacert`, the bridge `--ca`.
+
 Claude Code:
 
 ```sh
-claude mcp add --transport http ramen-demo http://localhost:8080/mcp \
+export NODE_EXTRA_CA_CERTS=$PWD/deploy/local/.certs/ca/ca.crt   # before starting the client
+claude mcp add --transport http ramen-demo https://localhost:8080/mcp \
   --header "Authorization: Bearer $RAMEN_MCP_KEY" --header "ramen-group: demo" --header "ramen-zone: local"
 ```
 
@@ -109,7 +129,7 @@ Cursor (`~/.cursor/mcp.json`) takes this entry; VS Code / GitHub Copilot (`.vsco
 `"servers"` with `"type": "http"`:
 
 ```json
-{"mcpServers": {"ramen-demo": {"url": "http://localhost:8080/mcp",
+{"mcpServers": {"ramen-demo": {"url": "https://localhost:8080/mcp",
   "headers": {"Authorization": "Bearer ${RAMEN_MCP_KEY}", "ramen-group": "demo", "ramen-zone": "local"}}}}
 ```
 
@@ -117,10 +137,15 @@ Restart the client and `demo_calculator_tool` appears under the server. Ask it t
 a shell:
 
 ```sh
-curl -s http://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
+curl -s --cacert deploy/local/.certs/ca/ca.crt https://localhost:8080/mcp -H "Authorization: Bearer $RAMEN_MCP_KEY" -H 'Content-Type: application/json' \
   -H 'ramen-group: demo' -H 'ramen-zone: local' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}'
 ```
+
+The demo repo ships `mcp/llm-config/`, so the workers refuse a call that does not carry the accepted configs
+version (`-32028 configs required`): add `"_meta": {"io.ramen/configs": {"version": "<v>"}}` to `params`, with `<v>` from
+`/.well-known/ramen-policy?group=demo&zone=<zone>` ([Deploy your first group → Call a tool](first-group.md#8-call-a-tool)). The bridge
+(0.6.0 or later) does this by itself.
 
 ### As yourself (Claude Code, with OAuth)
 
@@ -130,7 +155,7 @@ page, Microsoft Entra ID or Google ([Entra ID and Workspace](wiki/sso.md)). A su
 account needs a role in the group; *MCP User* is enough. Then, against the local stack:
 
 ```sh
-claude mcp add-json ramen-demo '{"type":"http","url":"http://localhost:8080/mcp",
+claude mcp add-json ramen-demo '{"type":"http","url":"https://localhost:8080/mcp",
   "headers":{"ramen-group":"demo","ramen-zone":"local"},
   "oauth":{"clientId":"<client id>","scopes":"mcp:demo:local"}}'
 ```
@@ -147,13 +172,15 @@ address and a cloud zone, and nothing else changes.
 ### Clients that only speak stdio: the bridge
 
 ```sh
-uvx ramen-mcp-bridge@latest --target localhost:8080 --insecure --key "$RAMEN_MCP_KEY" --group demo --zone local
+uvx ramen-mcp-bridge@latest --target localhost:8080 --ca deploy/local/.certs/ca/ca.crt --key "$RAMEN_MCP_KEY" --group demo --zone local
 # or, registered in Claude Code:
-claude mcp add ramen-demo-stdio -- uvx ramen-mcp-bridge@latest --target localhost:8080 --insecure \
+claude mcp add ramen-demo-stdio -- uvx ramen-mcp-bridge@latest --target localhost:8080 --ca $PWD/deploy/local/.certs/ca/ca.crt \
   --key "$RAMEN_MCP_KEY" --group demo --zone local
 ```
 
-`uvx …@latest` runs the newest release without installing it (`pip install ramen-mcp-bridge` also works). In any
+`uvx …@latest` runs the newest release without installing it (`pip install ramen-mcp-bridge` also works). Ramen
+1.0.0's policy versions (LLM configs, guardrails, evals, scans) need bridge 0.6.0 or later; an older bridge's gated
+calls are refused (`-32028` against the demo group). In any
 other client, put the command in an `mcpServers` entry as `command: "uvx"` and `args`.
 
 Against a cloud console the bridge takes `--target <edge>:443 --tls`, and `--oauth https://<edge> --client-id <id>`
@@ -163,8 +190,9 @@ users sign in** card prints every command for your install.
 
 ## Where next
 
-- [Deploy on GCP](wiki/deploy-gcp.md), [AWS](wiki/deploy-aws.md) or [Azure](wiki/deploy-azure.md). The console
-  pages are the same; only the addresses change. Then set a max per zone and let Ramen
+- [Deploy on GCP](wiki/deploy-gcp.md), [AWS](wiki/deploy-aws.md) or [Azure](wiki/deploy-azure.md) — and what each
+  install grants and opens: [IAM and network on GCP](wiki/iam-network-gcp.md), [AWS](wiki/iam-network-aws.md),
+  [Azure](wiki/iam-network-azure.md). The console pages are the same; only the addresses change. Then set a max per zone and let Ramen
   [autoscale](wiki/autoscaling.md).
 - [Guardrails](wiki/guardrails.md): the demo repo ships NeMo rails on `word_count` from its 0.7.5 release.
 - [Connect with OAuth](wiki/connect-oauth.md) and [connect with a password account](wiki/connect-password.md)

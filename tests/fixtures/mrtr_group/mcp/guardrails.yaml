@@ -1,0 +1,9 @@
+# CONTRACTS 23.4 / 23.5 fixture: the team's own policy.py around MRTR rounds and tasks, fail closed.
+engine: policy
+config: mcp/guardrails
+fail: closed
+timeout_s: 5
+tools:
+  ask_confirm: {pre: true, post: true}
+  slow_job: {pre: true, post: true}
+  confirm_job: {pre: true, post: true}

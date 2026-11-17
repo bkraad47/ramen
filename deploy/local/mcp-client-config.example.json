@@ -3,7 +3,7 @@
     "Streamable HTTP is the front door (CONTRACTS §16): a URL and a bearer header, nothing to install.",
     "The key comes from the environment: set RAMEN_MCP_KEY to the group's rmk_ key before starting the client.",
     "Clients that cannot expand ${RAMEN_MCP_KEY} take the literal key in the header value instead.",
-    "The `ramen-demo` entry talks to the compose worker over plain http on localhost — local only.",
+    "The `ramen-demo` entry talks to the compose worker over https on localhost with the local CA (start the client with NODE_EXTRA_CA_CERTS=deploy/local/.certs/ca/ca.crt) — local only.",
     "JSON has no comments; the deployed form and the stdio fallback are spelled out under _DEPLOYED and _STDIO."
   ],
   "_DEPLOYED": {
@@ -30,19 +30,28 @@
     "mcpServers": {
       "ramen-stdio": {
         "command": "ramen-mcp-bridge",
-        "args": ["--target", "mcp.example.com:443", "--group", "demo", "--zone", "us-central1-a", "--tls"],
-        "env": { "RAMEN_MCP_KEY": "rmk_..." }
+        "args": [
+          "--target",
+          "mcp.example.com:443",
+          "--group",
+          "demo",
+          "--zone",
+          "us-central1-a"
+        ],
+        "env": {
+          "RAMEN_MCP_KEY": "rmk_..."
+        }
       }
     },
     "_notes": [
       "The bridge reads the key from RAMEN_MCP_KEY (or RAMEN_BRIDGE_KEY, or --key); nothing in the args.",
       "Add --ca /path/to/lb-ca.pem when the load balancer's certificate is not in the system store.",
-      "Never keep --insecure in a deployed entry: it silently downgrades the hop to plaintext."
+      "The bridge is TLS by default (0.6.0); --insecure is for a bare local node only and is an error next to --ca."
     ]
   },
   "mcpServers": {
     "ramen-demo": {
-      "url": "http://localhost:8080/mcp",
+      "url": "https://localhost:8080/mcp",
       "headers": {
         "Authorization": "Bearer ${RAMEN_MCP_KEY}",
         "ramen-group": "demo",

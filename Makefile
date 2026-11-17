@@ -76,16 +76,32 @@ env:
 
 # Pulls the release's published images (docker.io/bkraad47/ramen-{console,worker}:$VERSION; RAMEN_IMAGE_REGISTRY=ghcr.io/bkraad47
 # to switch); a tag that is not published yet (a branch ahead of the release) falls back to a build. BUILD=1 always builds.
+# §34.1 optional engines: `make up ENGINES=phoenix,promptfoo` (= compose profiles) also hands the console the engines' UI urls.
+ENGINES ?= $(COMPOSE_PROFILES)
+export COMPOSE_PROFILES := $(ENGINES)
+ifneq (,$(findstring phoenix,$(ENGINES)))
+export RAMEN_OTEL_UI_URL ?= https://localhost:6006
+endif
+ifneq (,$(findstring promptfoo,$(ENGINES)))
+export RAMEN_EVALS_UI_URL ?= https://localhost:3000
+export RAMEN_EVALS_API_URL ?= https://promptfoo:3000
+endif
+# §33.4a: `ENGINES=redis` runs the password-protected Redis and hands the console its URL (password read from the
+# generated .env at run time, never written into this file)
+ifneq (,$(findstring redis,$(ENGINES)))
+REDIS_URL_ENV = RAMEN_REDIS_URL="rediss://:$$(sed -n 's/^RAMEN_REDIS_PASSWORD=//p' deploy/local/.env)@redis:6379"
+endif
 up: env
 ifeq ($(BUILD),1)
 	$(COMPOSE) build
 else
 	$(COMPOSE) pull --ignore-pull-failures console worker
 endif
-	$(COMPOSE) up -d
+	$(REDIS_URL_ENV) $(COMPOSE) up -d
 
+# every profile, so the engines come down whatever ENGINES is set to now
 down:
-	$(COMPOSE) down -v
+	$(COMPOSE) --profile '*' down -v --remove-orphans
 
 logs:
 	$(COMPOSE) logs -f --tail=100

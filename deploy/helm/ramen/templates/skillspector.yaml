@@ -1,0 +1,9 @@
+{{- /* §30.0: SkillSpector has no server — the engine switch only hands the console RAMEN_SKILLSPECTOR_* (deployment.yaml)
+and keeps the builder ServiceAccount + Job RBAC (builder.yaml); this file validates the value. */ -}}
+{{- $engine := .Values.skillspector.engine | default "none" }}
+{{- if not (has $engine (list "none" "skillspector")) }}
+{{- fail (printf "skillspector.engine must be none or skillspector, not %q" $engine) }}
+{{- end }}
+{{- if and (eq $engine "skillspector") (not .Values.skillspector.image) }}
+{{- fail "skillspector.engine is skillspector but skillspector.image is empty" }}
+{{- end }}

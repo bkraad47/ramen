@@ -1,0 +1,114 @@
+{{- if eq (.Values.otel.collector | default "none") "phoenix" }}
+# §24.3: Arize Phoenix for trying telemetry out and for the test runs — SQLite on a PVC (otel.phoenix.persistence; an
+# emptyDir lost the span history at every restart, b35), no authentication.
+# Phoenix takes OTLP protobuf only and has no metrics endpoint, while Ramen posts OTLP/JSON traces and metrics; an
+# OpenTelemetry Collector sidecar on 4318 (the same port as the chart's Jaeger) turns the traces into protobuf for
+# Phoenix and discards the metrics. The UI is 6006. Not for production: point Config → Telemetry at your own
+# collector there. Deliberately no Ingress/HTTPRoute.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: phoenix-collector
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http: { endpoint: 0.0.0.0:4318, tls: { cert_file: /tls/tls.crt, key_file: /tls/tls.key } }
+    exporters:
+      otlp_http: { endpoint: https://127.0.0.1:6006, tls: { ca_file: /tls/ca.crt } }
+      nop: {}
+    extensions:
+      health_check: { endpoint: 0.0.0.0:13133, tls: { cert_file: /tls/tls.crt, key_file: /tls/tls.key } }
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces: { receivers: [otlp], exporters: [otlp_http] }
+        metrics: { receivers: [otlp], exporters: [nop] }
+---
+{{- $persist := .Values.otel.phoenix.persistence | default dict }}
+{{- if $persist.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: phoenix
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with include "ramen.storageClassName" (dict "own" $persist.storageClass "root" $) }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources: { requests: { storage: {{ $persist.size | default "5Gi" | quote }} } }
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phoenix
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  replicas: 1
+  # one RWO volume, one writer (SQLite takes one writer anyway): the old pod goes before the new one starts. A
+  # RollingUpdate with maxSurge 0, not Recreate — server-side apply refuses switching an existing Deployment to
+  # Recreate while its defaulted rollingUpdate block stays (GKE 1.0.0b36 upgrade), and this needs no switch at all.
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 0, maxUnavailable: 1 } }
+  selector:
+    matchLabels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+      annotations: { checksum/collector: {{ toYaml .Values.otel.phoenix | sha256sum | trunc 16 }} }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532 }
+      containers:
+        - name: phoenix
+          image: {{ .Values.otel.phoenix.image | quote }}
+          env:
+            # Phoenix switches auth on by itself when it binds a non-loopback address; off here, like Jaeger — no edge reaches it
+            - { name: PHOENIX_ENABLE_AUTH, value: "false" }
+            - { name: PHOENIX_PORT, value: "6006" }
+            - { name: PHOENIX_GRPC_PORT, value: "4317" }
+            - { name: PHOENIX_WORKING_DIR, value: /data }
+            # D86 §39.3: UI, OTLP HTTP and gRPC over TLS with the console-issued leaf
+            - { name: PHOENIX_TLS_ENABLED, value: "true" }
+            - { name: PHOENIX_TLS_CERT_FILE, value: /tls/tls.crt }
+            - { name: PHOENIX_TLS_KEY_FILE, value: /tls/tls.key }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          ports:
+            - { name: http, containerPort: 6006 }
+            - { name: otlp-grpc, containerPort: 4317 }
+          readinessProbe: { httpGet: { path: /, port: http, scheme: HTTPS }, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 36 }
+          resources: {{- toYaml .Values.otel.phoenix.resources | nindent 12 }}
+          volumeMounts: [{ name: data, mountPath: /data }, { name: tls, mountPath: /tls, readOnly: true }]
+        - name: collector
+          image: {{ .Values.otel.phoenix.collectorImage | quote }}
+          args: ["--config", "/etc/otelcol/config.yaml"]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          ports:
+            - { name: otlp-http, containerPort: 4318 }
+          readinessProbe: { httpGet: { path: /, port: 13133, scheme: HTTPS }, periodSeconds: 5 }
+          resources: {{- toYaml .Values.otel.phoenix.collectorResources | nindent 12 }}
+          volumeMounts: [{ name: collector, mountPath: /etc/otelcol, readOnly: true }, { name: tls, mountPath: /tls, readOnly: true }]
+      volumes:
+        {{- if $persist.enabled }}
+        - { name: data, persistentVolumeClaim: { claimName: phoenix } }
+        {{- else }}
+        - { name: data, emptyDir: {} }
+        {{- end }}
+        - { name: tls, secret: { secretName: ramen-tls-phoenix } }   # written by the console (D86 §39.2)
+        - { name: collector, configMap: { name: phoenix-collector } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phoenix
+  labels: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: phoenix, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+    - { name: http, port: 6006, targetPort: http }
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+{{- end }}

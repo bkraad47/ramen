@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 
+from . import sleeping
 from .audit import write_audit
 from .deploy import cell_load
 from .services import Services
@@ -38,6 +39,8 @@ async def tick(svc: Services) -> list[dict]:
     fired = []
     for group, zone in sorted(pairs):
         try:
+            if sleeping.state_of(await svc.worker_config(group, zone)) != sleeping.AWAKE:
+                continue  # §24.1: a sleeping zone is neither rebalanced nor autoscaled (that would wake it)
             load = cell_load(await svc.cloud.workers(group, zone))
             result = await svc.rebalance(group, zone, user="scheduler")
         except Exception as e:  # noqa: BLE001 - a dead worker/API must not stop the scan
@@ -58,10 +61,27 @@ async def tick(svc: Services) -> list[dict]:
     return fired
 
 
+async def sleep_tick(svc: Services, at: float | None = None) -> list[dict]:
+    """§24.1: every group × zone with `sleep_after_secs` set is put to sleep once it is idle (audited `workers.sleep`,
+    `trigger:idle`, user `scheduler`). Runs on every pass, whether or not auto-rebalance is enabled."""
+    slept = []
+    for w in await svc.store.list("workers"):
+        if int(w.get("sleep_after_secs") or 0) <= 0 or sleeping.state_of(w) != sleeping.AWAKE:
+            continue
+        try:
+            if await svc.sleep_if_idle(w["group"], w["zone"], at) is not None:
+                slept.append({"group": w["group"], "zone": w["zone"]})
+        except Exception as e:  # noqa: BLE001 - one zone that cannot be read or scaled must not stop the scan
+            log.warning("scheduler: idle check of %s/%s failed: %s", w.get("group"), w.get("zone"), e)
+    return slept
+
+
 async def run_forever(svc: Services) -> None:
     """Thin loop: re-reads config every pass so a super-admin toggle takes effect without a restart."""
     while True:
         cfg = await get_config(svc.store)
         with contextlib.suppress(Exception):
             await tick(svc)
+        with contextlib.suppress(Exception):
+            await sleep_tick(svc)
         await asyncio.sleep(max(cfg["interval_seconds"], 1))

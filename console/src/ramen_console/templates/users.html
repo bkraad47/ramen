@@ -2,7 +2,7 @@
 {% block body %}
 {% set member_role_opts = [('mcp_user', 'MCP User'), ('viewer', 'Viewer')] + ([('group_admin', 'Group Admin')] if p.role == 'super_admin' else []) %}
 {% for cname, cr in custom_roles().items() %}{% if p.role == 'super_admin' or cr.base != 'group_admin' %}{% set _ = member_role_opts.append((cname, cr.label)) %}{% endif %}{% endfor %}
-{% if is_admin %}<div class="card"><details><summary class="btn">Create user</summary>
+{% if is_admin %}<div class="card"><h2 style="margin-top:0">Create user</h2>
 <p class="muted">The person gets the chosen role in each chosen group (a super admin needs no groups). Roles are per group: change them in the tables below.</p>
 <form class="inline" hx-post="{{ base }}/api/v1/users" hx-ext="json" hx-swap="none">
 <label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>
@@ -10,7 +10,7 @@
 {% for cname, cr in custom_roles().items() %}{% if p.role == 'super_admin' or cr.base != 'group_admin' %}{% set _ = role_opts.append((cname, cr.label ~ ' (' ~ role_label(cr.base) ~ ')')) %}{% endif %}{% endfor %}
 {{ multi('role', role_opts, ['viewer'], 'new-role', 'Role', single=True) }}
 {% set group_opts = [] %}{% for g in groups %}{% if g.id in admin_groups %}{% set _ = group_opts.append((g.id, g.name)) %}{% endif %}{% endfor %}{{ multi('groups', group_opts, [], 'new-groups', 'Groups', 'No groups') }}
-<button>Create user</button></form></details></div>{% endif %}
+<button>Create user</button></form></div>{% endif %}
 <h2>Members per group</h2>
 <p class="muted">Who may do what, group by group: a <b>Group Admin</b> runs the group, a <b>Viewer</b> looks, an <b>MCP User</b> only connects MCP clients to its workers. One person can hold a different role in each group.{% if is_admin %} Admins set viewer and MCP-user roles in the groups they administer; only a super admin hands out Group Admin.{% endif %}</p>
 {% for g in groups %}<div class="card"><h3 style="margin-top:0">{{ g.name }}</h3>

@@ -1,0 +1,9 @@
+{# 1.0.0c: the zone location picker — every non-blocked region of the cloud grouped by continent. `groups` is
+   [(continent, [{region, zones, cluster}])]: a region with a cluster offers its zones (the option says which cluster
+   serves it), a region without one is shown disabled so an admin sees what a satellite would add. #}
+{% macro zone_picker(groups, selected='') %}
+{% set ns = namespace(seen=false) %}
+{% for cont, rows in groups %}<optgroup label="{{ cont }}">{% for row in rows %}{% if row.zones %}{% for z in row.zones %}{% if z == selected %}{% set ns.seen = true %}{% endif %}<option value="{{ z }}"{{ ' selected' if z == selected }}>{{ z }}{% if row.cluster %} · {{ 'home cluster' if row.cluster == 'home' else 'satellite ' ~ row.cluster }}{% endif %}</option>{% endfor %}{% else %}<option value="" disabled>{{ row.region }} — no cluster yet — register a satellite cluster on the Config page</option>{% endif %}{% endfor %}</optgroup>
+{% else %}<option value="">Every region is blocked</option>{% endfor %}
+{% if selected and not ns.seen %}<option value="{{ selected }}" selected>{{ selected }}</option>{% endif %}
+{% endmacro %}

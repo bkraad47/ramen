@@ -10,14 +10,31 @@ locals {
 
 # Permissions boundary for every worker role the console creates: whatever the SA policy engine (policy/permissions.py)
 # grants, a worker can never exceed this. The console must pass it on iam:CreateRole (see the console policy below).
+# §33.4a (D79): the bucket and secret statements are keyed on the role's `group` tag (the console tags every
+# `ramen-<group>-<zone>` role it creates — cloud/aws_api.py ensure_role — and role tags become aws:PrincipalTag in the
+# IRSA session), so even a mis-written inline policy cannot reach another group's prefix `<bucket>/<other>/` or its
+# `ramen/<other>/*` secrets. The inline policies the console writes carry the same s3:prefix / object-ARN limits.
 data "aws_iam_policy_document" "worker_boundary" {
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "s3:GetBucketLocation"]
-    resources = [aws_s3_bucket.groups.arn, "${aws_s3_bucket.groups.arn}/*"]
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.groups.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["$${aws:PrincipalTag/group}/*", "$${aws:PrincipalTag/group}/"]
+    }
+  }
+  statement { # carries no s3:prefix key, so it cannot sit under the condition above
+    actions   = ["s3:GetBucketLocation"]
+    resources = [aws_s3_bucket.groups.arn]
+  }
+  statement {
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.groups.arn}/$${aws:PrincipalTag/group}/*"]
   }
   statement {
     actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/$${aws:PrincipalTag/group}/*"]
   }
   statement {
     actions = ["logs:CreateLogStream", "logs:PutLogEvents", "cloudwatch:PutMetricData", "sns:Publish",
@@ -40,6 +57,8 @@ data "aws_iam_policy_document" "irsa_trust" {
     console    = local.console_ksa
     alb        = "system:serviceaccount:kube-system:aws-load-balancer-controller"
     fluent_bit = "system:serviceaccount:kube-system:aws-for-fluent-bit"
+    evals      = "system:serviceaccount:ramen-system:ramen-evals"
+    ebs_csi    = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
   }
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -79,7 +98,10 @@ data "aws_iam_policy_document" "console" {
   statement { # secrets backend `aws`: ramen/<group>/<env>/<zone>/<NAME>
     actions = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
     "secretsmanager:DeleteSecret", "secretsmanager:RestoreSecret", "secretsmanager:TagResource", "secretsmanager:UpdateSecret"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*"]
+    resources = [ # ramen-console/*: the console's own secrets (1.0.0), outside every worker's boundary
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen/*",
+      "arn:aws:secretsmanager:${var.region}:${local.account}:secret:ramen-console/*",
+    ]
   }
   statement {
     actions   = ["secretsmanager:ListSecrets"]
@@ -98,19 +120,27 @@ data "aws_iam_policy_document" "console" {
     actions   = ["eks:DescribeCluster"]
     resources = [aws_eks_cluster.ramen.arn]
   }
+  # §33.4a: no iam:PassRole anywhere — IRSA binds a role to a KSA by annotation, the console never passes a role to a
+  # service. The role actions below are the only IAM writes and all stop at the /ramen/ path.
   statement { # create_service_account / detach_group: roles under /ramen/ only ...
     actions = ["iam:DeleteRole", "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole",
     "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:DetachRolePolicy"]
     resources = ["arn:aws:iam::${local.account}:role/ramen/*"]
   }
-  statement { # ... and only with the worker permissions boundary, so a compromised console cannot self-escalate
+  statement { # ... and only with the worker (zone roles) or build (§38.2 group build roles) permissions boundary, so a
+    # compromised console cannot self-escalate
     actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy"]
     resources = ["arn:aws:iam::${local.account}:role/ramen/*"]
     condition {
       test     = "StringEquals"
       variable = "iam:PermissionsBoundary"
-      values   = [aws_iam_policy.worker_boundary.arn]
+      values   = [aws_iam_policy.worker_boundary.arn, aws_iam_policy.build_boundary.arn]
     }
+  }
+  statement { # §38.2: the per-group image repositories ramen/groups/* — created, tagged, deleted; never pushed to
+    actions = ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:TagResource", "ecr:DeleteRepository",
+    "ecr:BatchDeleteImage", "ecr:ListImages"]
+    resources = ["arn:aws:ecr:${var.region}:${local.account}:repository/ramen/groups/*"]
   }
   statement {
     actions   = ["iam:ListRoles"]
@@ -141,6 +171,27 @@ data "aws_iam_policy_document" "console" {
     actions   = ["logs:StartQuery", "logs:GetQueryResults", "logs:StopQuery", "logs:DescribeLogGroups"]
     resources = ["*"]
   }
+}
+
+# §38.1: the judge proxy calls Bedrock for a group's LLM rails; workers never call a provider for rails (the worker
+# boundary keeps bedrock:InvokeModel only for an approved `ai.user` permission request on tool code).
+data "aws_iam_policy_document" "console_bedrock" {
+  statement {
+    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    resources = ["arn:aws:bedrock:*::foundation-model/*",
+    "arn:aws:bedrock:*:${local.account}:inference-profile/*"]
+  }
+  statement { # Bedrock API keys (bearer tokens) minted from the role's credentials; not resource-scoped
+    actions   = ["bedrock:CallWithBearerToken"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "console_bedrock" {
+  count  = var.console_bedrock ? 1 : 0
+  name   = "ramen-console-bedrock"
+  role   = aws_iam_role.console.id
+  policy = data.aws_iam_policy_document.console_bedrock.json
 }
 
 resource "aws_iam_role_policy" "console" {
@@ -176,8 +227,70 @@ resource "aws_iam_role_policy_attachment" "fluent_bit" {
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
+# EBS CSI driver (managed addon, main.tf): the controller creates, attaches and deletes the PVCs' EBS volumes
+resource "aws_iam_role" "ebs_csi" {
+  name               = "ramen-ebs-csi"
+  path               = "/ramen/"
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust["ebs_csi"].json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 resource "aws_cloudwatch_log_group" "application" {
   name              = local.log_group
   retention_in_days = var.log_retention_days
   tags              = local.tags
+}
+
+# §38.2 (D85, F2): no shared builder role. The console creates, per group, the ECR repository
+# ramen/groups/<group>/worker and the role /ramen/build/ramen-build-<group> (IRSA for ramen-system/ramen-build-<group>)
+# whose inline policy pushes to that repository only. Every such role carries this boundary: push only under
+# ramen/groups/<its ramen-build tag>/, pull from the ramen/* repositories (the worker base image is the build's FROM),
+# nothing else — so no build identity can ever write the platform repositories ramen/{console,worker,skillspector}.
+data "aws_iam_policy_document" "build_boundary" {
+  statement { # registry login: not scopable to a repository
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    resources = ["arn:aws:ecr:${var.region}:${local.account}:repository/ramen/*"]
+  }
+  statement {
+    actions   = ["ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"]
+    resources = ["arn:aws:ecr:${var.region}:${local.account}:repository/ramen/groups/$${aws:PrincipalTag/ramen-build}/*"]
+  }
+}
+
+resource "aws_iam_policy" "build_boundary" {
+  name   = "ramen-build-boundary"
+  path   = "/ramen/"
+  policy = data.aws_iam_policy_document.build_boundary.json
+  tags   = local.tags
+}
+
+# §33.4a (D79): the identity the evals and SkillSpector scan Jobs run as (KSA ramen-system/ramen-evals). They execute
+# a group repo's promptfoo config, so this role may only write its own log streams: no ECR, no bucket, no secrets.
+resource "aws_iam_role" "evals" {
+  name               = "ramen-evals"
+  path               = "/ramen/"
+  assume_role_policy = data.aws_iam_policy_document.irsa_trust["evals"].json
+  tags               = local.tags
+}
+
+data "aws_iam_policy_document" "evals" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.application.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "evals" {
+  name   = "ramen-evals"
+  role   = aws_iam_role.evals.id
+  policy = data.aws_iam_policy_document.evals.json
 }

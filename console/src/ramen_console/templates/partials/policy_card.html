@@ -1,0 +1,17 @@
+{# 1.0.0c D84: the one card for a group policy (Evals, Scans, Guardrails): help, then one `.policy-row` — Required switch ·
+   Gate switch (when the policy gates deploys) · LLM provider select · Model slot (the caller: `model_select`) · Save —
+   with the status badges on the right. `s` is the group's settings, `choices` the scope-resolved providers as (name,
+   scope) pairs (the group's first, then the org's), `editable` False shows `resolved_text` read-only (Evals, §29.2),
+   `status` a list of {cls, text, title?, href?}. The switches carry `data-bool`: the page's script posts them as
+   `true` / `false` (an unchecked box would otherwise be left out and keep the stored value). #}
+{% macro policy_card(kind, url, models_url, s, has_gate, choices, selected, empty_text, editable, resolved_text, status, help) %}
+<div class="card policy" id="policy-{{ kind }}"><p class="muted">{{ help }}</p>
+<form class="policy-row" hx-put="{{ url }}" hx-ext="json" hx-swap="none">
+<label class="switch pol-required" title="Every MCP client must carry this policy's version; a call without it, or with an older one, is refused until the person signs in again"><input type="checkbox" name="required" value="true" data-bool{{ ' checked' if s.required }}><span>Required</span></label>
+{% if has_gate %}<label class="switch pol-gate" title="A failure or an error fails the deploy like a failed golden case (canary scaled down, stable untouched); off, a warning and a red badge"><input type="checkbox" name="gate" value="true" data-bool{{ ' checked' if s.gate }}><span>Gate</span></label>{% endif %}
+<label class="pol-llm">LLM provider{% if editable %}<select name="llm" hx-get="{{ models_url }}?kind={{ kind }}" hx-trigger="change" hx-target="#{{ kind }}-model" hx-swap="innerHTML"><option value="">{{ empty_text }}</option>{% set names = [] %}{% for v, scope in choices %}{% set _ = names.append(v) %}<option value="{{ v }}" title="{{ scope }} scope"{{ ' selected' if v == selected }}>{{ v }}</option>{% endfor %}{% if selected and selected not in names %}<option value="{{ selected }}" selected>{{ selected }} (not configured any more)</option>{% endif %}</select>{% else %}<select name="llm" disabled title="Evals have no provider setting of their own: the Job gets the resolved scope's providers (this group's, else the org's) and the promptfoo config names one"><option>{{ resolved_text }}</option></select>{% endif %}</label>
+<label class="pol-model">Model<span id="{{ kind }}-model">{{ caller() }}</span></label>
+<button class="act pol-save">Save</button>
+<span class="pol-status">{% for b in status %}{% if b.href %}<a href="{{ b.href }}">{% endif %}<span class="badge {{ b.cls }}"{% if b.title %} title="{{ b.title }}"{% endif %}>{{ b.text }}</span>{% if b.href %}</a>{% endif %}{% endfor %}</span>
+</form></div>
+{% endmacro %}

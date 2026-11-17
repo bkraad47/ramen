@@ -1,0 +1,8 @@
+{# 1.0.0c: the Model slot of a policy card (D84) — the allowed models of the scope (group, then org) that serves the chosen
+   provider; `gm` is `llm_scope.options()` or None when no scope configures one. Rendered by
+   `GET /ui/groups/{g}/guardrails/models?kind=guardrails|scans&llm=` when the provider select changes: the Guardrails
+   card posts `model`; Scans and Evals show the scope's default read-only (`disabled`: htmx never sends it). #}
+{% macro model_select(gm, saved, disabled, static_text) %}
+<select name="model"{{ ' disabled' if disabled }}{% if disabled %} title="{{ 'Static rules only: no model' if static_text else 'The default model of the provider; allowed models are set on the providers card' }}"{% endif %}>{% if static_text %}<option value="">{{ static_text }}</option>{% elif gm %}<option value="">{{ 'default: ' ~ gm.models[0] if gm.models else 'no default — list allowed models on the ' ~ gm.scope }}</option>{% for mid in gm.models %}<option value="{{ mid }}"{{ ' selected' if mid == saved }}>{{ mid }}</option>{% endfor %}{% if saved and saved not in gm.models %}<option value="{{ saved }}" selected>{{ saved }} (not allowed any more)</option>{% endif %}{% else %}<option value="">no provider configured yet</option>{% endif %}</select>{% if gm and not static_text %}<small class="muted">{{ gm.provider }} · {{ gm.scope }} scope</small>{% endif %}
+{% endmacro %}
+{% if kind is defined %}{{ model_select(guardrail_models, (gg or {}).get('model') or '', kind != 'guardrails', 'static rules only' if kind == 'scans' and not llm else none) }}{% endif %}

@@ -43,7 +43,7 @@ def azure_manifests(group, zone, spec, image, bucket_uri, client_id=None) -> lis
             for e in tpl["spec"]["containers"][0]["env"]:
                 if e["name"] == "RAMEN_TRUST_PROXY_HOPS":
                     e["value"] = "1"
-        elif kind == "NetworkPolicy":
+        elif kind == "NetworkPolicy" and d["metadata"]["name"] == "worker":  # the egress policy stays as rendered
             d = networkpolicy(ns, group, zone, lb_cidrs=[])
             peer = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": ENVOY_NAMESPACE}}}
             d["spec"]["ingress"][0]["from"].append(peer)
@@ -75,6 +75,10 @@ class AzureKube(Kube):
     def _fns(self, kind):
         if kind == "SecurityPolicy":
             return self._custom(EG_GROUP, EG_VERSION, SP_PLURAL)
+        if kind == "BackendTLSPolicy":  # D86 §39.3: Envoy verifies the worker against the install CA
+            from .zone_tls import BTLS_GROUP, BTLS_PLURAL, BTLS_VERSION
+
+            return self._custom(BTLS_GROUP, BTLS_VERSION, BTLS_PLURAL)
         return super()._fns(kind)
 
     def delete_security_policy(self, ns: str) -> bool:

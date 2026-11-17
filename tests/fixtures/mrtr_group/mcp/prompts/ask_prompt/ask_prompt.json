@@ -1,0 +1,7 @@
+{
+  "type": "prompt",
+  "name": "ask_prompt",
+  "description": "A callable prompt that first asks the user for a topic (input_required), then uses it.",
+  "callable": "build",
+  "input": {}
+}

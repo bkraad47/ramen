@@ -1,0 +1,7 @@
+{
+  "type": "tool",
+  "name": "ask_roots",
+  "description": "Ask the client for its roots (key `roots`).",
+  "callable": "run",
+  "input": {}
+}

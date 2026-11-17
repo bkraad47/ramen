@@ -1,0 +1,17 @@
+Ramen satellite {{ .Chart.AppVersion }} in {{ .Release.Namespace }} ({{ .Values.provider }}, {{ .Values.region }}). CONTRACTS §28.
+         kubectl label ns {{ .Release.Namespace }} {{ .Values.gateway.routesLabel }}=true   (worker namespaces are labelled by the console)
+{{- if eq .Values.provider "aws" }}
+Console access: EKS access entry (terraform) → group {{ .Values.aws.consoleGroup }} → ClusterRoleBinding ramen-console.
+Edge: ALB IngressGroup {{ .Values.aws.albGroup }}; host = kubectl -n {{ .Release.Namespace }} get ingress edge -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' (after ~3 min)
+      self-signed certificate: aws acm get-certificate --certificate-arn {{ .Values.aws.certificateArn }} --query Certificate --output text > ramen-lb.pem
+{{- else if eq .Values.provider "azure" }}
+Console identity: User {{ include "satellite.identity" . }} (ClusterRoleBinding ramen-console; Entra-integrated API server).
+Edge: Envoy Gateway on public IP {{ .Values.azure.publicIpName }}; certificate: kubectl -n {{ .Release.Namespace }} get certificate edge (Ready in ~1-2 min, {{ .Values.azure.tls }})
+      host = {{ .Values.azure.publicHostname }}
+{{- else }}
+Console identity: User {{ include "satellite.identity" . }} (ClusterRoleBinding ramen-console; needs roles/container.developer on the project — the home apply grants it).
+TLS: Google-managed cert via Certificate Manager map {{ .Values.gateway.certificateMap }} (terraform output certificate_map / host).
+LB: kubectl -n {{ .Release.Namespace }} get gateway {{ .Values.gateway.name }} (programmed in ~5 min; answers 404 until a zone's route exists)
+{{- end }}
+Then on the console: Config → Clusters → Add satellite: provider {{ .Values.provider }}, region {{ .Values.region }}, the cluster name, the host above.
+Zones placed in {{ .Values.region }} land here; clients call <host>/mcp (or gRPC <host>:443) with ramen-group/ramen-zone.

@@ -7,3 +7,11 @@ output "artifact_repo" { value = "${var.region}-docker.pkg.dev/${var.project}/${
 output "console_gsa" { value = google_service_account.console.email }
 output "groups_bucket" { value = google_storage_bucket.groups.name }
 output "project" { value = var.project }
+output "builder_set" { value = "--set builder.enabled=true" }     # §38.2: per-group build identities, no shared builder
+output "evals_gsa" { value = google_service_account.evals.email } # helm: --set evals.gsa=<this> (§33.4a)
+output "node_service_account" { value = local.node_service_account }
+# §34.1 optional engines, ready to paste into `helm install ramen` (docs/wiki/deploy-*.md)
+output "engines_set" { value = local.engines_set }
+locals {
+  engines_set = "--set otel.collector=${var.otel_collector},evals.engine=${var.evals_engine},skillspector.engine=${var.skillspector_engine}"
+}

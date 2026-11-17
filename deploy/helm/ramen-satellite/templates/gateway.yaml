@@ -1,0 +1,27 @@
+{{- if and .Values.gateway.enabled (eq .Values.provider "gcp") }}
+# The satellite edge on GKE (CONTRACTS §28.1): clients and the console reach this region's zones at its own host.
+# Worker HTTPRoutes are written by the console into each ramen-<group>-<zone> namespace, labelled for the selector
+# below. No console route and no HealthCheckPolicy/GCPBackendPolicy: those target the console Service, home only.
+# Google-managed TLS only (certmap): a satellite has no self-signed fallback.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  labels: {{- include "satellite.labels" . | nindent 4 }}
+  annotations:
+    networking.gke.io/certmap: {{ required "gateway.certificateMap is required on gcp (terraform output certificate_map)" .Values.gateway.certificateMap }}
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  addresses:
+    - type: NamedAddress
+      value: {{ include "satellite.staticIpName" . }}
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels: { {{ .Values.gateway.routesLabel }}: "true" }
+{{- end }}

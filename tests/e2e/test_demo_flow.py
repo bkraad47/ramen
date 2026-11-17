@@ -48,8 +48,9 @@ def ready(node: Node, timeout: float = 180) -> None:
 @pytest.fixture(scope="module")
 def deployed(admin, node_url, demo_repo):
     ok(admin.create_zone(ZONE), 201, 409)
-    ok(admin.create_group(GROUP, demo_repo), 201, 409)
-    ok(admin.create_environment(GROUP, ENV, [ZONE]), 201, 409)
+    ref = E.env("RAMEN_DEMO_REF", "main")  # the demo repo ref under test (release branches carry tools `main` lacks)
+    ok(admin.create_group(GROUP, demo_repo, ref=ref), 201, 409)
+    ok(admin.create_environment(GROUP, ENV, [ZONE], ref=ref), 201, 409)
     key = ok(admin.create_mcp_key(GROUP, f"e2e-{uuid.uuid4().hex[:6]}"), 201).json()["key"]
     assert key.startswith("rmk_")
     state.MCP_KEY = key

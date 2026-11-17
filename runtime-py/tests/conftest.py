@@ -13,6 +13,15 @@ def demo_bucket(tmp_path: Path) -> Path:
     return dst
 
 
+@pytest.fixture
+def ui_bucket(tmp_path: Path, monkeypatch) -> Path:
+    """§33: two apps, a tool bound to one, a skill with a text and a binary file; group `g1`."""
+    monkeypatch.setenv("RAMEN_GROUP", "g1")
+    dst = tmp_path / "ui"
+    shutil.copytree(FIXTURES / "ui", dst)
+    return dst
+
+
 def write_pkg(bucket: Path, kind: str, name: str, proto: dict, code: str = "", stem: str | None = None) -> Path:
     d = bucket / "mcp" / kind / name
     d.mkdir(parents=True, exist_ok=True)

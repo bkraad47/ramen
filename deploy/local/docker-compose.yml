@@ -2,8 +2,31 @@
 # Shell env > .env; secrets have no default here (`make env` generates them into .env; CI generates them into its environment).
 # Deploy from the console writes /buckets/demo/.ramen/env-local (minted rmk_ keys) and calls the worker's ramen.v1.Admin/Reload (gRPC, CONTRACTS §11).
 # Worker build context is the ramen repo root because the image needs node-rs/, runtime-py/ and proto/ (see node-rs/Dockerfile).
+# D86 (CONTRACTS §39): every hop is TLS here too. `certs` generates the local CA and one leaf per service into
+# ./.certs (kept across runs, re-issued when due); trust ./.certs/ca/ca.crt on the laptop (curl --cacert, bridge --ca).
 name: ramen
+x-tls-leaves: &leaves
+  - --leaf
+  - console=console,localhost,127.0.0.1
+  - --zone
+  - worker=local
+  - --leaf
+  - redis=redis,localhost,127.0.0.1
+  - --leaf
+  - phoenix=phoenix,localhost,127.0.0.1
+  - --leaf
+  - phoenix-collector=phoenix-collector,localhost,127.0.0.1
+  - --leaf
+  - promptfoo=promptfoo,localhost,127.0.0.1
 services:
+  certs:
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-1.0.0}
+    user: "0"   # writes the bind mount; leaves end up 0644 (each container reads its own as another user), ca.key 0600
+    entrypoint: ["python", "-m", "ramen_console.tls", "init", "/certs"]
+    command: *leaves
+    volumes:
+      - ./.certs:/certs
+
   firestore:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     command: gcloud beta emulators firestore start --host-port=0.0.0.0:8081 --project=${GCP_PROJECT:-ramen-local}
@@ -17,23 +40,29 @@ services:
   console:
     build:
       context: ../../console
-      args: { RAMEN_VERSION: "${VERSION:-0.8.0}" }
-    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-0.8.0}   # pulled by `make up`; built when the tag is not published (or BUILD=1)
+      args: { RAMEN_VERSION: "${VERSION:-1.0.0}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-1.0.0}   # pulled by `make up`; built when the tag is not published (or BUILD=1)
     depends_on:
       firestore: { condition: service_healthy }
+      certs: { condition: service_completed_successfully }
     environment:
       RAMEN_STORE: firestore
       FIRESTORE_EMULATOR_HOST: firestore:8081
       GOOGLE_CLOUD_PROJECT: ${GCP_PROJECT:-ramen-local}
       RAMEN_CLOUD: local
-      RAMEN_TLS: self
+      # D86: TLS on every hop with the local CA; the console serves the leaf `certs` issued and dials the worker over TLS
+      RAMEN_REQUIRE_TLS: "1"
+      RAMEN_TLS_CA_DIR: /certs/ca
+      RAMEN_TLS_CERT: /certs/console/tls.crt
+      RAMEN_TLS_KEY: /certs/console/tls.key
+      RAMEN_WORKER_CA: /certs/ca/ca.crt
       RAMEN_CONSOLE_PORT: "8443"
       RAMEN_ADMIN_EMAIL: ${RAMEN_ADMIN_EMAIL:-admin@ramen.local}
       RAMEN_ADMIN_PASSWORD: ${RAMEN_ADMIN_PASSWORD:?generated into deploy/local/.env by make env}
       RAMEN_FERNET_KEY: ${RAMEN_FERNET_KEY:?generated into deploy/local/.env by make env}
       RAMEN_BUCKET_ROOT: /buckets
       RAMEN_LOG_ROOT: /buckets/_logs
-      RAMEN_WORKER_URL: worker:8080               # zone `local` → this worker (gRPC h2c target host:port)
+      RAMEN_WORKER_URL: worker:8080               # zone `local` → this worker (gRPC over TLS, verified as worker.ramen.internal)
       RAMEN_ADMIN_KEY: ${RAMEN_ADMIN_KEY:?generated into deploy/local/.env by make env}   # sent as metadata x-ramen-admin-key on Admin/Reload
       RAMEN_PUBLIC_URL: ${RAMEN_PUBLIC_URL:-https://localhost:8443}   # base for links in mails, and the OAuth issuer (§16.3)
       RAMEN_LOCAL_SESSION_SECRET: ${RAMEN_SESSION_SECRET:?generated into deploy/local/.env by make env}   # the worker's RAMEN_SESSION_SECRET, so console-minted tokens verify; not written to the bucket
@@ -41,19 +70,35 @@ services:
       RAMEN_SMTP_FROM: ${RAMEN_SMTP_FROM:-ramen@localhost}
       RAMEN_AUTH_MAGIC_LINK: ${RAMEN_AUTH_MAGIC_LINK:-0}
       RAMEN_ADMIN_FORCE_PASSWORD: ${RAMEN_ADMIN_FORCE_PASSWORD:-0}
+      # §34.1 optional engines, the chart's names; empty = off. `make up ENGINES=phoenix,promptfoo` fills the UI urls.
+      # The local adapter has no Job runner, so RAMEN_EVALS_IMAGE / RAMEN_SKILLSPECTOR_IMAGE only name an image here.
+      RAMEN_OTEL_UI_URL: ${RAMEN_OTEL_UI_URL:-}
+      RAMEN_EVALS_IMAGE: ${RAMEN_EVALS_IMAGE:-}
+      RAMEN_EVALS_API_URL: ${RAMEN_EVALS_API_URL:-}
+      RAMEN_EVALS_UI_URL: ${RAMEN_EVALS_UI_URL:-}
+      RAMEN_SKILLSPECTOR_IMAGE: ${RAMEN_SKILLSPECTOR_IMAGE:-}
+      # §33.4a: the shared Redis of `make up ENGINES=redis` (password from .env); empty = the worker gets no store
+      RAMEN_REDIS_URL: ${RAMEN_REDIS_URL:-}
     ports: ["8443:8443"]
     volumes:
       - buckets:/buckets
       - ./.mail:/mail
+      - ./.certs:/certs:ro
 
   worker:
     build:
       context: ../..
       dockerfile: node-rs/Dockerfile
-      args: { VERSION: "${VERSION:-0.8.0}" }
-    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-worker:${VERSION:-0.8.0}
+      args: { VERSION: "${VERSION:-1.0.0}" }
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-worker:${VERSION:-1.0.0}
+    depends_on:
+      certs: { condition: service_completed_successfully }
     environment:
       RAMEN_NODE_PORT: "8080"
+      RAMEN_REQUIRE_TLS: "1"                       # D86: TLS only, the leaf `certs` issued (SAN worker.ramen.internal)
+      RAMEN_TLS_CERT: /certs/worker/tls.crt
+      RAMEN_TLS_KEY: /certs/worker/tls.key
+      RAMEN_TLS_CA: /certs/ca/ca.crt
       RAMEN_BUCKET: /buckets/demo
       RAMEN_GROUP: demo
       RAMEN_ENV: default
@@ -63,19 +108,93 @@ services:
       RAMEN_ALLOWED_CIDRS: ${RAMEN_ALLOWED_CIDRS:-0.0.0.0/0,::/0}
       RAMEN_SESSION_SECRET: ${RAMEN_SESSION_SECRET:?generated into deploy/local/.env by make env}   # §16.2 session ids and §16.3 tokens; same value as the console's
       RAMEN_OAUTH_ISSUER: ${RAMEN_PUBLIC_URL:-https://localhost:8443}       # the console is the authorization server
+      RAMEN_PUBLIC_URL: https://localhost:8080                              # the worker's own address: RFC 9728 absolute resource_metadata
       RAMEN_ALLOWED_ORIGINS: ${RAMEN_ALLOWED_ORIGINS:-}                     # empty: every browser Origin refused (§16.1)
       RAMEN_SIDECAR_IDLE_SECS: "300"
       RAMEN_MAX_INFLIGHT: "32"
       RAMEN_VERBOSE: ${RAMEN_VERBOSE:-0}
       RAMEN_LOG_FILE: /buckets/_logs/demo/local/worker.log   # read back by the console Logs page
-    ports: ["8080:8080"]                            # Streamable HTTP /mcp and gRPC h2c (ramen.v1.Mcp / Admin / Health) on one port
+    ports: ["8080:8080"]                            # Streamable HTTP /mcp and gRPC (ramen.v1.Mcp / Admin / Health) on one TLS port
     healthcheck:                                    # liveness (ramen.v1.Admin is SERVING before the first deploy); "" = readiness
-      test: ["CMD", "/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--health", "ramen.v1.Admin", "--timeout", "3"]
+      test: ["CMD", "/opt/venv/bin/ramen-mcp-bridge", "--target", "127.0.0.1:8080", "--ca", "/certs/ca/ca.crt", "--health", "ramen.v1.Admin", "--timeout", "3"]
       interval: 10s
       timeout: 5s
       retries: 12
     volumes:
       - buckets:/buckets
+      - ./.certs:/certs:ro
+
+  # --profile phoenix (§24.3 / §34.1): Arize Phoenix as the chart runs it — UI https://localhost:6006, no auth, SQLite in
+  # the container; Config → Telemetry endpoint https://phoenix-collector:4318 (the collector turns Ramen's OTLP/JSON
+  # into the protobuf Phoenix takes and drops the metrics). Try-out only, like the chart's. TLS both ways (D86).
+  phoenix:
+    profiles: [phoenix]
+    image: arizephoenix/phoenix:version-21.1.0-nonroot
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    environment:
+      PHOENIX_ENABLE_AUTH: "false"
+      PHOENIX_PORT: "6006"
+      PHOENIX_GRPC_PORT: "4317"
+      PHOENIX_TLS_ENABLED: "true"
+      PHOENIX_TLS_CERT_FILE: /certs/phoenix/tls.crt
+      PHOENIX_TLS_KEY_FILE: /certs/phoenix/tls.key
+    ports: ["6006:6006"]
+    volumes:
+      - ./.certs:/certs:ro
+
+  phoenix-collector:
+    profiles: [phoenix]
+    image: otel/opentelemetry-collector:0.165.0
+    command: ["--config", "/etc/otelcol/config.yaml"]
+    volumes:
+      - ./phoenix-collector.yaml:/etc/otelcol/config.yaml:ro
+      - ./.certs:/certs:ro
+    ports: ["4318:4318"]
+    depends_on: [phoenix]
+
+  # --profile promptfoo (§29.2 / §34.1): the promptfoo server (UI + API, runs on a volume, no auth) the chart adds
+  # with evals.engine=promptfoo. Same image variable as the console's RAMEN_EVALS_IMAGE; the pin is the chart's.
+  # D86: promptfoo speaks plaintext only, so as in the chart a TLS front shares its network namespace and is the only
+  # published port (https://localhost:3000 → 3443 → 127.0.0.1:3000 inside).
+  promptfoo:
+    profiles: [promptfoo]
+    image: ${RAMEN_EVALS_IMAGE:-ghcr.io/promptfoo/promptfoo:0.125.1}
+    environment:
+      PROMPTFOO_CONFIG_DIR: /home/promptfoo/.promptfoo
+      PROMPTFOO_DISABLE_TELEMETRY: "1"
+      PROMPTFOO_DISABLE_UPDATE: "1"
+      PROMPTFOO_REMOTE_APP_BASE_URL: ${RAMEN_EVALS_UI_URL:-https://localhost:3000}
+    ports: ["3000:3443"]
+    volumes:
+      - promptfoo:/home/promptfoo/.promptfoo
+
+  promptfoo-tls:
+    profiles: [promptfoo]
+    image: ${RAMEN_IMAGE_REGISTRY:-docker.io/bkraad47}/ramen-console:${VERSION:-1.0.0}
+    network_mode: "service:promptfoo"
+    depends_on:
+      certs: { condition: service_completed_successfully }
+      promptfoo: { condition: service_started }
+    entrypoint: ["python", "-m", "ramen_console.tlsproxy", "--listen", "0.0.0.0:3443", "--upstream", "127.0.0.1:3000",
+                 "--cert", "/certs/promptfoo/tls.crt", "--key", "/certs/promptfoo/tls.key"]
+    volumes:
+      - ./.certs:/certs:ro
+
+  # --profile redis (§33.4a): the shared Redis the chart runs (`redis.enabled`), with `requirepass` from the generated
+  # .env (RAMEN_REDIS_PASSWORD, `make env`); `make up ENGINES=redis` hands the console RAMEN_REDIS_URL (rediss://) with it.
+  redis:
+    profiles: [redis]
+    image: redis:7.4.2-alpine
+    depends_on:
+      certs: { condition: service_completed_successfully }
+    command: ["redis-server", "--requirepass", "${RAMEN_REDIS_PASSWORD:?generated into deploy/local/.env by make env}", "--save", "",
+              "--port", "0", "--tls-port", "6379", "--tls-cert-file", "/certs/redis/tls.crt", "--tls-key-file", "/certs/redis/tls.key",
+              "--tls-ca-cert-file", "/certs/ca/ca.crt", "--tls-auth-clients", "no"]
+    ports: ["6379:6379"]
+    volumes:
+      - ./.certs:/certs:ro
 
 volumes:
   buckets: {}
+  promptfoo: {}

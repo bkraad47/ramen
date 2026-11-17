@@ -5,9 +5,12 @@ import json
 
 from . import rbac
 
-# `key` = a group MCP key; the rest = the person's role in THIS group (the token's `role` claim). Super admins are
-# always allowed and never appear in a list.
-KINDS = ("key", "group_admin", "viewer", "mcp_user")
+# `key` = a group MCP key; `evals` = the deploy's evals Job (§31.4a, `RAMEN_EVALS_KEY`: a rule that leaves it out
+# hides the tool from the repo's evals); the rest = the person's role in THIS group (the token's `role` claim). Super
+# admins are always allowed and never appear in a list. `key` and `evals` are reserved: no custom role takes them.
+KINDS = ("key", "evals", "group_admin", "viewer", "mcp_user")
+LABELS = {"key": "Group MCP key", "evals": "Evals Job"}
+HINTS = {"evals": "the evals Job before a deploy goes live"}
 MODES = ("list", "call")
 
 

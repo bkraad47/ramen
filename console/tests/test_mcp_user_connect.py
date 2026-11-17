@@ -46,3 +46,9 @@ def test_a_group_without_a_deployed_zone_says_so(demo):  # noqa: F811
     )
     page = as_user(demo.app, demo, "lo@ramen.local", "mcp_user", ["lonely"]).get("/").text
     assert "no zone yet" in page.lower() and "mcp:lonely:" not in page
+
+
+def test_the_group_card_names_each_zones_scope(demo):  # noqa: F811
+    client_id(demo)
+    html = demo.get("/groups/demo").text
+    assert "<code>mcp:demo:zone-a</code>, <code>mcp:demo:zone-b</code>" in html and "mcp:demo:&lt;zone&gt;" not in html

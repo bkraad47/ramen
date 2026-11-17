@@ -12,6 +12,7 @@ is proven here, the cloud-role path in `tests/cloud/test_permissions.py` and the
 import shutil
 import subprocess
 import time
+from urllib.parse import urlsplit
 
 import grpc
 import pytest
@@ -57,9 +58,16 @@ def pinned_tag(admin, stack, group):
     if not shutil.which("kind") or not shutil.which("docker"):
         pytest.skip("per-group image proof needs kind and docker on PATH")
     current = _image(group, stack["zones"][0])
-    alias = f"{current.split(':')[0]}:{current.split(':')[-1]}-{group}"
+    name = current.partition("@")[0]  # §38.2: a built image runs as repo@sha256:…
+    repo = name.rsplit(":", 1)[0] if ":" in name.rsplit("/", 1)[-1] else name
+    alias = f"{repo}:pinned-{group}"
     cluster = E.env("KIND_CLUSTER", "ramen")
-    subprocess.run(["docker", "tag", current, alias], check=True, timeout=120)
+    src = current
+    if subprocess.run(["docker", "image", "inspect", current], capture_output=True, timeout=60).returncode:
+        # §24.2: an image built on deploy lives in the build registry only — pull it through the host's port
+        src = f"{urlsplit(E.env('RAMEN_KIND_REGISTRY', 'http://localhost:5001')).netloc}/{current.split('/', 1)[1]}"
+        subprocess.run(["docker", "pull", src], check=True, timeout=300)
+    subprocess.run(["docker", "tag", src, alias], check=True, timeout=120)
     subprocess.run(["kind", "load", "docker-image", alias, "--name", cluster], check=True, timeout=300)
     yield alias
     admin.delete("image_current", group=group)

@@ -1,8 +1,19 @@
 # Changelog
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
-## [Unreleased]
+## [1.0.0] — released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS
 
+### Known issues (fixed first in 1.0.1)
+- **A call that wakes a sleeping zone can fail once right after a revocation.** A key or token revoked while a zone
+  sleeps is pushed when it wakes; that push restarts the worker's runtime, and the waking call, if still in flight, ends
+  with `-32603 sidecar exited during call`. Retrying the call succeeds. Seen intermittently in the kind proofs; 1.0.1
+  makes the worker drain in-flight calls before a runtime restart.
+
+### Changed in the release pass
+- **Chart: `tls.extraServices`.** More Services in the console's namespace can get an install-CA leaf (Secret
+  `ramen-tls-<name>`); the console's Role names them. kind uses it for its fake LLM judge.
+- **kind CI deploys the real 1.0.0 demo again.** Its nodes and zones are `us-central1-a`/`-b` (inside the console's home
+  region, §28.0), and `fake-llm`, the CI judge compose already runs, is the org's LLM provider (§36.4).
 - **A deploy to a satellite zone finishes when evals or scans run.** The evals / SkillSpector Job (and an image build)
   runs on the home cluster and left it current for the rest of the deploy, so the stable roll went to home and got 403;
   the zone's cluster is now current again after it (GCP, AWS and Azure; found in the final GCP pass).
@@ -283,7 +294,7 @@ All notable changes. Versions follow semver; 0.x is pre-stable.
   the group or the org (§36.2). Both still work; a non-empty `models:` adds `warnings: [...]` to the worker's load
   result and a warning line to the deploy log. Page: [Guardrails](https://bkraad47.github.io/ramen/wiki/guardrails/#2c-llm-rails-100c).
 
-## [1.0.0] — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
+## 1.0.0 features (2026-11-14 build) — MCP 2026-07-28: stateless requests, standard headers, multi round-trip requests, tasks; sleeping workers, images built on deploy, OpenTelemetry
 2026-11-14. A worker now speaks MCP **2026-07-28** next to 2025-06-18, on the same `POST /mcp` and the same
 `ramen.v1.Mcp/Call`. Each request is served in the version it names; nothing has to be switched on.
 Pages: [Transport](https://bkraad47.github.io/ramen/wiki/transport/#two-protocol-versions-on-one-endpoint),

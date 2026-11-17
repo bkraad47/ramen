@@ -20,6 +20,9 @@ jobs:
           for d in console tests; do (cd "$d" && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .); done
           (cd runtime-py && export UV_PYTHON=$RUNTIME_PYTHON && uv sync --all-extras && uv run ruff check . && uv run ruff format --check .)
           (cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local)
+      - name: Agent Skills (skills/*) against the agentskills.io reference validator
+        run: |
+          for d in skills/*/; do uvx --from skills-ref==0.1.1 agentskills validate "$d" || exit 1; done
 
   versions:
     runs-on: ubuntu-latest

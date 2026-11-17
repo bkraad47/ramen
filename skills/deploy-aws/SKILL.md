@@ -1,39 +1,88 @@
 ---
 name: deploy-aws
-description: Bring Ramen up on AWS (EKS, DynamoDB, S3, Secrets Manager, ECR, ALB, WAF) with Terraform or CloudFormation + Helm, then create the first zone, group and deploy. UNTESTED path — use when asked to deploy Ramen on AWS, and expect to fix IAM details.
+description: Bring Ramen 1.0 up on AWS (EKS with VPC CNI network policies and pod subnets, DynamoDB, S3, Secrets Manager, ECR, ALB with a self-signed ACM certificate, WAF) with Terraform and Helm, deploy a first group through the console API, verify it, and tear it all down cleanly. Use when asked to install, deploy, stand up, verify or tear down Ramen on AWS or EKS.
+license: BSD-3-Clause
+compatibility: Needs a checkout of github.com/bkraad47/ramen at the release tag, the aws CLI (admin on the target account), terraform 1.6+, helm 3.14+, kubectl, curl, openssl, python3; grpcurl, docker buildx or crane are optional.
+metadata:
+  version: "1.0.0"
+  author: bkraad47
+  docs: https://bkraad47.github.io/ramen/wiki/deploy-aws/
 ---
 
-# Deploy Ramen on AWS (untested path)
+# Deploy Ramen on AWS
 
-The AWS artifacts were built against `docs/CONTRACTS.md` §8 and unit-tested with moto; **they have never been
-applied to a real account**. This skill therefore runs everything in plan/dry-run mode first, requires a human OK
-before `apply`, and refuses to call the job done without the validator. Narrative: `docs/wiki/deploy-aws.md`.
+Source of truth: `docs/wiki/deploy-aws.md` and `docs/wiki/iam-network-aws.md` in the repo. Each release's cloud pass
+applies this path on a real account. Budget about 30 minutes, most of it the EKS control plane and node group.
 
-## Inputs
-- AWS credentials with admin on the target account (`aws sts get-caller-identity` works), `REGION` (default `us-east-1`), first zone `AWS_AZ` (default `us-east-1a`).
-- Choice: `terraform` (default) or `cloudformation`.
-- Tools: `aws`, `terraform >= 1.6` or `aws cloudformation`, `helm 4`, `kubectl`, `docker` + buildx, `uv`, `openssl`, `python3`, `cfn-lint` (for the template path).
+## Rules
+- Never print a secret or an account id into chat, tickets or commits. Generate the three console secrets inline in
+  the Helm command; read one back into a shell variable only when a step needs it; never `echo` it.
+- Pin the kube context: right after `update-kubeconfig`, `CTX=$(kubectl config current-context)`; pass
+  `--context "$CTX"` / `--kube-context "$CTX"` everywhere. Check `aws sts get-caller-identity` is the intended
+  account before every apply and destroy.
+- `terraform apply` is billable: plan, summarise, get the human's OK unless the request already said so.
+- Do not widen IAM to `*` to make something pass: report the missing action. Stop after three failures on a step.
 
 ## Steps
-1. Preflight: `aws sts get-caller-identity`; `aws service-quotas get-service-quota --service-code eks --quota-code L-1194D53C` (clusters per region) is ≥ 1 free; region has ≥ 2 AZs.
-2. Plan only: `cd deploy/terraform/aws && cp -n terraform.tfvars.example terraform.tfvars` (region, node size) → `terraform init && terraform validate && terraform plan -out=ramen.plan`; or `cfn-lint deploy/cloudformation/ramen.yaml && aws cloudformation validate-template --template-body file://deploy/cloudformation/ramen.yaml`. Summarise the plan (resource count, IAM roles, estimated cost: EKS control plane ~$0.10/h + node group + ALB + NAT if any) and **ask the human to confirm** before step 3.
-3. Apply: `terraform apply ramen.plan` (~20 min) or `aws cloudformation deploy --stack-name ramen --template-file deploy/cloudformation/ramen.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides Region=$REGION`. Record outputs `cluster_name`, `ecr_console`, `ecr_worker`, `console_role_arn`, ACM cert ARN, bucket name.
-4. Images: `aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin <account>.dkr.ecr.$REGION.amazonaws.com`; `docker buildx build --platform linux/amd64 -f node-rs/Dockerfile --build-arg VERSION=$(cat VERSION) -t <ecr_worker>:$(cat VERSION) --push .`; `docker buildx build --platform linux/amd64 --build-arg RAMEN_VERSION=$(cat VERSION) -t <ecr_console>:$(cat VERSION) --push console`.
-5. Console: `aws eks update-kubeconfig --name ramen --region $REGION`; generate `ADMIN_PW`, `FERNET`, `ADMIN_KEY` as in deploy-gcp; `helm upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace --set provider=aws,region=$REGION,image.console=<ecr_console>:<v>,image.worker=<ecr_worker>:<v>,console.roleArn=<console_role_arn>,console.certificateArn=<acm_arn> --set console.secrets.RAMEN_ADMIN_PASSWORD=$ADMIN_PW,console.secrets.RAMEN_FERNET_KEY=$FERNET,console.secrets.RAMEN_ADMIN_KEY=$ADMIN_KEY`. If the chart rejects a value, read `deploy/helm/ramen/values.yaml` — the AWS keys are documented there — and do not guess.
-6. Wait: `kubectl -n ramen-system rollout status deploy/console`; `kubectl -n ramen-system get ingress console` until ADDRESS is set (ALB controller, 3–5 min); `curl -k https://<alb-dns>/readyz` → `{"ok":true,...}`. If the Ingress never gets an address, check `kubectl -n kube-system logs deploy/aws-load-balancer-controller` — the most likely first-contact failure is the controller's IAM policy.
-7. First zone/group/env/key/deploy through the API exactly as in `deploy-gcp` step 6, with `provider:"aws"`, `region:"$AWS_AZ"`. Expect the first deploy to surface IRSA/S3 permission errors in the job log; fix the role policy in Terraform (path `/ramen/`), re-apply, redeploy.
-8. Record every deviation you had to make in `docs/wiki/deploy-aws.md` under "Gotchas" (as a PR), so the next run is shorter.
+1. **Credentials.** `aws login --profile ramen` (or `aws sso login`), `export AWS_PROFILE=ramen AWS_REGION=us-east-1`.
+   Terraform's AWS provider (5.x) cannot read a `login_session` profile: give it a wrapper profile in
+   `~/.aws/config` (`credential_process = aws configure export-credentials --profile ramen --format process`) and
+   `export AWS_PROFILE=<that profile>` for Terraform.
+2. **Infrastructure.** `cd deploy/terraform/aws && cp terraform.tfvars.example terraform.tfvars` (region; defaults
+   `node_count = 4`, `node_max = 5` `t3.small`; optional engines `otel_collector`, `evals_engine`,
+   `skillspector_engine`). `terraform init && terraform plan -out=ramen.plan`, summarise, `terraform apply ramen.plan`;
+   `cd ../../..`. If it fails before its Helm releases (Load Balancer Controller, Fluent Bit), apply again.
+3. **Images.** Default: the public images (flags below). Own build: push to the `ecr_console` / `ecr_worker`
+   outputs (`docs/wiki/deploy-aws.md` step 2; from Colima/Lima use `crane push`).
+4. **Console.**
+   ```sh
+   TF="terraform -chdir=deploy/terraform/aws"; REGION=$($TF output -raw region); V=$(cat VERSION)
+   aws eks update-kubeconfig --name ramen --region $REGION; CTX=$(kubectl config current-context)
+   helm --kube-context "$CTX" upgrade --install ramen deploy/helm/ramen -n ramen-system --create-namespace \
+     --set provider=aws,region=$REGION --set-string aws.account=$($TF output -raw account) \
+     --set aws.cluster=ramen --set aws.table=$($TF output -raw dynamodb_table) \
+     --set aws.certificateArn=$($TF output -raw certificate_arn) \
+     $($TF output -raw builder_set) --set evals.roleArn=$($TF output -raw evals_role_arn) \
+     $($TF output -raw engines_set) $($TF output -raw network_set) \
+     --set cluster.serviceCidr=$(aws eks describe-cluster --name ramen --region $REGION --query cluster.kubernetesNetworkConfig.serviceIpv4Cidr --output text) \
+     --set image.repository=docker.io/bkraad47/ramen-console --set image.tag=$V \
+     --set console.env.RAMEN_IMAGE_WORKER=docker.io/bkraad47/ramen-worker:$V \
+     --set console.secrets.RAMEN_ADMIN_PASSWORD=$(openssl rand -base64 18) \
+     --set console.secrets.RAMEN_FERNET_KEY=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())') \
+     --set console.secrets.RAMEN_ADMIN_KEY=$(openssl rand -hex 24)
+   ```
+   `network_set` gives the policies the ALB's public subnets (D89: pods live in their own subnets, so admitting the
+   ALB admits no pod); without it the enforced policies cut the ALB off. `engines_set` carries the `gp3`
+   StorageClass the engines' PVCs need. `tls.require` is always true (D86).
+5. **Wait, then the public URL.** `kubectl --context "$CTX" -n ramen-system rollout status deploy/console`; poll
+   `kubectl --context "$CTX" -n ramen-system get ingress console` until ADDRESS is set (`ALB=<it>`; if never, read
+   `kubectl -n kube-system logs deploy/aws-load-balancer-controller`).
+   `aws acm get-certificate --certificate-arn $($TF output -raw certificate_arn) --region $REGION --query Certificate --output text > ramen-lb.pem`;
+   `curl --cacert ramen-lb.pem https://$ALB/readyz` → `"store":"dynamodb"`. Then
+   `helm --kube-context "$CTX" upgrade ramen deploy/helm/ramen -n ramen-system --reuse-values --set console.env.RAMEN_PUBLIC_URL=https://$ALB`
+   (the OAuth issuer the workers trust).
+6. **LLM provider, only if the group needs one** (LLM rails in `mcp/guardrails.yaml`): the human adds it on
+   **Config → LLM providers**. Bedrock goes through the console's own role (`console_bedrock`, default on).
+7. **First group**: [references/first-group.md](references/first-group.md) with `PROVIDER=aws`,
+   `LOCATION=us-east-1a`, `CURL_CA="--cacert ramen-lb.pem"`. Bridge clients need `--ca ramen-lb.pem`.
+   A deploy stuck `Pending` with "Too many pods" or "Insufficient memory" needs nodes (`t3.small` holds 8 pods with
+   pod subnets): raise `node_count`.
+8. **Record** region, ALB host, zone, group and the teardown pointer (no account id, no secrets).
+
+Satellite clusters: [references/satellites.md](references/satellites.md).
 
 ## Validate
-(read-only sub-agent; `CONSOLE=https://<alb-dns>`, `rmk_` key, viewer `rmn_` key)
-- V1 `curl -sk $CONSOLE/readyz` → 200, `"store":"dynamodb"`.
-- V2 `curl -sk -H "X-Ramen-Api-Key: $RMN" $CONSOLE/api/v1/groups/<g>/zones/<z>/workers` → 200, ≥1 live stable worker.
-- V3 (gRPC through the ALB, `lb.pem` = the cert imported into ACM) `REQ=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo_calculator_tool","arguments":{"var1":2,"var2":3,"func":"add"}}}' | base64); grpcurl -cacert lb.pem -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: <z>' -d "{\"body\":\"$REQ\"}" <alb-dns>:443 ramen.v1.Mcp/Call` → status OK; base64-decoded `body` contains `"text":"5"`, `isError:false`.
-- V4 Same without the header → 401.
-- V5 `aws logs describe-log-groups --log-group-name-prefix /aws/containerinsights/ramen` lists a group; `curl -sk -H "X-Ramen-Api-Key: $RMN" "$CONSOLE/api/v1/logs?group=<g>&zone=<z>&tail=5"` → 200 with ≥1 line.
-- V6 `aws wafv2 list-web-acls --scope REGIONAL` shows no ACL for the group unless IP rules were set; if they were, `curl` from a disallowed IP → 403.
+Read-only sub-agent with `U=https://$ALB`, `ramen-lb.pem`, `CTX`, a viewer `rmn_` key and the group's `rmk_` key;
+`curl` GETs/MCP calls and `kubectl get` only. Reply `PASS` or `FAIL: <id> — <evidence>`.
+- V1 `curl --cacert ramen-lb.pem $U/readyz` → 200, `"store":"dynamodb"`, `"version":"1.0.0"`.
+- V2 `GET $U/api/v1/groups/demo/zones/a/workers` (viewer key) → ≥ 1 live `stable` worker.
+- V3 `tools/call` 2 + 3 through `$U/mcp` with the headers, key and configs `_meta` → `5`; without the key → 401.
+- V4 `kubectl --context $CTX -n ramen-demo-a get secret ramen-tls networkpolicy` → present;
+  `kubectl --context $CTX -n ramen-demo-a get pods -o wide` → pod IPs in the pod subnets (`10.42.64.0/20`,
+  `10.42.80.0/20` by default), not the public `/24`s.
+- V5 With engines on: `kubectl --context $CTX -n ramen-system get pvc` all `Bound`; Secret `ramen-engines` exists.
 
-## Boundaries
-- No `apply` without the human's confirmation from step 2; no teardown unless asked (then `helm uninstall ramen -n ramen-system`, `terraform destroy` / `delete-stack`, and check for leftover ALBs, target groups, WAF ACLs, log groups).
-- Do not widen IAM policies to `*` to make something pass; report the exact missing action instead.
-- Never print secrets or keys beyond the one hand-over. Stop after three failed validator rounds.
+## Teardown
+Only on an explicit request: [references/teardown.md](references/teardown.md). Groups and satellites first,
+`helm uninstall` against `$CTX` **before** `terraform destroy` (it releases the ALB and the PVCs' EBS volumes), then
+this skill's [scripts/leftovers.sh](scripts/leftovers.sh).

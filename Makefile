@@ -28,12 +28,13 @@ lint:
 	python3 scripts/check_secrets.py
 	@for d in console runtime-py tests; do (cd $$d && uv sync -q --all-extras && uv run ruff check . && uv run ruff format --check .) || exit 1; done
 	cd console && uv run ruff check ../scripts ../deploy/local && uv run ruff format --check ../scripts ../deploy/local
+	@for d in skills/*/; do uvx --from skills-ref==0.1.1 agentskills validate "$$d" || exit 1; done
 	cd node-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 	helm lint deploy/helm/ramen && helm lint deploy/helm/ramen --set provider=aws && helm lint deploy/helm/ramen-worker && helm lint deploy/helm/ramen-worker --set provider=aws
 	helm lint deploy/helm/ramen $(AZURE_HELM) && helm lint deploy/helm/ramen-worker --set provider=azure,azure.acr=r.azurecr.io
 	terraform -chdir=deploy/terraform/gcp fmt -check && terraform -chdir=deploy/terraform/aws fmt -check && terraform -chdir=deploy/terraform/azure fmt -check
 	@command -v actionlint >/dev/null && actionlint || echo "actionlint not installed, skipped"
-	@command -v shellcheck >/dev/null && shellcheck scripts/*.sh deploy/scripts/*.sh deploy/local/*.sh console/entrypoint.sh || echo "shellcheck not installed, skipped"
+	@command -v shellcheck >/dev/null && shellcheck scripts/*.sh deploy/scripts/*.sh deploy/local/*.sh console/entrypoint.sh skills/*/scripts/*.sh || echo "shellcheck not installed, skipped"
 
 test-runtime:
 	cd runtime-py && uv sync -q --all-extras && uv run pytest -q --cov --cov-fail-under=90

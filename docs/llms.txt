@@ -39,7 +39,7 @@ Clients send `Authorization: Bearer rmk_<group key>` or a console-issued OAuth t
 - [Changelog](https://bkraad47.github.io/ramen/changelog/), [Releases](https://bkraad47.github.io/ramen/release/), [Version tracker](https://bkraad47.github.io/ramen/versions/)
 - [Transport, hop by hop](https://bkraad47.github.io/ramen/wiki/transport/): what protects each hop, the two protocol versions (2026-07-28 and 2025-06-18), standard headers, `server/discover`, subscriptions, what is verified and what is not
 - [Threat model, security and isolation](https://bkraad47.github.io/ramen/threat-model/): trust boundaries, what a group can reach, secrets at rest, the gate codes, every security finding with its status
-- [Cloud-ops agent skills](https://bkraad47.github.io/ramen/wiki/skills/): skills an agent uses to deploy and operate Ramen
+- [Agent skills](https://bkraad47.github.io/ramen/wiki/skills/): Agent Skills (agentskills.io) an agent installs to deploy Ramen on GCP, AWS and Azure, verify and tear it down, rotate keys, back up, scale, test and fix the code
 - [Contributing](https://bkraad47.github.io/ramen/contributing/): build, test and modify each component
 - [Interface contracts](https://bkraad47.github.io/ramen/CONTRACTS/)
 - [Architecture](https://bkraad47.github.io/ramen/architecture/): components, data model, decisions

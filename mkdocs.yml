@@ -100,7 +100,7 @@ nav:
   - Release: release.md
   - Reference:
       - Transport, hop by hop: wiki/transport.md
-      - Cloud-ops agent skills: wiki/skills.md
+      - Agent skills: wiki/skills.md
       - Interface contracts: CONTRACTS.md
       - Contributing and modifying: contributing.md
       - Version tracker: versions.md

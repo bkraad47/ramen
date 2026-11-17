@@ -204,3 +204,5 @@ users sign in** card prints every command for your install.
 - [Connect with OAuth](wiki/connect-oauth.md) and [connect with a password account](wiki/connect-password.md)
   in detail.
 - [Users and access](wiki/users-access.md), [secrets](wiki/secrets.md), [throttling](wiki/throttling.md).
+- [Agent skills](wiki/skills.md): hand the install, key rotation, backups and scaling to a coding agent
+  (Claude Code, Cursor, any Agent Skills client), with a read-only validator after each.

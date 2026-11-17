@@ -87,4 +87,4 @@ done; echo timeout; exit 1
 
 Keep `rmn_` keys in CI secrets. [Deploy from GitHub Actions](deploy-github-actions.md) is the complete version of
 this job: the key, the repo secret, a workflow that fails on a failed deploy, rotation. An agent operator can use
-the [cloud-ops skills](skills.md) instead.
+the [agent skills](skills.md) instead.

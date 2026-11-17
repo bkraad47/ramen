@@ -67,7 +67,7 @@ it is about to return, and secret values never reach it.
 | **Logs and audit** | One JSON line per MCP call naming the key or the person. Every console action with user, address and outcome. | [Users and access](wiki/users-access.md#audit-and-logs) |
 | **Backups** | JSON exports of the console state, tagged with the release, with preview and restore. | [Backups](wiki/backups.md) |
 | **Worker images** | A group runs the release image, one built on deploy from its `requirements.txt` (1.0), or a recorded image with its own system packages. | [Worker images](wiki/worker-images.md) |
-| **Agent skills** | `SKILL.md` playbooks for deploy, rotate, backup and scale. | [Cloud-ops skills](wiki/skills.md) |
+| **Agent skills** | [Agent Skills](https://agentskills.io) for any coding agent: deploy, verify and tear down on GCP, AWS and Azure, rotate and revoke keys, back up and restore, scale and sleep zones, test and fix the code. | [Agent skills](wiki/skills.md) |
 | **MCP 2026-07-28** | Tasks, multi round-trip requests, subscriptions, standard headers, `server/discover`, MCP Apps (`ui://`) and Skills over MCP (`skill://`), next to 2025-06-18 on one endpoint. | [MCP features](wiki/mcp-features.md) |
 | **Evals and scans** | The repo's promptfoo suite and an NVIDIA SkillSpector scan run on every deploy after the golden cases; report or gate per group. | [Evals](wiki/evals.md), [SkillSpector](wiki/skillspector.md) |
 | **Client policies** | Telemetry, evals, scans, LLM configs and guardrails each carry a version every call must hold (`-32024`…`-32029`), handed out on every sign-in path; LLM configs are accepted per person. | [LLM configs](wiki/llm-configs.md), [Threat model](threat-model.md#gates-on-every-call) |

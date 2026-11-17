@@ -1,47 +1,75 @@
 ---
 name: scale-zone
-description: Add a new zone to a Ramen group, change worker count or size in a zone, rebalance load across zones, or remove a zone — through the console API with the cloud adapter doing the Kubernetes/LB work. Use when asked to scale, add capacity, add a region/zone, or drain a zone.
+description: Add a zone to a Ramen 1.0 environment, set a zone's worker count, autoscale max and size, rebalance, let an idle zone sleep or wake it, or remove a zone — through the console API, which does the Kubernetes and load-balancer work. Use when asked to scale, add capacity or a region, put zones to sleep to save cost, rebalance load, or drain and remove a zone.
+license: BSD-3-Clause
+compatibility: Needs a reachable Ramen 1.0 console and an rmn_ key or session of a group admin (counts, max, sleep) or super admin (zones, sizes); kubectl read access helps validation.
+metadata:
+  version: "1.0.0"
+  author: bkraad47
+  docs: https://bkraad47.github.io/ramen/wiki/groups-zones/
 ---
 
 # Scale a zone
 
-Hierarchy: Group → Environment → Zone → Worker (`docs/wiki/groups-zones.md`). Zones are global objects created by a
-super admin; environments attach them. Group admins change **count**; only super admins change **size**
-(`s` 250m/512Mi, `m` 500m/1Gi, `l` 1 CPU/2Gi) and the allowed-size list. `U=$RAMEN_CONSOLE_URL/api/v1`, `H='X-Ramen-Api-Key: $RMN'`.
+`U=$RAMEN_CONSOLE_URL/api/v1`, header `X-Ramen-Api-Key: $RMN`. Source of truth: `docs/wiki/groups-zones.md`,
+`docs/wiki/autoscaling.md`, `docs/wiki/sleeping-workers.md`.
 
-## Add a zone (multi-zone)
-1. Super admin: `POST $U/zones {name:"b",provider:"gcp"|"aws"|"local",region:"<cloud zone e.g. us-central1-b>"}`. Locally the zone must be one the compose adapter maps to a worker (`RAMEN_LOCAL_WORKERS`); otherwise stay with `local`.
-2. Group admin: `PUT $U/groups/<g>/environments/<e> {zones:[...existing,"b"]}` — the adapter creates namespace `ramen-<g>-b`, service account, Role/RoleBinding, Service (h2c) / NEG or gRPC Ingress, a route matching metadata `ramen-group: <g>` + `ramen-zone: b`, Secret.
-3. (super admin, cloud) `POST $U/groups/<g>/zones/b/service-account` if the environment update did not report one; `PUT $U/groups/<g>/zones/b/workers {count:1,size:"s",allowed_sizes:["s","m"]}`.
-4. Deploy: `POST $U/groups/<g>/environments/<e>/deploy {canary:true,zone:"b"}` → poll job to `ok` (first run 1–3 min). Deploying without `zone` rolls every zone of the environment.
-5. Copy IP rules if the group uses them: `PUT $U/groups/<g>/zones/b/ip-rules {cidrs:[...]}` (same list as zone a).
-6. Tell MCP client owners to point a bridge at the new zone: `ramen-mcp-bridge --target <lb>:443 --tls --key rmk_… --group <g> --zone b` (same `rmk_` keys, only `--zone` changes; `--ca` is only needed on a cluster still using the self-signed fallback instead of the default Google-managed cert, v0.5.5).
+Model (1.0.0b): *a group has environments, an environment has zones, a zone has workers.* An environment is a name
+shared by the groups it lists; a zone names the environments it serves and its groups follow. Every derived
+group × zone pair is deployed the moment it appears and torn down when it disappears.
 
-## Change count / size
-- Count (group admin): `PUT $U/groups/<g>/zones/<z>/workers {count:N}` → HPA min N, max 2N (cloud) / no-op locally. No deploy needed.
-- Size (super admin): `PUT ... {size:"m"}`; workers roll. Do it zone by zone.
-- Watch: `GET $U/groups/<g>/zones/<z>/workers` → `live[]` with `load`, `track`, `phase`.
+## Add a zone
+1. Where: a zone must be in a region that has a cluster — the home region or a registered satellite
+   (`GET $U/config/regions` → `clusters`, super admin). Otherwise `422` naming the regions that have one; adding a
+   satellite is the deploy skills' job. Creating a zone that serves no group yet is a super admin's; a group admin
+   may create or edit zones whose environments are wholly their groups'.
+2. `POST $U/zones {"name":"b","provider":"<console's cloud>","region":"<us-central1-b | us-east-1b | eastus-2>","environments":["prod"]}`
+   → the zone with its derived `groups`, `cluster`, `host` and the `jobs` it started. Poll each `GET $U/jobs/<id>` to
+   `ok`. To attach an existing zone: `PUT $U/zones/<z> {"environments":[…]}` (the whole list).
+3. Copy the group's IP rules if it uses them: `PUT $U/groups/<g>/zones/b/ip-rules {"cidrs":[…]}` (include the
+   console's own range: the deploy smoke test calls the worker as an ordinary caller).
+4. Clients reach the zone at its cluster's host with `ramen-zone: b`; keys and tokens do not change.
+
+## Count, max, size
+`PUT $U/groups/<g>/zones/<z>/workers` with one field per call:
+- `{"max_count": 4}` — group admins and super admins. Ramen scales between **1** and max itself (no HPA); the
+  cluster autoscaler adds nodes. Nothing scales on its own unless **Config → Auto-rebalance scheduler** is on
+  (`PUT $U/config/scheduler {"enabled":true,"interval_seconds":60}`, super admin).
+- `{"count": 2}` — a manual count inside `1..max` (`422` outside it).
+- `{"size": "m"}` — `s` 250m/512Mi, `m` 500m/1Gi, `l` 1 CPU/2Gi; group admins only within the zone's
+  `allowed_sizes`, which super admins set (`{"allowed_sizes":["s","m"]}`). A size change rolls the canary first.
+Watch: `GET $U/groups/<g>/zones/<z>/workers` → `live[]` (`load`, `track`, latency) and the last autoscale decision.
 
 ## Rebalance
-`POST $U/groups/<g>/zones/<z>/rebalance` → `{ok, load, capacity_scaler, applied, note?}`. On GCP it sets the
-backend capacity scaler (0.5 when the zone is `high`, else 1.0). `applied:false` + note means the Gateway is still
-reconciling; it retries in the background — do not loop. Repeat for the other zones so traffic shifts.
+`POST $U/groups/<g>/zones/<z>/rebalance` → the load-balancer leg (GCP capacity scaler, AWS target-group weights)
+plus `autoscale: {action, from, to, reason}`. `applied:false` with a note means the edge is still reconciling and
+retries in the background: do not loop.
+
+## Sleep (cost: one 10m/32Mi activator pod instead of the workers)
+- `PUT $U/groups/<g>/zones/<z>/workers {"sleep_after_secs": 900}` — `0` = never (default), else ≥ 60 (`422`).
+- `POST …/zones/<z>/sleep` and `…/wake` by hand. State on the group page: `awake`, `asleep`, `waking`.
+- The first authenticated call wakes the zone; when the wake takes longer than 25 s the caller gets `503` with
+  `Retry-After: 10` (cold GKE Autopilot wakes can). Deploys, rebalance and count/size changes wake it first; the
+  autoscaler holds while it sleeps. Sleep needs the deploy-written session secret, so only on console-deployed zones.
 
 ## Remove a zone
-1. Drain: `POST rebalance` on the other zones; then `PUT $U/groups/<g>/environments/<e> {zones:[without z]}`. The adapter deletes the route first so the LB stops sending traffic, then the namespace and service account.
-2. Only delete the global zone (`DELETE $U/zones/<z>`) when no environment of any group references it.
+1. Make sure the group's other zones can take the load (raise their max; rebalance them).
+2. `PUT $U/zones/<z> {"environments":[…without the one]}` to detach, or `DELETE $U/zones/<z>` to delete it with every
+   pair. The route goes first, then the namespace, identity and record. On GKE the network endpoint groups are
+   reaped in the background (up to fifteen minutes).
+
+## Rules
+- Never set a count of 0 to save money: count is 1..max; sleeping is the zero-worker state.
+- Sizes and allowed sizes outside a group admin's reach are `403` and audited; do not retry with another key.
+- Do not add zones without confirming quota (Autopilot regional pods, EKS node group capacity and pods per node,
+  AKS VM family cores). A deploy `error` after adding a zone: read the job log; stop after three failed attempts.
 
 ## Validate
-(read-only sub-agent; viewer `rmn_` key, an `rmk_` key of the group)
-- V1 `GET $U/zones` lists the zone with the expected provider/region.
-- V2 `GET $U/groups/<g>/environments/<e>` → `zones` contains it; `last_deploy.status == "ok"`.
-- V3 `GET $U/groups/<g>/zones/<z>/workers` → `count` as requested, `size` as requested, `live` has ≥1 `stable` worker with `phase:"Running"` (cloud) and `load` set.
-- V4 `tools/list` via `grpcurl -import-path proto -proto ramen/v1/mcp.proto -H "authorization: Bearer $RMK" -H 'ramen-group: <g>' -H 'ramen-zone: <z>' -d "{\"body\":\"$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | base64)\"}" <lb>:443 ramen.v1.Mcp/Call` → OK with tools in the decoded body (locally `-plaintext localhost:8080`, no group/zone headers needed; no CA needed against the LB either — the cert is publicly trusted, v0.5.5).
-- V5 `GET $U/dashboard` shows the zone×group cell as low/even/high (not down).
-- V6 For removals: `kubectl get ns ramen-<g>-<z>` → NotFound; `GET $U/audit` has the `environments.update` entry `ok:true`.
-
-## Boundaries
-- Never set `count` to 0 to "save money" — remove the zone instead; a zone with 0 workers still owns LB and IAM resources.
-- Never change `size` or `allowed_sizes` without super-admin authority; the API returns 403 and it is audited.
-- Do not create zones in a region without confirming quotas (GKE Autopilot regional pods, EKS node group capacity).
-- A deploy job `error` after adding a zone: read the streamed log; typical causes are a missing service account (step 3) or the route not yet programmed (wait 2 min, redeploy). Stop after three failed attempts and ask.
+Read-only sub-agent with a viewer `rmn_` key and an `rmk_` key of the group. Reply `PASS` or `FAIL: <id> — <evidence>`.
+- V1 `GET $U/zones/<z>` → provider, region, `environments`, `cluster` as intended.
+- V2 `GET $U/groups/<g>/zones/<z>/workers` → `count`, `max_count`, `size`, `sleep_after_secs` as requested; `live`
+  has ≥ 1 `stable` worker (or `asleep`, when that was the point).
+- V3 `tools/call` through `<host>/mcp` with `ramen-group`/`ramen-zone` → result (a sleeping zone: a `503` with
+  `Retry-After` at most, then the result on retry).
+- V4 `GET $U/environments/by-name` → the environment's last deploy for the group is `ok`.
+- V5 Removal: `kubectl get ns ramen-<g>-<z>` → NotFound; `GET $U/zones` no longer lists a deleted zone.

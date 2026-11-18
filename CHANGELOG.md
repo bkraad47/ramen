@@ -1,17 +1,24 @@
 # Changelog
 All notable changes. Versions follow semver; 0.x is pre-stable.
 
-## [Unreleased]
+## [1.0.1] — 2026-11-18: listings and release packaging only; Ramen's code is the same as 1.0.0
+- **Registry description.** The official MCP registry entry now reads "Governed MCP for teams on GKE/EKS/AKS: SSO
+  roles, guardrails, evals and scans gate deploys, audit." A published version's text cannot change, hence a version.
+- **Release worker zip runs on any x86-64 CPU.** 1.0.0's `ramen-node-linux-amd64.zip` was built on GitHub's
+  ubuntu-26.04 runner, where ring's P-256 code used AVX2 without a CPU check: on a CPU without AVX2 the node died
+  with SIGILL (exit 132) when it set up TLS (Glama's image downloads this zip). The build job is pinned to
+  ubuntu-24.04. The worker and console images were not affected (built in `rust:1.99-slim`).
+- Glama images and the demo group at `v1.0.1`.
 - **Release no longer publishes to Smithery.** Smithery shut down its API, CLI and accounts on 2026-10-31; the 1.0.0
   release's publish was refused (403 "Updating servers has been removed"). The `smithery` job is gone; the MCPB bundle
   is still attached to every GitHub release for Claude Desktop, and the `bkraad47/ramen` Smithery listing is not updated.
 
 ## [1.0.0] — released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS
 
-### Known issues (fixed first in 1.0.1)
+### Known issues (still open in 1.0.1, which changed listings only)
 - **A call that wakes a sleeping zone can fail once right after a revocation.** A key or token revoked while a zone
   sleeps is pushed when it wakes; that push restarts the worker's runtime, and the waking call, if still in flight, ends
-  with `-32603 sidecar exited during call`. Retrying the call succeeds. Seen intermittently in the kind proofs; 1.0.1
+  with `-32603 sidecar exited during call`. Retrying the call succeeds. Seen intermittently in the kind proofs; a later release
   makes the worker drain in-flight calls before a runtime restart.
 
 ### Changed in the release pass

@@ -6,7 +6,7 @@ project: kind
 region: us-central1
 image:
   repository: ramen-console          # side-loaded with `kind load docker-image`
-  tag: 1.0.0
+  tag: 1.0.1
   pullPolicy: IfNotPresent
 serviceAccount:
   name: console
@@ -24,7 +24,7 @@ console:
     RAMEN_GROUPS_BUCKET: ramen-kind-groups
     # the worker image by its registry name (up.sh side-loads it under this name and pushes it to the build
     # registry, so a zone never waits on a pull and a build's `FROM` resolves); up.sh passes the same with $VERSION
-    RAMEN_IMAGE_WORKER: kind-registry:5000/ramen-worker-kind:1.0.0
+    RAMEN_IMAGE_WORKER: kind-registry:5000/ramen-worker-kind:1.0.1
     # §24.2: the registry speaks plain http; a laptop-sized build pod
     RAMEN_BUILD_ARGS: "--insecure --insecure-pull"
     RAMEN_BUILD_CPU: 250m

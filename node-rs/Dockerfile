@@ -19,7 +19,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --target "$(cat /targe
  && cp "target/$(cat /target.txt)/release/ramen-node" /ramen-node
 
 FROM python:3.12-slim
-ARG VERSION=1.0.0
+ARG VERSION=1.0.1
 # the bridge, used here as the gRPC health-check CLI; a test build may pass a wheel or archive URL instead (Phase 9)
 ARG BRIDGE=ramen-mcp-bridge==1.0.0
 LABEL org.opencontainers.image.title="ramen-worker" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="BSD-3-Clause"

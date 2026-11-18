@@ -12,7 +12,7 @@ RUN cargo build --release && cp target/release/ramen-node /ramen-node
 FROM python:3.12-slim
 # the demo at the release tag. Its LLM-judged rails need a key: with no console and no LLM here, guarded tools are
 # refused (fail closed) until one is given — a known 1.0.0 limit for this image (D93).
-ARG DEMO_REF=v1.0.0
+ARG DEMO_REF=v1.0.1
 ARG BRIDGE=ramen-mcp-bridge==1.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssl && rm -rf /var/lib/apt/lists/* \
  && git clone --depth 1 --branch "$DEMO_REF" https://github.com/bkraad47/ramen-demo-mcp-group /buckets/default \

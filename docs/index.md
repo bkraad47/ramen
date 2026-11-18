@@ -16,7 +16,7 @@ hide: [toc]
       "applicationCategory": "DeveloperApplication",
       "applicationSubCategory": "MCP server (Model Context Protocol)",
       "operatingSystem": "Kubernetes (GKE, EKS, AKS), Docker",
-      "softwareVersion": "1.0.0",
+      "softwareVersion": "1.0.1",
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "url": "https://bkraad47.github.io/ramen/",
       "downloadUrl": "https://github.com/bkraad47/ramen/releases",
@@ -61,7 +61,7 @@ hide: [toc]
         "Docker"
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "keywords": "MCP, MCP server, Model Context Protocol, MCP governance, governed MCP, shadow MCP, AI governance, agent guardrails, NeMo Guardrails, promptfoo, LLM evals, NVIDIA SkillSpector, skill scanning, Arize Phoenix, OpenTelemetry, self-hosted MCP, MCP 2026-07-28, MCP tasks, multi-zone, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, SSO, OAuth 2.1, Streamable HTTP, gRPC, canary deploy, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"

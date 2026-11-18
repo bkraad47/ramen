@@ -4,7 +4,8 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 
 | Version | Date | Theme | Links |
 |---|---|---|---|
-| `1.0.0` **(current)** | 2026-11-18 | released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
+| `1.0.1` **(current)** | 2026-11-18 | 2026-11-18: listings and release packaging only; Ramen's code is the same as 1.0.0 | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.1) |
+| `1.0.0` | 2026-11-18 | released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS | [release](https://github.com/bkraad47/ramen/releases/tag/v1.0.0) |
 | `0.8.0` | 2026-10-17 | verified again on GKE, EKS and AKS; published images by default; bridge 0.3.0; no static secrets | [release](https://github.com/bkraad47/ramen/releases/tag/v0.8.0) |
 | `0.7.5` | 2026-10-10 | guardrails in the worker, your identity provider's groups, roles you define, Azure, autoscaling by Ramen | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.5) |
 | `0.7.2` | 2026-10-07 | the rest of the r/selfhosted list | [release](https://github.com/bkraad47/ramen/releases/tag/v0.7.2) |
@@ -37,9 +38,16 @@ Generated from [`CHANGELOG.md`](https://github.com/bkraad47/ramen/blob/main/CHAN
 | `0.2.0` | — | GCP | folded forward, never tagged · [architecture](architecture/v0.2.0.md) |
 | `0.1.0` | — | local core | folded forward, never tagged · [architecture](architecture/v0.1.0.md) |
 
+## 1.0.1 — 2026-11-18: listings and release packaging only; Ramen's code is the same as 1.0.0
+
+- **Registry description.** The official MCP registry entry now reads "Governed MCP for teams on GKE/EKS/AKS: SSO roles, guardrails, evals and scans gate deploys, audit." A published version's text cannot change, hence a version.
+- **Release worker zip runs on any x86-64 CPU.** 1.0.0's `ramen-node-linux-amd64.zip` was built on GitHub's ubuntu-26.04 runner, where ring's P-256 code used AVX2 without a CPU check: on a CPU without AVX2 the node died with SIGILL (exit 132) when it set up TLS (Glama's image downloads this zip). The build job is pinned to ubuntu-24.04. The worker and console images were not affected (built in `rust:1.99-slim`).
+- Glama images and the demo group at `v1.0.1`.
+- **Release no longer publishes to Smithery.** Smithery shut down its API, CLI and accounts on 2026-10-31; the 1.0.0 release's publish was refused (403 "Updating servers has been removed"). The `smithery` job is gone; the MCPB bundle is still attached to every GitHub release for Claude Desktop, and the `bkraad47/ramen` Smithery listing is not updated.
+
 ## 1.0.0 — released 2026-11-18: TLS on every hop (D86), the D92 security fixes, verified on GKE (with a satellite), EKS and AKS
 
-- **A call that wakes a sleeping zone can fail once right after a revocation.** A key or token revoked while a zone sleeps is pushed when it wakes; that push restarts the worker's runtime, and the waking call, if still in flight, ends with `-32603 sidecar exited during call`. Retrying the call succeeds. Seen intermittently in the kind proofs; 1.0.1 makes the worker drain in-flight calls before a runtime restart.
+- **A call that wakes a sleeping zone can fail once right after a revocation.** A key or token revoked while a zone sleeps is pushed when it wakes; that push restarts the worker's runtime, and the waking call, if still in flight, ends with `-32603 sidecar exited during call`. Retrying the call succeeds. Seen intermittently in the kind proofs; a later release makes the worker drain in-flight calls before a runtime restart.
 - **Chart: `tls.extraServices`.** More Services in the console's namespace can get an install-CA leaf (Secret `ramen-tls-<name>`); the console's Role names them. kind uses it for its fake LLM judge.
 - **kind CI deploys the real 1.0.0 demo again.** Its nodes and zones are `us-central1-a`/`-b` (inside the console's home region, §28.0), and `fake-llm`, the CI judge compose already runs, is the org's LLM provider (§36.4).
 - **A deploy to a satellite zone finishes when evals or scans run.** The evals / SkillSpector Job (and an image build) runs on the home cluster and left it current for the rest of the deploy, so the stable roll went to home and got 403; the zone's cluster is now current again after it (GCP, AWS and Azure; found in the final GCP pass).

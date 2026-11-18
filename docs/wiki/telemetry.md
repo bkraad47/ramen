@@ -82,6 +82,12 @@ event (the model, the tool or the MCP method), timed from its `ts` for `ms`, wit
 LLM, tool and MCP activity, call by call; the client's own telemetry that reaches the console's
 [`/otlp` ingest](#client-telemetry-through-the-console-otlp) lands in the same project with the same `ramen.user`.
 
+<figure markdown>
+![One call in Phoenix](../img/phoenix-trace.png){ .ramen-shot }
+<figcaption>Phoenix on the local stack (<code>make up ENGINES=phoenix</code>): project <code>demo</code>, a
+<code>tools/call</code> span with its <code>runtime call_tool</code> child, <code>ramen.user</code> naming the group key.</figcaption>
+</figure>
+
 **By the console**, one span per deploy job, named `ramen.deploy`, resource `service.name` `ramen-console`:
 `ramen.group`, `ramen.env`, `ramen.zones`, `ramen.outcome` (`ok` or `error`), `ramen.golden.passed`,
 `ramen.golden.failed`, `ramen.compat` (`none`, `additive` or `breaking`) and `ramen.image` (the image reference, or

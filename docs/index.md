@@ -1,6 +1,6 @@
 ---
-title: Self-hosted MCP for teams
-description: Multizone, highly available MCP server for GCP, AWS and Azure Kubernetes. A git repo of Python tools becomes a fleet of MCP workers with canary deploys, secrets, roles and OAuth.
+title: Governed MCP for teams
+description: Ramen is a self-hosted MCP platform that enforces your organisation's security and structure on every tool call — SSO roles per group, NeMo guardrails per tool, promptfoo evals and SkillSpector scans gating deploys, Phoenix traces — on a laptop or across zones on GKE, EKS and AKS.
 hide: [toc]
 ---
 
@@ -23,8 +23,8 @@ hide: [toc]
       "releaseNotes": "https://bkraad47.github.io/ramen/changelog/",
       "softwareHelp": "https://bkraad47.github.io/ramen/get-started/",
       "screenshot": "https://bkraad47.github.io/ramen/img/dashboard.png",
-      "description": "Self-hosted, multi-zone, highly available MCP (Model Context Protocol) server for Kubernetes on GKE, EKS and AKS. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC, MCP 2026-07-28 (tasks, MCP Apps, Skills over MCP) and 2025-06-18 on one endpoint; a Python 3.12 runtime runs your tools, resources, prompts, apps and skills from a git repo, with NeMo Guardrails per tool; a FastAPI console manages groups, environments, zones, secrets, canary deploys with golden cases, promptfoo evals and NVIDIA SkillSpector scans, roles per group, OAuth 2.1 sign-in with Entra ID and Google Workspace groups, client policies enforced on every sign-in, telemetry per group and user in Phoenix, autoscaling, sleeping workers, satellite clusters, IP rules, throttling and audit.",
-      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "description": "Governed MCP for teams: a self-hosted MCP (Model Context Protocol) platform that enforces an organisation's security and structure on every tool call, multi-zone on Kubernetes (GKE, EKS, AKS) or one worker on a laptop. A Rust MCP node speaks Streamable HTTP and JSON-RPC 2.0 over gRPC, MCP 2026-07-28 (tasks, MCP Apps, Skills over MCP) and 2025-06-18 on one endpoint; a Python 3.12 runtime runs your tools, resources, prompts, apps and skills from a git repo, with NeMo Guardrails per tool; a FastAPI console manages groups, environments, zones, secrets, canary deploys with golden cases, promptfoo evals and NVIDIA SkillSpector scans, roles per group, OAuth 2.1 sign-in with Entra ID and Google Workspace groups, client policies enforced on every sign-in, telemetry per group and user in Phoenix, autoscaling, sleeping workers, satellite clusters, IP rules, throttling and audit.",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP governance, governed MCP, shadow MCP, AI governance, agent guardrails, NeMo Guardrails, promptfoo, LLM evals, NVIDIA SkillSpector, skill scanning, Arize Phoenix, OpenTelemetry, self-hosted MCP, MCP 2026-07-28, MCP tasks, multi-zone, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, SSO, OAuth 2.1, Streamable HTTP, gRPC, canary deploy, Rust, Python",
       "author": {
         "@type": "Person",
         "name": "Raad",
@@ -35,7 +35,17 @@ hide: [toc]
         "price": "0",
         "priceCurrency": "USD"
       },
-      "isAccessibleForFree": true
+      "isAccessibleForFree": true,
+      "featureList": [
+        "Sign-in with Microsoft Entra ID, Google or any OIDC provider; roles per group, custom roles, per-tool access; OAuth 2.1 authorization server",
+        "NVIDIA NeMo Guardrails per tool, before the call and after the result, static or LLM-judged, fail-closed",
+        "promptfoo evals and NVIDIA SkillSpector scans against a canary on every deploy, optionally gating it",
+        "Group LLM configs and policies versioned, accepted per person and checked by the worker on every call",
+        "Arize Phoenix / OpenTelemetry traces per group and person; per-call access log; audit log of console actions",
+        "MCP spec 2026-07-28 and 2025-06-18 on one endpoint: stateless requests, tasks, multi round-trip requests, MCP Apps, Skills over MCP",
+        "Autoscaling on load and latency, sleeping zones at zero workers, satellite clusters, TLS on every hop"
+      ],
+      "discussionUrl": "https://github.com/bkraad47/ramen/discussions"
     },
     {
       "@type": "SoftwareSourceCode",
@@ -52,7 +62,7 @@ hide: [toc]
       ],
       "license": "https://opensource.org/licenses/BSD-3-Clause",
       "version": "1.0.0",
-      "keywords": "MCP, MCP server, Model Context Protocol, MCP gateway, self-hosted MCP, multi-zone, high availability, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, OAuth, OAuth 2.1, gRPC, JSON-RPC, Streamable HTTP, canary deploy, agent tools, Rust, Python",
+      "keywords": "MCP, MCP server, Model Context Protocol, MCP governance, governed MCP, shadow MCP, AI governance, agent guardrails, NeMo Guardrails, promptfoo, LLM evals, NVIDIA SkillSpector, skill scanning, Arize Phoenix, OpenTelemetry, self-hosted MCP, MCP 2026-07-28, MCP tasks, multi-zone, Kubernetes, GKE, EKS, AKS, GCP, AWS, Azure, SSO, OAuth 2.1, Streamable HTTP, gRPC, canary deploy, Rust, Python",
       "targetProduct": {
         "@id": "https://bkraad47.github.io/ramen/#app"
       },
@@ -77,18 +87,24 @@ hide: [toc]
 <td><a href="https://github.com/bkraad47/ramen/actions/workflows/pages.yml"><img src="https://img.shields.io/github/actions/workflow/status/bkraad47/ramen/pages.yml?branch=main&label=docs&style=flat" alt="docs"></a></td>
 <td><a href="https://pypi.org/project/ramen-mcp-bridge/"><img src="https://img.shields.io/pypi/v/ramen-mcp-bridge?color=F26B3A&label=ramen-mcp-bridge&style=flat" alt="PyPI bridge"></a></td>
 <td><a href="https://github.com/bkraad47/ramen/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-F26B3A?style=flat" alt="license"></a></td>
-<td><a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-Streamable%20HTTP%20%2B%20gRPC-2B2622?style=flat" alt="MCP"></a></td>
+<td><a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-2026--07--28%20%2B%202025--06--18-2B2622?style=flat" alt="MCP"></a></td>
 </tr>
 </table>
 
 <p class="ramen-glama"><a href="https://glama.ai/mcp/servers/bkraad47/ramen"><img width="380" height="200" src="https://glama.ai/mcp/servers/bkraad47/ramen/badge" alt="Ramen on Glama: score, tools and listing"></a></p>
 
-Ramen is a self-hosted, multizone, highly available MCP server for GCP, AWS and Azure Kubernetes. Your team keeps
-**a git repo of tools, resources, prompts, apps and skills in plain Python**. Ramen turns it into a fleet of MCP
-workers behind a cloud load balancer, gates every deploy with golden cases, evals and a skill scan, checks every call
-with [guardrails](wiki/guardrails.md) (NeMo rails, static and LLM-judged), signs people in with a role per group, and
-enforces the group's client policies on every call. Underneath it is gRPC, JSON-RPC 2.0
-and a Rust node. **You code in Python.**
+**Governed MCP for teams.** Ramen is a self-hosted MCP platform that enforces your organisation's security and
+structure on every tool call — the sanctioned home for your team's tools instead of shadow MCP servers on laptops.
+Your team keeps **a git repo of tools, resources, prompts, apps and skills in plain Python**. Ramen signs people in
+with a role per group, checks every call with [guardrails](wiki/guardrails.md) (NVIDIA NeMo Guardrails, static and
+LLM-judged), gates every deploy with golden cases, [promptfoo evals](wiki/evals.md) and an
+[NVIDIA SkillSpector scan](wiki/skillspector.md), and records every call — in the access log, the audit log and
+[Arize Phoenix](wiki/telemetry.md). It runs on a laptop or across zones on GKE, EKS and AKS, and speaks MCP
+2026-07-28. **You code in Python.**
+
+<figure markdown>
+![How Ramen governs your MCP tools: sign-in and roles, guardrails per tool, evals and scans before a tool goes live, tools on workers, logs and traces; the answer and the group's rules go back to the client](img/how-ramen-governs.svg){ .ramen-shot }
+</figure>
 
 <section class="ramen-family" aria-label="The Ramen project" markdown>
 <p class="ramen-family__lead"><strong>One project, three repositories</strong> — the server you install, the bridge
@@ -130,9 +146,9 @@ LLM configs.</p>
 
 <a class="ramen-path ramen-path--primary" href="get-started/" markdown="span">
 <span class="ramen-path__step">1 · Try it</span>
-<span class="ramen-path__title">:material-rocket-launch-outline: Get started</span>
-<span class="ramen-path__text">Ramen on your laptop in a minute: start it, connect a repo of tools, connect a client.</span>
-<span class="ramen-path__go">Start locally :material-arrow-right:</span>
+<span class="ramen-path__title">:material-rocket-launch-outline: Try the demo</span>
+<span class="ramen-path__text">From nothing to a governed MCP server on your laptop, step by step with a picture per step: guardrails, sign-in, traces, a client calling a tool.</span>
+<span class="ramen-path__go">Start the walkthrough :material-arrow-right:</span>
 </a>
 
 <a class="ramen-path" href="first-group/" markdown="span">
@@ -150,6 +166,28 @@ LLM configs.</p>
 </a>
 
 </nav>
+
+## Why teams pick it
+
+- **Sanctioned MCP, not shadow MCP.** Tools in a repo you review, on your cluster, answering only people who signed
+  in with your identity provider and hold a role in the group.
+- **No eval, no deploy.** A canary first; golden cases always, promptfoo evals and a SkillSpector scan when the engines
+  are on, and a group admin can make either stop the deploy.
+- **Guardrails per tool, not per chat.** Rails run inside the worker for every client, before the tool and after it.
+- **Every tool call has a name.** A person's sign-in or a named key on every call; access log, audit log, Phoenix.
+- **It directs the LLM.** The group's rules and client configs are versioned, accepted per person and checked on
+  every call.
+- **Scales for what you need now**, and **follows MCP's 2026 direction**: stateless requests, tasks, multi
+  round-trip requests, MCP Apps and Skills over MCP.
+
+## Built-in governance and dev tools
+
+| Tool | What it does in Ramen | Where it runs |
+|---|---|---|
+| [NVIDIA NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) | rails per tool, before the call and after the result | in every worker, on the laptop too |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | the repo's eval suite against the canary on every deploy | a Job in the cluster |
+| [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector) | scans the repo's skills and the served tools on every deploy | a Job in the cluster |
+| [Arize Phoenix](https://github.com/Arize-ai/phoenix) | traces, one project per group, the person on every span | next to the console, and on the laptop |
 
 ## Key features
 
@@ -188,8 +226,17 @@ LLM configs.</p>
 </div>
 </div>
 
-**What is verified.** The 1.0.0c final runs passed on GKE, EKS and AKS (smoke and the policy, guardrail, access
-and security suites), with load tests on all three (every miss recorded) and two independent security passes on GKE; what each covered
-and what is open: [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not) and the
+**What is verified.** The 1.0.0 release candidate ran live on GKE (with a satellite cluster), EKS and AKS: a demo
+deploy with evals 6 passed and a SkillSpector SAFE verdict, a tool call through each load balancer, the full
+verification suite and load tests with p95 under 1.5 s on all three, after two independent security passes on GKE; what
+each covered and what is open: [Transport → What is verified](wiki/transport.md#what-is-verified-and-what-is-not) and the
 [Threat model](threat-model.md#findings-and-their-status). Everything else is in the [wiki](wiki/index.md); to let a coding
 agent deploy and run it, install the [agent skills](wiki/skills.md).
+
+## Fork it, shape it, talk to us
+
+Ramen is BSD-3-Clause and made to be forked: copy the
+[demo group repo](https://github.com/bkraad47/ramen-demo-mcp-group) for your own tools, or fork Ramen and change it
+for your organisation. Collaboration is welcome — questions, ideas and what you built go to
+**[GitHub Discussions](https://github.com/bkraad47/ramen/discussions)**; how changes get in is in
+[Contributing](contributing.md).

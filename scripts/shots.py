@@ -105,6 +105,11 @@ PAGES = {
         "#policy-evals, #policy-scans, #policy-guardrails",  # one picture spanning the three cards
     ),
     "scan-report.png": ("{scan}", "Scan report: NVIDIA SkillSpector findings per skill for one zone's deploy", False),
+    "evals-report.png": (
+        "{evals}",
+        "Evals run: every promptfoo case of one zone's deploy with what it sent, what came back and its verdict",
+        False,
+    ),
     "configs.png": (
         "/groups/demo/configs",
         "LLM configs: the repo's mcp/llm-config/ as every member reads and accepts it",
@@ -266,11 +271,55 @@ targets:
 }
 
 
+# the demo repo's mcp/evals/promptfooconfig.yaml cases, answered as the live runs answered them (evals 6/0)
+EVAL_CASES = [
+    (
+        "calculator adds two numbers",
+        '{"tool": "demo_calculator_tool", "args": {"var1": 2, "var2": 3, "func": "add"}}',
+        "5",
+    ),
+    (
+        "word_count counts six words on one line",
+        '{"tool": "word_count", "args": {"text": "ramen is a bowl of noodles"}}',
+        '{"characters": 26, "words": 6, "lines": 1}',
+    ),
+    (
+        "unit_convert turns 100 celsius into 212 fahrenheit",
+        '{"tool": "unit_convert", "args": {"value": 100, "from_unit": "celsius", "to_unit": "fahrenheit"}}',
+        "212.0",
+    ),
+    (
+        "iris_describe counts 150 rows",
+        '{"tool": "iris_describe", "args": {}}',
+        '{"count": 150, "columns": {"sepal_length": …}}',
+    ),
+    (
+        "iris_outliers on sepal_width at z 2.5 returns at most 5 rows",
+        '{"tool": "iris_outliers", "args": {"column": "sepal_width", "z": 2.5}}',
+        '{"column": "sepal_width", "rows": […]}',
+    ),
+    (
+        "iris_group_means has three species",
+        '{"tool": "iris_group_means", "args": {"by": "species"}}',
+        '{"setosa": {…}, "versicolor": {…}, "virginica": {…}}',
+    ),
+]
+
+
 def _evals_log(group: str, zone: str) -> str:
-    rows = [{"success": True, "testCase": {"description": f"case {i + 1}"}} for i in range(5)]
+    rows = [
+        {
+            "success": True,
+            "testCase": {"description": d},
+            "prompt": {"raw": p},
+            "response": {"output": o},
+            "latencyMs": 40 + 9 * i,
+        }
+        for i, (d, p, o) in enumerate(EVAL_CASES)
+    ]
     doc = {
         "evalId": f"eval-{group}-{zone}",
-        "results": {"results": rows, "stats": {"successes": 5, "failures": 0, "errors": 0}},
+        "results": {"results": rows, "stats": {"successes": len(rows), "failures": 0, "errors": 0}},
         "shareableUrl": f"https://localhost:3443/eval/?evalId=eval-{group}-{zone}",
     }
     return f"promptfoo eval\nRAMEN_EVALS_RESULTS_BEGIN\n{json.dumps(doc)}\nRAMEN_EVALS_RESULTS_END\n"
@@ -475,13 +524,24 @@ def seed(client, repo: str | None = None) -> dict:
         json={"name": "Claude Desktop", "redirect_uris": ["http://127.0.0.1:9999/callback"]},
         headers=h(),
     )
-    scan = ""
+    scan = evals_url = ""
     for e in client.get("/api/v1/environments/by-name").json():
-        for _z, sc in sorted((((e.get("last_deploy") or {}).get("demo") or {}).get("skillspector") or {}).items()):
+        last = (e.get("last_deploy") or {}).get("demo") or {}
+        for _z, sc in sorted((last.get("skillspector") or {}).items()):
             scan = scan or sc.get("url") or ""
+        for _z, ev in sorted((last.get("evals") or {}).items()):
+            evals_url = evals_url or ev.get("url") or ""
     if not scan:
         print("seed: the deploy recorded no scan report; scan-report.png will be skipped", file=sys.stderr)
-    return {"consent": consent_query(oc.json()["client_id"], "demo", "a"), "scan": scan, "app_zone": "a"}
+    # 1.0.0: zone b sleeps after 15 idle minutes and is asleep now (the local adapter only flips the state)
+    client.put("/api/v1/groups/demo/zones/b/workers", json={"sleep_after_secs": 900}, headers=h())
+    client.post("/api/v1/groups/demo/zones/b/sleep", headers=h())
+    return {
+        "consent": consent_query(oc.json()["client_id"], "demo", "a"),
+        "scan": scan,
+        "evals": evals_url,
+        "app_zone": "a",
+    }
 
 
 def wait_job(client, jid, secs: int = 120) -> None:
@@ -581,6 +641,9 @@ def capture(
                 values.update(live_engines(page, base))
             if "{scan}" in path and not values.get("scan"):
                 print(f"{name}: the console has no scan report yet; skipped", file=sys.stderr)
+                continue
+            if "{evals}" in path and not values.get("evals"):
+                print(f"{name}: the console has no evals run yet; skipped", file=sys.stderr)
                 continue
             if name == "login.png":  # the one page that must not be signed in
                 page.goto(f"{base}/logout")

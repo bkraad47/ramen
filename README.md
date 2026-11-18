@@ -26,14 +26,48 @@ guardrails, client policies enforced at every sign-in, telemetry per group and u
 
 ## What it is
 
-Ramen is a self-hosted, multizone MCP server for teams. Each team (a **group**) keeps a git repo of tools,
-resources, prompts, MCP Apps and skills in plain Python; Ramen deploys it as a fleet of MCP workers behind a cloud
+<p align="center"><img src="docs/img/how-ramen-governs.png" width="900" alt="How Ramen governs your MCP tools: you and your LLM client call Ramen; Ramen checks sign-in and roles, runs NeMo guardrails on the tool, serves only tools that passed promptfoo evals and SkillSpector scans, runs the tool on workers and writes a log line per call, the audit log and Phoenix traces; it answers the LLM with the result, the tools it may call and the group's rules."></p>
+
+<p align="center"><b><a href="https://bkraad47.github.io/ramen/get-started/">Try the demo</a></b> — Ramen on your laptop, step by step ·
+<b><a href="https://github.com/bkraad47/ramen/discussions">Join the Discussions</a></b> · fork it and make it yours</p>
+
+**An MCP that enforces your organisation's security and structure — governance, built in.** Ramen is a self-hosted,
+multizone MCP server for teams: the sanctioned place for your team's tools, instead of shadow MCP servers on laptops.
+Each team (a **group**) keeps a git repo of tools, resources, prompts, MCP Apps and skills in plain Python; Ramen deploys it as a fleet of MCP workers behind a cloud
 load balancer, canary first, gated by the repo's golden cases, a promptfoo eval suite and an NVIDIA SkillSpector scan.
 People sign in with a role per group (a Ramen password, Entra ID or Google Workspace), agents use a group key, and
 every call — whichever client sends it — must carry the group's current policy versions: telemetry, evals, scans, LLM
 configs and guardrails. Each worker pairs a **Rust MCP node** (transport, auth, gates, limits) with a **Python 3.12
 runtime** (your code, in its own process); a FastAPI **console** runs everything else. It is a platform for *your*
 tools, not a gateway in front of someone else's.
+
+## Why teams pick it
+
+- **Sanctioned MCP, not shadow MCP.** Your tools live in a git repo you review, run on your cluster, and answer only
+  people who signed in with your identity provider (Entra ID, Google or any OIDC) and hold a role in the group.
+- **No eval, no deploy.** Every deploy goes to a canary first and must pass the repo's golden cases; with the engines
+  on, a promptfoo eval suite and an NVIDIA SkillSpector scan run against the canary too, and a group admin can make
+  either one stop the deploy.
+- **Guardrails per tool, not per chat.** NVIDIA NeMo Guardrails (static or LLM-judged rails) or your own `policy.py`
+  run inside the worker before the tool and after its result, whichever client called. Fail-closed.
+- **Every tool call has a name.** Calls run under a person's sign-in or a named group key; each one is a line in the
+  worker's access log (the person or the key id), every console action is in the audit log, and with telemetry on
+  each call is a trace in Arize Phoenix, one project per group, `ramen.user` on every span.
+- **It directs the LLM, too.** The group's rules and client configs (`mcp/llm-config/`) are versioned, accepted per
+  person, written into Claude Code, Cursor, VS Code or Codex by the bridge, and checked on every call.
+- **Scales for what you need now.** One worker on a laptop; on a cloud, zones across regions behind one load balancer,
+  autoscaled by Ramen on load and latency, and idle zones that can sleep at zero workers.
+- **Follows MCP's 2026 direction.** Spec 2026-07-28 next to 2025-06-18 on one endpoint: stateless requests, tasks for
+  long-running tools, multi round-trip requests for tools that ask before they act, MCP Apps and Skills over MCP.
+
+## Built-in governance and dev tools
+
+| Tool | What it does in Ramen | Where it runs |
+|---|---|---|
+| [NVIDIA NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) | rails per tool, before the call and after the result; LLM rails go through the console's judge proxy | inside every worker, locally too |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | the repo's `mcp/evals/` suite against the canary on every deploy; report or gate per group | an evals Job in the cluster (`evals_engine = "promptfoo"`); not on compose |
+| [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector) | scans the repo's skills and what the zone serves on every deploy; a report page per zone | a scan Job in the cluster (`skillspector_engine`); not on compose |
+| [Arize Phoenix](https://github.com/Arize-ai/phoenix) | OpenTelemetry traces, one project per group, the person on every span | next to the console (`otel_collector = "phoenix"`), and on compose with `ENGINES=phoenix` |
 
 ## Key features
 
@@ -125,12 +159,14 @@ More: [Architecture](https://bkraad47.github.io/ramen/architecture/) ·
 
 ## Quick start (local)
 
-Needs Docker with compose v2, `uv`, `git` and `make`.
+New to Docker or MCP? **[Try the demo](https://bkraad47.github.io/ramen/get-started/)** walks through the same in
+fourteen small steps with a picture for each. Needs Docker with compose v2, `uv`, `git` and `make`.
 
 ```sh
 git clone https://github.com/bkraad47/ramen && cd ramen
 make up                               # Firestore emulator + console https://localhost:8443 + one worker on :8080
 make up ENGINES=phoenix,promptfoo     # optional: the same plus Arize Phoenix (:6006) and promptfoo (:3000)
+# before the demo: a key on Config → LLM providers (its rails ask a model), or RAMEN_DEMO_REF=v0.8.0 make demo
 make demo                             # zone, group `demo` from the demo repo, a key, a canary deploy, a tools/call
 #   PASS: demo_calculator_tool(2,3,add) -> 5
 make down                             # stop everything, engines included, and remove volumes
@@ -138,7 +174,7 @@ make down                             # stop everything, engines included, and r
 
 Sign in at https://localhost:8443 as `admin@ramen.local` with the generated password
 (`grep RAMEN_ADMIN_PASSWORD deploy/local/.env`). Nothing in the stack is a static secret. Compose has no Job
-runner, so evals, scans and image builds run on the clouds, not locally.
+runner, so evals, scans, image builds and sleeping zones run on a cluster (kind or a cloud), not on compose.
 
 ## Deploy to the cloud
 
@@ -177,6 +213,10 @@ AWS). Then follow [Deploy your first group](https://bkraad47.github.io/ramen/fir
 |---|---|
 | ![phoenix](docs/img/phoenix-demo.png) | ![promptfoo](docs/img/promptfoo-run.png) |
 
+| A call refused by a NeMo rail, in the Logs page (local stack) | One call in Arize Phoenix with `ramen.user` (local stack) |
+|---|---|
+| ![guardrail blocked](docs/img/guardrail-blocked.png) | ![phoenix trace](docs/img/phoenix-trace.png) |
+
 | An MCP App previewed in a sandbox | LLM providers, keys never shown |
 |---|---|
 | ![app preview](docs/img/app-preview.png) | ![LLM providers](docs/img/config-llm-providers.png) |
@@ -186,7 +226,8 @@ AWS). Then follow [Deploy your first group](https://bkraad47.github.io/ramen/fir
 | ![environments](docs/img/environments.png) | ![deploy job](docs/img/deploy-job.png) |
 
 Console screenshots come from `make shots` (a throwaway local console with fictional data and canned evals and scan
-Jobs); the Phoenix and promptfoo ones from the live GKE run.
+Jobs); the Phoenix-project and promptfoo ones from the live GKE run; the guardrail and Phoenix-trace ones from the local
+compose stack.
 
 ## The honest limits
 
@@ -210,8 +251,8 @@ Jobs); the Phoenix and promptfoo ones from the live GKE run.
   worker at 250m from about 30 to about 70 calls/s locally (p95 2.1 → 0.8 s at 32 clients), and the autoscaler asks
   for another worker at a p50 of 250 ms instead of 500; the cloud tables are re-measured for 1.0.0
   ([Autoscaling → Load tests](https://bkraad47.github.io/ramen/wiki/autoscaling/#load-tests)).
-- **Local compose** runs no evals, scans or image builds, and its workers cannot reach the judge proxy, so LLM rails
-  are a cloud feature there.
+- **Local compose** runs no evals, scans, image builds or sleeping zones (no Job runner, one fixed worker); those need a
+  cluster (kind or a cloud). Guardrails, LLM rails (with a key on Config → LLM providers), OAuth and Phoenix run locally.
 
 ## Write your own group repo
 
@@ -245,6 +286,16 @@ make test-harness    # tests/: conformance + e2e (skips without a running stack)
 make shots           # regenerate the console screenshots in docs/img
 uv run --project docs --group docs mkdocs serve   # docs at http://127.0.0.1:8000
 ```
+
+## Community: fork it, shape it
+
+Ramen is BSD-3-Clause and built to be forked: copy the [demo group repo](https://github.com/bkraad47/ramen-demo-mcp-group)
+for your own tools, or fork Ramen itself and change the console, the node or the runtime for your organisation.
+Collaboration is welcome — ideas, issues, pull requests, write-ups of how you run it.
+
+- **[GitHub Discussions](https://github.com/bkraad47/ramen/discussions)**: Q&A, Ideas, and Show and tell for what you built.
+- **Issues** for bugs; open one before anything larger than a fix.
+- **Security reports** go to the maintainer privately ([SECURITY.md](SECURITY.md)).
 
 ## Contributing
 

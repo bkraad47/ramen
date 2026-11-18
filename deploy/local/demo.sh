@@ -20,9 +20,12 @@ CSRF=$(awk '$6=="ramen_csrf"{print $7}' "$JAR")   # CONTRACTS §9: cookie sessio
 api() { $C -H 'Content-Type: application/json' -H "X-Ramen-CSRF: $CSRF" -X "$1" "$CONSOLE/api/v1$2" ${3:+-d "$3"}; echo; }
 api POST /zones '{"name":"local","provider":"local","region":"local"}'
 api POST /groups "{\"name\":\"demo\",\"repo_url\":\"$REPO\",\"ref\":\"$REF\"}"
-api PUT /zones/local/groups '{"groups":["demo"]}'   # CONTRACTS §26.1: an environment may only name the group's zones
-api POST /groups/demo/environments "{\"name\":\"dev\",\"ref\":\"$REF\",\"zones\":[\"local\"]}"
-JOB=$(api POST /groups/demo/environments/dev/deploy '{"canary":true}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+# §27: an environment naming the zone binds the pair and starts its first deploy at once; a re-run deploys again
+ENV=$(api POST /groups/demo/environments "{\"name\":\"dev\",\"ref\":\"$REF\",\"zones\":[\"local\"]}")
+echo "$ENV"
+deploy() { api POST /groups/demo/environments/dev/deploy '{"canary":true}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id") or "")'; }
+JOB=$(printf '%s' "$ENV" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("jobs") or [""])[0])' 2>/dev/null || true)
+[ -n "$JOB" ] || JOB=$(deploy)
 failed() {
   echo "deploy failed: $1"
   case "$1" in *"LLM provider"*)
@@ -30,13 +33,24 @@ failed() {
     echo "the key-free demo: RAMEN_DEMO_REF=v0.8.0 make demo" ;; esac
   exit 1
 }
-for _ in $(seq 1 60); do
-  J=$(api GET "/jobs/$JOB")
-  S=$(printf '%s' "$J" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))')
-  [ "$S" = ok ] && break
-  [ "$S" = error ] && failed "$(printf '%s' "$J" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("error") or "")')"
-  sleep 2
-done
+wait_job() {  # ok → 0; error → the error text on stdout, 1
+  for _ in $(seq 1 90); do
+    J=$(api GET "/jobs/$1")
+    S=$(printf '%s' "$J" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))')
+    [ "$S" = ok ] && return 0
+    [ "$S" = error ] && { printf '%s' "$J" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("error") or "")'; return 1; }
+    sleep 2
+  done
+  echo "deploy $1 still running after 180 s"; return 1
+}
+# the first load on a fresh worker pip-installs the repo's requirements and starts NeMo, which can outlast the
+# console's 10 s reload deadline (DEADLINE_EXCEEDED); the worker keeps loading, so wait and deploy once more
+if ! ERR=$(wait_job "$JOB"); then
+  case "$ERR" in *DEADLINE_EXCEEDED*)
+    echo "first load still running on the worker ($ERR); deploying again in 30 s"; sleep 30
+    JOB=$(deploy); ERR=$(wait_job "$JOB") || failed "$ERR" ;;
+  *) failed "$ERR" ;; esac
+fi
 # §31.1: a repo with `mcp/llm-config/` (the demo's since v1.0.0) mints a key only for a member who accepted its
 # configs; §29.3/§31.2/§36.3: the call names every required policy version in `_meta` or the worker refuses it (-32028
 # for configs). A repo without them: no accept, no `_meta`.

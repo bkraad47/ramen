@@ -116,7 +116,7 @@ call is logged under their account. [Connect with OAuth](connect-oauth.md) and
 
 <figure markdown>
 ![What an MCP user sees](../img/mcp-user.png){ .ramen-shot }
-<figcaption>The MCP user's page: the groups they may connect to and the client command.</figcaption>
+<figcaption>The MCP user's page: per group, each deployed zone with ready-to-paste commands (Claude Code over HTTP, the bridge, a JSON entry for other clients), the OAuth client id filled in. Shown on the local stack, where the commands name the console's address; the worker there is on port 8080.</figcaption>
 </figure>
 
 ## Service-account permissions

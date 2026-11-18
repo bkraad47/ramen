@@ -37,6 +37,12 @@ tool call), what came back, why it failed, how long it took (at most 200 cases, 
 value scrubbed like the job log). When the chart runs the promptfoo server, the page also names the run's id and its
 address in promptfoo's own UI (below).
 
+<figure markdown>
+![An evals run page](../img/evals-report.png){ .ramen-shot }
+<figcaption>The run page of one zone's deploy: the demo's six cases, what each sent and what came back (seeded console,
+canned run; the live GKE run of the same suite is in <a href="#the-promptfoo-ui-trying-it-out">promptfoo's UI</a>).</figcaption>
+</figure>
+
 Exit codes follow promptfoo: 0 passed, 100 one or more failures, 1 an error (a config that does not parse, the
 canary unreachable). The run is given `RAMEN_EVALS_TIMEOUT_SECS` (default 600) before it counts as an error.
 

@@ -267,6 +267,15 @@ The deploy's load result and the worker's reload carry `guardrails: {engine, fai
 post), demo_calculator_tool (pre), iris_outliers (post; LLM: self_check_output)"). It is not part of the manifest hash,
 so switching a rail on or off is not a schema change for the [compatibility gate](groups-zones.md).
 
+A refused call is a line in the worker's access log like any other — `"status": "denied"`, `"reason":
+"guardrail_pre"` (or `guardrail_post`), the caller and the tool, the arguments only as a fingerprint:
+
+<figure markdown>
+![A call refused by a rail, in the Logs page](../img/guardrail-blocked.png){ .ramen-shot }
+<figcaption>Logs on the local stack: <code>word_count</code> called with an injection phrase, denied by the demo's
+NeMo rail before the tool ran.</figcaption>
+</figure>
+
 ## 5. Test it locally
 
 The runtime speaks JSON-RPC on stdin, so the demo repo's rails can be tried without a node (Python 3.12, `uv`):

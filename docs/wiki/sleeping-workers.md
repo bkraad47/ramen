@@ -15,6 +15,12 @@ A super admin or an admin of the group sets it; nobody else sees the control, an
   anything else must be 60 or more, or the answer is `422`.
 - By hand: `POST /api/v1/groups/{g}/zones/{z}/sleep` and `…/wake`, same roles.
 
+<figure markdown>
+![Zone actions with the Sleep row](../img/group-autoscale.png){ .ramen-shot }
+<figcaption>Zone <code>b</code> set to sleep after 15 idle minutes and asleep now, with <b>Wake now</b>; the zone row
+above shows the state. (Seeded console: its stand-in workers keep answering, where a cluster zone would run none.)</figcaption>
+</figure>
+
 ## What "idle" means
 
 The console checks every zone that has the setting on each pass of its scheduler loop (the interval is the

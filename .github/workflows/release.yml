@@ -9,7 +9,7 @@ jobs:
     # release zip's ramen-node died with SIGILL at TLS setup on CPUs without AVX2; 24.04 builds baseline x86-64
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { submodules: false }
       - name: Version
         run: |
@@ -18,7 +18,7 @@ jobs:
           echo "VER=$TAG" >> "$GITHUB_ENV"
       - name: Versions
         run: python3 scripts/check_versions.py --tag "$GITHUB_REF_NAME"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master 2026-09
         with: { toolchain: "1.99.1" }
       - name: Build node
         working-directory: node-rs
@@ -33,7 +33,7 @@ jobs:
           cp "dist/ramen-$VER-node-linux-amd64.zip" dist/ramen-node-linux-amd64.zip
           zip -r "dist/ramen-$VER-console.zip" console runtime-py deploy skills -x '*/.venv/*' '*/__pycache__/*' '*/target/*'
           ls -la dist
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - name: MCPB bundle (Claude Desktop)
         run: npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "dist/ramen-$VER.mcpb"
@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Publish
         run: |
           curl -fsSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
@@ -72,11 +72,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Version
         run: echo "VER=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - name: Docker Hub credentials
         id: hub
         env:
@@ -120,7 +120,7 @@ jobs:
           [ -n "$SS" ] || { echo "deploy/docker/skillspector/Dockerfile: no ARG SKILLSPECTOR_REF"; exit 1; }
           echo "SKILLSPECTOR_TAGS=$(VER=$SS tags ramen-skillspector)" >> "$GITHUB_ENV"
       - name: Worker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: node-rs/Dockerfile
@@ -129,7 +129,7 @@ jobs:
           build-args: VERSION=${{ env.VER }}
           tags: ${{ env.WORKER_TAGS }}
       - name: Console image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: console
           file: console/Dockerfile
@@ -138,7 +138,7 @@ jobs:
           build-args: RAMEN_VERSION=${{ env.VER }}
           tags: ${{ env.CONSOLE_TAGS }}
       - name: SkillSpector image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/docker/skillspector
           file: deploy/docker/skillspector/Dockerfile
@@ -146,7 +146,7 @@ jobs:
           push: true
           tags: ${{ env.SKILLSPECTOR_TAGS }}
       - name: SkillSpector image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/docker/skillspector
           file: deploy/docker/skillspector/Dockerfile

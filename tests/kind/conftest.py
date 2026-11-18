@@ -224,6 +224,23 @@ def bounds(admin, group):
     for zone, w in seen.items():
         admin.put("workers", {"max_count": max(int(w.get("max_count") or 1), 1)}, group=group, zone=zone)
         admin.put("workers", {"count": int(w.get("count") or 1)}, group=group, zone=zone)
+    for zone in seen:
+        settle_workers(kube.ns_name(group, zone))
+
+
+def settle_workers(ns: str, timeout: float = 180) -> None:
+    """The zone's stable roll is done and no worker scaled away is still draining. A scale-down ends with pods that
+    serve for 20 s more and then close every connection; the next module's first keep-alive connection must not be
+    one of those (1.0.1 kind run: test_http right after test_autoscale, "Server disconnected without a response")."""
+    kube.kubectl("-n", ns, "rollout", "status", "deployment/worker", f"--timeout={int(timeout)}s", timeout=timeout + 20)
+    deadline = time.monotonic() + timeout
+    while True:
+        out = json.loads(kube.kubectl("get", "pods", "-n", ns, "-l", "app=worker", "-o", "json"))
+        draining = [p["metadata"]["name"] for p in out.get("items", []) if p["metadata"].get("deletionTimestamp")]
+        if not draining:
+            return
+        assert time.monotonic() < deadline, f"{ns}: worker pods still draining after {timeout:.0f}s: {draining}"
+        time.sleep(2)
 
 
 def rebalance_until(admin, group: str, zone: str, done, timeout: float, every: float = 4.0) -> list[dict]:

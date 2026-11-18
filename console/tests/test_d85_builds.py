@@ -18,7 +18,7 @@ from tests.fakes_azure import ACCOUNT, ISSUER, LOCATION, RG, SUB, VAULT, FakeAzu
 from tests.fakes_gcp import FakeApiError, FakeClients
 from tests.test_api import PW, app, client, demo, login, make_user, root  # noqa: F401 - pytest fixtures
 from tests.test_v100_build import REQ, builds, cloud, deploy, requirements  # noqa: F401 - pytest fixtures
-from tests.test_v100c_evals import by_kind, console_env, needs_helm, template
+from tests.test_v100c_evals import CHART, by_kind, console_env, needs_helm, template
 
 SYS = "ramen-system"
 TAG = "b-demo-0123456789abcdef"
@@ -390,7 +390,8 @@ def test_the_chart_pins_platform_images_by_digest_and_has_no_shared_builder():
     rc, _, docs = template("builder.enabled=true", "builder.identities=none")
     assert console_env(docs)["RAMEN_BUILD_IDENTITIES"] == "none"
     console = by_kind(docs, "Deployment", "console")["spec"]["template"]["spec"]["containers"][0]
-    assert console["image"].endswith("/ramen/console:1.0.0")  # no digest: the tag
+    version = (CHART.parents[2] / "VERSION").read_text().strip()
+    assert console["image"].endswith(f"/ramen/console:{version}")  # no digest: the tag
     rc, err, _ = template("image.digest=sha256:short")
     assert rc != 0 and "is not sha256:<64 hex>" in err
 

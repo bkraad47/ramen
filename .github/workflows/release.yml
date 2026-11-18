@@ -5,7 +5,9 @@ on:
 permissions: { contents: write }
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # pinned: on ubuntu-26.04 (1.0.0's runner) ring's P-256 C code came out with AVX2 used unconditionally, so the
+    # release zip's ramen-node died with SIGILL at TLS setup on CPUs without AVX2; 24.04 builds baseline x86-64
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with: { submodules: false }

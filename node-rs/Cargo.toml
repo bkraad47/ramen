@@ -44,7 +44,7 @@ webpki-roots = "1"
 tower-service = "0.3"
 # N7: fixed-window throttling (item and scope Redis instances, §14); `rediss://` (managed Redis is TLS-only) through
 # rustls with the bundled webpki roots, so the image needs no CA store
-redis = { version = "0.27", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-webpki-roots", "connection-manager"] }
+redis = { version = "1.8", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-webpki-roots", "connection-manager"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

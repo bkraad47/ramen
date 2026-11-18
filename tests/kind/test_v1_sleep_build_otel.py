@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import tarfile
 import time
@@ -236,6 +237,46 @@ def draining_worker_pods(ns: str) -> list[str]:
 
 def activator_pods(ns: str) -> list[dict]:
     return kube.pods(ns, "app=worker,ramen.io/role=activator")
+
+
+def settled(group, zones) -> None:
+    """Every track a config push rolled is done — the stable one and, when it runs, the canary (P4-B1: the push rolls
+    both) — and no old pod is still draining. The kind NodePort spans both tracks, so until then a fresh connection
+    can still land on a pod that runs the old Secret."""
+    for z in zones:
+        ns = kube.ns_name(group, z)
+        canary = kube.deployment_or_none(ns, "worker-canary")
+        names = ["worker"] + (["worker-canary"] if canary and int(canary["spec"].get("replicas", 0)) > 0 else [])
+        for name in names:
+            kube.kubectl("-n", ns, "rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=320)
+        wait_for(lambda ns=ns: not draining_worker_pods(ns), 120, f"{ns}: the old worker pods have drained")
+
+
+def edge_diagnosis(zone_targets, zone: str, ns: str) -> str:
+    """What answers the zone's edge right now and what stands behind it, for a transport error there (1.0.1 kind run:
+    `[SSL: WRONG_VERSION_NUMBER]` from the TLS-only NodePort). Diagnostics only; nothing is retried."""
+    out = []
+    host, _, port = edge(zone_targets, zone).rpartition(":")
+    for _ in range(4):  # fresh connections: kube-proxy picks a pod for each
+        try:
+            with socket.create_connection((host, int(port)), timeout=5) as s:
+                s.settimeout(5)
+                s.sendall(b"GET / HTTP/1.0\r\n\r\n")  # a TLS server refuses this; a plaintext one answers HTTP
+                out.append(f"plain probe answered {s.recv(64)!r}")
+        except OSError as e:
+            out.append(f"plain probe: {e!r}")
+    try:
+        for p in json.loads(kube.kubectl("get", "pods", "-n", ns, "-o", "json")).get("items", []):
+            md, st = p["metadata"], p.get("status") or {}
+            labels, deleting = md.get("labels") or {}, bool(md.get("deletionTimestamp"))
+            out.append(
+                f"pod {md['name']} role={labels.get('ramen.io/role')} track={labels.get('ramen.io/track')} "
+                f"ip={st.get('podIP')} phase={st.get('phase')} ready={ready(p)} deleting={deleting}"
+            )
+        out.append("endpoints worker-host " + kube.kubectl("get", "endpoints", "worker-host", "-n", ns, "-o", "json"))
+    except Exception as e:  # noqa: BLE001 - diagnostics only
+        out.append(f"({e})")
+    return "\n".join(out) + "\n" + wake_logs(ns)
 
 
 def ready(pod: dict) -> bool:
@@ -633,10 +674,9 @@ def test_saving_the_telemetry_config_pushes_the_version_to_every_zone_without_a_
     rows = [e for e in audit_entries(admin) if e.get("action") == "telemetry.push"]
     assert rows and rows[0].get("ok") is True and f"version:{after}" in rows[0].get("tags", []), rows[:1]
     try:
-        for z in v1["zones"]:  # on Kubernetes the push rewrites the Secret and rolls the stable track
-            kube.kubectl(
-                "-n", kube.ns_name(group, z), "rollout", "status", "deployment/worker", "--timeout=300s", timeout=320
-            )
+        # on Kubernetes the push rewrites the Secret and rolls every track that runs; the NodePort spans both, so the
+        # old canary (or a draining pod) still answered with the old version after the stable roll alone (1.0.1 kind)
+        settled(group, v1["zones"])
         wait_for(lambda: told_version(zone_targets, zone, v1["key"], group) == after, 300, f"discover names {after}")
         with http_node(zone_targets, zone, v1["key"], group) as h:
             m = Modern(h, ALL_INPUT)
@@ -646,10 +686,7 @@ def test_saving_the_telemetry_config_pushes_the_version_to_every_zone_without_a_
     finally:
         r = admin.put("config_otel", {"enabled": True, "endpoint": OTLP, "client_headers": {}})
         assert r.status_code == 200 and r.json()["telemetry_version"] == before, r.text
-        for z in v1["zones"]:
-            kube.kubectl(
-                "-n", kube.ns_name(group, z), "rollout", "status", "deployment/worker", "--timeout=300s", timeout=320
-            )
+        settled(group, v1["zones"])  # the tests after this one report `before`: no pod may still hold `after`
         wait_for(lambda: told_version(zone_targets, zone, v1["key"], group) == before, 300, f"discover names {before}")
 
 
@@ -797,16 +834,28 @@ def test_a_zone_with_a_running_task_does_not_sleep(admin, sleepy, zone_targets, 
         created = m.call("slow_job", {"seconds": SLEEP_AFTER + 45, "label": "kind"})
         assert created["resultType"] == "task" and created["status"] == "working", created
         stays_awake(admin, group, sleepy, SLEEP_AFTER + 35)  # no poll meanwhile: a poll would be a call
-        done = m.wait_task(created["taskId"], timeout=60)
+        try:
+            done = m.wait_task(created["taskId"], timeout=60)
+        except httpx.TransportError as e:  # never retried: a TLS port answering otherwise is a finding, not noise
+            why = edge_diagnosis(zone_targets, sleepy["zone"], sleepy["ns"])
+            raise AssertionError(f"tasks/get through the edge failed: {e!r}\n{why}") from e
         assert done["status"] == "completed" and "job kind done" in text_of(done["result"]), done
 
 
 # --- §24.1 sleep on idle, wake by a call ------------------------------------------------------------------------------
 def test_an_idle_zone_goes_to_sleep(admin, sleepy, zone_targets, group):
+    """The last call is this test's own: what the test before it sent last is not known here (1.0.1 kind run — its
+    final poll never reached a worker, so the zone had been idle since the task began and slept 15 s into this test)."""
     zone, ns = sleepy["zone"], sleepy["ns"]
-    sleepy["slept_after"] = began = time.time()
+    with http_node(zone_targets, zone, sleepy["key"], group) as h:
+        assert text_of(Modern(h).call("plain_tool", {"text": "last call"})) == "last call"
+    sleepy["slept_after"] = began = time.time()  # the call reached a worker before this
+    awake_or_explain(admin, group, zone, ns)  # had the zone been asleep, that call woke it
     wait_for(lambda: zone_state(admin, group, zone) == "asleep", SLEEP_AFTER + 180, f"{zone} asleep on idle", every=5)
-    assert time.time() - began >= SLEEP_AFTER - 15, "it slept before the setting had passed since the last call"
+    w = admin.get("workers", group=group, zone=zone).json()
+    slept = w.get("state_since")  # the console's own time of the sleep (set once the workers were scaled to 0)
+    assert isinstance(slept, (int, float)), w
+    assert slept - began >= SLEEP_AFTER - 15, f"it slept {slept - began:.0f}s after the last call: {w}"
     acts = wait_for(lambda: [p for p in activator_pods(ns) if ready(p)], 60, "a Ready activator pod")
     assert len(acts) == 1
     spec = acts[0]["spec"]["containers"][0]
@@ -866,11 +915,16 @@ def wake_logs(ns: str) -> str:
 
 def test_a_call_through_the_edge_wakes_the_zone_and_is_answered(admin, sleepy, zone_targets, group):
     zone, ns = sleepy["zone"], sleepy["ns"]
+    # only the activator may take the call, as in the gRPC case below: the activator forwards to a worker still
+    # draining (20 s) without a wake, and that worker stops mid-call when its drain ends (1.0.1 kind run on db0b488:
+    # -32603 `sidecar exited during call`, `"woke": false`, the old canary's `shutdown` 3 s into the call)
+    wait_for(lambda: [p for p in activator_pods(ns) if ready(p)], 60, "a Ready activator pod")
+    wait_for(lambda: not draining_worker_pods(ns), 120, "the draining worker pods are gone")
     began, t0 = time.time(), time.monotonic()
     with http_node(zone_targets, zone, sleepy["key"], group, timeout=WAKE_TIMEOUT + 30) as h:
         try:
             result = Modern(h).call("plain_tool", {"text": "good morning"}, timeout=WAKE_TIMEOUT + 30)
-        except Exception as e:  # 1.0.0 known issue (1.0.1): keep the evidence of a runtime restart during the wake
+        except Exception as e:  # keep the evidence of whatever stopped the runtime during the wake
             took = time.monotonic() - t0
             raise AssertionError(f"the waking call failed after {took:.0f}s: {e}\n{wake_logs(ns)}") from e
     took = time.monotonic() - t0

@@ -12,8 +12,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14 3.12
       - name: ruff (ruff.toml) on console, runtime-py, tests, scripts, deploy/local
         run: |
@@ -27,7 +27,7 @@ jobs:
   versions:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: python3 scripts/check_versions.py
       - run: python3 scripts/check_secrets.py
       - run: python3 scripts/check_docs_links.py
@@ -38,21 +38,21 @@ jobs:
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install ${{ matrix.python }}
       - working-directory: ${{ matrix.dir }}
         run: |
           if [ -f pyproject.toml ]; then uv sync --all-extras && uv run pytest --cov --cov-report=xml --cov-fail-under=90; else echo "no project yet"; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: hashFiles(format('{0}/coverage.xml', matrix.dir)) != ''
         with: { name: "coverage-${{ matrix.dir }}", path: "${{ matrix.dir }}/coverage.xml" }
 
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master 2026-09
         with: { toolchain: "1.99.1", components: "clippy,rustfmt,llvm-tools-preview" }
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: protoc (tonic-prost-build compiles proto/ramen/v1)
@@ -63,9 +63,9 @@ jobs:
             cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build
             cargo llvm-cov --cobertura --output-path coverage.xml
           else echo "no crate yet"; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: ramen-node, path: node-rs/target/debug/ramen-node, if-no-files-found: error }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: hashFiles('node-rs/coverage.xml') != ''
         with: { name: coverage-node-rs, path: node-rs/coverage.xml }
 
@@ -73,8 +73,8 @@ jobs:
     # conformance suites in "skip without env" mode: everything collects, fixture/schema tests run.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14
       - working-directory: tests
         run: uv sync && uv run pytest -q -rs
@@ -90,10 +90,10 @@ jobs:
     env:
       RAMEN_TEST_TLS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14 3.12
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { name: ramen-node, path: bin }
       - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
       - name: runtime-py venv (sidecar, Python 3.12 — D45)
@@ -133,12 +133,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14 3.12
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "22" }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { name: ramen-node, path: bin }
       - run: chmod +x bin/ramen-node && echo "RAMEN_NODE_BIN=$PWD/bin/ramen-node" >> "$GITHUB_ENV"
       - name: runtime-py venv (sidecar, Python 3.12 — D45)
@@ -148,7 +148,7 @@ jobs:
       - name: official suite, --requirements 2026-07-28 and --spec-version 2025-06-18
         working-directory: tests
         run: uv sync && uv run pytest -q -rs conformance_suite
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: conformance-suite-results, path: tests/conformance_suite/results, if-no-files-found: ignore }
 
@@ -161,12 +161,12 @@ jobs:
     timeout-minutes: 30
     defaults: { run: { shell: bash } }
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master 2026-09
         with: { toolchain: "1.99.1" }
       - uses: arduino/setup-protoc@v3
         with: { version: "28.x", repo-token: "${{ secrets.GITHUB_TOKEN }}" }
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14 3.12
       - name: build the node on Windows
         working-directory: node-rs
@@ -193,10 +193,10 @@ jobs:
     # Terraform (fmt + validate, no backend, no credentials) and Helm (lint + render) for every provider: gcp, aws, azure.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with: { terraform_wrapper: false }
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: terraform fmt + validate (gcp, aws, azure + the three satellite modules)
         run: |
           for p in gcp aws azure gcp-satellite aws-satellite azure-satellite; do
@@ -229,7 +229,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs: { present: "${{ steps.c.outputs.present }}" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: c
         run: |
           if [ "${{ hashFiles('deploy/local/docker-compose.yml') }}" != "" ]; then echo present=true >> "$GITHUB_OUTPUT"; else echo present=false >> "$GITHUB_OUTPUT"; fi
@@ -255,10 +255,10 @@ jobs:
       # §36.4: the demo's LLM rails judged by the `ci` profile's fake (TLS, compose CA); the harness sets the org provider
       RAMEN_FAKE_LLM_URL: https://fake-llm:8443/v1
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14 3.12
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: artifacts, pattern: "coverage-*" }
       - name: Runtime venv for sidecar conformance (Python 3.12 — D45)
         run: |
@@ -299,13 +299,13 @@ jobs:
       - name: Compose logs
         if: failure()
         run: docker compose -f deploy/local/docker-compose.yml --profile ci logs --no-color --tail=300
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: coverage-tests, path: tests/coverage.xml, if-no-files-found: ignore }
       - name: Coverage report
         if: always()
         run: python3 scripts/coverage_report.py --artifacts artifacts --out coverage-report.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: coverage-report, path: coverage-report.md, if-no-files-found: ignore }
       - name: Compose down
@@ -329,8 +329,8 @@ jobs:
       RAMEN_KIND_SUITES: kind          # e2e + conformance run against compose in the `e2e` job
       RAMEN_KIND_LOAD_THREADS: "8"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv python install 3.14
       - name: kind + helm
         run: |
